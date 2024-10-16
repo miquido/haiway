@@ -13,7 +13,7 @@ haiway defines five distinct package types, each serving a specific purpose in t
 Here is a high level overview of the project packages structure which will be explained in detail below.
 
 ```
-src/project
+src/
 │
 ├── ...
 │
@@ -63,7 +63,7 @@ src/project
 Entrypoint packages serve as the starting points for your application. They define how your application is invoked and interacted with from the outside world. Examples of entrypoints include command-line interfaces (CLIs), HTTP servers, or even graphical user interfaces (GUIs).
 
 ```
-src/project
+src/
 │
 ├── entrypoint_a/
 │   ├── __init__.py
@@ -85,7 +85,7 @@ By keeping entrypoints separate, you maintain flexibility in how your applicatio
 Feature packages encapsulate the highest-level functions provided by your application. They represent the main capabilities or services that your application offers to its users. Examples of features could be user registration, chat handling or data processing pipelines.
 
 ```
-src/project
+src/
 │
 ├── ...
 │
@@ -108,7 +108,7 @@ By organizing your core application capabilities into feature packages, you crea
 Solution packages provide smaller, more focused utilities and partial functionalities. They serve as the building blocks for your features, offering reusable components that can be combined to create more complex behaviors. While features implement a complete and complex functionalities, the solutions aim for simple, single purpose helpers that allow build numerous features on top. Examples of solutions include storage mechanism, user management or encryption helpers.
 
 ```
-src/project
+src/
 │
 ├── ...
 │
@@ -131,7 +131,7 @@ By breaking down common functionalities into solution packages, you promote code
 Integration packages are responsible for implementing connections to third-party services, external APIs, or system resources. They serve as the bridge between your application and the outside world. Examples of integrations may be api clients or database connectors.
 
 ```
-src/project
+src/
 │
 ├── ...
 │
@@ -154,7 +154,7 @@ By isolating integrations in their own packages, you make it easier to manage ex
 The commons package is a special package that provides shared utilities, extensions, and helper functions used throughout your application. It serves as a foundation for all other packages and may be used to resolve circular dependencies caused by type imports in some cases.
 
 ```
-src/project
+src/
 │
 ├── ...
 │
@@ -273,7 +273,7 @@ When splitting your code into multiple small packages, you may encounter circula
 This approach involves creating an additional common package that contains the conflicting packages. This strategy allows you to resolve conflicts while keeping linked functionalities together. It is helpful to merge few (at most three) packages that are linked together and commonly providing functionalities within that link i.e. database storage of specific data and some linked service relaying on that data.
 
 ```
-src/project
+src/
 │
 ├── package_group/
 │   ├── __init__.py
@@ -302,7 +302,7 @@ By placing linked packages within the common package, you create a new scope tha
 When the contained packages strategy can't be applied due to multiple dependencies spread across multiple packages, you can create an additional, shared package within the same package group. This shared package declares all required interfaces.
 
 ```
-src/project
+src/
 │
 ├── package_group/
 │   ├── __init__.py
