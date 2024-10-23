@@ -2,7 +2,7 @@ from asyncio import CancelledError, Task, sleep
 from collections.abc import Callable, Generator
 from time import sleep as sync_sleep
 
-from haiway import cached
+from haiway import cache
 from pytest import fixture, mark, raises
 
 
@@ -18,8 +18,8 @@ def fake_random() -> Callable[[], Generator[int, None, None]]:
     return random_next
 
 
-def test_returns_cached_value_with_same_argument(fake_random: Callable[[], int]):
-    @cached
+def test_returns_cache_value_with_same_argument(fake_random: Callable[[], int]):
+    @cache
     def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -28,7 +28,7 @@ def test_returns_cached_value_with_same_argument(fake_random: Callable[[], int])
 
 
 def test_returns_fresh_value_with_different_argument(fake_random: Callable[[], int]):
-    @cached
+    @cache
     def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -37,7 +37,7 @@ def test_returns_fresh_value_with_different_argument(fake_random: Callable[[], i
 
 
 def test_returns_fresh_value_with_limit_exceed(fake_random: Callable[[], int]):
-    @cached(limit=1)
+    @cache(limit=1)
     def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -47,7 +47,7 @@ def test_returns_fresh_value_with_limit_exceed(fake_random: Callable[[], int]):
 
 
 def test_returns_same_value_with_repeating_argument(fake_random: Callable[[], int]):
-    @cached(limit=2)
+    @cache(limit=2)
     def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -61,7 +61,7 @@ def test_returns_same_value_with_repeating_argument(fake_random: Callable[[], in
 
 
 def test_fails_with_error():
-    @cached(expiration=0.02)
+    @cache(expiration=0.02)
     def randomized(_: str, /) -> int:
         raise FakeException()
 
@@ -70,7 +70,7 @@ def test_fails_with_error():
 
 
 def test_returns_fresh_value_with_expiration_time_exceed(fake_random: Callable[[], int]):
-    @cached(expiration=0.01)
+    @cache(expiration=0.01)
     def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -80,8 +80,8 @@ def test_returns_fresh_value_with_expiration_time_exceed(fake_random: Callable[[
 
 
 @mark.asyncio
-async def test_async_returns_cached_value_with_same_argument(fake_random: Callable[[], int]):
-    @cached
+async def test_async_returns_cache_value_with_same_argument(fake_random: Callable[[], int]):
+    @cache
     async def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -91,7 +91,7 @@ async def test_async_returns_cached_value_with_same_argument(fake_random: Callab
 
 @mark.asyncio
 async def test_async_returns_fresh_value_with_different_argument(fake_random: Callable[[], int]):
-    @cached
+    @cache
     async def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -101,7 +101,7 @@ async def test_async_returns_fresh_value_with_different_argument(fake_random: Ca
 
 @mark.asyncio
 async def test_async_returns_fresh_value_with_limit_exceed(fake_random: Callable[[], int]):
-    @cached(limit=1)
+    @cache(limit=1)
     async def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -112,7 +112,7 @@ async def test_async_returns_fresh_value_with_limit_exceed(fake_random: Callable
 
 @mark.asyncio
 async def test_async_returns_same_value_with_repeating_argument(fake_random: Callable[[], int]):
-    @cached(limit=2)
+    @cache(limit=2)
     async def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -129,7 +129,7 @@ async def test_async_returns_same_value_with_repeating_argument(fake_random: Cal
 async def test_async_returns_fresh_value_with_expiration_time_exceed(
     fake_random: Callable[[], int],
 ):
-    @cached(expiration=0.01)
+    @cache(expiration=0.01)
     async def randomized(_: str, /) -> int:
         return fake_random()
 
@@ -140,7 +140,7 @@ async def test_async_returns_fresh_value_with_expiration_time_exceed(
 
 @mark.asyncio
 async def test_async_cancel_waiting_does_not_cancel_task():
-    @cached
+    @cache
     async def randomized(_: str, /) -> int:
         try:
             await sleep(0.5)
@@ -160,7 +160,7 @@ async def test_async_cancel_waiting_does_not_cancel_task():
 
 @mark.asyncio
 async def test_async_expiration_does_not_cancel_task():
-    @cached(expiration=0.01)
+    @cache(expiration=0.01)
     async def randomized(_: str, /) -> int:
         try:
             await sleep(0.02)
@@ -173,7 +173,7 @@ async def test_async_expiration_does_not_cancel_task():
 
 @mark.asyncio
 async def test_async_expiration_creates_new_task(fake_random: Callable[[], int]):
-    @cached(expiration=0.01)
+    @cache(expiration=0.01)
     async def randomized(_: str, /) -> int:
         await sleep(0.02)
         return fake_random()
@@ -183,7 +183,7 @@ async def test_async_expiration_creates_new_task(fake_random: Callable[[], int])
 
 @mark.asyncio
 async def test_async_fails_with_error():
-    @cached(expiration=0.02)
+    @cache(expiration=0.02)
     async def randomized(_: str, /) -> int:
         raise FakeException()
 

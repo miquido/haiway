@@ -1,10 +1,10 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from logging import Logger, getLogger
-from typing import Final
 
 from fastapi import FastAPI
-from haiway import Dependencies, Structure, frozenlist
+from haiway import Disposables
+from integrations.postgres import PostgresSession
 
 from server.middlewares import ContextMiddleware
 from server.routes import technical_router, todos_router
@@ -12,9 +12,6 @@ from server.routes import technical_router, todos_router
 __all__ = [
     "app",
 ]
-
-# define common state available for all endpoints
-STATE: Final[frozenlist[Structure]] = ()
 
 
 async def startup(app: FastAPI) -> None:
@@ -28,7 +25,14 @@ async def startup(app: FastAPI) -> None:
     else:
         logger.info("Starting server...")
 
-    app.extra["state"] = STATE  # include base state for all endpoints
+    # initialize all shared clients on startup
+    disposables = Disposables(
+        PostgresSession(),
+    )
+    app.extra["disposables"] = disposables
+
+    # prepare common state for all endpoints
+    app.extra["state"] = (*await disposables.initialize(),)
 
     logger.info("...server started!")
 
@@ -37,7 +41,8 @@ async def shutdown(app: FastAPI) -> None:
     """
     Shutdown function is called when server process ends.
     """
-    await Dependencies.dispose()  # dispose all dependencies on shutdown
+    # dispose all clients on shutdown
+    await app.extra["disposables"].dispose()
 
     getLogger("server").info("...server shutdown!")
 

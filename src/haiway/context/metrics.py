@@ -9,7 +9,7 @@ from types import TracebackType
 from typing import Any, Self, cast, final, overload
 from uuid import uuid4
 
-from haiway.state import Structure
+from haiway.state import State
 from haiway.utils import freeze
 
 __all__ = [
@@ -30,7 +30,7 @@ class ScopeMetrics:
         self.trace_id: str = trace_id or uuid4().hex
         self._label: str = f"{self.trace_id}|{scope}" if scope else self.trace_id
         self._logger: Logger = logger or getLogger(name=scope)
-        self._metrics: dict[type[Structure], Structure] = {}
+        self._metrics: dict[type[State], State] = {}
         self._nested: list[ScopeMetrics] = []
         self._timestamp: float = monotonic()
         self._completed: Future[float] = get_event_loop().create_future()
@@ -46,11 +46,11 @@ class ScopeMetrics:
     def metrics(
         self,
         *,
-        merge: Callable[[Structure, Structure], Structure] = lambda lhs, rhs: lhs,
-    ) -> list[Structure]:
-        metrics: dict[type[Structure], Structure] = copy(self._metrics)
+        merge: Callable[[State, State], State] = lambda lhs, rhs: lhs,
+    ) -> list[State]:
+        metrics: dict[type[State], State] = copy(self._metrics)
         for metric in chain.from_iterable(nested.metrics(merge=merge) for nested in self._nested):
-            metric_type: type[Structure] = type(metric)
+            metric_type: type[State] = type(metric)
             if current := metrics.get(metric_type):
                 metrics[metric_type] = merge(current, metric)
 
@@ -60,21 +60,21 @@ class ScopeMetrics:
         return list(metrics.values())
 
     @overload
-    def read[Metric: Structure](
+    def read[Metric: State](
         self,
         metric: type[Metric],
         /,
     ) -> Metric | None: ...
 
     @overload
-    def read[Metric: Structure](
+    def read[Metric: State](
         self,
         metric: type[Metric],
         /,
         default: Metric,
     ) -> Metric: ...
 
-    def read[Metric: Structure](
+    def read[Metric: State](
         self,
         metric: type[Metric],
         /,
@@ -82,7 +82,7 @@ class ScopeMetrics:
     ) -> Metric | None:
         return cast(Metric | None, self._metrics.get(metric, default))
 
-    def record[Metric: Structure](
+    def record[Metric: State](
         self,
         metric: Metric,
         /,
@@ -187,7 +187,7 @@ class MetricsContext:
             )
 
     @classmethod
-    def record[Metric: Structure](
+    def record[Metric: State](
         cls,
         metric: Metric,
         /,

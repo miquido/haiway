@@ -2,7 +2,7 @@ from asyncio import CancelledError, Task, sleep
 from time import time
 from unittest import TestCase
 
-from haiway import auto_retry
+from haiway import retry
 from pytest import mark, raises
 
 
@@ -14,7 +14,7 @@ class FakeException(Exception):
 async def test_returns_value_without_errors():
     executions: int = 0
 
-    @auto_retry
+    @retry
     def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -28,7 +28,7 @@ async def test_returns_value_without_errors():
 async def test_retries_with_errors():
     executions: int = 0
 
-    @auto_retry
+    @retry
     def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -46,7 +46,7 @@ async def test_logs_issue_with_errors():
     executions: int = 0
     test_case = TestCase()
 
-    @auto_retry
+    @retry
     def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -68,7 +68,7 @@ async def test_logs_issue_with_errors():
 async def test_fails_with_exceeding_errors():
     executions: int = 0
 
-    @auto_retry(limit=1)
+    @retry(limit=1)
     def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -83,7 +83,7 @@ async def test_fails_with_exceeding_errors():
 async def test_fails_with_cancellation():
     executions: int = 0
 
-    @auto_retry(limit=1)
+    @retry(limit=1)
     def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -98,7 +98,7 @@ async def test_fails_with_cancellation():
 async def test_retries_with_selected_errors():
     executions: int = 0
 
-    @auto_retry
+    @retry
     def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -115,7 +115,7 @@ async def test_retries_with_selected_errors():
 async def test_fails_with_not_selected_errors():
     executions: int = 0
 
-    @auto_retry(catching={ValueError})
+    @retry(catching={ValueError})
     def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -131,7 +131,7 @@ async def test_fails_with_not_selected_errors():
 async def test_async_returns_value_without_errors():
     executions: int = 0
 
-    @auto_retry
+    @retry
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -145,7 +145,7 @@ async def test_async_returns_value_without_errors():
 async def test_async_retries_with_errors():
     executions: int = 0
 
-    @auto_retry
+    @retry
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -162,7 +162,7 @@ async def test_async_retries_with_errors():
 async def test_async_fails_with_exceeding_errors():
     executions: int = 0
 
-    @auto_retry(limit=1)
+    @retry(limit=1)
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -177,7 +177,7 @@ async def test_async_fails_with_exceeding_errors():
 async def test_async_fails_with_cancellation():
     executions: int = 0
 
-    @auto_retry(limit=1)
+    @retry(limit=1)
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -192,7 +192,7 @@ async def test_async_fails_with_cancellation():
 async def test_async_fails_when_cancelled():
     executions: int = 0
 
-    @auto_retry(limit=1)
+    @retry(limit=1)
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -211,7 +211,7 @@ async def test_async_fails_when_cancelled():
 async def test_async_uses_delay_with_errors():
     executions: int = 0
 
-    @auto_retry(limit=2, delay=0.05)
+    @retry(limit=2, delay=0.05)
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -228,7 +228,7 @@ async def test_async_uses_delay_with_errors():
 async def test_async_uses_computed_delay_with_errors():
     executions: int = 0
 
-    @auto_retry(limit=2, delay=lambda attempt, _: attempt * 0.035)
+    @retry(limit=2, delay=lambda attempt, _: attempt * 0.035)
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -246,7 +246,7 @@ async def test_async_logs_issue_with_errors():
     executions: int = 0
     test_case = TestCase()
 
-    @auto_retry
+    @retry
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -267,7 +267,7 @@ async def test_async_logs_issue_with_errors():
 async def test_async_retries_with_selected_errors():
     executions: int = 0
 
-    @auto_retry
+    @retry
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -284,7 +284,7 @@ async def test_async_retries_with_selected_errors():
 async def test_async_fails_with_not_selected_errors():
     executions: int = 0
 
-    @auto_retry(catching={ValueError})
+    @retry(catching={ValueError})
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1

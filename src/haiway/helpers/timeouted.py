@@ -4,11 +4,11 @@ from collections.abc import Callable, Coroutine
 from haiway.utils.mimic import mimic_function
 
 __all__ = [
-    "with_timeout",
+    "timeout",
 ]
 
 
-def with_timeout[**Args, Result](
+def timeout[**Args, Result](
     timeout: float,
     /,
 ) -> Callable[

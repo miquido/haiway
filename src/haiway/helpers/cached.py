@@ -9,26 +9,26 @@ from weakref import ref
 from haiway.utils.mimic import mimic_function
 
 __all__ = [
-    "cached",
+    "cache",
 ]
 
 
 @overload
-def cached[**Args, Result](
+def cache[**Args, Result](
     function: Callable[Args, Result],
     /,
 ) -> Callable[Args, Result]: ...
 
 
 @overload
-def cached[**Args, Result](
+def cache[**Args, Result](
     *,
     limit: int = 1,
     expiration: float | None = None,
 ) -> Callable[[Callable[Args, Result]], Callable[Args, Result]]: ...
 
 
-def cached[**Args, Result](
+def cache[**Args, Result](
     function: Callable[Args, Result] | None = None,
     *,
     limit: int = 1,

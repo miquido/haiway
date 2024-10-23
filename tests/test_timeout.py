@@ -1,6 +1,6 @@
 from asyncio import CancelledError, Task, sleep
 
-from haiway import with_timeout
+from haiway import timeout
 from pytest import mark, raises
 
 
@@ -10,7 +10,7 @@ class FakeException(Exception):
 
 @mark.asyncio
 async def test_returns_result_when_returning_value():
-    @with_timeout(3)
+    @timeout(3)
     async def long_running() -> int:
         return 42
 
@@ -19,7 +19,7 @@ async def test_returns_result_when_returning_value():
 
 @mark.asyncio
 async def test_raises_with_error():
-    @with_timeout(3)
+    @timeout(3)
     async def long_running() -> int:
         raise FakeException()
 
@@ -29,7 +29,7 @@ async def test_raises_with_error():
 
 @mark.asyncio
 async def test_raises_with_cancel():
-    @with_timeout(3)
+    @timeout(3)
     async def long_running() -> int:
         await sleep(1)
         raise RuntimeError("Invalid state")
@@ -43,7 +43,7 @@ async def test_raises_with_cancel():
 
 @mark.asyncio
 async def test_raises_with_timeout():
-    @with_timeout(0.01)
+    @timeout(0.01)
     async def long_running() -> int:
         await sleep(0.03)
         raise RuntimeError("Invalid state")

@@ -26,10 +26,10 @@ Interfaces define the public API of a functionality, specifying the data types a
 ```python 
 # types.py
 from typing import Protocol, Any
-from haiway import Structure
+from haiway import State
 
-# Structure representing the argument passed to functions
-class FunctionArgument(Structure):
+# State representing the argument passed to functions
+class FunctionArgument(State):
     value: Any
 
 # Protocol defining the expected function signature
@@ -41,19 +41,19 @@ In the example above, typing.Protocol is used to fully define the function signa
 
 ### Defining state
 
-State represents the immutable data required by functionalities. It is propagated through contexts to maintain consistency and support dependency injection. haiway comes with a helpful base class `Structure` which utilizes dataclass-like transform combined with runtime  type checking and immutability.
+State represents the immutable data required by functionalities. It is propagated through contexts to maintain consistency and support dependency injection. haiway comes with a helpful base class `State` which utilizes dataclass-like transform combined with runtime  type checking and immutability.
 
 ```python
 # state.py
 from my_functionality.types import FunctionSignature
-from haiway import Structure
+from haiway import State
 
-# Structure representing the state parameters needed by the functionality
-class FunctionalityState(Structure):
+# State representing the state parameters needed by the functionality
+class FunctionalityState(State):
     parameter: Any
 
-# Structure encapsulating the functionality with its interface
-class Functionality(Structure):
+# State encapsulating the functionality with its interface
+class Functionality(State):
     function: FunctionSignature
 ```
 
@@ -150,7 +150,7 @@ async def function_implementation(argument: FunctionArgument, **extra: Any) -> N
 
 ```
 
-haiway `Structure` types allow to create object copies with updated attributes by using `updated` method. The updated object is a swallow copy of the original object allowing to change the state only in local context without affecting other users of that state. When there are no changes to be applied no copy is created. Additionally the `updated` method skips all unnecessary arguments to handle described case without additional code required. However, there is always risk of name collisions, this approach should be carefully considered to avoid any potential issues.
+haiway `State` types allow to create object copies with updated attributes by using `updated` method. The updated object is a swallow copy of the original object allowing to change the state only in local context without affecting other users of that state. When there are no changes to be applied no copy is created. Additionally the `updated` method skips all unnecessary arguments to handle described case without additional code required. However, there is always risk of name collisions, this approach should be carefully considered to avoid any potential issues.
 
 ## Example
 
@@ -163,10 +163,10 @@ First we define some basic types required by our functionality - management func
 from typing import Any, Protocol
 from datetime import datetime
 from uuid import UUID
-from haiway import Structure
+from haiway import State
 
-# Structure representing the note
-class Note(Structure):
+# State representing the note
+class Note(State):
     identifier: UUID
     last_update: datetime
     content: str
@@ -186,14 +186,14 @@ Then we can define the state holding our functions and defining some context.
 # notes/state.py
 from notes.types import NoteCreating, NoteUpdating
 
-from haiway import Structure
+from haiway import State
 
-# Structure providing contextual state for the functionality
-class NotesDirectory(Structure):
+# State providing contextual state for the functionality
+class NotesDirectory(State):
     path: str = "./"
 
-# Structure encapsulating the functionality with its interface
-class Notes(Structure):
+# State encapsulating the functionality with its interface
+class Notes(State):
     create: NoteCreating
     update: NoteUpdating
 ```
