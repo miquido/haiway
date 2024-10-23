@@ -3,7 +3,7 @@ from typing import overload
 from uuid import UUID, uuid4
 
 from haiway import ctx
-from integrations.postgres import PostgresClient, PostgresClientException
+from integrations.postgres import PostgresClient, PostgresException
 
 from solutions.user_tasks.types import UserTask
 
@@ -19,12 +19,11 @@ async def postgres_task_create(
     *,
     description: str,
 ) -> UserTask:
-    postgres_client: PostgresClient = await ctx.dependency(PostgresClient)
-    async with postgres_client.connection() as connection:
+    async with ctx.state(PostgresClient).connection() as connection:
         try:  # actual SQL goes here...
             await connection.execute("EXAMPLE")
 
-        except PostgresClientException as exc:
+        except PostgresException as exc:
             ctx.log_debug(
                 "Example postgres_task_create failed",
                 exception=exc,
@@ -42,12 +41,11 @@ async def postgres_task_update(
     *,
     task: UserTask,
 ) -> None:
-    postgres_client: PostgresClient = await ctx.dependency(PostgresClient)
-    async with postgres_client.connection() as connection:
+    async with ctx.state(PostgresClient).connection() as connection:
         try:  # actual SQL goes here...
             await connection.execute("EXAMPLE")
 
-        except PostgresClientException as exc:
+        except PostgresException as exc:
             ctx.log_debug(
                 "Example postgres_task_update failed",
                 exception=exc,
@@ -71,12 +69,11 @@ async def postgres_tasks_fetch(
 async def postgres_tasks_fetch(
     identifier: UUID | None = None,
 ) -> list[UserTask] | UserTask:
-    postgres_client: PostgresClient = await ctx.dependency(PostgresClient)
-    async with postgres_client.connection() as connection:
+    async with ctx.state(PostgresClient).connection() as connection:
         try:  # actual SQL goes here...
             await connection.execute("EXAMPLE")
 
-        except PostgresClientException as exc:
+        except PostgresException as exc:
             ctx.log_debug(
                 "Example postgres_tasks_fetch failed",
                 exception=exc,
@@ -98,12 +95,11 @@ async def postgres_task_delete(
     *,
     identifier: UUID,
 ) -> None:
-    postgres_client: PostgresClient = await ctx.dependency(PostgresClient)
-    async with postgres_client.connection() as connection:
+    async with ctx.state(PostgresClient).connection() as connection:
         try:  # actual SQL goes here...
             await connection.execute("EXAMPLE")
 
-        except PostgresClientException as exc:
+        except PostgresException as exc:
             ctx.log_debug(
                 "Example postgres_task_delete failed",
                 exception=exc,

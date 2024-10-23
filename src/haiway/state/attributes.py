@@ -52,7 +52,7 @@ def attribute_annotations(
 
     self_annotation = AttributeAnnotation(
         origin=cls,
-        arguments=[],  # ignore self arguments here, Structure will have them resolved at this stage
+        arguments=[],  # ignore self arguments here, State will have them resolved at this stage
     )
     localns: dict[str, Any] = {cls.__name__: cls}
     recursion_guard: dict[Any, AttributeAnnotation] = {cls: self_annotation}

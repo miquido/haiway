@@ -1,7 +1,10 @@
-from integrations.postgres.client import PostgresClient
-from integrations.postgres.types import PostgresClientException
+from integrations.postgres.asyncpg import PostgresSession
+from integrations.postgres.state import PostgresClient, PostgresConnection
+from integrations.postgres.types import PostgresException
 
 __all__ = [
     "PostgresClient",
-    "PostgresClientException",
+    "PostgresConnection",
+    "PostgresException",
+    "PostgresSession",
 ]

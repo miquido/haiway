@@ -19,12 +19,12 @@ from haiway.state.validation import attribute_type_validator
 from haiway.types.missing import MISSING, Missing
 
 __all__ = [
-    "Structure",
+    "State",
 ]
 
 
 @final
-class StructureAttribute[Value]:
+class StateAttribute[Value]:
     def __init__(
         self,
         annotation: AttributeAnnotation,
@@ -48,7 +48,7 @@ class StructureAttribute[Value]:
     frozen_default=True,
     field_specifiers=(),
 )
-class StructureMeta(type):
+class StateMeta(type):
     def __new__(
         cls,
         /,
@@ -58,7 +58,7 @@ class StructureMeta(type):
         type_parameters: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        structure_type = type.__new__(
+        state_type = type.__new__(
             cls,
             name,
             bases,
@@ -66,28 +66,28 @@ class StructureMeta(type):
             **kwargs,
         )
 
-        attributes: dict[str, StructureAttribute[Any]] = {}
+        attributes: dict[str, StateAttribute[Any]] = {}
 
         if bases:  # handle base class
             for key, annotation in attribute_annotations(
-                structure_type,
+                state_type,
                 type_parameters=type_parameters,
             ).items():
                 # do not include ClassVars and dunder items
                 if ((get_origin(annotation) or annotation) is ClassVar) or key.startswith("__"):
                     continue
 
-                attributes[key] = StructureAttribute(
+                attributes[key] = StateAttribute(
                     annotation=annotation,
-                    default=getattr(structure_type, key, MISSING),
+                    default=getattr(state_type, key, MISSING),
                     validator=attribute_type_validator(annotation),
                 )
 
-        structure_type.__ATTRIBUTES__ = attributes  # pyright: ignore[reportAttributeAccessIssue]
-        structure_type.__slots__ = frozenset(attributes.keys())  # pyright: ignore[reportAttributeAccessIssue]
-        structure_type.__match_args__ = structure_type.__slots__  # pyright: ignore[reportAttributeAccessIssue]
+        state_type.__ATTRIBUTES__ = attributes  # pyright: ignore[reportAttributeAccessIssue]
+        state_type.__slots__ = frozenset(attributes.keys())  # pyright: ignore[reportAttributeAccessIssue]
+        state_type.__match_args__ = state_type.__slots__  # pyright: ignore[reportAttributeAccessIssue]
 
-        return structure_type
+        return state_type
 
 
 _types_cache: WeakValueDictionary[
@@ -99,12 +99,12 @@ _types_cache: WeakValueDictionary[
 ] = WeakValueDictionary()
 
 
-class Structure(metaclass=StructureMeta):
+class State(metaclass=StateMeta):
     """
     Base class for immutable data structures.
     """
 
-    __ATTRIBUTES__: ClassVar[dict[str, StructureAttribute[Any]]]
+    __ATTRIBUTES__: ClassVar[dict[str, StateAttribute[Any]]]
 
     def __class_getitem__(
         cls,
@@ -151,7 +151,7 @@ class Structure(metaclass=StructureMeta):
         name: str = f"{cls.__name__}[{parameter_names}]"
         bases: tuple[type[Self]] = (cls,)
 
-        parametrized_type: type[Self] = StructureMeta.__new__(
+        parametrized_type: type[Self] = StateMeta.__new__(
             cls.__class__,
             name=name,
             bases=bases,
@@ -211,7 +211,7 @@ class Structure(metaclass=StructureMeta):
         value: Any,
     ) -> Any:
         raise AttributeError(
-            f"Can't modify immutable structure {self.__class__.__qualname__},"
+            f"Can't modify immutable state {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
         )
 
@@ -220,7 +220,7 @@ class Structure(metaclass=StructureMeta):
         name: str,
     ) -> None:
         raise AttributeError(
-            f"Can't modify immutable structure {self.__class__.__qualname__},"
+            f"Can't modify immutable state {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
         )
 

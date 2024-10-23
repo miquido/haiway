@@ -1,20 +1,11 @@
 from haiway.context import (
-    Dependencies,
-    Dependency,
     MissingContext,
-    MissingDependency,
     MissingState,
     ScopeMetrics,
     ctx,
 )
-from haiway.helpers import (
-    asynchronous,
-    auto_retry,
-    cached,
-    throttle,
-    with_timeout,
-)
-from haiway.state import Structure
+from haiway.helpers import Disposable, Disposables, asynchronous, cache, retry, throttle, timeout
+from haiway.state import State
 from haiway.types import (
     MISSING,
     Missing,
@@ -45,11 +36,10 @@ __all__ = [
     "async_noop",
     "asynchronous",
     "AsyncQueue",
-    "auto_retry",
-    "cached",
+    "cache",
     "ctx",
-    "Dependencies",
-    "Dependency",
+    "Disposable",
+    "Disposables",
     "freeze",
     "frozenlist",
     "getenv_bool",
@@ -62,14 +52,14 @@ __all__ = [
     "Missing",
     "MISSING",
     "MissingContext",
-    "MissingDependency",
     "MissingState",
     "noop",
     "not_missing",
+    "retry",
     "ScopeMetrics",
     "setup_logging",
-    "Structure",
+    "State",
     "throttle",
+    "timeout",
     "when_missing",
-    "with_timeout",
 ]

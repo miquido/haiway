@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Protocol, overload, runtime_checkable
 from uuid import UUID
 
-from haiway import Structure
+from haiway import State
 
 __all__ = [
     "UserTask",
@@ -13,7 +13,7 @@ __all__ = [
 ]
 
 
-class UserTask(Structure):
+class UserTask(State):
     identifier: UUID
     modified: datetime
     description: str

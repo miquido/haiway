@@ -1,4 +1,4 @@
-from haiway import Structure
+from haiway import State
 
 from solutions.user_tasks.postgres import (
     postgres_task_create,
@@ -18,7 +18,7 @@ __all__ = [
 ]
 
 
-class UserTasks(Structure):
+class UserTasks(State):
     fetch: UserTaskFetching = postgres_tasks_fetch
     create: UserTaskCreation = postgres_task_create
     update: UserTaskUpdating = postgres_task_update

@@ -2,7 +2,7 @@
 #    uv --no-cache pip compile pyproject.toml -o constraints --all-extras
 bandit==1.7.10
     # via haiway (pyproject.toml)
-coverage==7.6.3
+coverage==7.6.4
     # via pytest-cov
 iniconfig==2.0.0
     # via pytest
@@ -20,7 +20,7 @@ pluggy==1.5.0
     # via pytest
 pygments==2.18.0
     # via rich
-pyright==1.1.384
+pyright==1.1.386
     # via haiway (pyproject.toml)
 pytest==7.4.4
     # via
@@ -33,7 +33,7 @@ pytest-cov==4.1.0
     # via haiway (pyproject.toml)
 pyyaml==6.0.2
     # via bandit
-rich==13.9.2
+rich==13.9.3
     # via bandit
 ruff==0.5.7
     # via haiway (pyproject.toml)

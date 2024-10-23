@@ -1,8 +1,8 @@
-from haiway import MissingContext, ScopeMetrics, Structure, ctx
+from haiway import MissingContext, ScopeMetrics, State, ctx
 from pytest import mark, raises
 
 
-class ExampleState(Structure):
+class ExampleState(State):
     state: str = "default"
 
 

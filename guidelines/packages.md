@@ -167,13 +167,13 @@ Commons package cannot depend on any other package in your application. It shoul
 
 The commons package helps reduce code duplication and provides a centralized location for shared utilities, promoting consistency across your application.
 
-### Internal Package Structure
+### Internal package structure
 
-To maintain consistency and improve code organization, haiway recommends a specific internal structure for packages. This structure varies slightly depending on the package type, but generally follows a similar pattern.
+To maintain consistency and improve code organization, haiway recommends a specific internal structure for packages. This structure varies slightly depending on the package type, but generally follows a similar pattern. Features, solutions and integrations, referred also as functionalities, all follow a similar pattern when it comes to the package contents and organization.
 
-#### Structure for Features and Solutions Packages
+#### Structure of functionality packages
 
-Features and solutions packages should adhere to the following internal structure:
+Functionality (feature, solution, integration) packages should adhere to the following internal structure:
 
 ```
 solution_or_feature/
@@ -198,31 +198,7 @@ solution_or_feature/
 
 Other: Any additional files needed for internal implementation details. These files should be treated as internal and not exported.
 
-#### Structure for Integration Packages
-
-Integration packages follow a slightly different structure:
-
-```
-integration/
-│
-├── __init__.py
-├── config.py
-├── client.py
-├── ...
-└── types.py
-```
-
-`__init__.py`: Similar to feature and solution packages, this file exports the integration's public symbols.
-
-`types.py`: Contains data types, interfaces, and errors specific to the integration.
-
-`config.py`: Holds configuration and constants for the integration, including relevant environment variables.
-
-`client.py`: Defines the integration client, which should be exported as public and provide all the functionalities of the integration.
-
-Other: These may include sets of mixins providing parts of the implementation separated by functionalities or topics. It may also include a session base type for managing connections to services. All mixins should be merged within the client type to provide the full functionality of the integration.
-
-#### Structure for Commons Package
+#### Structure of commons package
 
 The commons package has a more flexible structure, as it contains various utility functions and shared components. However, it should still maintain a clear organization:
 
@@ -243,7 +219,7 @@ commons/
 
 Other: there are possible multiple additional files within this package according to your project needs. Additional, nested packages are highly recommended for splitting complex and long files though.
 
-#### Structure for Entrypoint Packages
+#### Structure of entrypoint packages
 
 Entrypoint packages have a structure that reflects their role as the application's entry point:
 
@@ -258,7 +234,7 @@ entrypoint/
 
 `__init__.py`: Typically empty as entrypoints are usually not imported by other packages.
 
-`__main__.py`: The entry point for the application, containing the code that runs when the package is executed.
+`__main__.py`: The entry point for the application, containing the code that runs when the package is run.
 
 `config.py`: Configuration specific to this entrypoint.
 
@@ -326,7 +302,7 @@ src/
 
 The shared package acts as an intermediary, defining interfaces that both package_a and package_b can depend on. This breaks the direct circular dependency between them. The shared package should only contain interface definitions and types, not implementations.
 
-### Best Practices
+### Best practices
 
 To make the most of haiway's package organization strategy, consider the following best practices:
 

@@ -10,11 +10,10 @@ from logging import Logger
 from types import TracebackType
 from typing import Any, final
 
-from haiway.context.dependencies import Dependencies, Dependency
 from haiway.context.metrics import MetricsContext, ScopeMetrics
 from haiway.context.state import StateContext
 from haiway.context.tasks import TaskGroupContext
-from haiway.state import Structure
+from haiway.state import State
 from haiway.utils import freeze
 
 __all__ = [
@@ -101,7 +100,7 @@ class ctx:
     def scope(
         name: str,
         /,
-        *state: Structure,
+        *state: State,
         logger: Logger | None = None,
         trace_id: str | None = None,
         completion: Callable[[ScopeMetrics], Coroutine[None, None, None]] | None = None,
@@ -115,7 +114,7 @@ class ctx:
         name: Value
             name of the scope context
 
-        *state: Structure
+        *state: State
             state propagated within the scope context, will be merged with current if any\
              by replacing current with provided on conflict
 
@@ -152,7 +151,7 @@ class ctx:
 
     @staticmethod
     def updated(
-        *state: Structure,
+        *state: State,
     ) -> StateContext:
         """
         Update scope context with given state. When called within an existing context\
@@ -160,7 +159,7 @@ class ctx:
 
         Parameters
         ----------
-        *state: Structure
+        *state: State
             state propagated within the updated scope context, will be merged with current if any\
              by replacing current with provided on conflict
 
@@ -215,28 +214,7 @@ class ctx:
             raise RuntimeError("Attempting to cancel context out of asyncio task")
 
     @staticmethod
-    async def dependency[DependencyType: Dependency](
-        dependency: type[DependencyType],
-        /,
-    ) -> DependencyType:
-        """
-        Access current dependency by its type.
-
-        Parameters
-        ----------
-        dependency: type[DependencyType]
-            type of requested dependency
-
-        Returns
-        -------
-        DependencyType
-            resolved dependency instance
-        """
-
-        return await Dependencies.dependency(dependency)
-
-    @staticmethod
-    def state[StateType: Structure](
+    def state[StateType: State](
         state: type[StateType],
         /,
         default: StateType | None = None,
@@ -261,7 +239,7 @@ class ctx:
         )
 
     @staticmethod
-    def record[Metric: Structure](
+    def record[Metric: State](
         metric: Metric,
         /,
         merge: Callable[[Metric, Metric], Metric] = lambda lhs, rhs: rhs,

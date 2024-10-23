@@ -1,17 +1,18 @@
 from asyncio import CancelledError, iscoroutinefunction, sleep
 from collections.abc import Callable, Coroutine
+from time import sleep as sleep_sync
 from typing import cast, overload
 
 from haiway.context import ctx
 from haiway.utils import mimic_function
 
 __all__ = [
-    "auto_retry",
+    "retry",
 ]
 
 
 @overload
-def auto_retry[**Args, Result](
+def retry[**Args, Result](
     function: Callable[Args, Result],
     /,
 ) -> Callable[Args, Result]:
@@ -34,7 +35,7 @@ def auto_retry[**Args, Result](
 
 
 @overload
-def auto_retry[**Args, Result](
+def retry[**Args, Result](
     *,
     limit: int = 1,
     delay: Callable[[int, Exception], float] | float | None = None,
@@ -66,7 +67,7 @@ def auto_retry[**Args, Result](
     """
 
 
-def auto_retry[**Args, Result](
+def retry[**Args, Result](
     function: Callable[Args, Result] | None = None,
     *,
     limit: int = 1,
@@ -115,11 +116,12 @@ def auto_retry[**Args, Result](
                     catching=catching if isinstance(catching, set | tuple) else {catching},
                 ),
             )
+
         else:
-            assert delay is None, "Delay is not supported in sync wrapper"  # nosec: B101
             return _wrap_sync(
                 function,
                 limit=limit,
+                delay=delay,
                 catching=catching if isinstance(catching, set | tuple) else {catching},
             )
 
@@ -133,6 +135,7 @@ def _wrap_sync[**Args, Result](
     function: Callable[Args, Result],
     *,
     limit: int,
+    delay: Callable[[int, Exception], float] | float | None,
     catching: set[type[Exception]] | tuple[type[Exception], ...],
 ) -> Callable[Args, Result]:
     assert limit > 0, "Limit has to be greater than zero"  # nosec: B101
@@ -157,6 +160,16 @@ def _wrap_sync[**Args, Result](
                         function.__name__,
                         exc,
                     )
+
+                    match delay:
+                        case None:
+                            continue
+
+                        case float(strict):
+                            sleep_sync(strict)
+
+                        case make_delay:  # type: Callable[[], float]
+                            sleep_sync(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
 
                 else:
                     raise exc
@@ -199,10 +212,10 @@ def _wrap_async[**Args, Result](
                             continue
 
                         case float(strict):
-                            await sleep(delay=strict)
+                            await sleep(strict)
 
                         case make_delay:  # type: Callable[[], float]
-                            await sleep(delay=make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
+                            await sleep(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
 
                 else:
                     raise exc

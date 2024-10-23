@@ -4,7 +4,7 @@ from types import TracebackType
 from typing import Self, cast, final
 
 from haiway.context.types import MissingContext, MissingState
-from haiway.state import Structure
+from haiway.state import State
 from haiway.utils import freeze
 
 __all__ = [
@@ -17,28 +17,26 @@ __all__ = [
 class ScopeState:
     def __init__(
         self,
-        state: Iterable[Structure],
+        state: Iterable[State],
     ) -> None:
-        self._state: dict[type[Structure], Structure] = {
-            type(element): element for element in state
-        }
+        self._state: dict[type[State], State] = {type(element): element for element in state}
         freeze(self)
 
-    def state[State: Structure](
+    def state[StateType: State](
         self,
-        state: type[State],
+        state: type[StateType],
         /,
-        default: State | None = None,
-    ) -> State:
+        default: StateType | None = None,
+    ) -> StateType:
         if state in self._state:
-            return cast(State, self._state[state])
+            return cast(StateType, self._state[state])
 
         elif default is not None:
             return default
 
         else:
             try:
-                initialized: State = state()
+                initialized: StateType = state()
                 self._state[state] = initialized
                 return initialized
 
@@ -50,7 +48,7 @@ class ScopeState:
 
     def updated(
         self,
-        state: Iterable[Structure],
+        state: Iterable[State],
     ) -> Self:
         if state:
             return self.__class__(
@@ -69,12 +67,12 @@ class StateContext:
     _context = ContextVar[ScopeState]("StateContext")
 
     @classmethod
-    def current[State: Structure](
+    def current[StateType: State](
         cls,
-        state: type[State],
+        state: type[StateType],
         /,
-        default: State | None = None,
-    ) -> State:
+        default: StateType | None = None,
+    ) -> StateType:
         try:
             return cls._context.get().state(state, default=default)
 
@@ -84,7 +82,7 @@ class StateContext:
     @classmethod
     def updated(
         cls,
-        state: Iterable[Structure],
+        state: Iterable[State],
         /,
     ) -> Self:
         try:

@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import Literal, Protocol, Self, runtime_checkable
 
-from haiway import Structure, frozenlist
+from haiway import State, frozenlist
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -9,7 +9,7 @@ def test_basic_initializes_with_arguments() -> None:
     class Proto(Protocol):
         def __call__(self) -> None: ...
 
-    class Basics(Structure):
+    class Basics(State):
         string: str
         literal: Literal["A", "B"]
         sequence: list[str]
@@ -46,7 +46,7 @@ def test_basic_initializes_with_arguments() -> None:
 
 
 def test_basic_initializes_with_defaults() -> None:
-    class Basics(Structure):
+    class Basics(State):
         string: str = ""
         integer: int = 0
         optional: str | None = None
@@ -58,7 +58,7 @@ def test_basic_initializes_with_defaults() -> None:
 
 
 def test_basic_initializes_with_arguments_and_defaults() -> None:
-    class Basics(Structure):
+    class Basics(State):
         string: str
         integer: int = 0
         optional: str | None = None
@@ -73,7 +73,7 @@ def test_basic_initializes_with_arguments_and_defaults() -> None:
 
 
 def test_parametrized_initializes_with_proper_parameters() -> None:
-    class Parametrized[T](Structure):
+    class Parametrized[T](State):
         value: T
 
     parametrized_string = Parametrized(
@@ -90,10 +90,10 @@ def test_parametrized_initializes_with_proper_parameters() -> None:
 
 
 def test_nested_initializes_with_proper_arguments() -> None:
-    class Nested(Structure):
+    class Nested(State):
         string: str
 
-    class Recursive(Structure):
+    class Recursive(State):
         nested: Nested
         recursion: "Recursive | None"
         self_recursion: Self | None
