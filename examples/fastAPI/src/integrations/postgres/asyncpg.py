@@ -83,7 +83,7 @@ class PostgresSession:
                 *args: Any,
             ) -> Any:
                 try:
-                    return await acquired_connection.execute(  # pyright: ignore[reportUnknownMemberType]
+                    return await acquired_connection.execute(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
                         statement,
                         *args,
                     )
@@ -92,10 +92,10 @@ class PostgresSession:
                     raise PostgresException("Failed to execute SQL statement") from exc
 
             def transaction() -> PostgresTransactionContext:
-                transaction_context: Transaction = acquired_connection.transaction()  # pyright: ignore[reportAssignmentType, reportUnknownMemberType]
+                transaction_context: Transaction = acquired_connection.transaction()  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
 
                 async def transaction_enter() -> None:
-                    await transaction_context.__aenter__()
+                    await transaction_context.__aenter__()  # pyright: ignore[reportUnknownMemberType]
 
                 async def transaction_exit(
                     exc_type: type[BaseException] | None,

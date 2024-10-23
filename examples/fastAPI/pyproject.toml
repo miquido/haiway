@@ -12,7 +12,7 @@ maintainers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-  "haiway~=0.1.0",
+  "haiway~=0.2.0",
   "fastapi-slim~=0.115",
   "asyncpg~=0.29",
   "httpx~=0.25.0",
