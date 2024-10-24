@@ -53,6 +53,9 @@ class Disposables:
         elif exceptions:
             raise exceptions[0]
 
+    def __bool__(self) -> bool:
+        return len(self._disposables) > 0
+
     async def __aenter__(self) -> Iterable[State]:
         return await self.initialize()
 
