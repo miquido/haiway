@@ -10,6 +10,7 @@ from typing import Any, Self, cast, final, overload
 from uuid import uuid4
 
 from haiway.state import State
+from haiway.types import MISSING, Missing, not_missing
 from haiway.utils import freeze
 
 __all__ = [
@@ -52,16 +53,24 @@ class ScopeMetrics:
     def metrics(
         self,
         *,
-        merge: Callable[[State, State], State] = lambda lhs, rhs: lhs,
+        merge: Callable[[State | Missing, State], State | Missing] | None = None,
     ) -> list[State]:
+        if not merge:
+            return list(self._metrics.values())
+
         metrics: dict[type[State], State] = copy(self._metrics)
         for metric in chain.from_iterable(nested.metrics(merge=merge) for nested in self._nested):
             metric_type: type[State] = type(metric)
-            if current := metrics.get(metric_type):
-                metrics[metric_type] = merge(current, metric)
+            merged: State | Missing = merge(
+                metrics.get(  # current
+                    metric_type,
+                    MISSING,
+                ),
+                metric,  # received
+            )
 
-            else:
-                metrics[metric_type] = metric
+            if not_missing(merged):
+                metrics[metric_type] = merged
 
         return list(metrics.values())
 
