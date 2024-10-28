@@ -3,9 +3,9 @@ from collections.abc import Callable, Coroutine
 from concurrent.futures import Executor
 from contextvars import Context, copy_context
 from functools import partial
-from typing import Any, Literal, cast, overload
+from typing import Any, cast, overload
 
-from haiway.types.missing import MISSING, Missing, not_missing
+from haiway.types.missing import MISSING, Missing
 
 __all__ = [
     "asynchronous",
@@ -25,7 +25,7 @@ def asynchronous[**Args, Result]() -> (
 def asynchronous[**Args, Result](
     *,
     loop: AbstractEventLoop | None = None,
-    executor: Executor | Literal["default"],
+    executor: Executor,
 ) -> Callable[
     [Callable[Args, Result]],
     Callable[Args, Coroutine[None, None, Result]],
@@ -43,7 +43,7 @@ def asynchronous[**Args, Result](
     function: Callable[Args, Result] | None = None,
     /,
     loop: AbstractEventLoop | None = None,
-    executor: Executor | Literal["default"] | Missing = MISSING,
+    executor: Executor | Missing = MISSING,
 ) -> (
     Callable[
         [Callable[Args, Result]],
@@ -63,10 +63,9 @@ def asynchronous[**Args, Result](
     loop: AbstractEventLoop | None
         loop used to call the function. When None was provided the loop currently running while \
         executing the function will be used. Default is None.
-    executor: Executor | Literal["default"] | Missing
-        executor used to run the function. Specifying "default" uses a default loop executor.
-        When not provided (Missing) no executor will be used \
-        (function will by just wrapped as an async function without any executor)
+    executor: Executor | Missing
+        executor used to run the function. When not provided (Missing) default loop executor\
+         will be used.
 
     Returns
     -------
@@ -79,26 +78,11 @@ def asynchronous[**Args, Result](
     ) -> Callable[Args, Coroutine[None, None, Result]]:
         assert not iscoroutinefunction(wrapped), "Cannot wrap async function in executor"  # nosec: B101
 
-        if not_missing(executor):
-            return _ExecutorWrapper(
-                wrapped,
-                loop=loop,
-                executor=cast(Executor | None, None if executor == "default" else executor),
-            )
-
-        else:
-
-            async def wrapper(
-                *args: Args.args,
-                **kwargs: Args.kwargs,
-            ) -> Result:
-                return wrapped(
-                    *args,
-                    **kwargs,
-                )
-
-            _mimic_async(wrapped, within=wrapper)
-            return wrapper
+        return _ExecutorWrapper(
+            wrapped,
+            loop=loop,
+            executor=cast(Executor | None, None if executor is MISSING else executor),
+        )
 
     if function := function:
         return wrap(wrapped=function)

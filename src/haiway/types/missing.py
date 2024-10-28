@@ -46,20 +46,20 @@ class Missing(metaclass=MissingType):
         self,
         name: str,
     ) -> Any:
-        raise RuntimeError("Missing has no attributes")
+        raise AttributeError("Missing has no attributes")
 
     def __setattr__(
         self,
         __name: str,
         __value: Any,
     ) -> None:
-        raise RuntimeError("Missing can't be modified")
+        raise AttributeError("Missing can't be modified")
 
     def __delattr__(
         self,
         __name: str,
     ) -> None:
-        raise RuntimeError("Missing can't be modified")
+        raise AttributeError("Missing can't be modified")
 
 
 MISSING: Final[Missing] = Missing()
