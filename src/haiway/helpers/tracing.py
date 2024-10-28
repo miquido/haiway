@@ -89,18 +89,25 @@ def _traced_sync[**Args, Result](
     /,
     label: str,
 ) -> Callable[Args, Result]:
-    @mimic_function(function)
-    def wrapped(
+    def traced(
         *args: Args.args,
         **kwargs: Args.kwargs,
     ) -> Result:
         with ctx.scope(label):
             ctx.record(ArgumentsTrace.of(*args, **kwargs))
-            result: Result = function(*args, **kwargs)
-            ctx.record(ResultTrace.of(result))
-            return result
+            try:
+                result: Result = function(*args, **kwargs)
+                ctx.record(ResultTrace.of(result))
+                return result
 
-    return wrapped
+            except BaseException as exc:
+                ctx.record(ResultTrace.of(exc))
+                raise exc
+
+    return mimic_function(
+        function,
+        within=traced,
+    )
 
 
 def _traced_async[**Args, Result](
@@ -108,15 +115,22 @@ def _traced_async[**Args, Result](
     /,
     label: str,
 ) -> Callable[Args, Coroutine[Any, Any, Result]]:
-    @mimic_function(function)
-    async def wrapped(
+    async def traced(
         *args: Args.args,
         **kwargs: Args.kwargs,
     ) -> Result:
         with ctx.scope(label):
             ctx.record(ArgumentsTrace.of(*args, **kwargs))
-            result: Result = await function(*args, **kwargs)
-            ctx.record(ResultTrace.of(result))
-            return result
+            try:
+                result: Result = await function(*args, **kwargs)
+                ctx.record(ResultTrace.of(result))
+                return result
 
-    return wrapped
+            except BaseException as exc:
+                ctx.record(ResultTrace.of(exc))
+                raise exc
+
+    return mimic_function(
+        function,
+        within=traced,
+    )

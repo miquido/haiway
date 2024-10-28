@@ -28,7 +28,13 @@ class ScopeMetrics:
         logger: Logger | None,
     ) -> None:
         self.trace_id: str = trace_id or uuid4().hex
-        self._label: str = f"{self.trace_id}|{scope}" if scope else self.trace_id
+        self.identifier: str = uuid4().hex
+        self.label: str = scope
+        self._logger_prefix: str = (
+            f"[{self.trace_id}] [{scope}] [{self.identifier}]"
+            if scope
+            else f"[{self.trace_id}] [{self.identifier}]"
+        )
         self._logger: Logger = logger or getLogger(name=scope)
         self._metrics: dict[type[State], State] = {}
         self._nested: list[ScopeMetrics] = []
@@ -41,7 +47,7 @@ class ScopeMetrics:
         self._complete()  # ensure completion on deinit
 
     def __str__(self) -> str:
-        return self._label
+        return f"{self.label}[{self.identifier}]@[{self.trace_id}]"
 
     def metrics(
         self,
@@ -145,7 +151,7 @@ class ScopeMetrics:
     ) -> None:
         self._logger.log(
             level,
-            f"[{self}] {message}",
+            f"{self._logger_prefix} {message}",
             *args,
             exc_info=exception,
         )
