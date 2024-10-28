@@ -6,7 +6,16 @@ from haiway.context import (
     ScopeMetrics,
     ctx,
 )
-from haiway.helpers import asynchronous, cache, retry, throttle, timeout
+from haiway.helpers import (
+    ArgumentsTrace,
+    ResultTrace,
+    asynchronous,
+    cache,
+    retry,
+    throttle,
+    timeout,
+    traced,
+)
 from haiway.state import State
 from haiway.types import (
     MISSING,
@@ -34,6 +43,7 @@ from haiway.utils import (
 
 __all__ = [
     "always",
+    "ArgumentsTrace",
     "async_always",
     "async_noop",
     "asynchronous",
@@ -57,11 +67,13 @@ __all__ = [
     "MissingState",
     "noop",
     "not_missing",
+    "ResultTrace",
     "retry",
     "ScopeMetrics",
     "setup_logging",
     "State",
     "throttle",
     "timeout",
+    "traced",
     "when_missing",
 ]
