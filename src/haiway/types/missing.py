@@ -27,6 +27,9 @@ class Missing(metaclass=MissingType):
     Type representing absence of a value. Use MISSING constant for its value.
     """
 
+    __slots__ = ()
+    __match_args__ = ()
+
     def __bool__(self) -> bool:
         return False
 
@@ -42,7 +45,7 @@ class Missing(metaclass=MissingType):
     def __repr__(self) -> str:
         return "MISSING"
 
-    def __getattribute__(
+    def __getattr__(
         self,
         name: str,
     ) -> Any:
