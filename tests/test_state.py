@@ -1,10 +1,13 @@
 from collections.abc import Callable
-from typing import Literal, Protocol, Self, runtime_checkable
+from typing import Literal, Protocol, Self, TypedDict, runtime_checkable
 
 from haiway import State, frozenlist
 
 
 def test_basic_initializes_with_arguments() -> None:
+    class DictTyped(TypedDict):
+        value: str
+
     @runtime_checkable
     class Proto(Protocol):
         def __call__(self) -> None: ...
@@ -20,6 +23,7 @@ def test_basic_initializes_with_arguments() -> None:
         none: None
         function: Callable[[], None]
         proto: Proto
+        dict_typed: DictTyped
 
     basic = Basics(
         string="string",
@@ -32,6 +36,7 @@ def test_basic_initializes_with_arguments() -> None:
         none=None,
         function=lambda: None,
         proto=lambda: None,
+        dict_typed={"value": "42"},
     )
     assert basic.string == "string"
     assert basic.literal == "A"
@@ -41,6 +46,7 @@ def test_basic_initializes_with_arguments() -> None:
     assert basic.union == "union"
     assert basic.optional == "optional"
     assert basic.none is None
+    assert basic.dict_typed == {"value": "42"}
     assert callable(basic.function)
     assert isinstance(basic.proto, Proto)
 

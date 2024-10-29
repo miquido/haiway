@@ -11,7 +11,7 @@ __all__ = [
 ]
 
 
-def attribute_type_validator(
+def attribute_type_validator(  # noqa: PLR0911
     annotation: AttributeAnnotation,
     /,
 ) -> Callable[[Any], Any]:
@@ -30,6 +30,10 @@ def attribute_type_validator(
 
         case typing.Any:
             return _any_validator
+
+        # typed dicts fail on type checks
+        case typed_dict if typing.is_typeddict(typed_dict):
+            return _prepare_typed_dict_validator(typed_dict)
 
         case type() as other_type:
             return _prepare_type_validator(other_type)
@@ -123,3 +127,23 @@ def _prepare_type_validator(
                 )
 
     return type_validator
+
+
+def _prepare_typed_dict_validator(
+    validated_type: type[Any],
+    /,
+) -> Callable[[Any], Any]:
+    def typed_dict_validator(
+        value: Any,
+    ) -> Any:
+        match value:
+            case value if isinstance(value, dict):
+                # for typed dicts check only if that is a dict
+                return value  # pyright: ignore[reportUnknownVariableType]
+
+            case _:
+                raise TypeError(
+                    f"Type '{type(value)}' is not matching expected type '{validated_type}'"
+                )
+
+    return typed_dict_validator
