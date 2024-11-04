@@ -1,5 +1,12 @@
-from asyncio import Future, gather, get_event_loop
-from collections.abc import Callable
+from asyncio import (
+    AbstractEventLoop,
+    Future,
+    gather,
+    get_event_loop,
+    iscoroutinefunction,
+    run_coroutine_threadsafe,
+)
+from collections.abc import Callable, Coroutine
 from contextvars import ContextVar, Token
 from copy import copy
 from itertools import chain
@@ -27,6 +34,8 @@ class ScopeMetrics:
         trace_id: str | None,
         scope: str,
         logger: Logger | None,
+        parent: Self | None,
+        completion: Callable[[Self], Coroutine[None, None, None]] | Callable[[Self], None] | None,
     ) -> None:
         self.trace_id: str = trace_id or uuid4().hex
         self.identifier: str = uuid4().hex
@@ -37,15 +46,38 @@ class ScopeMetrics:
             else f"[{self.trace_id}] [{self.identifier}]"
         )
         self._logger: Logger = logger or getLogger(name=scope)
+        self._parent: Self | None = parent if parent else None
         self._metrics: dict[type[State], State] = {}
-        self._nested: list[ScopeMetrics] = []
+        self._nested: set[ScopeMetrics] = set()
         self._timestamp: float = monotonic()
-        self._completed: Future[float] = get_event_loop().create_future()
+        self._finished: bool = False
+        self._loop: AbstractEventLoop = get_event_loop()
+        self._completed: Future[float] = self._loop.create_future()
+
+        if parent := parent:
+            parent._nested.add(self)
 
         freeze(self)
 
+        if completion := completion:
+            metrics: Self = self
+            if iscoroutinefunction(completion):
+
+                def callback(_: Future[float]) -> None:
+                    run_coroutine_threadsafe(
+                        completion(metrics),
+                        metrics._loop,
+                    )
+
+            else:
+
+                def callback(_: Future[float]) -> None:
+                    completion(metrics)
+
+            self._completed.add_done_callback(callback)
+
     def __del__(self) -> None:
-        self._complete()  # ensure completion on deinit
+        assert self.is_completed, "Deinitializing not completed scope metrics"  # nosec: B101
 
     def __str__(self) -> str:
         return f"{self.label}[{self.identifier}]@[{self.trace_id}]"
@@ -113,8 +145,8 @@ class ScopeMetrics:
             self._metrics[metric_type] = metric
 
     @property
-    def completed(self) -> bool:
-        return self._completed.done() and all(nested.completed for nested in self._nested)
+    def is_completed(self) -> bool:
+        return self._completed.done() and all(nested.is_completed for nested in self._nested)
 
     @property
     def time(self) -> float:
@@ -131,24 +163,36 @@ class ScopeMetrics:
             return_exceptions=False,
         )
 
-    def _complete(self) -> None:
-        if self._completed.done():
-            return  # already completed
+    def _finish(self) -> None:
+        assert (  # nosec: B101
+            not self._completed.done()
+        ), "Invalid state - called finish on already completed scope"
 
+        assert (  # nosec: B101
+            not self._finished
+        ), "Invalid state - called completion on already finished scope"
+
+        self._finished = True  # self is now finished
+
+        self._complete_if_able()
+
+    def _complete_if_able(self) -> None:
+        assert (  # nosec: B101
+            not self._completed.done()
+        ), "Invalid state - called complete on already completed scope"
+
+        if not self._finished:
+            return  # wait for finishing self
+
+        if any(not nested.is_completed for nested in self._nested):
+            return  # wait for completing all nested scopes
+
+        # set completion time
         self._completed.set_result(monotonic() - self._timestamp)
 
-    def scope(
-        self,
-        name: str,
-        /,
-    ) -> Self:
-        nested: Self = self.__class__(
-            scope=name,
-            logger=self._logger,
-            trace_id=self.trace_id,
-        )
-        self._nested.append(nested)
-        return nested
+        # notify parent about completion
+        if parent := self._parent:
+            parent._complete_if_able()
 
     def log(
         self,
@@ -178,28 +222,36 @@ class MetricsContext:
         *,
         trace_id: str | None = None,
         logger: Logger | None = None,
+        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]]
+        | Callable[[ScopeMetrics], None]
+        | None,
     ) -> Self:
-        try:
-            context: ScopeMetrics = cls._context.get()
-            if trace_id is None or context.trace_id == trace_id:
-                return cls(context.scope(name))
+        current: ScopeMetrics
+        try:  # check for current scope context
+            current = cls._context.get()
 
-            else:
-                return cls(
-                    ScopeMetrics(
-                        trace_id=trace_id,
-                        scope=name,
-                        logger=logger or context._logger,  # pyright: ignore[reportPrivateUsage]
-                    )
-                )
-        except LookupError:  # create metrics scope when missing yet
+        except LookupError:
+            # create metrics scope when missing yet
             return cls(
                 ScopeMetrics(
                     trace_id=trace_id,
                     scope=name,
                     logger=logger,
+                    parent=None,
+                    completion=completion,
                 )
             )
+
+        # or create nested metrics otherwise
+        return cls(
+            ScopeMetrics(
+                trace_id=trace_id,
+                scope=name,
+                logger=logger or current._logger,  # pyright: ignore[reportPrivateUsage]
+                parent=current,
+                completion=completion,
+            )
+        )
 
     @classmethod
     def record[Metric: State](
@@ -320,15 +372,12 @@ class MetricsContext:
     ) -> None:
         self._metrics: ScopeMetrics = metrics
         self._token: Token[ScopeMetrics] | None = None
-        self._started: float | None = None
-        self._finished: float | None = None
 
     def __enter__(self) -> None:
         assert (  # nosec: B101
-            self._token is None and self._started is None
+            self._token is None and not self._metrics._finished  # pyright: ignore[reportPrivateUsage]
         ), "MetricsContext reentrance is not allowed"
         self._token = MetricsContext._context.set(self._metrics)
-        self._started = monotonic()
 
     def __exit__(
         self,
@@ -337,8 +386,8 @@ class MetricsContext:
         exc_tb: TracebackType | None,
     ) -> None:
         assert (  # nosec: B101
-            self._token is not None and self._started is not None and self._finished is None
+            self._token is not None
         ), "Unbalanced MetricsContext context enter/exit"
-        self._finished = monotonic()
         MetricsContext._context.reset(self._token)
+        self._metrics._finish()  # pyright: ignore[reportPrivateUsage]
         self._token = None

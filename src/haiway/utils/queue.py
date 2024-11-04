@@ -3,8 +3,6 @@ from collections import deque
 from collections.abc import AsyncIterator
 from typing import Self
 
-from haiway.utils.immutable import freeze
-
 __all__ = [
     "AsyncQueue",
 ]
@@ -18,20 +16,19 @@ class AsyncQueue[Element](AsyncIterator[Element]):
 
     def __init__(
         self,
+        *elements: Element,
         loop: AbstractEventLoop | None = None,
     ) -> None:
         self._loop: AbstractEventLoop = loop or get_running_loop()
-        self._queue: deque[Element] = deque()
+        self._queue: deque[Element] = deque(elements)
         self._waiting: Future[Element] | None = None
         self._finish_reason: BaseException | None = None
-
-        freeze(self)
 
     def __del__(self) -> None:
         self.finish()
 
     @property
-    def finished(self) -> bool:
+    def is_finished(self) -> bool:
         return self._finish_reason is not None
 
     def enqueue(
@@ -40,7 +37,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         /,
         *elements: Element,
     ) -> None:
-        if self.finished:
+        if self.is_finished:
             raise RuntimeError("AsyncQueue is already finished")
 
         if self._waiting is not None and not self._waiting.done():
@@ -55,7 +52,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         self,
         exception: BaseException | None = None,
     ) -> None:
-        if self.finished:
+        if self.is_finished:
             return  # already finished, ignore
 
         self._finish_reason = exception or StopAsyncIteration()
@@ -70,7 +67,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         return self
 
     async def __anext__(self) -> Element:
-        assert self._waiting is None, "Only a single queue iterator is supported!"  # nosec: B101
+        assert self._waiting is None, "Only a single queue consumer is supported!"  # nosec: B101
 
         if self._queue:  # check the queue, let it finish
             return self._queue.popleft()

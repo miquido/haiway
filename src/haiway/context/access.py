@@ -1,12 +1,16 @@
 from asyncio import (
+    CancelledError,
     Task,
     current_task,
 )
 from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
     Callable,
     Coroutine,
     Iterable,
 )
+from contextvars import Context, copy_context
 from logging import Logger
 from types import TracebackType
 from typing import Any, final
@@ -32,32 +36,28 @@ class ScopeContext:
         logger: Logger | None,
         state: tuple[State, ...],
         disposables: Disposables | None,
-        task_group: TaskGroupContext,
-        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]] | None,
+        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]]
+        | Callable[[ScopeMetrics], None]
+        | None,
     ) -> None:
-        self._task_group: TaskGroupContext = task_group
-        self._logger: Logger | None = logger
-        self._trace_id: str | None = trace_id
-        self._name: str = name
+        self._task_group_context: TaskGroupContext = TaskGroupContext()
+        # postponing state creation to include disposables if needed
         self._state_context: StateContext
         self._state: tuple[State, ...] = state
         self._disposables: Disposables | None = disposables
-        self._metrics_context: MetricsContext
-        self._completion: Callable[[ScopeMetrics], Coroutine[None, None, None]] | None = completion
+        # pre-building metrics context to ensure nested context registering
+        self._metrics_context: MetricsContext = MetricsContext.scope(
+            name,
+            logger=logger,
+            trace_id=trace_id,
+            completion=completion,
+        )
 
         freeze(self)
 
     def __enter__(self) -> None:
-        assert self._completion is None, "Can't enter synchronous context with completion"  # nosec: B101
         assert self._disposables is None, "Can't enter synchronous context with disposables"  # nosec: B101
-
         self._state_context = StateContext.updated(self._state)
-        self._metrics_context = MetricsContext.scope(
-            self._name,
-            logger=self._logger,
-            trace_id=self._trace_id,
-        )
-
         self._state_context.__enter__()
         self._metrics_context.__enter__()
 
@@ -80,21 +80,15 @@ class ScopeContext:
         )
 
     async def __aenter__(self) -> None:
-        await self._task_group.__aenter__()
+        await self._task_group_context.__aenter__()
 
-        if self._disposables:
+        if self._disposables is not None:
             self._state_context = StateContext.updated(
                 (*self._state, *await self._disposables.__aenter__())
             )
 
         else:
             self._state_context = StateContext.updated(self._state)
-
-        self._metrics_context = MetricsContext.scope(
-            self._name,
-            logger=self._logger,
-            trace_id=self._trace_id,
-        )
 
         self._state_context.__enter__()
         self._metrics_context.__enter__()
@@ -105,14 +99,14 @@ class ScopeContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if self._disposables:
+        if self._disposables is not None:
             await self._disposables.__aexit__(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
             )
 
-        await self._task_group.__aexit__(
+        await self._task_group_context.__aexit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
@@ -130,9 +124,6 @@ class ScopeContext:
             exc_tb=exc_tb,
         )
 
-        if completion := self._completion:
-            await completion(self._metrics_context._metrics)  # pyright: ignore[reportPrivateUsage]
-
 
 @final
 class ctx:
@@ -144,7 +135,9 @@ class ctx:
         disposables: Disposables | Iterable[Disposable] | None = None,
         logger: Logger | None = None,
         trace_id: str | None = None,
-        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]] | None = None,
+        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]]
+        | Callable[[ScopeMetrics], None]
+        | None = None,
     ) -> ScopeContext:
         """
         Access scope context with given parameters. When called within an existing context\
@@ -173,7 +166,7 @@ class ctx:
              provided current identifier will be used if any, otherwise it random id will\
              be generated
 
-        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]] | None = None
+        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]] | Callable[[ScopeMetrics], None] | None = None
             completion callback called on exit from the scope granting access to finished\
              scope metrics. Completion is called outside of the context when its metrics is\
              already finished. Make sure to avoid any long operations within the completion.
@@ -182,7 +175,7 @@ class ctx:
         -------
         ScopeContext
             context object intended to enter context manager with it
-        """
+        """  # noqa: E501
 
         resolved_disposables: Disposables | None
         match disposables:
@@ -201,7 +194,6 @@ class ctx:
             logger=logger,
             state=state,
             disposables=resolved_disposables,
-            task_group=TaskGroupContext(),
             completion=completion,
         )
 
@@ -256,6 +248,62 @@ class ctx:
         """
 
         return TaskGroupContext.run(function, *args, **kwargs)
+
+    @staticmethod
+    def stream[Result, **Arguments](
+        source: Callable[Arguments, AsyncGenerator[Result, None]],
+        /,
+        *args: Arguments.args,
+        **kwargs: Arguments.kwargs,
+    ) -> AsyncIterator[Result]:
+        """
+        Stream results produced by a generator within the proper context state.
+
+        Parameters
+        ----------
+        source: Callable[Arguments, AsyncGenerator[Result, None]]
+            generator streamed as the result
+
+        *args: Arguments.args
+            positional arguments passed to generator call
+
+        **kwargs: Arguments.kwargs
+            keyword arguments passed to generator call
+
+        Returns
+        -------
+        AsyncIterator[Result]
+            iterator for accessing generated results
+        """
+
+        # prepare context snapshot
+        context_snapshot: Context = copy_context()
+
+        # prepare nested context
+        streaming_context: ScopeContext = ctx.scope(
+            getattr(
+                source,
+                "__name__",
+                "streaming",
+            )
+        )
+
+        async def generator() -> AsyncGenerator[Result, None]:
+            async with streaming_context:
+                async for result in source(*args, **kwargs):
+                    yield result
+
+        # finally return it as an iterator
+        return context_snapshot.run(generator)
+
+    @staticmethod
+    def check_cancellation() -> None:
+        """
+        Check if current asyncio task is cancelled, raises CancelledError if so.
+        """
+
+        if (task := current_task()) and task.cancelled():
+            raise CancelledError()
 
     @staticmethod
     def cancel() -> None:
