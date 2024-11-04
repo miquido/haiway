@@ -1,3 +1,5 @@
+from asyncio import get_running_loop
+
 from haiway import MissingContext, ScopeMetrics, State, ctx
 from pytest import mark, raises
 
@@ -64,38 +66,92 @@ async def test_exceptions_are_propagated():
 
 @mark.asyncio
 async def test_completions_are_called_according_to_context_exits():
+    completion_future = get_running_loop().create_future()
+    nested_completion_future = get_running_loop().create_future()
+    executions: int = 0
+
+    def completion(metrics: ScopeMetrics):
+        nonlocal executions
+        executions += 1
+        completion_future.set_result(())
+
+    def nested_completion(metrics: ScopeMetrics):
+        nonlocal executions
+        executions += 1
+        nested_completion_future.set_result(())
+
+    async with ctx.scope("outer", completion=completion):
+        assert executions == 0
+
+        async with ctx.scope("inner", completion=nested_completion):
+            assert executions == 0
+
+        await nested_completion_future
+        assert executions == 1
+
+    await completion_future
+    assert executions == 2
+
+
+@mark.asyncio
+async def test_async_completions_are_called_according_to_context_exits():
+    completion_future = get_running_loop().create_future()
+    nested_completion_future = get_running_loop().create_future()
     executions: int = 0
 
     async def completion(metrics: ScopeMetrics):
         nonlocal executions
         executions += 1
+        completion_future.set_result(())
+
+    async def nested_completion(metrics: ScopeMetrics):
+        nonlocal executions
+        executions += 1
+        nested_completion_future.set_result(())
 
     async with ctx.scope("outer", completion=completion):
         assert executions == 0
 
-        async with ctx.scope("inner", completion=completion):
+        async with ctx.scope("inner", completion=nested_completion):
             assert executions == 0
 
+        await nested_completion_future
         assert executions == 1
 
+    await completion_future
     assert executions == 2
 
 
 @mark.asyncio
 async def test_metrics_are_recorded_within_context():
-    def verify_example_metrics(state: str):
-        async def completion(metrics: ScopeMetrics):
-            assert metrics.read(ExampleState, default=ExampleState()).state == state
+    completion_future = get_running_loop().create_future()
+    nested_completion_future = get_running_loop().create_future()
+    metric: ExampleState = ExampleState()
+    nested_metric: ExampleState = ExampleState()
 
-        return completion
+    async def completion(metrics: ScopeMetrics):
+        nonlocal metric
+        metric = metrics.read(ExampleState, default=ExampleState())
+        completion_future.set_result(())
 
-    async with ctx.scope("outer", completion=verify_example_metrics("outer-in-out")):
+    async def nested_completion(metrics: ScopeMetrics):
+        nonlocal nested_metric
+        nested_metric = metrics.read(ExampleState, default=ExampleState())
+        nested_completion_future.set_result(())
+
+    async with ctx.scope("outer", completion=completion):
         ctx.record(ExampleState(state="outer-in"))
 
-        async with ctx.scope("inner", completion=verify_example_metrics("inner")):
+        async with ctx.scope("inner", completion=nested_completion):
             ctx.record(ExampleState(state="inner"))
+
+        await nested_completion_future
+        assert nested_metric.state == "inner"
 
         ctx.record(
             ExampleState(state="-out"),
             merge=lambda lhs, rhs: ExampleState(state=lhs.state + rhs.state),
         )
+
+    await completion_future
+    assert metric.state == "outer-in-out"
