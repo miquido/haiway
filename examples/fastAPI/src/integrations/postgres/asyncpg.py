@@ -63,11 +63,16 @@ class PostgresSession:
         if self._pool._initialized:  # pyright: ignore[reportPrivateUsage]
             ctx.spawn(self._pool.close)
 
-    async def initialize(self) -> PostgresClient:
+    async def __aenter__(self) -> PostgresClient:
         await self._pool  # initialize pool
         return PostgresClient(connection=self.connection)
 
-    async def dispose(self) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         if self._pool._initialized:  # pyright: ignore[reportPrivateUsage]
             await self._pool.close()
 

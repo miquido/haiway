@@ -1,7 +1,6 @@
 from asyncio import AbstractEventLoop, CancelledError, Future, get_running_loop
 from collections import deque
 from collections.abc import AsyncIterator
-from typing import Self
 
 __all__ = [
     "AsyncQueue",
@@ -62,9 +61,6 @@ class AsyncQueue[Element](AsyncIterator[Element]):
 
     def cancel(self) -> None:
         self.finish(exception=CancelledError())
-
-    def __aiter__(self) -> Self:
-        return self
 
     async def __anext__(self) -> Element:
         assert self._waiting is None, "Only a single queue consumer is supported!"  # nosec: B101
