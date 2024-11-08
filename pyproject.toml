@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "haiway"
 description = "Framework for dependency injection and state management within structured concurrency model."
-version = "0.4.0"
+version = "0.5.0"
 readme = "README.md"
 maintainers = [
   { name = "Kacper Kaliński", email = "kacper.kalinski@miquido.com" },
