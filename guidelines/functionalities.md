@@ -207,13 +207,13 @@ from notes.state import Notes, NotesDirectory
 from haiway import ctx
 
 # Implementation of note creation function
-async def file_note_create(self, content: str, **extra: Any) -> Note:
+async def file_note_create(content: str, **extra: Any) -> Note:
     # Retrieve path from the current context's state, updated if needed
     path = ctx.state(NotesDirectory).updated(**extra).path
     # Store note in file within the path...
 
 # Implementation of note update function
-async def file_note_update(self, note: Note, **extra: Any) -> None:
+async def file_note_update(note: Note, **extra: Any) -> None:
     # Retrieve path from the current context's state, updated if needed
     path = ctx.state(NotesDirectory).updated(**extra).path
     # Update the note...
@@ -237,12 +237,12 @@ from notes.state import Notes
 from haiway import ctx
 
 # Call of note creation function
-async def create_note(self, content: str, **extra: Any) -> Note:
+async def create_note(content: str, **extra: Any) -> Note:
     # Invoke the function implementation from the contextual state
     await ctx.state(Notes).create(content=content, **extra)
 
 # Call of note update function
-async def update_note(self, note: Note, **extra: Any) -> None:
+async def update_note(note: Note, **extra: Any) -> None:
     # Invoke the function implementation from the contextual state
     await ctx.state(Notes).update(note=note, **extra)
 ```
