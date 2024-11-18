@@ -16,7 +16,7 @@ from weakref import WeakValueDictionary
 
 from haiway.state.attributes import AttributeAnnotation, attribute_annotations
 from haiway.state.validation import attribute_type_validator
-from haiway.types.missing import MISSING, Missing
+from haiway.types import MISSING, Missing, not_missing
 
 __all__ = [
     "State",
@@ -184,7 +184,13 @@ class State(metaclass=StateMeta):
         return self.__replace__(**kwargs)
 
     def as_dict(self) -> dict[str, Any]:
-        return vars(self)
+        dict_result: dict[str, Any] = {}
+        for key in self.__ATTRIBUTES__.keys():
+            value: Any | Missing = getattr(self, key, MISSING)
+            if not_missing(value):
+                dict_result[key] = value
+
+        return dict_result
 
     def __str__(self) -> str:
         attributes: str = ", ".join([f"{key}: {value}" for key, value in vars(self).items()])

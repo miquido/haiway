@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import Literal, Protocol, Self, TypedDict, runtime_checkable
 
-from haiway import State, frozenlist
+from haiway import MISSING, Missing, State, frozenlist
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -63,6 +63,17 @@ def test_basic_initializes_with_defaults() -> None:
     assert basic.optional is None
 
 
+def test_basic_equals_checks_properties() -> None:
+    class Basics(State):
+        string: str
+        integer: int
+
+    assert Basics(string="a", integer=1) == Basics(string="a", integer=1)
+    assert Basics(string="a", integer=1) != Basics(string="b", integer=1)
+    assert Basics(string="a", integer=1) != Basics(string="a", integer=2)
+    assert Basics(string="a", integer=1) != Basics(string="b", integer=2)
+
+
 def test_basic_initializes_with_arguments_and_defaults() -> None:
     class Basics(State):
         string: str
@@ -119,3 +130,23 @@ def test_nested_initializes_with_proper_arguments() -> None:
         recursion=None,
         self_recursion=None,
     )
+
+
+def test_dict_skips_missing_properties() -> None:
+    class Basics(State):
+        string: str
+        integer: int | Missing | None
+
+    assert Basics(string="a", integer=1).as_dict() == {"string": "a", "integer": 1}
+    assert Basics(string="a", integer=MISSING).as_dict() == {"string": "a"}
+    assert Basics(string="a", integer=None).as_dict() == {"string": "a", "integer": None}
+
+
+def test_initialization_allows_missing_properties() -> None:
+    class Basics(State):
+        string: str
+        integer: int | Missing | None
+
+    assert Basics(**{"string": "a", "integer": 1}) == Basics(string="a", integer=1)
+    assert Basics(**{"string": "a", "integer": None}) == Basics(string="a", integer=None)
+    assert Basics(**{"string": "a"}) == Basics(string="a", integer=MISSING)
