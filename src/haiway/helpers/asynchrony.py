@@ -9,7 +9,24 @@ from haiway.types.missing import MISSING, Missing
 
 __all__ = [
     "asynchronous",
+    "wrap_async",
 ]
+
+
+def wrap_async[**Args, Result](
+    function: Callable[Args, Coroutine[None, None, Result]] | Callable[Args, Result],
+    /,
+) -> Callable[Args, Coroutine[None, None, Result]]:
+    if iscoroutinefunction(function):
+        return function
+
+    else:
+
+        async def async_function(*args: Args.args, **kwargs: Args.kwargs) -> Result:
+            return cast(Callable[Args, Result], function)(*args, **kwargs)
+
+        _mimic_async(function, within=async_function)
+        return async_function
 
 
 @overload
