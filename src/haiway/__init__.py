@@ -15,6 +15,7 @@ from haiway.helpers import (
     throttle,
     timeout,
     traced,
+    wrap_async,
 )
 from haiway.state import State
 from haiway.types import (
@@ -76,4 +77,5 @@ __all__ = [
     "timeout",
     "traced",
     "when_missing",
+    "wrap_async",
 ]

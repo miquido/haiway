@@ -1,4 +1,4 @@
-from haiway.helpers.asynchrony import asynchronous
+from haiway.helpers.asynchrony import asynchronous, wrap_async
 from haiway.helpers.caching import cache
 from haiway.helpers.retries import retry
 from haiway.helpers.throttling import throttle
@@ -14,4 +14,5 @@ __all__ = [
     "throttle",
     "timeout",
     "traced",
+    "wrap_async",
 ]
