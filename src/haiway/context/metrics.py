@@ -48,14 +48,14 @@ class ScopeMetrics:
         self._logger: Logger = logger or getLogger(name=scope)
         self._parent: Self | None = parent if parent else None
         self._metrics: dict[type[State], State] = {}
-        self._nested: set[ScopeMetrics] = set()
+        self._nested: list[ScopeMetrics] = []
         self._timestamp: float = monotonic()
         self._finished: bool = False
         self._loop: AbstractEventLoop = get_event_loop()
         self._completed: Future[float] = self._loop.create_future()
 
         if parent := parent:
-            parent._nested.add(self)
+            parent._nested.append(self)
 
         freeze(self)
 
