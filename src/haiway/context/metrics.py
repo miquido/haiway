@@ -21,8 +21,8 @@ from haiway.types import MISSING, Missing, not_missing
 from haiway.utils import freeze
 
 __all__ = [
-    "ScopeMetrics",
     "MetricsContext",
+    "ScopeMetrics",
 ]
 
 
@@ -378,6 +378,7 @@ class MetricsContext:
             self._token is None and not self._metrics._finished  # pyright: ignore[reportPrivateUsage]
         ), "MetricsContext reentrance is not allowed"
         self._token = MetricsContext._context.set(self._metrics)
+        self._metrics.log(INFO, "Started...")
 
     def __exit__(
         self,
@@ -391,3 +392,4 @@ class MetricsContext:
         MetricsContext._context.reset(self._token)
         self._metrics._finish()  # pyright: ignore[reportPrivateUsage]
         self._token = None
+        self._metrics.log(INFO, f"...finished after {self._metrics.time:.2f}s")
