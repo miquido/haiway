@@ -7,9 +7,9 @@ from haiway.helpers.tracing import ArgumentsTrace, ResultTrace, traced
 
 __all__ = [
     "ArgumentsTrace",
+    "ResultTrace",
     "asynchronous",
     "cache",
-    "ResultTrace",
     "retry",
     "throttle",
     "timeout",

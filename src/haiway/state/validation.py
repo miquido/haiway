@@ -3,7 +3,7 @@ import typing
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from haiway import types as _types
+from haiway import types as haiway_types
 from haiway.state.attributes import AttributeAnnotation
 
 __all__ = [
@@ -19,7 +19,7 @@ def attribute_type_validator(  # noqa: PLR0911
         case types.NoneType:
             return _none_validator
 
-        case _types.Missing:
+        case haiway_types.Missing:
             return _missing_validator
 
         case types.UnionType:
@@ -57,8 +57,8 @@ def _missing_validator(
     value: Any,
 ) -> Any:
     match value:
-        case _types.Missing():
-            return _types.MISSING
+        case haiway_types.Missing():
+            return haiway_types.MISSING
 
         case _:
             raise TypeError(f"Type '{type(value)}' is not matching expected type 'Missing'")

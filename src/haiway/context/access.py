@@ -1,8 +1,4 @@
-from asyncio import (
-    CancelledError,
-    Task,
-    current_task,
-)
+from asyncio import CancelledError, Task, current_task
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,

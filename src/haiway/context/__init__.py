@@ -4,10 +4,10 @@ from haiway.context.metrics import ScopeMetrics
 from haiway.context.types import MissingContext, MissingState
 
 __all__ = [
-    "ctx",
     "Disposable",
     "Disposables",
     "MissingContext",
     "MissingState",
     "ScopeMetrics",
+    "ctx",
 ]

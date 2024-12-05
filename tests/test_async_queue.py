@@ -1,7 +1,8 @@
 from asyncio import CancelledError
 
-from haiway import AsyncQueue, ctx
 from pytest import mark, raises
+
+from haiway import AsyncQueue, ctx
 
 
 class FakeException(Exception):

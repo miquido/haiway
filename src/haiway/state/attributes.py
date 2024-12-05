@@ -17,8 +17,8 @@ from typing import (
 )
 
 __all__ = [
-    "attribute_annotations",
     "AttributeAnnotation",
+    "attribute_annotations",
 ]
 
 
