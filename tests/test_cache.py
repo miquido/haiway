@@ -2,8 +2,9 @@ from asyncio import CancelledError, Task, sleep
 from collections.abc import Callable, Generator
 from time import sleep as sync_sleep
 
-from haiway import cache
 from pytest import fixture, mark, raises
+
+from haiway import cache
 
 
 class FakeException(Exception):

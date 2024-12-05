@@ -7,10 +7,10 @@ from haiway.utils.noop import async_noop, noop
 from haiway.utils.queue import AsyncQueue
 
 __all__ = [
+    "AsyncQueue",
     "always",
     "async_always",
     "async_noop",
-    "AsyncQueue",
     "freeze",
     "getenv_bool",
     "getenv_float",

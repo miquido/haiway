@@ -3,8 +3,8 @@ from typing import overload
 
 __all__ = [
     "getenv_bool",
-    "getenv_int",
     "getenv_float",
+    "getenv_int",
     "getenv_str",
     "load_env",
 ]

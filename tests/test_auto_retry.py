@@ -2,8 +2,9 @@ from asyncio import CancelledError, Task, sleep
 from time import time
 from unittest import TestCase
 
-from haiway import retry
 from pytest import mark, raises
+
+from haiway import retry
 
 
 class FakeException(Exception):

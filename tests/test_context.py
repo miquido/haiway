@@ -1,7 +1,8 @@
 from asyncio import get_running_loop
 
-from haiway import MissingContext, ScopeMetrics, State, ctx
 from pytest import mark, raises
+
+from haiway import MissingContext, ScopeMetrics, State, ctx
 
 
 class ExampleState(State):

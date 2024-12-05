@@ -1,10 +1,11 @@
 from asyncio import CancelledError, get_running_loop, sleep
 from collections.abc import AsyncGenerator, AsyncIterator
 
+from pytest import mark, raises
+
 from haiway import ctx
 from haiway.context.metrics import ScopeMetrics
 from haiway.state.structure import State
-from pytest import mark, raises
 
 
 class FakeException(Exception):

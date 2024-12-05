@@ -8,9 +8,9 @@ from haiway.types import MISSING, Missing
 from haiway.utils import mimic_function
 
 __all__ = [
-    "traced",
     "ArgumentsTrace",
     "ResultTrace",
+    "traced",
 ]
 
 

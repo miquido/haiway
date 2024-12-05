@@ -1,7 +1,8 @@
 from asyncio import CancelledError, Task, sleep
 
-from haiway import timeout
 from pytest import mark, raises
+
+from haiway import timeout
 
 
 class FakeException(Exception):
