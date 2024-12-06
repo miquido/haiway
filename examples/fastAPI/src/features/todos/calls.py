@@ -1,7 +1,8 @@
 from uuid import UUID
 
-from features.todos.state import Todos
 from haiway import ctx
+
+from features.todos.state import Todos
 
 __all__ = [
     "complete_todo",

@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from haiway import ctx
+
 from solutions.user_tasks import UserTask, UserTasks
 
 __all__ = [

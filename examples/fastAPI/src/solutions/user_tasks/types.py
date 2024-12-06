@@ -7,9 +7,9 @@ from haiway import State
 __all__ = [
     "UserTask",
     "UserTaskCreation",
-    "UserTaskUpdating",
-    "UserTaskFetching",
     "UserTaskDeletion",
+    "UserTaskFetching",
+    "UserTaskUpdating",
 ]
 
 

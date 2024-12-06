@@ -12,10 +12,10 @@ maintainers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-  "haiway~=0.2.0",
+  "haiway~=0.6.0",
   "fastapi-slim~=0.115",
-  "asyncpg~=0.29",
-  "httpx~=0.25.0",
+  "asyncpg~=0.30",
+  "httpx~=0.28.0",
 ]
 
 [project.urls]
@@ -24,7 +24,7 @@ Homepage = "https://miquido.com"
 [project.optional-dependencies]
 dev = [
   "uvicorn~=0.30",
-  "ruff~=0.5.0",
+  "ruff~=0.8.0",
   "pyright~=1.1",
   "bandit~=1.7",
 ]
