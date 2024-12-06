@@ -2,6 +2,7 @@ from collections.abc import Callable, Mapping, Sequence, Set
 from enum import Enum
 from types import MappingProxyType, NoneType, UnionType
 from typing import Any, Literal, Protocol, Union
+from uuid import UUID
 
 from haiway.state.attributes import AttributeAnnotation
 from haiway.types import MISSING, Missing
@@ -289,6 +290,7 @@ VALIDATORS: Mapping[Any, Callable[[AttributeAnnotation], Callable[[Any], Any]]] 
     Set: _prepare_validator_of_set,
     Sequence: _prepare_validator_of_sequence,
     Mapping: _prepare_validator_of_mapping,
+    UUID: _prepare_validator_of_type,
     Union: _prepare_validator_of_union,
     UnionType: _prepare_validator_of_union,
     Callable: _prepare_validator_of_callable,

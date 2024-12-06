@@ -1,6 +1,7 @@
 from collections.abc import Callable, Sequence, Set
 from enum import StrEnum
 from typing import Literal, Protocol, Self, runtime_checkable
+from uuid import UUID, uuid4
 
 from haiway import MISSING, Missing, State, frozenlist
 
@@ -15,6 +16,7 @@ def test_basic_initializes_with_arguments() -> None:
         def __call__(self) -> None: ...
 
     class Basics(State):
+        uuid: UUID
         string: str
         literal: Literal["A", "B"]
         sequence: Sequence[str]
@@ -29,6 +31,7 @@ def test_basic_initializes_with_arguments() -> None:
         selection: Selection
 
     basic = Basics(
+        uuid=uuid4(),
         string="string",
         literal="A",
         sequence=["a", "b", "c"],
