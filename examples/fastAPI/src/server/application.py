@@ -3,9 +3,9 @@ from contextlib import asynccontextmanager
 from logging import Logger, getLogger
 
 from fastapi import FastAPI
-from haiway import Disposables
-from integrations.postgres import PostgresSession
+from haiway import Disposables, setup_logging
 
+from integrations.postgres import PostgresClient
 from server.middlewares import ContextMiddleware
 from server.routes import technical_router, todos_router
 
@@ -18,6 +18,8 @@ async def startup(app: FastAPI) -> None:
     """
     Startup function is called when the server process starts.
     """
+    setup_logging("server")  # setup logging
+
     logger: Logger = getLogger("server")
     if __debug__:
         logger.warning("Starting DEBUG server...")
@@ -27,12 +29,12 @@ async def startup(app: FastAPI) -> None:
 
     # initialize all shared clients on startup
     disposables = Disposables(
-        PostgresSession(),
+        PostgresClient(),
     )
     app.extra["disposables"] = disposables
 
     # prepare common state for all endpoints
-    app.extra["state"] = (*await disposables.initialize(),)
+    app.extra["state"] = (*await disposables.__aenter__(),)
 
     logger.info("...server started!")
 
@@ -42,7 +44,11 @@ async def shutdown(app: FastAPI) -> None:
     Shutdown function is called when server process ends.
     """
     # dispose all clients on shutdown
-    await app.extra["disposables"].dispose()
+    await app.extra["disposables"].__aexit(
+        None,
+        None,
+        None,
+    )
 
     getLogger("server").info("...server shutdown!")
 

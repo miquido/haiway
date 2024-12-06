@@ -6,7 +6,7 @@ __all__ = [
     "UserTask",
     "UserTasks",
     "create_task",
-    "update_task",
-    "fetch_tasks",
     "delete_task",
+    "fetch_tasks",
+    "update_task",
 ]

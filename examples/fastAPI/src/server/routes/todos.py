@@ -1,8 +1,9 @@
 from uuid import UUID
 
 from fastapi import APIRouter
-from features.todos import complete_todo
 from starlette.responses import Response
+
+from features.todos import complete_todo
 
 __all__ = [
     "router",

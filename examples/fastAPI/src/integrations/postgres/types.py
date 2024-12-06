@@ -1,16 +1,16 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 __all__ = [
-    "PostgresValue",
-    "PostgresExecution",
     "PostgresException",
+    "PostgresExecution",
+    "PostgresValue",
 ]
 
 type PostgresValue = UUID | datetime | date | time | str | bytes | float | int | bool | None
-type PostgresRow = Mapping[str, PostgresValue]
+type PostgresRow = Mapping[str, Any]
 
 
 @runtime_checkable
@@ -20,7 +20,7 @@ class PostgresExecution(Protocol):
         statement: str,
         /,
         *args: PostgresValue,
-    ) -> Iterable[PostgresRow]: ...
+    ) -> Sequence[PostgresRow]: ...
 
 
 class PostgresException(Exception):
