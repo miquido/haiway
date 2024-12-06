@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from copy import deepcopy
-from types import GenericAlias
+from types import EllipsisType, GenericAlias
 from typing import (
     Any,
     ClassVar,
@@ -15,7 +15,7 @@ from typing import (
 from weakref import WeakValueDictionary
 
 from haiway.state.attributes import AttributeAnnotation, attribute_annotations
-from haiway.state.validation import attribute_type_validator
+from haiway.state.validation import attribute_validator
 from haiway.types import MISSING, Missing, not_missing
 
 __all__ = [
@@ -80,7 +80,7 @@ class StateMeta(type):
                 attributes[key] = StateAttribute(
                     annotation=annotation,
                     default=getattr(state_type, key, MISSING),
-                    validator=attribute_type_validator(annotation),
+                    validator=attribute_validator(annotation),
                 )
 
         state_type.__ATTRIBUTES__ = attributes  # pyright: ignore[reportAttributeAccessIssue]
@@ -104,6 +104,7 @@ class State(metaclass=StateMeta):
     Base class for immutable data structures.
     """
 
+    __IMMUTABLE__: ClassVar[EllipsisType] = ...
     __ATTRIBUTES__: ClassVar[dict[str, StateAttribute[Any]]]
 
     def __class_getitem__(
