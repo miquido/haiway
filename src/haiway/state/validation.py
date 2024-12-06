@@ -1,5 +1,8 @@
 from collections.abc import Callable, Mapping, Sequence, Set
+from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
+from pathlib import Path
+from re import Pattern
 from types import MappingProxyType, NoneType, UnionType
 from typing import Any, Literal, Protocol, Union
 from uuid import UUID
@@ -282,6 +285,7 @@ VALIDATORS: Mapping[Any, Callable[[AttributeAnnotation], Callable[[Any], Any]]] 
     bool: _prepare_validator_of_type,
     int: _prepare_validator_of_type,
     float: _prepare_validator_of_type,
+    complex: _prepare_validator_of_type,
     bytes: _prepare_validator_of_type,
     str: _prepare_validator_of_type,
     tuple: _prepare_validator_of_tuple,
@@ -290,7 +294,15 @@ VALIDATORS: Mapping[Any, Callable[[AttributeAnnotation], Callable[[Any], Any]]] 
     Set: _prepare_validator_of_set,
     Sequence: _prepare_validator_of_sequence,
     Mapping: _prepare_validator_of_mapping,
+    range: _prepare_validator_of_type,
     UUID: _prepare_validator_of_type,
+    date: _prepare_validator_of_type,
+    datetime: _prepare_validator_of_type,
+    time: _prepare_validator_of_type,
+    timedelta: _prepare_validator_of_type,
+    timezone: _prepare_validator_of_type,
+    Path: _prepare_validator_of_type,
+    Pattern: _prepare_validator_of_type,
     Union: _prepare_validator_of_union,
     UnionType: _prepare_validator_of_union,
     Callable: _prepare_validator_of_callable,
