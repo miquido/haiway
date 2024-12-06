@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence, Set
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal, Protocol, Self, runtime_checkable
 from uuid import UUID, uuid4
@@ -17,6 +18,8 @@ def test_basic_initializes_with_arguments() -> None:
 
     class Basics(State):
         uuid: UUID
+        date: date
+        datetime: datetime
         string: str
         literal: Literal["A", "B"]
         sequence: Sequence[str]
@@ -32,6 +35,8 @@ def test_basic_initializes_with_arguments() -> None:
 
     basic = Basics(
         uuid=uuid4(),
+        date=date.today(),
+        datetime=datetime.now(),
         string="string",
         literal="A",
         sequence=["a", "b", "c"],
