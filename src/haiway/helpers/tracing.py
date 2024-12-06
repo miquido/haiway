@@ -1,5 +1,5 @@
 from asyncio import iscoroutinefunction
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from typing import Any, Self, cast
 
 from haiway.context import ctx
@@ -33,8 +33,8 @@ class ArgumentsTrace(State):
                 kwargs=MISSING,
             )
 
-    args: tuple[Any, ...] | Missing
-    kwargs: dict[str, Any] | Missing
+    args: Sequence[Any] | Missing
+    kwargs: Mapping[str, Any] | Missing
 
 
 class ResultTrace(State):

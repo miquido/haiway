@@ -42,6 +42,11 @@ class AttributeAnnotation:
             and self.arguments == other.arguments
         )
 
+    def __str__(self) -> str:
+        return f"{getattr(self.origin, "__name__", str(self.origin))}" + (
+            ("[" + ", ".join(str(arg) for arg in self.arguments) + "]") if self.arguments else ""
+        )
+
 
 def attribute_annotations(
     cls: type[Any],

@@ -1,12 +1,14 @@
-from collections.abc import Callable
-from typing import Literal, Protocol, Self, TypedDict, runtime_checkable
+from collections.abc import Callable, Sequence, Set
+from enum import StrEnum
+from typing import Literal, Protocol, Self, runtime_checkable
 
 from haiway import MISSING, Missing, State, frozenlist
 
 
 def test_basic_initializes_with_arguments() -> None:
-    class DictTyped(TypedDict):
-        value: str
+    class Selection(StrEnum):
+        A = "A"
+        B = "A"
 
     @runtime_checkable
     class Proto(Protocol):
@@ -15,7 +17,8 @@ def test_basic_initializes_with_arguments() -> None:
     class Basics(State):
         string: str
         literal: Literal["A", "B"]
-        sequence: list[str]
+        sequence: Sequence[str]
+        string_set: Set[str]
         frozen: frozenlist[int]
         integer: int
         union: str | int
@@ -23,12 +26,13 @@ def test_basic_initializes_with_arguments() -> None:
         none: None
         function: Callable[[], None]
         proto: Proto
-        dict_typed: DictTyped
+        selection: Selection
 
     basic = Basics(
         string="string",
         literal="A",
         sequence=["a", "b", "c"],
+        string_set={"a", "b"},
         frozen=(1, 2, 3),
         integer=0,
         union="union",
@@ -36,17 +40,18 @@ def test_basic_initializes_with_arguments() -> None:
         none=None,
         function=lambda: None,
         proto=lambda: None,
-        dict_typed={"value": "42"},
+        selection=Selection.A,
     )
     assert basic.string == "string"
     assert basic.literal == "A"
-    assert basic.sequence == ["a", "b", "c"]
+    assert basic.sequence == ("a", "b", "c")
+    assert basic.string_set == {"a", "b"}
     assert basic.frozen == (1, 2, 3)
     assert basic.integer == 0
     assert basic.union == "union"
     assert basic.optional == "optional"
     assert basic.none is None
-    assert basic.dict_typed == {"value": "42"}
+    assert basic.selection == Selection.A
     assert callable(basic.function)
     assert isinstance(basic.proto, Proto)
 

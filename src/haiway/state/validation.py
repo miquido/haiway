@@ -1,84 +1,242 @@
-import types
-import typing
-from collections.abc import Callable, Sequence
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence, Set
+from enum import Enum
+from types import MappingProxyType, NoneType, UnionType
+from typing import Any, Literal, Protocol, Union
 
-from haiway import types as haiway_types
 from haiway.state.attributes import AttributeAnnotation
+from haiway.types import MISSING, Missing
 
 __all__ = [
-    "attribute_type_validator",
+    "attribute_validator",
 ]
 
 
-def attribute_type_validator(  # noqa: PLR0911
+def attribute_validator(
     annotation: AttributeAnnotation,
     /,
 ) -> Callable[[Any], Any]:
-    match annotation.origin:
-        case types.NoneType:
-            return _none_validator
+    if validator := VALIDATORS.get(annotation.origin):
+        return validator(annotation)
 
-        case haiway_types.Missing:
-            return _missing_validator
+    elif hasattr(annotation.origin, "__IMMUTABLE__"):
+        return _prepare_validator_of_type(annotation)
 
-        case types.UnionType:
-            return _prepare_union_validator(annotation.arguments)
+    elif issubclass(annotation.origin, Protocol):
+        return _prepare_validator_of_type(annotation)
 
-        case typing.Literal:
-            return _prepare_literal_validator(annotation.arguments)
+    elif issubclass(annotation.origin, Enum):
+        return _prepare_validator_of_type(annotation)
 
-        case typing.Any:
-            return _any_validator
-
-        # typed dicts fail on type checks
-        case typed_dict if typing.is_typeddict(typed_dict):
-            return _prepare_typed_dict_validator(typed_dict)
-
-        case type() as other_type:
-            return _prepare_type_validator(other_type)
-
-        case other:
-            raise TypeError(f"Unsupported type annotation: {other}")
+    else:
+        raise TypeError(f"Unsupported type annotation: {annotation}")
 
 
-def _none_validator(
-    value: Any,
-) -> Any:
-    match value:
-        case None:
-            return None
+def _prepare_validator_of_any(
+    annotation: AttributeAnnotation,
+    /,
+) -> Callable[[Any], Any]:
+    def validator(
+        value: Any,
+    ) -> Any:
+        return value  # any is always valid
 
-        case _:
-            raise TypeError(f"Type '{type(value)}' is not matching expected type 'None'")
-
-
-def _missing_validator(
-    value: Any,
-) -> Any:
-    match value:
-        case haiway_types.Missing():
-            return haiway_types.MISSING
-
-        case _:
-            raise TypeError(f"Type '{type(value)}' is not matching expected type 'Missing'")
+    return validator
 
 
-def _any_validator(
-    value: Any,
-) -> Any:
-    return value  # any is always valid
+def _prepare_validator_of_none(
+    annotation: AttributeAnnotation,
+    /,
+) -> Callable[[Any], Any]:
+    def validator(
+        value: Any,
+    ) -> Any:
+        if value is None:
+            return value
+
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of 'None'")
+
+    return validator
 
 
-def _prepare_union_validator(
-    elements: Sequence[AttributeAnnotation],
+def _prepare_validator_of_missing(
+    annotation: AttributeAnnotation,
+    /,
+) -> Callable[[Any], Any]:
+    def validator(
+        value: Any,
+    ) -> Any:
+        if value is MISSING:
+            return value
+
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of 'Missing'")
+
+    return validator
+
+
+def _prepare_validator_of_literal(
+    annotation: AttributeAnnotation,
+    /,
+) -> Callable[[Any], Any]:
+    elements: list[Any] = annotation.arguments
+    formatted_type: str = str(annotation)
+
+    def validator(
+        value: Any,
+    ) -> Any:
+        if value in elements:
+            return value
+
+        else:
+            raise ValueError(f"'{value}' is not matching expected values of '{formatted_type}'")
+
+    return validator
+
+
+def _prepare_validator_of_type(
+    annotation: AttributeAnnotation,
+    /,
+) -> Callable[[Any], Any]:
+    validated_type: type[Any] = annotation.origin
+    formatted_type: str = str(annotation)
+
+    def type_validator(
+        value: Any,
+    ) -> Any:
+        match value:
+            case value if isinstance(value, validated_type):
+                return value
+
+            case _:
+                raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
+
+    return type_validator
+
+
+def _prepare_validator_of_set(
+    annotation: AttributeAnnotation,
+    /,
+) -> Callable[[Any], Any]:
+    element_validator: Callable[[Any], Any] = attribute_validator(annotation.arguments[0])
+    formatted_type: str = str(annotation)
+
+    def validator(
+        value: Any,
+    ) -> Any:
+        if isinstance(value, Set):
+            return frozenset(element_validator(element) for element in value)  # pyright: ignore[reportUnknownVariableType]
+
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
+
+    return validator
+
+
+def _prepare_validator_of_sequence(
+    annotation: AttributeAnnotation,
+    /,
+) -> Callable[[Any], Any]:
+    element_validator: Callable[[Any], Any] = attribute_validator(annotation.arguments[0])
+    formatted_type: str = str(annotation)
+
+    def validator(
+        value: Any,
+    ) -> Any:
+        match value:
+            case [*elements]:
+                return tuple(element_validator(element) for element in elements)
+
+            case _:
+                raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
+
+    return validator
+
+
+def _prepare_validator_of_mapping(
+    annotation: AttributeAnnotation,
+    /,
+) -> Callable[[Any], Any]:
+    key_validator: Callable[[Any], Any] = attribute_validator(annotation.arguments[0])
+    value_validator: Callable[[Any], Any] = attribute_validator(annotation.arguments[1])
+    formatted_type: str = str(annotation)
+
+    def validator(
+        value: Any,
+    ) -> Any:
+        match value:
+            case {**elements}:
+                return MappingProxyType(
+                    {key_validator(key): value_validator(value) for key, value in elements}
+                )
+
+            case _:
+                raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
+
+    return validator
+
+
+def _prepare_validator_of_tuple(
+    annotation: AttributeAnnotation,
+    /,
+) -> Callable[[Any], Any]:
+    if annotation.arguments[-1].origin == Ellipsis:
+        element_validator: Callable[[Any], Any] = attribute_validator(annotation.arguments[0])
+        formatted_type: str = str(annotation)
+
+        def validator(
+            value: Any,
+        ) -> Any:
+            match value:
+                case [*elements]:
+                    return tuple(element_validator(element) for element in elements)
+
+                case _:
+                    raise TypeError(
+                        f"'{value}' is not matching expected type of '{formatted_type}'"
+                    )
+
+        return validator
+
+    else:
+        element_validators: list[Callable[[Any], Any]] = [
+            attribute_validator(alternative) for alternative in annotation.arguments
+        ]
+        elements_count: int = len(element_validators)
+        formatted_type: str = str(annotation)
+
+        def validator(
+            value: Any,
+        ) -> Any:
+            match value:
+                case [*elements]:
+                    if len(elements) != elements_count:
+                        raise ValueError(
+                            f"'{value}' is not matching expected type of '{formatted_type}'"
+                        )
+
+                    return tuple(
+                        element_validators[idx](value) for idx, value in enumerate(elements)
+                    )
+
+                case _:
+                    raise TypeError(
+                        f"'{value}' is not matching expected type of '{formatted_type}'"
+                    )
+
+        return validator
+
+
+def _prepare_validator_of_union(
+    annotation: AttributeAnnotation,
     /,
 ) -> Callable[[Any], Any]:
     validators: list[Callable[[Any], Any]] = [
-        attribute_type_validator(alternative) for alternative in elements
+        attribute_validator(alternative) for alternative in annotation.arguments
     ]
+    formatted_type: str = str(annotation)
 
-    def union_validator(
+    def validator(
         value: Any,
     ) -> Any:
         errors: list[Exception] = []
@@ -89,61 +247,49 @@ def _prepare_union_validator(
             except Exception as exc:
                 errors.append(exc)
 
-        raise ExceptionGroup("Multiple errors", errors)
+        raise ExceptionGroup(
+            f"'{value}' is not matching expected type of '{formatted_type}'",
+            errors,
+        )
 
-    return union_validator
+    return validator
 
 
-def _prepare_literal_validator(
-    elements: Sequence[Any],
+def _prepare_validator_of_callable(
+    annotation: AttributeAnnotation,
     /,
 ) -> Callable[[Any], Any]:
-    def literal_validator(
+    formatted_type: str = str(annotation)
+
+    def validator(
         value: Any,
     ) -> Any:
-        if value in elements:
+        if callable(value):
             return value
 
         else:
-            raise ValueError(f"Value '{value}' is not matching expected '{elements}'")
+            raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
 
-    return literal_validator
-
-
-def _prepare_type_validator(
-    validated_type: type[Any],
-    /,
-) -> Callable[[Any], Any]:
-    def type_validator(
-        value: Any,
-    ) -> Any:
-        match value:
-            case value if isinstance(value, validated_type):
-                return value
-
-            case _:
-                raise TypeError(
-                    f"Type '{type(value)}' is not matching expected type '{validated_type}'"
-                )
-
-    return type_validator
+    return validator
 
 
-def _prepare_typed_dict_validator(
-    validated_type: type[Any],
-    /,
-) -> Callable[[Any], Any]:
-    def typed_dict_validator(
-        value: Any,
-    ) -> Any:
-        match value:
-            case value if isinstance(value, dict):
-                # for typed dicts check only if that is a dict
-                return value  # pyright: ignore[reportUnknownVariableType]
-
-            case _:
-                raise TypeError(
-                    f"Type '{type(value)}' is not matching expected type '{validated_type}'"
-                )
-
-    return typed_dict_validator
+VALIDATORS: Mapping[Any, Callable[[AttributeAnnotation], Callable[[Any], Any]]] = {
+    Any: _prepare_validator_of_any,
+    NoneType: _prepare_validator_of_none,
+    Missing: _prepare_validator_of_missing,
+    type: _prepare_validator_of_type,
+    bool: _prepare_validator_of_type,
+    int: _prepare_validator_of_type,
+    float: _prepare_validator_of_type,
+    bytes: _prepare_validator_of_type,
+    str: _prepare_validator_of_type,
+    tuple: _prepare_validator_of_tuple,
+    frozenset: _prepare_validator_of_set,
+    Literal: _prepare_validator_of_literal,
+    Set: _prepare_validator_of_set,
+    Sequence: _prepare_validator_of_sequence,
+    Mapping: _prepare_validator_of_mapping,
+    Union: _prepare_validator_of_union,
+    UnionType: _prepare_validator_of_union,
+    Callable: _prepare_validator_of_callable,
+}
