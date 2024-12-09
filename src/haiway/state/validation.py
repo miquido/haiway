@@ -5,6 +5,9 @@ from pathlib import Path
 from re import Pattern
 from types import MappingProxyType, NoneType, UnionType
 from typing import Any, Literal, Protocol, Union
+from typing import Mapping as MappingType  # noqa: UP035
+from typing import Sequence as SequenceType  # noqa: UP035
+from typing import Sequence as SetType  # noqa: UP035
 from uuid import UUID
 
 from haiway.state.attributes import AttributeAnnotation
@@ -128,7 +131,7 @@ def _prepare_validator_of_set(
     def validator(
         value: Any,
     ) -> Any:
-        if isinstance(value, Set):
+        if isinstance(value, set):
             return frozenset(element_validator(element) for element in value)  # pyright: ignore[reportUnknownVariableType]
 
         else:
@@ -171,7 +174,7 @@ def _prepare_validator_of_mapping(
         match value:
             case {**elements}:
                 return MappingProxyType(
-                    {key_validator(key): value_validator(value) for key, value in elements}
+                    {key_validator(key): value_validator(value) for key, value in elements.items()}
                 )
 
             case _:
@@ -291,9 +294,13 @@ VALIDATORS: Mapping[Any, Callable[[AttributeAnnotation], Callable[[Any], Any]]] 
     tuple: _prepare_validator_of_tuple,
     frozenset: _prepare_validator_of_set,
     Literal: _prepare_validator_of_literal,
+    set: _prepare_validator_of_set,
     Set: _prepare_validator_of_set,
+    SetType: _prepare_validator_of_set,
     Sequence: _prepare_validator_of_sequence,
+    SequenceType: _prepare_validator_of_sequence,
     Mapping: _prepare_validator_of_mapping,
+    MappingType: _prepare_validator_of_mapping,
     range: _prepare_validator_of_type,
     UUID: _prepare_validator_of_type,
     date: _prepare_validator_of_type,

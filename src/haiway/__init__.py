@@ -17,7 +17,7 @@ from haiway.helpers import (
     traced,
     wrap_async,
 )
-from haiway.state import State
+from haiway.state import AttributePath, AttributeRequirement, State
 from haiway.types import (
     MISSING,
     Missing,
@@ -46,6 +46,8 @@ __all__ = [
     "MISSING",
     "ArgumentsTrace",
     "AsyncQueue",
+    "AttributePath",
+    "AttributeRequirement",
     "Disposable",
     "Disposables",
     "Missing",

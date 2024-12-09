@@ -2,7 +2,7 @@
 #    uv --no-cache pip compile pyproject.toml -o constraints --all-extras
 bandit==1.8.0
     # via haiway (pyproject.toml)
-coverage==7.6.8
+coverage==7.6.9
     # via pytest-cov
 iniconfig==2.0.0
     # via pytest
