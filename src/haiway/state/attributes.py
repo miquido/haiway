@@ -19,6 +19,7 @@ from typing import (
 __all__ = [
     "AttributeAnnotation",
     "attribute_annotations",
+    "resolve_attribute_annotation",
 ]
 
 
@@ -68,7 +69,7 @@ def attribute_annotations(
         if ((get_origin(annotation) or annotation) is ClassVar) or key.startswith("_"):
             continue
 
-        attributes[key] = _resolve_attribute_annotation(
+        attributes[key] = resolve_attribute_annotation(
             annotation,
             self_annotation=self_annotation,
             type_parameters=type_parameters,
@@ -80,7 +81,7 @@ def attribute_annotations(
     return attributes
 
 
-def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
+def resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
     annotation: Any,
     /,
     self_annotation: AttributeAnnotation | None,
@@ -100,7 +101,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
 
         # forward reference through string
         case str() as forward_ref:
-            return _resolve_attribute_annotation(
+            return resolve_attribute_annotation(
                 ForwardRef(forward_ref, module=module)._evaluate(
                     globalns=None,
                     localns=localns,
@@ -115,7 +116,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
 
         # forward reference directly
         case typing.ForwardRef() as reference:
-            return _resolve_attribute_annotation(
+            return resolve_attribute_annotation(
                 reference._evaluate(
                     globalns=None,
                     localns=localns,
@@ -137,7 +138,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
                         origin=TypeAliasType,
                         arguments=[],
                     )
-                    resolved: AttributeAnnotation = _resolve_attribute_annotation(
+                    resolved: AttributeAnnotation = resolve_attribute_annotation(
                         alias.__value__,
                         self_annotation=None,
                         type_parameters=type_parameters,
@@ -169,7 +170,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
                             return AttributeAnnotation(
                                 origin=parametrized,
                                 arguments=[
-                                    _resolve_attribute_annotation(
+                                    resolve_attribute_annotation(
                                         argument,
                                         self_annotation=self_annotation,
                                         type_parameters=type_parameters,
@@ -193,7 +194,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
                     return AttributeAnnotation(
                         origin=origin,
                         arguments=[
-                            _resolve_attribute_annotation(
+                            resolve_attribute_annotation(
                                 argument,
                                 self_annotation=self_annotation,
                                 type_parameters=type_parameters,
@@ -211,7 +212,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
                 origin=TypeAliasType,
                 arguments=[],
             )
-            resolved: AttributeAnnotation = _resolve_attribute_annotation(
+            resolved: AttributeAnnotation = resolve_attribute_annotation(
                 alias.__value__,
                 self_annotation=None,
                 type_parameters=type_parameters,
@@ -225,7 +226,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
 
         # type parameter
         case typing.TypeVar():
-            return _resolve_attribute_annotation(
+            return resolve_attribute_annotation(
                 # try to resolve it from current parameters if able
                 type_parameters.get(
                     annotation.__name__,
@@ -270,7 +271,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
                 arguments=[
                     recursion_guard.get(
                         argument,
-                        _resolve_attribute_annotation(
+                        resolve_attribute_annotation(
                             argument,
                             self_annotation=self_annotation,
                             type_parameters=type_parameters,
@@ -287,7 +288,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
             return AttributeAnnotation(
                 origin=typing.Callable,
                 arguments=[
-                    _resolve_attribute_annotation(
+                    resolve_attribute_annotation(
                         argument,
                         self_annotation=self_annotation,
                         type_parameters=type_parameters,
@@ -314,7 +315,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
 
         # unwrap from irrelevant type wrappers
         case typing.Annotated | typing.Final | typing.Required | typing.NotRequired:
-            return _resolve_attribute_annotation(
+            return resolve_attribute_annotation(
                 get_args(annotation)[0],
                 self_annotation=self_annotation,
                 type_parameters=type_parameters,
@@ -327,7 +328,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
             return AttributeAnnotation(
                 origin=UnionType,  # pyright: ignore[reportArgumentType]
                 arguments=[
-                    _resolve_attribute_annotation(
+                    resolve_attribute_annotation(
                         get_args(annotation)[0],
                         self_annotation=self_annotation,
                         type_parameters=type_parameters,
@@ -352,7 +353,7 @@ def _resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
             return AttributeAnnotation(
                 origin=other,
                 arguments=[
-                    _resolve_attribute_annotation(
+                    resolve_attribute_annotation(
                         argument,
                         self_annotation=self_annotation,
                         type_parameters=type_parameters,

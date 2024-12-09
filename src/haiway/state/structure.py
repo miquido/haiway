@@ -15,6 +15,7 @@ from typing import (
 from weakref import WeakValueDictionary
 
 from haiway.state.attributes import AttributeAnnotation, attribute_annotations
+from haiway.state.path import AttributePath
 from haiway.state.validation import attribute_validator
 from haiway.types import MISSING, Missing, not_missing
 
@@ -86,6 +87,7 @@ class StateMeta(type):
         state_type.__ATTRIBUTES__ = attributes  # pyright: ignore[reportAttributeAccessIssue]
         state_type.__slots__ = frozenset(attributes.keys())  # pyright: ignore[reportAttributeAccessIssue]
         state_type.__match_args__ = state_type.__slots__  # pyright: ignore[reportAttributeAccessIssue]
+        state_type._ = AttributePath(state_type, attribute=state_type)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
 
         return state_type
 
@@ -104,6 +106,7 @@ class State(metaclass=StateMeta):
     Base class for immutable data structures.
     """
 
+    _: ClassVar[Self]
     __IMMUTABLE__: ClassVar[EllipsisType] = ...
     __ATTRIBUTES__: ClassVar[dict[str, StateAttribute[Any]]]
 
@@ -177,6 +180,30 @@ class State(metaclass=StateMeta):
                     ),
                 ),
             )
+
+    @classmethod
+    def path[Attribute](
+        cls,
+        path: Attribute,
+        /,
+    ) -> AttributePath[Self, Attribute]:
+        assert isinstance(  # nosec: B101
+            path, AttributePath
+        ), "Prepare parameter path by using Self._.path.to.property or explicitly"
+
+        return cast(AttributePath[Self, Attribute], path)
+
+    def updating[Value](
+        self,
+        path: AttributePath[Self, Value] | Value,
+        /,
+        value: Value,
+    ) -> Self:
+        assert isinstance(  # nosec: B101
+            path, AttributePath
+        ), "Prepare parameter path by using Self._.path.to.property or explicitly"
+
+        return cast(AttributePath[Self, Value], path)(self, updated=value)
 
     def updated(
         self,
