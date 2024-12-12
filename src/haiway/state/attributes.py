@@ -1,20 +1,28 @@
-import sys
 import types
 import typing
-from collections.abc import Mapping
-from types import NoneType, UnionType
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from types import GenericAlias, NoneType, UnionType
 from typing import (
     Any,
     ClassVar,
     ForwardRef,
     Generic,
     Literal,
+    ParamSpec,
+    Self,
     TypeAliasType,
     TypeVar,
+    TypeVarTuple,
+    _GenericAlias,  # pyright: ignore
     get_args,
     get_origin,
     get_type_hints,
+    is_typeddict,
+    overload,
 )
+
+from haiway import types as haiway_types
+from haiway.types import MISSING, Missing
 
 __all__ = [
     "AttributeAnnotation",
@@ -28,339 +36,703 @@ class AttributeAnnotation:
         self,
         *,
         origin: Any,
-        arguments: list[Any],
+        arguments: Sequence[Any] | None = None,
+        required: bool = True,
+        extra: Mapping[str, Any] | None = None,
     ) -> None:
         self.origin: Any = origin
-        self.arguments: list[Any] = arguments
+        self.arguments: Sequence[Any]
+        if arguments is None:
+            self.arguments = ()
 
-    def __eq__(
+        else:
+            self.arguments = arguments
+
+        self.required: bool = required
+        self.extra: Mapping[str, Any]
+        if extra is None:
+            self.extra = {}
+
+        else:
+            self.extra = extra
+
+    def update_required(
         self,
-        other: Any,
-    ) -> bool:
-        return self is other or (
-            isinstance(other, self.__class__)
-            and self.origin == other.origin
-            and self.arguments == other.arguments
-        )
+        required: bool,
+        /,
+    ) -> Self:
+        self.required = self.required and required
+
+        return self
 
     def __str__(self) -> str:
-        return f"{getattr(self.origin, "__name__", str(self.origin))}" + (
-            ("[" + ", ".join(str(arg) for arg in self.arguments) + "]") if self.arguments else ""
-        )
+        origin_str: str = getattr(self.origin, "__name__", str(self.origin))
+        arguments_str: str
+        if self.arguments:
+            arguments_str = "[" + ", ".join(str(arg) for arg in self.arguments) + "]"
+
+        else:
+            arguments_str = ""
+
+        if module := getattr(self.origin, "__module__", None):
+            return f"{module}.{origin_str}{arguments_str}"
+
+        else:
+            return f"{origin_str}{arguments_str}"
 
 
 def attribute_annotations(
     cls: type[Any],
     /,
-    type_parameters: dict[str, Any] | None = None,
-) -> dict[str, AttributeAnnotation]:
-    type_parameters = type_parameters or {}
-
+    type_parameters: Mapping[str, Any],
+) -> Mapping[str, AttributeAnnotation]:
     self_annotation = AttributeAnnotation(
         origin=cls,
-        arguments=[],  # ignore self arguments here, State will have them resolved at this stage
+        # ignore arguments here, State (and draive.DataModel) will have them resolved at this stage
+        arguments=[],
     )
-    localns: dict[str, Any] = {cls.__name__: cls}
-    recursion_guard: dict[Any, AttributeAnnotation] = {cls: self_annotation}
-    attributes: dict[str, AttributeAnnotation] = {}
 
-    for key, annotation in get_type_hints(cls, localns=localns).items():
-        # do not include ClassVars, private or dunder items
-        if ((get_origin(annotation) or annotation) is ClassVar) or key.startswith("_"):
+    # ignore args_keys here, State (and draive.DataModel) will have them resolved at this stage
+    recursion_guard: MutableMapping[str, AttributeAnnotation] = {
+        _recursion_key(cls, default=str(self_annotation)): self_annotation
+    }
+
+    attributes: dict[str, AttributeAnnotation] = {}
+    for key, annotation in get_type_hints(cls, localns={cls.__name__: cls}).items():
+        # do not include private or special items
+        if key.startswith("_"):
+            continue
+
+        # do not include ClassVars
+        if (get_origin(annotation) or annotation) is ClassVar:
             continue
 
         attributes[key] = resolve_attribute_annotation(
             annotation,
-            self_annotation=self_annotation,
             type_parameters=type_parameters,
             module=cls.__module__,
-            localns=localns,
+            self_annotation=self_annotation,
             recursion_guard=recursion_guard,
         )
 
     return attributes
 
 
-def resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912, PLR0913
+def _resolve_none(
     annotation: Any,
-    /,
-    self_annotation: AttributeAnnotation | None,
-    type_parameters: dict[str, Any],
-    module: str,
-    localns: dict[str, Any],
-    recursion_guard: Mapping[Any, AttributeAnnotation],  # TODO: verify recursion!
 ) -> AttributeAnnotation:
-    # resolve annotation directly if able
+    return AttributeAnnotation(origin=NoneType)
+
+
+def _resolve_missing(
+    annotation: Any,
+) -> AttributeAnnotation:
+    # special case - attributes marked as missing are not required
+    # Missing does not work properly within TypedDict though
+    return AttributeAnnotation(
+        origin=Missing,
+        required=False,
+    )
+
+
+def _resolve_literal(
+    annotation: Any,
+) -> AttributeAnnotation:
+    return AttributeAnnotation(
+        origin=Literal,
+        arguments=get_args(annotation),
+    )
+
+
+def _resolve_forward_ref(
+    annotation: ForwardRef | str,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    forward_ref: ForwardRef
     match annotation:
-        # None
-        case types.NoneType | types.NoneType():
-            return AttributeAnnotation(
-                origin=NoneType,
-                arguments=[],
-            )
+        case str() as string:
+            forward_ref = ForwardRef(string, module=module)
 
-        # forward reference through string
-        case str() as forward_ref:
-            return resolve_attribute_annotation(
-                ForwardRef(forward_ref, module=module)._evaluate(
-                    globalns=None,
-                    localns=localns,
-                    recursive_guard=frozenset(),
-                ),
+        case reference:
+            forward_ref = reference
+
+    if evaluated := forward_ref._evaluate(
+        globalns=None,
+        localns=None,
+        recursive_guard=frozenset(),
+    ):
+        return resolve_attribute_annotation(
+            evaluated,
+            type_parameters=type_parameters,
+            module=module,
+            self_annotation=self_annotation,
+            recursion_guard=recursion_guard,
+        )
+
+    else:
+        raise RuntimeError(f"Cannot resolve annotation of {annotation}")
+
+
+def _resolve_generic_alias(  # noqa: PLR0911, PLR0912
+    annotation: GenericAlias,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    match get_origin(annotation):
+        case TypeAliasType() as alias:  # pyright: ignore[reportUnnecessaryComparison]
+            return _resolve_type_alias(
+                alias,
+                type_parameters={
+                    # verify if we should pass all parameters
+                    param.__name__: get_args(annotation)[idx]
+                    for idx, param in enumerate(alias.__type_params__)
+                },
+                module=module,
                 self_annotation=self_annotation,
-                type_parameters=type_parameters,
-                module=module,
-                localns=localns,
-                recursion_guard=recursion_guard,  # we might need to update it somehow?
-            )
-
-        # forward reference directly
-        case typing.ForwardRef() as reference:
-            return resolve_attribute_annotation(
-                reference._evaluate(
-                    globalns=None,
-                    localns=localns,
-                    recursive_guard=frozenset(),
-                ),
-                self_annotation=self_annotation,
-                type_parameters=type_parameters,
-                module=module,
-                localns=localns,
-                recursion_guard=recursion_guard,  # we might need to update it somehow?
-            )
-
-        # generic alias aka parametrized type
-        case types.GenericAlias() as generic_alias:
-            match get_origin(generic_alias):
-                # check for an alias with parameters
-                case typing.TypeAliasType() as alias:  # pyright: ignore[reportUnnecessaryComparison]
-                    type_alias: AttributeAnnotation = AttributeAnnotation(
-                        origin=TypeAliasType,
-                        arguments=[],
-                    )
-                    resolved: AttributeAnnotation = resolve_attribute_annotation(
-                        alias.__value__,
-                        self_annotation=None,
-                        type_parameters=type_parameters,
-                        module=module,
-                        localns=localns,
-                        recursion_guard=recursion_guard,
-                    )
-                    type_alias.origin = resolved.origin
-                    type_alias.arguments = resolved.arguments
-                    return type_alias
-
-                # check if we can resolve it as generic
-                case parametrized if issubclass(parametrized, Generic):
-                    parametrized_type: Any = parametrized.__class_getitem__(  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-                        *(
-                            type_parameters.get(
-                                arg.__name__,
-                                arg.__bound__ or Any,
-                            )
-                            if isinstance(arg, TypeVar)
-                            else arg
-                            for arg in get_args(generic_alias)
-                        )
-                    )
-
-                    match parametrized_type:
-                        # verify if we got any specific type or generic alias again
-                        case types.GenericAlias():
-                            return AttributeAnnotation(
-                                origin=parametrized,
-                                arguments=[
-                                    resolve_attribute_annotation(
-                                        argument,
-                                        self_annotation=self_annotation,
-                                        type_parameters=type_parameters,
-                                        module=module,
-                                        localns=localns,
-                                        recursion_guard=recursion_guard,
-                                    )
-                                    for argument in get_args(generic_alias)
-                                ],
-                            )
-
-                        # use resolved type if it is not an alias again
-                        case _:
-                            return AttributeAnnotation(
-                                origin=parametrized_type,
-                                arguments=[],
-                            )
-
-                # anything else - try to resolve a concrete type or use as is
-                case origin:
-                    return AttributeAnnotation(
-                        origin=origin,
-                        arguments=[
-                            resolve_attribute_annotation(
-                                argument,
-                                self_annotation=self_annotation,
-                                type_parameters=type_parameters,
-                                module=module,
-                                localns=localns,
-                                recursion_guard=recursion_guard,
-                            )
-                            for argument in get_args(generic_alias)
-                        ],
-                    )
-
-        # type alias
-        case typing.TypeAliasType() as alias:
-            type_alias: AttributeAnnotation = AttributeAnnotation(
-                origin=TypeAliasType,
-                arguments=[],
-            )
-            resolved: AttributeAnnotation = resolve_attribute_annotation(
-                alias.__value__,
-                self_annotation=None,
-                type_parameters=type_parameters,
-                module=module,
-                localns=localns,
-                recursion_guard=recursion_guard,
-            )
-            type_alias.origin = resolved.origin
-            type_alias.arguments = resolved.arguments
-            return type_alias
-
-        # type parameter
-        case typing.TypeVar():
-            return resolve_attribute_annotation(
-                # try to resolve it from current parameters if able
-                type_parameters.get(
-                    annotation.__name__,
-                    # use bound as default or Any otherwise
-                    annotation.__bound__ or Any,
-                ),
-                self_annotation=None,
-                type_parameters=type_parameters,
-                module=module,
-                localns=localns,
                 recursion_guard=recursion_guard,
             )
 
-        case typing.ParamSpec():
-            sys.stderr.write(
-                "ParamSpec is not supported for attribute annotations,"
-                " ignoring with Any type - it might incorrectly validate types\n"
-            )
-            return AttributeAnnotation(
-                origin=Any,
-                arguments=[],
-            )
+        case origin if issubclass(origin, Generic):
+            match origin.__class_getitem__(  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+                tuple(
+                    type_parameters.get(
+                        arg.__name__,
+                        arg.__bound__ or Any,
+                    )
+                    if isinstance(arg, TypeVar)
+                    else arg
+                    for arg in get_args(annotation)
+                )
+            ):
+                case GenericAlias() as generic_alias:
+                    resolved_attribute = AttributeAnnotation(origin=generic_alias.__origin__)
+                    if recursion_key := _recursion_key(generic_alias):
+                        if recursive := recursion_guard.get(recursion_key):
+                            return recursive
 
-        case typing.TypeVarTuple():
-            sys.stderr.write(
-                "TypeVarTuple is not supported for attribute annotations,"
-                " ignoring with Any type - it might incorrectly validate types\n"
-            )
-            return AttributeAnnotation(
-                origin=Any,
-                arguments=[],
-            )
+                        else:
+                            recursion_guard[recursion_key] = resolved_attribute
 
-        case _:
-            pass  # proceed to resolving based on origin
-
-    # resolve based on origin if any
-    match get_origin(annotation) or annotation:
-        case types.UnionType | typing.Union:
-            return AttributeAnnotation(
-                origin=UnionType,  # pyright: ignore[reportArgumentType]
-                arguments=[
-                    recursion_guard.get(
-                        argument,
+                    resolved_attribute.arguments = [
                         resolve_attribute_annotation(
                             argument,
-                            self_annotation=self_annotation,
                             type_parameters=type_parameters,
                             module=module,
-                            localns=localns,
+                            self_annotation=self_annotation,
                             recursion_guard=recursion_guard,
-                        ),
-                    )
-                    for argument in get_args(annotation)
-                ],
-            )
+                        )
+                        for argument in get_args(generic_alias)
+                    ]
 
-        case typing.Callable:  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-            return AttributeAnnotation(
-                origin=typing.Callable,
-                arguments=[
-                    resolve_attribute_annotation(
-                        argument,
-                        self_annotation=self_annotation,
-                        type_parameters=type_parameters,
-                        module=module,
-                        localns=localns,
-                        recursion_guard=recursion_guard,
-                    )
-                    for argument in get_args(annotation)
-                ],
-            )
+                    return resolved_attribute
 
-        case typing.Self:  # pyright: ignore[reportUnknownMemberType]
-            if not self_annotation:
-                sys.stderr.write(
-                    "Unresolved Self attribute annotation,"
-                    " ignoring with Any type - it might incorrectly validate types\n"
+                # use resolved type if it is not an alias again
+                case resolved:  # pyright: ignore
+                    resolved_attribute = AttributeAnnotation(origin=resolved)
+
+                    if recursion_key := _recursion_key(origin):
+                        if recursive := recursion_guard.get(recursion_key):
+                            return recursive
+
+                        else:
+                            recursion_guard[recursion_key] = resolved_attribute
+
+                    resolved_attribute.arguments = [
+                        resolve_attribute_annotation(
+                            argument,
+                            type_parameters=type_parameters,
+                            module=module,
+                            self_annotation=self_annotation,
+                            recursion_guard=recursion_guard,
+                        )
+                        for argument in get_args(annotation)
+                    ]
+
+                    return resolved_attribute
+
+        case origin:
+            resolved_attribute = AttributeAnnotation(origin=origin)
+
+            if recursion_key := _recursion_key(origin):
+                if recursive := recursion_guard.get(recursion_key):
+                    return recursive
+
+            resolved_attribute.arguments = [
+                resolve_attribute_annotation(
+                    argument,
+                    type_parameters=type_parameters,
+                    module=module,
+                    self_annotation=self_annotation,
+                    recursion_guard=recursion_guard,
                 )
-                return AttributeAnnotation(
-                    origin=Any,
-                    arguments=[],
-                )
+                for argument in get_args(annotation)
+            ]
 
-            return self_annotation
+            return resolved_attribute
 
-        # unwrap from irrelevant type wrappers
-        case typing.Annotated | typing.Final | typing.Required | typing.NotRequired:
-            return resolve_attribute_annotation(
-                get_args(annotation)[0],
-                self_annotation=self_annotation,
+
+def _resolve_special_generic_alias(
+    annotation: Any,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    origin: type[Any] = get_origin(annotation)
+    resolved_attribute = AttributeAnnotation(origin=origin)
+
+    if recursion_key := _recursion_key(origin):
+        if recursive := recursion_guard.get(recursion_key):
+            return recursive
+
+        else:
+            recursion_guard[recursion_key] = resolved_attribute
+
+    resolved_attribute.arguments = [
+        resolve_attribute_annotation(
+            argument,
+            type_parameters=type_parameters,
+            module=module,
+            self_annotation=self_annotation,
+            recursion_guard=recursion_guard,
+        )
+        for argument in get_args(annotation)
+    ]
+
+    return resolved_attribute
+
+
+def _resolve_type_alias(
+    annotation: TypeAliasType,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    resolved_attribute = AttributeAnnotation(origin=MISSING)
+
+    if recursion_key := _recursion_key(annotation):
+        if recursive := recursion_guard.get(recursion_key):
+            return recursive
+
+        else:
+            recursion_guard[recursion_key] = resolved_attribute
+
+    resolved: AttributeAnnotation = resolve_attribute_annotation(
+        annotation.__value__,
+        module=annotation.__module__ or module,
+        type_parameters=type_parameters,
+        self_annotation=self_annotation,
+        recursion_guard=recursion_guard,
+    )
+
+    resolved_attribute.origin = resolved.origin
+    resolved_attribute.arguments = resolved.arguments
+    resolved_attribute.extra = resolved.extra
+    resolved_attribute.required = resolved.required
+
+    return resolved_attribute
+
+
+def _resolve_type_var(
+    annotation: TypeVar,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    return resolve_attribute_annotation(
+        type_parameters.get(
+            annotation.__name__,
+            # use bound as default or Any otherwise
+            annotation.__bound__ or Any,
+        ),
+        module=module,
+        type_parameters=type_parameters,
+        self_annotation=self_annotation,
+        recursion_guard=recursion_guard,
+    )
+
+
+def _resolve_type_union(
+    annotation: UnionType,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    arguments: Sequence[AttributeAnnotation] = [
+        resolve_attribute_annotation(
+            argument,
+            type_parameters=type_parameters,
+            module=module,
+            self_annotation=self_annotation,
+            recursion_guard=recursion_guard,
+        )
+        for argument in get_args(annotation)
+    ]
+    return AttributeAnnotation(
+        origin=UnionType,  # pyright: ignore[reportArgumentType]
+        arguments=arguments,
+        required=all(argument.required for argument in arguments),
+    )
+
+
+def _resolve_callable(
+    annotation: Any,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    return AttributeAnnotation(
+        origin=Callable,
+        arguments=[
+            resolve_attribute_annotation(
+                argument,
                 type_parameters=type_parameters,
                 module=module,
-                localns=localns,
+                self_annotation=self_annotation,
+                recursion_guard=recursion_guard,
+            )
+            for argument in get_args(annotation)
+        ],
+    )
+
+
+def _resolve_type_box(
+    annotation: Any,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    return resolve_attribute_annotation(
+        get_args(annotation)[0],
+        type_parameters=type_parameters,
+        module=module,
+        self_annotation=self_annotation,
+        recursion_guard=recursion_guard,
+    )
+
+
+def _resolve_type_not_required(
+    annotation: Any,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    return resolve_attribute_annotation(
+        get_args(annotation)[0],
+        type_parameters=type_parameters,
+        module=module,
+        self_annotation=self_annotation,
+        recursion_guard=recursion_guard,
+    ).update_required(False)
+
+
+def _resolve_type_optional(
+    annotation: Any,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    return AttributeAnnotation(
+        origin=UnionType,  # pyright: ignore[reportArgumentType]
+        arguments=[
+            resolve_attribute_annotation(
+                get_args(annotation)[0],
+                type_parameters=type_parameters,
+                module=module,
+                self_annotation=self_annotation,
+                recursion_guard=recursion_guard,
+            ),
+            AttributeAnnotation(origin=NoneType),
+        ],
+    )
+
+
+def _resolve_type_typeddict(
+    annotation: Any,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    resolved_attribute = AttributeAnnotation(origin=annotation)
+
+    if recursion_key := _recursion_key(annotation):
+        if recursive := recursion_guard.get(recursion_key):
+            return recursive
+
+        else:
+            recursion_guard[recursion_key] = resolved_attribute
+
+    resolved_attribute.arguments = [
+        resolve_attribute_annotation(
+            argument,
+            type_parameters=type_parameters,
+            module=module,
+            self_annotation=self_annotation,
+            recursion_guard=recursion_guard,
+        )
+        for argument in get_args(annotation)
+    ]
+
+    attributes: dict[str, AttributeAnnotation] = {}
+    for key, element in get_type_hints(
+        annotation,
+        localns={annotation.__name__: annotation},
+    ).items():
+        attributes[key] = resolve_attribute_annotation(
+            element,
+            type_parameters=type_parameters,
+            module=getattr(annotation, "__module__", module),
+            self_annotation=resolved_attribute,
+            recursion_guard=recursion_guard,
+        ).update_required(key in annotation.__required_keys__)
+    resolved_attribute.extra = attributes
+    return resolved_attribute
+
+
+def _resolve_type(
+    annotation: Any,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    if recursion_key := _recursion_key(annotation):
+        if recursive := recursion_guard.get(recursion_key):
+            return recursive
+
+        # not updating recursion guard here - it might be a builtin type
+
+    return AttributeAnnotation(
+        origin=annotation,
+        arguments=[
+            resolve_attribute_annotation(
+                argument,
+                type_parameters=type_parameters,
+                module=module,
+                self_annotation=self_annotation,
+                recursion_guard=recursion_guard,
+            )
+            for argument in get_args(annotation)
+        ],
+    )
+
+
+def resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912
+    annotation: Any,
+    /,
+    module: str,
+    type_parameters: Mapping[str, Any],
+    self_annotation: AttributeAnnotation | None,
+    recursion_guard: MutableMapping[str, AttributeAnnotation],
+) -> AttributeAnnotation:
+    match get_origin(annotation) or annotation:
+        case types.NoneType | None:
+            return _resolve_none(
+                annotation=annotation,
+            )
+
+        case haiway_types.Missing:
+            return _resolve_missing(
+                annotation=annotation,
+            )
+
+        case types.UnionType | typing.Union:
+            return _resolve_type_union(
+                annotation,
+                module=module,
+                type_parameters=type_parameters,
+                self_annotation=self_annotation,
+                recursion_guard=recursion_guard,
+            )
+
+        case typing.Literal:
+            return _resolve_literal(annotation)
+
+        case typeddict if is_typeddict(typeddict):
+            return _resolve_type_typeddict(
+                typeddict,
+                module=module,
+                type_parameters=type_parameters,
+                self_annotation=self_annotation,
+                recursion_guard=recursion_guard,
+            )
+
+        case typing.Callable:  # pyright: ignore
+            return _resolve_callable(
+                annotation,
+                module=module,
+                type_parameters=type_parameters,
+                self_annotation=self_annotation,
+                recursion_guard=recursion_guard,
+            )
+
+        case typing.Annotated | typing.Final | typing.Required:
+            return _resolve_type_box(
+                annotation,
+                module=module,
+                type_parameters=type_parameters,
+                self_annotation=self_annotation,
+                recursion_guard=recursion_guard,
+            )
+
+        case typing.NotRequired:
+            return _resolve_type_not_required(
+                annotation,
+                module=module,
+                type_parameters=type_parameters,
+                self_annotation=self_annotation,
                 recursion_guard=recursion_guard,
             )
 
         case typing.Optional:  # optional is a Union[Value, None]
-            return AttributeAnnotation(
-                origin=UnionType,  # pyright: ignore[reportArgumentType]
-                arguments=[
-                    resolve_attribute_annotation(
-                        get_args(annotation)[0],
-                        self_annotation=self_annotation,
-                        type_parameters=type_parameters,
-                        module=module,
-                        localns=localns,
-                        recursion_guard=recursion_guard,
-                    ),
-                    AttributeAnnotation(
-                        origin=NoneType,
-                        arguments=[],
-                    ),
-                ],
+            return _resolve_type_optional(
+                annotation,
+                module=module,
+                type_parameters=type_parameters,
+                self_annotation=self_annotation,
+                recursion_guard=recursion_guard,
             )
 
-        case typing.Literal:
-            return AttributeAnnotation(
-                origin=Literal,
-                arguments=list(get_args(annotation)),
-            )
+        case typing.Self:  # pyright: ignore
+            if self_annotation:
+                return self_annotation
 
-        case other:  # finally use whatever there was
-            return AttributeAnnotation(
-                origin=other,
-                arguments=[
-                    resolve_attribute_annotation(
-                        argument,
-                        self_annotation=self_annotation,
-                        type_parameters=type_parameters,
+            else:
+                raise RuntimeError(f"Unresolved Self annotation: {annotation}")
+
+        case _:
+            match annotation:
+                case str() | ForwardRef():
+                    return _resolve_forward_ref(
+                        annotation,
                         module=module,
-                        localns=localns,
+                        type_parameters=type_parameters,
+                        self_annotation=self_annotation,
                         recursion_guard=recursion_guard,
                     )
-                    for argument in get_args(other)
-                ],
+
+                case GenericAlias():
+                    return _resolve_generic_alias(
+                        annotation,
+                        module=module,
+                        type_parameters=type_parameters,
+                        self_annotation=self_annotation,
+                        recursion_guard=recursion_guard,
+                    )
+
+                case _GenericAlias():
+                    return _resolve_special_generic_alias(
+                        annotation,
+                        module=module,
+                        type_parameters=type_parameters,
+                        self_annotation=self_annotation,
+                        recursion_guard=recursion_guard,
+                    )
+
+                case TypeAliasType():
+                    return _resolve_type_alias(
+                        annotation,
+                        module=module,
+                        type_parameters=type_parameters,
+                        self_annotation=self_annotation,
+                        recursion_guard=recursion_guard,
+                    )
+
+                case TypeVar():
+                    return _resolve_type_var(
+                        annotation,
+                        module=module,
+                        type_parameters=type_parameters,
+                        self_annotation=self_annotation,
+                        recursion_guard=recursion_guard,
+                    )
+
+                case ParamSpec():
+                    raise NotImplementedError(f"Unresolved ParamSpec annotation: {annotation}")
+
+                case TypeVarTuple():
+                    raise NotImplementedError(f"Unresolved TypeVarTuple annotation: {annotation}")
+
+                case _:  # finally use whatever there was
+                    return _resolve_type(
+                        annotation,
+                        module=module,
+                        type_parameters=type_parameters,
+                        self_annotation=self_annotation,
+                        recursion_guard=recursion_guard,
+                    )
+
+
+@overload
+def _recursion_key(
+    annotation: Any,
+    /,
+) -> str | None: ...
+
+
+@overload
+def _recursion_key(
+    annotation: Any,
+    /,
+    default: str,
+) -> str: ...
+
+
+def _recursion_key(
+    annotation: Any,
+    /,
+    default: str | None = None,
+) -> str | None:
+    args_suffix: str
+    if arguments := get_args(annotation):
+        arguments_string: str = ", ".join(
+            _recursion_key(
+                argument,
+                default="?",
             )
+            for argument in arguments
+        )
+        args_suffix = f"[{arguments_string}]"
+
+    else:
+        args_suffix = ""
+
+    if qualname := getattr(annotation, "__qualname__", None):
+        return qualname + args_suffix
+
+    module_prefix: str
+    if module := getattr(annotation, "__module__", None):
+        module_prefix = module + "."
+
+    else:
+        module_prefix = ""
+
+    if name := getattr(annotation, "__name__", None):
+        return module_prefix + name + args_suffix
+
+    return default

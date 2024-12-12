@@ -1,7 +1,7 @@
 from collections.abc import Callable, Sequence, Set
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Literal, Protocol, Self, runtime_checkable
+from typing import Literal, NotRequired, Protocol, Required, Self, TypedDict, runtime_checkable
 from uuid import UUID, uuid4
 
 from haiway import MISSING, Missing, State, frozenlist
@@ -10,7 +10,16 @@ from haiway import MISSING, Missing, State, frozenlist
 def test_basic_initializes_with_arguments() -> None:
     class Selection(StrEnum):
         A = "A"
-        B = "A"
+        B = "B"
+
+    class Nes(State):
+        val: str
+
+    class TypedValues(TypedDict):
+        val: str
+        mis: int | Missing
+        req: Required[Nes]
+        nreq: NotRequired[bool]
 
     @runtime_checkable
     class Proto(Protocol):
@@ -32,6 +41,7 @@ def test_basic_initializes_with_arguments() -> None:
         function: Callable[[], None]
         proto: Proto
         selection: Selection
+        typeddict: TypedValues
 
     basic = Basics(
         uuid=uuid4(),
@@ -49,6 +59,11 @@ def test_basic_initializes_with_arguments() -> None:
         function=lambda: None,
         proto=lambda: None,
         selection=Selection.A,
+        typeddict={
+            "val": "ok",
+            "mis": 42,
+            "req": Nes(val="ok"),
+        },
     )
     assert basic.string == "string"
     assert basic.literal == "A"
@@ -60,6 +75,11 @@ def test_basic_initializes_with_arguments() -> None:
     assert basic.optional == "optional"
     assert basic.none is None
     assert basic.selection == Selection.A
+    assert basic.typeddict == TypedValues(
+        val="ok",
+        mis=42,
+        req=Nes(val="ok"),
+    )
     assert callable(basic.function)
     assert isinstance(basic.proto, Proto)
 

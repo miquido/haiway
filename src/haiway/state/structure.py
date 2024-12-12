@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from copy import deepcopy
 from types import EllipsisType, GenericAlias
 from typing import (
@@ -10,13 +9,15 @@ from typing import (
     cast,
     dataclass_transform,
     final,
-    get_origin,
 )
 from weakref import WeakValueDictionary
 
 from haiway.state.attributes import AttributeAnnotation, attribute_annotations
 from haiway.state.path import AttributePath
-from haiway.state.validation import attribute_validator
+from haiway.state.validation import (
+    AttributeValidation,
+    AttributeValidator,
+)
 from haiway.types import MISSING, Missing, not_missing
 
 __all__ = [
@@ -28,13 +29,15 @@ __all__ = [
 class StateAttribute[Value]:
     def __init__(
         self,
+        name: str,
         annotation: AttributeAnnotation,
         default: Value | Missing,
-        validator: Callable[[Any], Value],
+        validator: AttributeValidation[Value],
     ) -> None:
+        self.name: str = name
         self.annotation: AttributeAnnotation = annotation
         self.default: Value | Missing = default
-        self.validator: Callable[[Any], Value] = validator
+        self.validator: AttributeValidation[Value] = validator
 
     def validated(
         self,
@@ -69,20 +72,22 @@ class StateMeta(type):
 
         attributes: dict[str, StateAttribute[Any]] = {}
 
-        if bases:  # handle base class
-            for key, annotation in attribute_annotations(
-                state_type,
-                type_parameters=type_parameters,
-            ).items():
-                # do not include ClassVars and dunder items
-                if ((get_origin(annotation) or annotation) is ClassVar) or key.startswith("__"):
-                    continue
-
-                attributes[key] = StateAttribute(
-                    annotation=annotation,
-                    default=getattr(state_type, key, MISSING),
-                    validator=attribute_validator(annotation),
-                )
+        for key, annotation in attribute_annotations(
+            state_type,
+            type_parameters=type_parameters or {},
+        ).items():
+            default: Any = getattr(state_type, key, MISSING)
+            attributes[key] = StateAttribute(
+                name=key,
+                annotation=annotation.update_required(default is MISSING),
+                default=default,
+                validator=AttributeValidator.of(
+                    annotation,
+                    recursion_guard={
+                        str(AttributeAnnotation(origin=state_type)): state_type.validator
+                    },
+                ),
+            )
 
         state_type.__ATTRIBUTES__ = attributes  # pyright: ignore[reportAttributeAccessIssue]
         state_type.__slots__ = frozenset(attributes.keys())  # pyright: ignore[reportAttributeAccessIssue]
@@ -90,6 +95,12 @@ class StateMeta(type):
         state_type._ = AttributePath(state_type, attribute=state_type)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
 
         return state_type
+
+    def validator(
+        cls,
+        value: Any,
+        /,
+    ) -> Any: ...
 
 
 _types_cache: WeakValueDictionary[
@@ -110,6 +121,7 @@ class State(metaclass=StateMeta):
     __IMMUTABLE__: ClassVar[EllipsisType] = ...
     __ATTRIBUTES__: ClassVar[dict[str, StateAttribute[Any]]]
 
+    @classmethod
     def __class_getitem__(
         cls,
         type_argument: tuple[type[Any], ...] | type[Any],
@@ -164,6 +176,22 @@ class State(metaclass=StateMeta):
         )
         _types_cache[(cls, type_arguments)] = parametrized_type
         return parametrized_type
+
+    @classmethod
+    def validator(
+        cls,
+        value: Any,
+        /,
+    ) -> Self:
+        match value:
+            case validated if isinstance(validated, cls):
+                return validated
+
+            case {**values}:
+                return cls(**values)
+
+            case _:
+                raise TypeError(f"Expected '{cls.__name__}', received '{type(value).__name__}'")
 
     def __init__(
         self,

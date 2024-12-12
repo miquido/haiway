@@ -35,7 +35,7 @@ pyyaml==6.0.2
     # via bandit
 rich==13.9.4
     # via bandit
-ruff==0.8.2
+ruff==0.8.3
     # via haiway (pyproject.toml)
 stevedore==5.4.0
     # via bandit
