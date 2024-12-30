@@ -1,8 +1,10 @@
 from collections.abc import Callable, Sequence, Set
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Literal, NotRequired, Protocol, Required, Self, TypedDict, runtime_checkable
+from typing import Any, Literal, NotRequired, Protocol, Required, Self, TypedDict, runtime_checkable
 from uuid import UUID, uuid4
+
+from pytest import raises
 
 from haiway import MISSING, Missing, State, frozenlist
 
@@ -183,3 +185,40 @@ def test_initialization_allows_missing_properties() -> None:
     assert Basics(**{"string": "a", "integer": 1}) == Basics(string="a", integer=1)
     assert Basics(**{"string": "a", "integer": None}) == Basics(string="a", integer=None)
     assert Basics(**{"string": "a"}) == Basics(string="a", integer=MISSING)
+
+
+def test_generic_subtypes_validation() -> None:
+    class NestedGeneric[T](State):
+        value: T
+
+    class Generic[T](State):
+        nested: NestedGeneric[T]
+
+    class Container(State):
+        generic: Generic[str]
+
+    assert isinstance(Generic[str](nested=NestedGeneric[str](value="ok")), Generic)
+    assert isinstance(Generic(nested=NestedGeneric[str](value="ok")), Generic)
+    assert isinstance(Generic(nested=NestedGeneric(value="ok")), Generic)
+
+    assert isinstance(Generic[str](nested=NestedGeneric[str](value="ok")), Generic[Any])
+    assert isinstance(Generic(nested=NestedGeneric[str](value="ok")), Generic[Any])
+    assert isinstance(Generic[str](nested=NestedGeneric(value="ok")), Generic[Any])
+    assert isinstance(Generic(nested=NestedGeneric(value="ok")), Generic[Any])
+
+    assert isinstance(Generic[str](nested=NestedGeneric[str](value="ok")), Generic[str])
+    assert isinstance(Generic(nested=NestedGeneric[str](value="ok")), Generic[str])
+    assert isinstance(Generic[str](nested=NestedGeneric(value="ok")), Generic[str])
+    assert isinstance(Generic(nested=NestedGeneric(value="ok")), Generic[str])
+
+    with raises(TypeError):
+        _ = Generic[int](nested=NestedGeneric[str](value="ok"))
+
+    with raises(TypeError):
+        _ = Container(generic=Generic(nested=NestedGeneric(value=42)))
+
+    with raises(TypeError):
+        _ = Container(generic=Generic[int](nested=NestedGeneric[str](value="ok")))
+
+    # not raises
+    _ = Container(generic=Generic(nested=NestedGeneric(value="ok")))
