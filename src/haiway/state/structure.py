@@ -91,7 +91,7 @@ class StateMeta(type):
                 ),
             )
 
-        state_type.__PARAMETERS__ = type_parameters  # pyright: ignore[reportAttributeAccessIssue]
+        state_type.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportAttributeAccessIssue]
         state_type.__ATTRIBUTES__ = attributes  # pyright: ignore[reportAttributeAccessIssue]
         state_type.__slots__ = frozenset(attributes.keys())  # pyright: ignore[reportAttributeAccessIssue]
         state_type.__match_args__ = state_type.__slots__  # pyright: ignore[reportAttributeAccessIssue]
@@ -139,7 +139,7 @@ class StateMeta(type):
         # then check if we are parametrized
         checked_parameters: Mapping[str, Any] | None = getattr(
             self,
-            "__PARAMETERS__",
+            "__TYPE_PARAMETERS__",
             None,
         )
         if checked_parameters is None:
@@ -152,7 +152,7 @@ class StateMeta(type):
             # we can verify all of the attributes to check if we have common base
             available_parameters: Mapping[str, Any] | None = getattr(
                 subclass,
-                "__PARAMETERS__",
+                "__TYPE_PARAMETERS__",
                 None,
             )
 
@@ -204,7 +204,7 @@ class State(metaclass=StateMeta):
 
     _: ClassVar[Self]
     __IMMUTABLE__: ClassVar[EllipsisType] = ...
-    __PARAMETERS__: ClassVar[Mapping[str, Any] | None] = None
+    __TYPE_PARAMETERS__: ClassVar[Mapping[str, Any] | None] = None
     __ATTRIBUTES__: ClassVar[dict[str, StateAttribute[Any]]]
 
     @classmethod
@@ -213,7 +213,7 @@ class State(metaclass=StateMeta):
         type_argument: tuple[type[Any], ...] | type[Any],
     ) -> type[Self]:
         assert Generic in cls.__bases__, "Can't specialize non generic type!"  # nosec: B101
-        assert cls.__PARAMETERS__ is None, "Can't specialize already specialized type!"  # nosec: B101
+        assert cls.__TYPE_PARAMETERS__ is None, "Can't specialize already specialized type!"  # nosec: B101
 
         type_arguments: tuple[type[Any], ...]
         match type_argument:
