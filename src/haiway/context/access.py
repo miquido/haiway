@@ -1,4 +1,4 @@
-from asyncio import CancelledError, Task, current_task
+from asyncio import CancelledError, Task, current_task, iscoroutinefunction
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
@@ -9,14 +9,16 @@ from collections.abc import (
 from contextvars import Context, copy_context
 from logging import Logger
 from types import TracebackType
-from typing import Any, final
+from typing import Any, final, overload
 
 from haiway.context.disposables import Disposable, Disposables
-from haiway.context.metrics import MetricsContext, ScopeMetrics
+from haiway.context.identifier import ScopeIdentifier
+from haiway.context.logging import LoggerContext
+from haiway.context.metrics import MetricsContext, MetricsHandler
 from haiway.context.state import StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.state import State
-from haiway.utils import freeze
+from haiway.utils import freeze, mimic_function
 
 __all__ = [
     "ctx",
@@ -25,37 +27,41 @@ __all__ = [
 
 @final
 class ScopeContext:
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
-        trace_id: str | None,
-        name: str,
+        label: str,
         logger: Logger | None,
         state: tuple[State, ...],
         disposables: Disposables | None,
-        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]]
-        | Callable[[ScopeMetrics], None]
-        | None,
+        metrics: MetricsHandler | None,
     ) -> None:
+        self._identifier: ScopeIdentifier = ScopeIdentifier.scope(label)
+        self._logger_context: LoggerContext = LoggerContext(
+            self._identifier,
+            logger=logger,
+        )
         self._task_group_context: TaskGroupContext = TaskGroupContext()
-        # postponing state creation to include disposables if needed
+        # postponing state creation to include disposables state when prepared
         self._state_context: StateContext
         self._state: tuple[State, ...] = state
         self._disposables: Disposables | None = disposables
         # pre-building metrics context to ensure nested context registering
         self._metrics_context: MetricsContext = MetricsContext.scope(
-            name,
-            logger=logger,
-            trace_id=trace_id,
-            completion=completion,
+            self._identifier,
+            metrics=metrics,
         )
 
         freeze(self)
 
-    def __enter__(self) -> None:
+    def __enter__(self) -> str:
         assert self._disposables is None, "Can't enter synchronous context with disposables"  # nosec: B101
+        self._identifier.__enter__()
+        self._logger_context.__enter__()
         self._state_context = StateContext.updated(self._state)
         self._state_context.__enter__()
         self._metrics_context.__enter__()
+
+        return self._identifier.trace_id
 
     def __exit__(
         self,
@@ -75,7 +81,21 @@ class ScopeContext:
             exc_tb=exc_tb,
         )
 
-    async def __aenter__(self) -> None:
+        self._logger_context.__exit__(
+            exc_type=exc_type,
+            exc_val=exc_val,
+            exc_tb=exc_tb,
+        )
+
+        self._identifier.__exit__(
+            exc_type=exc_type,
+            exc_val=exc_val,
+            exc_tb=exc_tb,
+        )
+
+    async def __aenter__(self) -> str:
+        self._identifier.__enter__()
+        self._logger_context.__enter__()
         await self._task_group_context.__aenter__()
 
         if self._disposables is not None:
@@ -88,6 +108,8 @@ class ScopeContext:
 
         self._state_context.__enter__()
         self._metrics_context.__enter__()
+
+        return self._identifier.trace_id
 
     async def __aexit__(
         self,
@@ -120,35 +142,82 @@ class ScopeContext:
             exc_tb=exc_tb,
         )
 
+        self._logger_context.__exit__(
+            exc_type=exc_type,
+            exc_val=exc_val,
+            exc_tb=exc_tb,
+        )
+
+        self._identifier.__exit__(
+            exc_type=exc_type,
+            exc_val=exc_val,
+            exc_tb=exc_tb,
+        )
+
+    @overload
+    def __call__[Result, **Arguments](
+        self,
+        function: Callable[Arguments, Coroutine[None, None, Result]],
+    ) -> Callable[Arguments, Coroutine[None, None, Result]]: ...
+
+    @overload
+    def __call__[Result, **Arguments](
+        self,
+        function: Callable[Arguments, Result],
+    ) -> Callable[Arguments, Result]: ...
+
+    def __call__[Result, **Arguments](
+        self,
+        function: Callable[Arguments, Coroutine[None, None, Result]] | Callable[Arguments, Result],
+    ) -> Callable[Arguments, Coroutine[None, None, Result]] | Callable[Arguments, Result]:
+        if iscoroutinefunction(function):
+
+            async def async_context(
+                *args: Arguments.args,
+                **kwargs: Arguments.kwargs,
+            ) -> Result:
+                async with self:
+                    return await function(*args, **kwargs)
+
+            return mimic_function(function, within=async_context)
+
+        else:
+
+            def sync_context(
+                *args: Arguments.args,
+                **kwargs: Arguments.kwargs,
+            ) -> Result:
+                with self:
+                    return function(*args, **kwargs)  # pyright: ignore[reportReturnType]
+
+            return mimic_function(function, within=sync_context)  # pyright: ignore[reportReturnType]
+
 
 @final
 class ctx:
     @staticmethod
     def scope(
-        name: str,
+        label: str,
         /,
         *state: State,
         disposables: Disposables | Iterable[Disposable] | None = None,
         logger: Logger | None = None,
-        trace_id: str | None = None,
-        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]]
-        | Callable[[ScopeMetrics], None]
-        | None = None,
+        metrics: MetricsHandler | None = None,
     ) -> ScopeContext:
         """
-        Access scope context with given parameters. When called within an existing context\
-         it becomes nested with current context as its predecessor.
+        Prepare scope context with given parameters. When called within an existing context\
+         it becomes nested with current context as its parent.
 
         Parameters
         ----------
-        name: Value
+        label: str
             name of the scope context
 
         *state: State | Disposable
             state propagated within the scope context, will be merged with current state by\
              replacing current with provided on conflict.
 
-        disposables: Disposables | list[Disposable] | None
+        disposables: Disposables | Iterable[Disposable] | None
             disposables consumed within the context when entered. Produced state will automatically\
              be added to the scope state. Using asynchronous context is required if any disposables\
              were provided.
@@ -157,21 +226,17 @@ class ctx:
             logger used within the scope context, when not provided current logger will be used\
              if any, otherwise the logger with the scope name will be requested.
 
-        trace_id: str | None = None
-            tracing identifier included in logs produced within the scope context, when not\
-             provided current identifier will be used if any, otherwise it random id will\
-             be generated
-
-        completion: Callable[[ScopeMetrics], Coroutine[None, None, None]] | Callable[[ScopeMetrics], None] | None = None
-            completion callback called on exit from the scope granting access to finished\
-             scope metrics. Completion is called outside of the context when its metrics is\
-             already finished. Make sure to avoid any long operations within the completion.
+        metrics_store: MetricsStore | None = None
+            metrics storage solution responsible for recording and storing metrics.\
+             Metrics recroding will be ignored if storage is not provided.
+            Assigning metrics_store within existing context will result in an error.
 
         Returns
         -------
         ScopeContext
-            context object intended to enter context manager with it
-        """  # noqa: E501
+            context object intended to enter context manager with.\
+             context manager will provide trace_id of current context.
+        """
 
         resolved_disposables: Disposables | None
         match disposables:
@@ -185,12 +250,11 @@ class ctx:
                 resolved_disposables = Disposables(*iterable)
 
         return ScopeContext(
-            trace_id=trace_id,
-            name=name,
+            label=label,
             logger=logger,
             state=state,
             disposables=resolved_disposables,
-            completion=completion,
+            metrics=metrics,
         )
 
     @staticmethod
@@ -339,32 +403,25 @@ class ctx:
         )
 
     @staticmethod
-    def record[Metric: State](
-        metric: Metric,
+    def record(
+        metric: State,
         /,
-        merge: Callable[[Metric, Metric], Metric] = lambda lhs, rhs: rhs,
     ) -> None:
         """
         Record metric within current scope context.
 
         Parameters
         ----------
-        metric: MetricType
-            value of metric to be recorded
-
-        merge: Callable[[MetricType, MetricType], MetricType] = lambda lhs, rhs: rhs
-            merge method used on to resolve conflicts when a metric of the same type\
-             was already recorded. When not provided value will be override current if any.
+        metric: State
+            value of metric to be recorded. When a metric implements __add__ it will be added to\
+             current value if any, otherwise subsequent calls may replace existing value.
 
         Returns
         -------
         None
         """
 
-        MetricsContext.record(
-            metric,
-            merge=merge,
-        )
+        MetricsContext.record(metric)
 
     @staticmethod
     def log_error(
@@ -393,7 +450,7 @@ class ctx:
         None
         """
 
-        MetricsContext.log_error(
+        LoggerContext.log_error(
             message,
             *args,
             exception=exception,
@@ -426,7 +483,7 @@ class ctx:
         None
         """
 
-        MetricsContext.log_warning(
+        LoggerContext.log_warning(
             message,
             *args,
             exception=exception,
@@ -455,7 +512,7 @@ class ctx:
         None
         """
 
-        MetricsContext.log_info(
+        LoggerContext.log_info(
             message,
             *args,
         )
@@ -487,7 +544,7 @@ class ctx:
         None
         """
 
-        MetricsContext.log_debug(
+        LoggerContext.log_debug(
             message,
             *args,
             exception=exception,

@@ -12,8 +12,7 @@ maintainers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-  "haiway~=0.6.0",
-  "fastapi-slim~=0.115",
+  "haiway @ git+https://github.com/miquido/haiway@main",
   "asyncpg~=0.30",
   "httpx~=0.28.0",
 ]
@@ -21,8 +20,13 @@ dependencies = [
 [project.urls]
 Homepage = "https://miquido.com"
 
-[project.optional-dependencies]
+[dependency-groups]
+server = [
+  "haiway_fastapi",
+  "fastapi-slim~=0.115",
+]
 dev = [
+  "haiway_fastapi",
   "uvicorn~=0.30",
   "ruff~=0.8.0",
   "pyright~=1.1",

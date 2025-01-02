@@ -1,10 +1,9 @@
-from asyncio import CancelledError, get_running_loop, sleep
+from asyncio import CancelledError, sleep
 from collections.abc import AsyncGenerator, AsyncIterator
 
 from pytest import mark, raises
 
 from haiway import ctx
-from haiway.context.metrics import ScopeMetrics
 from haiway.state.structure import State
 
 
@@ -124,38 +123,3 @@ async def test_nested_streaming_streams_correctly():
         TestState(value=42, other="outer"),
         TestState(value=10, other="inner"),
     ]
-
-
-@mark.asyncio
-async def test_streaming_context_completion_is_called_at_the_end_of_stream():
-    completion_future = get_running_loop().create_future()
-
-    class IterationMetric(State):
-        value: int = 0
-
-    metric: IterationMetric = IterationMetric()
-
-    def completion(metrics: ScopeMetrics):
-        nonlocal metric
-        metric = metrics.metrics(merge=lambda current, nested: nested)[0]  # pyright: ignore[reportAssignmentType]
-        completion_future.set_result(())
-
-    async def generator(value: int) -> AsyncGenerator[int, None]:
-        for i in range(0, value):
-            ctx.record(
-                IterationMetric(value=i),
-                merge=lambda lhs, rhs: IterationMetric(value=lhs.value + rhs.value),
-            )
-            yield i
-
-    stream: AsyncIterator[int]
-    async with ctx.scope("test", completion=completion):
-        elements: list[int] = []
-
-        stream = ctx.stream(generator, 10)
-
-    async for element in stream:
-        elements.append(element)
-
-    await completion_future
-    assert metric.value == 45

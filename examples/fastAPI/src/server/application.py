@@ -1,4 +1,3 @@
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from logging import Logger, getLogger
 
@@ -14,11 +13,9 @@ __all__ = [
 ]
 
 
-async def startup(app: FastAPI) -> None:
-    """
-    Startup function is called when the server process starts.
-    """
-    setup_logging("server")  # setup logging
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    setup_logging("server")
 
     logger: Logger = getLogger("server")
     if __debug__:
@@ -27,37 +24,16 @@ async def startup(app: FastAPI) -> None:
     else:
         logger.info("Starting server...")
 
-    # initialize all shared clients on startup
     disposables = Disposables(
         PostgresClient(),
     )
-    app.extra["disposables"] = disposables
+    async with disposables as state:
+        app.extra["state"] = (*state,)
 
-    # prepare common state for all endpoints
-    app.extra["state"] = (*await disposables.__aenter__(),)
+        logger.info("...server started...")
+        yield  # suspend until server shutdown
 
-    logger.info("...server started!")
-
-
-async def shutdown(app: FastAPI) -> None:
-    """
-    Shutdown function is called when server process ends.
-    """
-    # dispose all clients on shutdown
-    await app.extra["disposables"].__aexit(
-        None,
-        None,
-        None,
-    )
-
-    getLogger("server").info("...server shutdown!")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    await startup(app)
-    yield
-    await shutdown(app)
+    logger.info("...server shutdown!")
 
 
 app: FastAPI = FastAPI(

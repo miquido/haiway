@@ -1,6 +1,6 @@
 from asyncio import Task, TaskGroup, get_event_loop
 from collections.abc import Callable, Coroutine
-from contextvars import ContextVar, Token, copy_context
+from contextvars import ContextVar, copy_context
 from types import TracebackType
 from typing import final
 
@@ -37,10 +37,9 @@ class TaskGroupContext:
         self,
     ) -> None:
         self._group: TaskGroup = TaskGroup()
-        self._token: Token[TaskGroup] | None = None
 
     async def __aenter__(self) -> None:
-        assert self._token is None, "TaskGroupContext reentrance is not allowed"  # nosec: B101
+        assert not hasattr(self, "_token"), "Context reentrance is not allowed"  # nosec: B101
         await self._group.__aenter__()
         self._token = TaskGroupContext._context.set(self._group)
 
@@ -50,9 +49,9 @@ class TaskGroupContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert self._token is not None, "Unbalanced TaskGroupContext context exit"  # nosec: B101
+        assert hasattr(self, "_token"), "Unbalanced context enter/exit"  # nosec: B101
         TaskGroupContext._context.reset(self._token)
-        self._token = None
+        del self._token
 
         try:
             await self._group.__aexit__(
