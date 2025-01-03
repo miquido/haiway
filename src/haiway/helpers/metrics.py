@@ -1,18 +1,15 @@
 from collections.abc import Sequence
 from itertools import chain
 from time import monotonic
-from typing import Any, Final, Self, cast, final
+from typing import Any, Self, cast, final
 
 from haiway.context import MetricsHandler, ScopeIdentifier, ctx
 from haiway.state import State
 from haiway.types import MISSING, Missing
-from haiway.utils import getenv_bool
 
 __all_ = [
     "MetricsLogger",
 ]
-
-DEBUG_LOGGING: Final[bool] = getenv_bool("DEBUG_LOGGING", __debug__)
 
 
 class MetricsScopeStore:
@@ -96,13 +93,12 @@ class MetricsLogger:
             metrics[type(metric)] = current.__add__(metric)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
 
         metrics[type(metric)] = metric
-        if DEBUG_LOGGING:
-            if log := _state_log(
-                metric,
-                list_items_limit=self.items_limit,
-                redact_content=self.redact_content,
-            ):
-                ctx.log_info(f"Recorded metric:\n⎡ {type(metric).__qualname__}:{log}\n⌊")
+        if log := _state_log(
+            metric,
+            list_items_limit=self.items_limit,
+            redact_content=self.redact_content,
+        ):
+            ctx.log_debug(f"Recorded metric:\n⎡ {type(metric).__qualname__}:{log}\n⌊")
 
     def enter_scope[Metric: State](
         self,
@@ -118,7 +114,7 @@ class MetricsLogger:
                     self.scopes[key].nested.append(scope_metrics)
                     return
 
-            ctx.log_error(
+            ctx.log_debug(
                 "Attempting to enter nested scope metrics without entering its parent first"
             )
 
@@ -130,14 +126,13 @@ class MetricsLogger:
         assert scope in self.scopes  # nosec: B101
         self.scopes[scope].exited = monotonic()
 
-        if DEBUG_LOGGING:
-            if scope.is_root and self.scopes[scope].finished:
-                if log := _tree_log(
-                    self.scopes[scope],
-                    list_items_limit=self.items_limit,
-                    redact_content=self.redact_content,
-                ):
-                    ctx.log_info(f"Metrics summary:\n{log}")
+        if scope.is_root and self.scopes[scope].finished:
+            if log := _tree_log(
+                self.scopes[scope],
+                list_items_limit=self.items_limit,
+                redact_content=self.redact_content,
+            ):
+                ctx.log_debug(f"Metrics summary:\n{log}")
 
 
 def _tree_log(
