@@ -23,9 +23,9 @@ In haiway, functionalities are modularized into two primary components: interfac
 
 Interfaces define the public API of a functionality, specifying the data types and functions it exposes without detailing the underlying implementation. Preparing functionality starts from defining associated types - data structures and function types.
 
-```python 
+```python
 # types.py
-from typing import Protocol, Any
+from typing import Protocol, Any, runtime_checkable
 from haiway import State
 
 # State representing the argument passed to functions
@@ -33,6 +33,7 @@ class FunctionArgument(State):
     value: Any
 
 # Protocol defining the expected function signature
+@runtime_checkable
 class FunctionSignature(Protocol):
     async def __call__(self, argument: FunctionArgument) -> None: ...
 ```
@@ -137,12 +138,13 @@ When a function defined within the functionality is intended to utilize contextu
 ...
 
 # function signature allowing extra arguments
+@runtime_checkable
 class FunctionSignature(Protocol):
-    async def __call__(self, argument: FunctionArgument, **extra: Any) -> None: ... 
+    async def __call__(self, argument: FunctionArgument, **extra: Any) -> None: ...
 
 ...
 
-# function implementation utilizing extra arguments to update local state 
+# function implementation utilizing extra arguments to update local state
 async def function_implementation(argument: FunctionArgument, **extra: Any) -> None:
     # Retrieve 'parameter' from the current context's state updated with extra arguments
     parameter = ctx.state(FunctionalityState).updated(**extra).parameter
@@ -158,9 +160,9 @@ To better understand the whole idea we can take a look at more concrete example 
 
 First we define some basic types required by our functionality - management functions signatures and the note itself.
 
-```python 
+```python
 # notes/types.py
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 from datetime import datetime
 from uuid import UUID
 from haiway import State
@@ -172,10 +174,12 @@ class Note(State):
     content: str
 
 # Protocol defining the note creation function
+@runtime_checkable
 class NoteCreating(Protocol):
     async def __call__(self, content: str, **extra: Any) -> Note: ...
 
 # Protocol defining the note update function
+@runtime_checkable
 class NoteUpdating(Protocol):
     async def __call__(self, note: Note, **extra: Any) -> None: ...
 ```
@@ -246,4 +250,3 @@ async def update_note(note: Note, **extra: Any) -> None:
     # Invoke the function implementation from the contextual state
     await ctx.state(Notes).update(note=note, **extra)
 ```
-

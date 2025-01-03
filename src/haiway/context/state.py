@@ -86,9 +86,10 @@ class StateContext:
         /,
     ) -> Self:
         try:
+            # update current scope context
             return cls(state=cls._context.get().updated(state=state))
 
-        except LookupError:  # create new context as a fallback
+        except LookupError:  # create root scope when missing
             return cls(state=ScopeState(state))
 
     def __init__(
@@ -96,11 +97,10 @@ class StateContext:
         state: ScopeState,
     ) -> None:
         self._state: ScopeState = state
-        self._token: Token[ScopeState] | None = None
 
     def __enter__(self) -> None:
-        assert self._token is None, "StateContext reentrance is not allowed"  # nosec: B101
-        self._token = StateContext._context.set(self._state)
+        assert not hasattr(self, "_token"), "Context reentrance is not allowed"  # nosec: B101
+        self._token: Token[ScopeState] = StateContext._context.set(self._state)
 
     def __exit__(
         self,
@@ -108,6 +108,6 @@ class StateContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert self._token is not None, "Unbalanced StateContext context exit"  # nosec: B101
+        assert hasattr(self, "_token"), "Unbalanced context enter/exit"  # nosec: B101
         StateContext._context.reset(self._token)
-        self._token = None
+        del self._token

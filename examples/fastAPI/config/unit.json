@@ -1,0 +1,50 @@
+{
+  "listeners": {
+    "*:80": {
+      "pass": "routes/api"
+    }
+  },
+  "routes": {
+    "api": [
+      {
+        "match": {
+          "uri": "/health"
+        },
+        "action": {
+          "return": 204
+        }
+      },
+      {
+        "match": {
+          "uri": "/*"
+        },
+        "action": {
+          "pass": "applications/server"
+        }
+      }
+    ]
+  },
+  "applications": {
+    "server": {
+      "type": "python",
+      "protocol": "asgi",
+      "path": "/",
+      "module": "server",
+      "callable": "app",
+      "processes": 1,
+      "environment": {
+        "PYTHONOPTIMIZE": "2",
+        "HOME": "."
+      }
+    }
+  },
+  "access_log": {
+    "path": "/dev/stdout",
+    "format": "$time_local [ACCESS] $request_line -> $status"
+  },
+  "settings": {
+    "http": {
+      "server_version": false
+    }
+  }
+}
