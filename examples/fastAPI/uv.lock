@@ -119,7 +119,7 @@ wheels = [
 [[package]]
 name = "haiway"
 version = "0.8.0"
-source = { git = "https://github.com/miquido/haiway?rev=feature%2Fcontext_metrics#8e29a062528f2d2357b1c5497d9ac4594e40e8c1" }
+source = { git = "https://github.com/miquido/haiway?rev=main#59ea86f979f737d11be20d53ff53f726dd128d0e" }
 
 [[package]]
 name = "haiway-fastapi"
@@ -147,7 +147,7 @@ server = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = "~=0.30" },
-    { name = "haiway", git = "https://github.com/miquido/haiway?rev=feature%2Fcontext_metrics" },
+    { name = "haiway", git = "https://github.com/miquido/haiway?rev=main" },
     { name = "httpx", specifier = "~=0.28.0" },
 ]
 
