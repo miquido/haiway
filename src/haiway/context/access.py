@@ -46,6 +46,11 @@ class ScopeContext:
         self._state: tuple[State, ...] = state
         self._disposables: Disposables | None = disposables
         # pre-building metrics context to ensure nested context registering
+        if __debug__:
+            if self._identifier.is_root and metrics is None:
+                from haiway.helpers import MetricsLogger
+
+                metrics = MetricsLogger.handler()
         self._metrics_context: MetricsContext = MetricsContext.scope(
             self._identifier,
             metrics=metrics,
