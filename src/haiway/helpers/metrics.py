@@ -1,15 +1,18 @@
 from collections.abc import Sequence
 from itertools import chain
 from time import monotonic
-from typing import Any, Self, cast, final
+from typing import Any, Final, Self, cast, final
 
 from haiway.context import MetricsHandler, ScopeIdentifier, ctx
 from haiway.state import State
 from haiway.types import MISSING, Missing
+from haiway.utils import getenv_bool
 
 __all_ = [
     "MetricsLogger",
 ]
+
+DEBUG_LOGGING: Final[bool] = getenv_bool("DEBUG_LOGGING", __debug__)
 
 
 class MetricsScopeStore:
@@ -59,11 +62,11 @@ class MetricsLogger:
     def handler(
         cls,
         items_limit: int | None = None,
-        item_character_limit: int | None = None,
+        redact_content: bool = False,
     ) -> MetricsHandler:
         logger_handler: Self = cls(
             items_limit=items_limit,
-            item_character_limit=item_character_limit,
+            redact_content=redact_content,
         )
         return MetricsHandler(
             record=logger_handler.record,
@@ -73,11 +76,11 @@ class MetricsLogger:
 
     def __init__(
         self,
-        items_limit: int | None = None,
-        item_character_limit: int | None = None,
+        items_limit: int | None,
+        redact_content: bool,
     ) -> None:
         self.items_limit: int | None = items_limit
-        self.item_character_limit: int | None = item_character_limit
+        self.redact_content: bool = redact_content
         self.scopes: dict[ScopeIdentifier, MetricsScopeStore] = {}
 
     def record(
@@ -93,13 +96,13 @@ class MetricsLogger:
             metrics[type(metric)] = current.__add__(metric)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
 
         metrics[type(metric)] = metric
-        if __debug__:
+        if DEBUG_LOGGING:
             if log := _state_log(
                 metric,
                 list_items_limit=self.items_limit,
-                item_character_limit=self.item_character_limit,
+                redact_content=self.redact_content,
             ):
-                ctx.log_info(f"Recorded:\n• {type(metric).__qualname__}:{log}")
+                ctx.log_info(f"Recorded metric:\n⎡ {type(metric).__qualname__}:{log}\n⌊")
 
     def enter_scope[Metric: State](
         self,
@@ -107,7 +110,17 @@ class MetricsLogger:
         /,
     ) -> None:
         assert scope not in self.scopes  # nosec: B101
-        self.scopes[scope] = MetricsScopeStore(scope)
+        scope_metrics = MetricsScopeStore(scope)
+        self.scopes[scope] = scope_metrics
+        if not scope.is_root:  # root scopes have no actual parent
+            for key in self.scopes.keys():
+                if key.scope_id == scope.parent_id:
+                    self.scopes[key].nested.append(scope_metrics)
+                    return
+
+            ctx.log_error(
+                "Attempting to enter nested scope metrics without entering its parent first"
+            )
 
     def exit_scope[Metric: State](
         self,
@@ -117,22 +130,24 @@ class MetricsLogger:
         assert scope in self.scopes  # nosec: B101
         self.scopes[scope].exited = monotonic()
 
-        if __debug__:
+        if DEBUG_LOGGING:
             if scope.is_root and self.scopes[scope].finished:
                 if log := _tree_log(
                     self.scopes[scope],
                     list_items_limit=self.items_limit,
-                    item_character_limit=self.item_character_limit,
+                    redact_content=self.redact_content,
                 ):
-                    ctx.log_info(log)
+                    ctx.log_info(f"Metrics summary:\n{log}")
 
 
 def _tree_log(
     metrics: MetricsScopeStore,
     list_items_limit: int | None,
-    item_character_limit: int | None,
+    redact_content: bool,
 ) -> str:
-    log: str = f"@{metrics.identifier}({metrics.time:.2f}s):"
+    log: str = (
+        f"⎡ @{metrics.identifier.label} [{metrics.identifier.scope_id}]({metrics.time:.2f}s):"
+    )
 
     for metric in metrics.merged():
         metric_log: str = ""
@@ -140,52 +155,52 @@ def _tree_log(
             if value_log := _value_log(
                 value,
                 list_items_limit=list_items_limit,
-                item_character_limit=item_character_limit,
+                redact_content=redact_content,
             ):
-                metric_log += f"\n|  + {key}: {value_log}"
+                metric_log += f"\n├ {key}: {value_log}"
 
             else:
-                continue  # skip missing values
+                continue  # skip empty values
 
         if not metric_log:
             continue  # skip empty logs
 
-        log += f"\n• {type(metric).__qualname__}:{metric_log}"
+        log += f"\n⎡ •{type(metric).__qualname__}:{metric_log.replace("\n", "\n|  ")}\n⌊"
 
     for nested in metrics.nested:
         nested_log: str = _tree_log(
             nested,
             list_items_limit=list_items_limit,
-            item_character_limit=item_character_limit,
-        ).replace("\n", "\n|  ")
+            redact_content=redact_content,
+        )
 
-        log += f"\n{nested_log}"
+        log += f"\n\n{nested_log}"
 
-    return log.strip()
+    return log.strip().replace("\n", "\n|  ") + "\n⌊"
 
 
 def _state_log(
     value: State,
     /,
     list_items_limit: int | None,
-    item_character_limit: int | None,
+    redact_content: bool,
 ) -> str | None:
     state_log: str = ""
     for key, element in vars(value).items():
         element_log: str | None = _value_log(
             element,
             list_items_limit=list_items_limit,
-            item_character_limit=item_character_limit,
+            redact_content=redact_content,
         )
 
         if element_log:
-            state_log += f"\n|  + {key}: {element_log}"
+            state_log += f"\n├ {key}: {element_log}"
 
         else:
             continue  # skip empty logs
 
     if state_log:
-        return state_log.replace("\n", "\n|  ")
+        return state_log
 
     else:
         return None  # skip empty logs
@@ -195,17 +210,17 @@ def _dict_log(
     value: dict[Any, Any],
     /,
     list_items_limit: int | None,
-    item_character_limit: int | None,
+    redact_content: bool,
 ) -> str | None:
     dict_log: str = ""
     for key, element in value.items():
         element_log: str | None = _value_log(
             element,
             list_items_limit=list_items_limit,
-            item_character_limit=item_character_limit,
+            redact_content=redact_content,
         )
         if element_log:
-            dict_log += f"\n|  + {key}: {element_log}"
+            dict_log += f"\n[{key}]: {element_log}"
 
         else:
             continue  # skip empty logs
@@ -221,7 +236,7 @@ def _list_log(
     value: list[Any],
     /,
     list_items_limit: int | None,
-    item_character_limit: int | None,
+    redact_content: bool,
 ) -> str | None:
     list_log: str = ""
     enumerated: list[tuple[int, Any]] = list(enumerate(value))
@@ -236,10 +251,10 @@ def _list_log(
         element_log: str | None = _value_log(
             element,
             list_items_limit=list_items_limit,
-            item_character_limit=item_character_limit,
+            redact_content=redact_content,
         )
         if element_log:
-            list_log += f"\n|  [{idx}] {element_log}"
+            list_log += f"\n[{idx}] {element_log}"
 
         else:
             continue  # skip empty logs
@@ -254,34 +269,33 @@ def _list_log(
 def _raw_value_log(
     value: Any,
     /,
-    item_character_limit: int | None,
+    redact_content: bool,
 ) -> str | None:
     if value is MISSING:
         return None  # skip missing
 
-    value_log = str(value)
-    if not value_log:
-        return None  # skip empty logs
+    if redact_content:
+        return "[redacted]"
 
-    if (item_character_limit := item_character_limit) and len(value_log) > item_character_limit:
-        return value_log.replace("\n", " ")[:item_character_limit] + "..."
+    elif isinstance(value, str):
+        return f'"{value}"'.replace("\n", "\n|  ")
 
     else:
-        return value_log.replace("\n", "\n|  ")
+        return str(value).strip().replace("\n", "\n|  ")
 
 
 def _value_log(
     value: Any,
     /,
     list_items_limit: int | None,
-    item_character_limit: int | None,
+    redact_content: bool,
 ) -> str | None:
     # try unpack dicts
     if isinstance(value, dict):
         return _dict_log(
             cast(dict[Any, Any], value),
             list_items_limit=list_items_limit,
-            item_character_limit=item_character_limit,
+            redact_content=redact_content,
         )
 
     # try unpack lists
@@ -289,7 +303,7 @@ def _value_log(
         return _list_log(
             cast(list[Any], value),
             list_items_limit=list_items_limit,
-            item_character_limit=item_character_limit,
+            redact_content=redact_content,
         )
 
     # try unpack state
@@ -297,11 +311,11 @@ def _value_log(
         return _state_log(
             value,
             list_items_limit=list_items_limit,
-            item_character_limit=item_character_limit,
+            redact_content=redact_content,
         )
 
     else:
         return _raw_value_log(
             value,
-            item_character_limit=item_character_limit,
+            redact_content=redact_content,
         )
