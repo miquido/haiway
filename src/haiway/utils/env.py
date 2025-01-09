@@ -1,5 +1,5 @@
 from os import environ, getenv
-from typing import overload
+from typing import Literal, overload
 
 __all__ = [
     "getenv_bool",
@@ -25,13 +25,28 @@ def getenv_bool(
 ) -> bool: ...
 
 
+@overload
+def getenv_bool(
+    key: str,
+    /,
+    *,
+    required: Literal[True],
+) -> bool: ...
+
+
 def getenv_bool(
     key: str,
     /,
     default: bool | None = None,
+    *,
+    required: bool = False,
 ) -> bool | None:
     if value := getenv(key=key):
         return value.lower() in ("true", "1", "t")
+
+    elif required and default is None:
+        raise ValueError(f"Required environment value `{key}` is missing!")
+
     else:
         return default
 
@@ -51,13 +66,31 @@ def getenv_int(
 ) -> int: ...
 
 
+@overload
+def getenv_int(
+    key: str,
+    /,
+    *,
+    required: Literal[True],
+) -> int: ...
+
+
 def getenv_int(
     key: str,
     /,
     default: int | None = None,
+    *,
+    required: bool = False,
 ) -> int | None:
     if value := getenv(key=key):
-        return int(value)
+        try:
+            return int(value)
+
+        except Exception as exc:
+            raise ValueError(f"Environment value `{key}` is not a valid int!") from exc
+
+    elif required and default is None:
+        raise ValueError(f"Required environment value `{key}` is missing!")
 
     else:
         return default
@@ -78,13 +111,31 @@ def getenv_float(
 ) -> float: ...
 
 
+@overload
+def getenv_float(
+    key: str,
+    /,
+    *,
+    required: Literal[True],
+) -> float: ...
+
+
 def getenv_float(
     key: str,
     /,
     default: float | None = None,
+    *,
+    required: bool = False,
 ) -> float | None:
     if value := getenv(key=key):
-        return float(value)
+        try:
+            return float(value)
+
+        except Exception as exc:
+            raise ValueError(f"Environment value `{key}` is not a valid float!") from exc
+
+    elif required and default is None:
+        raise ValueError(f"Required environment value `{key}` is missing!")
 
     else:
         return default
@@ -105,13 +156,28 @@ def getenv_str(
 ) -> str: ...
 
 
+@overload
+def getenv_str(
+    key: str,
+    /,
+    *,
+    required: Literal[True],
+) -> str: ...
+
+
 def getenv_str(
     key: str,
     /,
     default: str | None = None,
+    *,
+    required: bool = False,
 ) -> str | None:
     if value := getenv(key=key):
         return value
+
+    elif required and default is None:
+        raise ValueError(f"Required environment value `{key}` is missing!")
+
     else:
         return default
 
