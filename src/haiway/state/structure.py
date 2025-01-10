@@ -1,6 +1,5 @@
 import typing
 from collections.abc import Mapping
-from copy import deepcopy
 from types import EllipsisType, GenericAlias
 from typing import (
     Any,
@@ -362,22 +361,13 @@ class State(metaclass=StateMeta):
         )
 
     def __copy__(self) -> Self:
-        return self.__class__(**vars(self))
+        return self  # State is immutable, no need to provide an actual copy
 
     def __deepcopy__(
         self,
         memo: dict[int, Any] | None,
     ) -> Self:
-        copy: Self = self.__class__(
-            **{
-                key: deepcopy(
-                    value,
-                    memo,
-                )
-                for key, value in vars(self).items()
-            }
-        )
-        return copy
+        return self  # State is immutable, no need to provide an actual copy
 
     def __replace__(
         self,
