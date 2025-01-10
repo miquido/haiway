@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence, Set
+from copy import copy, deepcopy
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Literal, NotRequired, Protocol, Required, Self, TypedDict, runtime_checkable
@@ -222,3 +223,16 @@ def test_generic_subtypes_validation() -> None:
 
     # not raises
     _ = Container(generic=Generic(nested=NestedGeneric(value="ok")))
+
+
+def test_copying_leaves_same_object() -> None:
+    class Nested(State):
+        string: str
+
+    class Copied(State):
+        string: str
+        nested: Nested
+
+    origin = Copied(string="42", nested=Nested(string="answer"))
+    assert copy(origin) is origin
+    assert deepcopy(origin) is origin
