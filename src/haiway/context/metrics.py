@@ -9,6 +9,7 @@ from haiway.state import State
 __all__ = [
     "MetricsContext",
     "MetricsHandler",
+    "MetricsReading",
     "MetricsRecording",
     "MetricsScopeEntering",
     "MetricsScopeExiting",
@@ -23,6 +24,18 @@ class MetricsRecording(Protocol):
         /,
         metric: State,
     ) -> None: ...
+
+
+@runtime_checkable
+class MetricsReading(Protocol):
+    async def __call__[Metric: State](
+        self,
+        scope: ScopeIdentifier,
+        /,
+        *,
+        metric: type[Metric],
+        merged: bool,
+    ) -> Metric | None: ...
 
 
 @runtime_checkable
@@ -45,6 +58,7 @@ class MetricsScopeExiting(Protocol):
 
 class MetricsHandler(State):
     record: MetricsRecording
+    read: MetricsReading
     enter_scope: MetricsScopeEntering
     exit_scope: MetricsScopeExiting
 
@@ -97,6 +111,30 @@ class MetricsContext:
             LoggerContext.log_error(
                 "Failed to record metric: %s",
                 type(metric).__qualname__,
+                exception=exc,
+            )
+
+    @classmethod
+    async def read[Metric: State](
+        cls,
+        metric: type[Metric],
+        /,
+        merged: bool,
+    ) -> Metric | None:
+        try:  # catch exceptions - we don't wan't to blow up on metrics
+            metrics: Self = cls._context.get()
+
+            if metrics._metrics is not None:
+                return await metrics._metrics.read(
+                    metrics._scope,
+                    metric=metric,
+                    merged=merged,
+                )
+
+        except Exception as exc:
+            LoggerContext.log_error(
+                "Failed to read metric: %s",
+                metric.__qualname__,
                 exception=exc,
             )
 

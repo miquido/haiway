@@ -61,7 +61,7 @@ async def test_logs_issue_with_errors():
         assert executions == 2
         assert logs.output == [
             f"ERROR:root:Attempting to retry {compute.__name__}"
-            f" which failed due to an error: {FakeException("fake")}"
+            f" which failed due to an error: {FakeException('fake')}"
         ]
 
 
@@ -260,7 +260,7 @@ async def test_async_logs_issue_with_errors():
         await compute("expected")
         assert executions == 2
         assert logs.output[0].startswith(
-            f"ERROR:root:Attempting to retry {compute.__name__}" " which failed due to an error"
+            f"ERROR:root:Attempting to retry {compute.__name__} which failed due to an error"
         )
 
 

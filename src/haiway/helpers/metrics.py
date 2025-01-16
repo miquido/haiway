@@ -1,14 +1,15 @@
 from collections.abc import Sequence
 from itertools import chain
 from time import monotonic
-from typing import Any, Self, cast, final
+from typing import Any, Self, cast, final, overload
 
 from haiway.context import MetricsHandler, ScopeIdentifier, ctx
 from haiway.state import State
-from haiway.types import MISSING, Missing
+from haiway.types import MISSING
 
 __all_ = [
     "MetricsLogger",
+    "MetricsHolder",
 ]
 
 
@@ -32,25 +33,129 @@ class MetricsScopeStore:
     def finished(self) -> float:
         return self.exited is not None and all(nested.finished for nested in self.nested)
 
-    def merged(self) -> Sequence[State]:
-        merged_metrics: dict[type[State], State] = dict(self.metrics)
-        for element in chain.from_iterable(nested.merged() for nested in self.nested):
-            metric_type: type[State] = type(element)
-            current: State | Missing = merged_metrics.get(
-                metric_type,
-                MISSING,
+    @overload
+    def merged[Metric: State](
+        self,
+    ) -> Sequence[State]: ...
+
+    @overload
+    def merged[Metric: State](
+        self,
+        metric: type[Metric],
+    ) -> Metric | None: ...
+
+    def merged[Metric: State](
+        self,
+        metric: type[Metric] | None = None,
+    ) -> Sequence[State] | Metric | None:
+        if metric is None:
+            merged_metrics: dict[type[State], State] = dict(self.metrics)
+            for nested in chain.from_iterable(nested.merged() for nested in self.nested):
+                metric_type: type[State] = type(nested)
+                current: State | None = merged_metrics.get(metric_type)
+
+                if current is None:
+                    merged_metrics[metric_type] = nested
+                    continue  # keep going
+
+                if hasattr(current, "__add__"):
+                    merged_metrics[metric_type] = current.__add__(nested)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+                    assert isinstance(merged_metrics[metric_type], State)  # nosec: B101
+                    continue  # keep going
+
+                break  # we have multiple value without a way to merge
+
+            return tuple(merged_metrics.values())
+
+        else:
+            merged_metric: State | None = self.metrics.get(metric)
+            for nested in self.nested:
+                nested_metric: Metric | None = nested.merged(metric)
+                if nested_metric is None:
+                    continue  # skip missing
+
+                if merged_metric is None:
+                    merged_metric = nested_metric
+                    continue  # keep going
+
+                if hasattr(merged_metric, "__add__"):
+                    merged_metric = merged_metric.__add__(nested_metric)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue, reportUnknownVariableType]
+                    assert isinstance(merged_metric, metric)  # nosec: B101
+                    continue  # keep going
+
+                break  # we have multiple value without a way to merge
+
+            return cast(Metric | None, merged_metric)
+
+
+@final
+class MetricsHolder:
+    @classmethod
+    def handler(cls) -> MetricsHandler:
+        store_handler: Self = cls()
+        return MetricsHandler(
+            record=store_handler.record,
+            read=store_handler.read,
+            enter_scope=store_handler.enter_scope,
+            exit_scope=store_handler.exit_scope,
+        )
+
+    def __init__(self) -> None:
+        self.scopes: dict[ScopeIdentifier, MetricsScopeStore] = {}
+
+    def record(
+        self,
+        scope: ScopeIdentifier,
+        /,
+        metric: State,
+    ) -> None:
+        assert scope in self.scopes  # nosec: B101
+        metric_type: type[State] = type(metric)
+        metrics: dict[type[State], State] = self.scopes[scope].metrics
+        if (current := metrics.get(metric_type)) and hasattr(current, "__add__"):
+            metrics[type(metric)] = current.__add__(metric)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+
+        metrics[type(metric)] = metric
+
+    async def read[Metric: State](
+        self,
+        scope: ScopeIdentifier,
+        /,
+        *,
+        metric: type[Metric],
+        merged: bool,
+    ) -> Metric | None:
+        if merged:
+            return self.scopes[scope].merged(metric)
+
+        else:
+            return cast(Metric | None, self.scopes[scope].metrics.get(metric))
+
+    def enter_scope[Metric: State](
+        self,
+        scope: ScopeIdentifier,
+        /,
+    ) -> None:
+        assert scope not in self.scopes  # nosec: B101
+        scope_metrics = MetricsScopeStore(scope)
+        self.scopes[scope] = scope_metrics
+        if not scope.is_root:  # root scopes have no actual parent
+            for key in self.scopes.keys():
+                if key.scope_id == scope.parent_id:
+                    self.scopes[key].nested.append(scope_metrics)
+                    return
+
+            ctx.log_debug(
+                "Attempting to enter nested scope metrics without entering its parent first"
             )
 
-            if current is MISSING:
-                continue  # do not merge to missing
-
-            elif hasattr(current, "__add__"):
-                merged_metrics[metric_type] = current.__add__(element)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-
-            else:
-                merged_metrics[metric_type] = element
-
-        return tuple(merged_metrics.values())
+    def exit_scope[Metric: State](
+        self,
+        scope: ScopeIdentifier,
+        /,
+    ) -> None:
+        assert scope in self.scopes  # nosec: B101
+        self.scopes[scope].exited = monotonic()
 
 
 @final
@@ -67,6 +172,7 @@ class MetricsLogger:
         )
         return MetricsHandler(
             record=logger_handler.record,
+            read=logger_handler.read,
             enter_scope=logger_handler.enter_scope,
             exit_scope=logger_handler.exit_scope,
         )
@@ -99,6 +205,20 @@ class MetricsLogger:
             redact_content=self.redact_content,
         ):
             ctx.log_debug(f"Recorded metric:\n⎡ {type(metric).__qualname__}:{log}\n⌊")
+
+    async def read[Metric: State](
+        self,
+        scope: ScopeIdentifier,
+        /,
+        *,
+        metric: type[Metric],
+        merged: bool,
+    ) -> Metric | None:
+        if merged:
+            return self.scopes[scope].merged(metric)
+
+        else:
+            return cast(Metric | None, self.scopes[scope].metrics.get(metric))
 
     def enter_scope[Metric: State](
         self,
@@ -145,6 +265,9 @@ def _tree_log(
     )
 
     for metric in metrics.merged():
+        if type(metric) not in metrics.metrics:
+            continue  # skip metrics not available in this scope
+
         metric_log: str = ""
         for key, value in vars(metric).items():
             if value_log := _value_log(
@@ -160,7 +283,7 @@ def _tree_log(
         if not metric_log:
             continue  # skip empty logs
 
-        log += f"\n⎡ •{type(metric).__qualname__}:{metric_log.replace("\n", "\n|  ")}\n⌊"
+        log += f"\n⎡ •{type(metric).__qualname__}:{metric_log.replace('\n', '\n|  ')}\n⌊"
 
     for nested in metrics.nested:
         nested_log: str = _tree_log(

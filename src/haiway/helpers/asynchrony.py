@@ -30,12 +30,10 @@ def wrap_async[**Args, Result](
 
 
 @overload
-def asynchronous[**Args, Result]() -> (
-    Callable[
-        [Callable[Args, Result]],
-        Callable[Args, Coroutine[None, None, Result]],
-    ]
-): ...
+def asynchronous[**Args, Result]() -> Callable[
+    [Callable[Args, Result]],
+    Callable[Args, Coroutine[None, None, Result]],
+]: ...
 
 
 @overload
