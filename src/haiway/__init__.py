@@ -3,6 +3,7 @@ from haiway.context import (
     Disposables,
     MetricsContext,
     MetricsHandler,
+    MetricsReading,
     MetricsRecording,
     MetricsScopeEntering,
     MetricsScopeExiting,
@@ -13,6 +14,7 @@ from haiway.context import (
 )
 from haiway.helpers import (
     ArgumentsTrace,
+    MetricsHolder,
     MetricsLogger,
     ResultTrace,
     asynchronous,
@@ -61,7 +63,9 @@ __all__ = [
     "Disposables",
     "MetricsContext",
     "MetricsHandler",
+    "MetricsHolder",
     "MetricsLogger",
+    "MetricsReading",
     "MetricsRecording",
     "MetricsScopeEntering",
     "MetricsScopeExiting",

@@ -423,6 +423,62 @@ class ctx:
 
         MetricsContext.record(metric)
 
+    @overload
+    @staticmethod
+    async def read[Metric: State](
+        metric: type[Metric],
+        /,
+        *,
+        merged: bool = False,
+    ) -> Metric | None: ...
+
+    @overload
+    @staticmethod
+    async def read[Metric: State](
+        metric: type[Metric],
+        /,
+        *,
+        merged: bool = False,
+        default: Metric,
+    ) -> Metric: ...
+
+    @staticmethod
+    async def read[Metric: State](
+        metric: type[Metric],
+        /,
+        *,
+        merged: bool = False,
+        default: Metric | None = None,
+    ) -> Metric | None:
+        """
+        Read metric within current scope context.
+
+        Parameters
+        ----------
+        metric: type[Metric]
+            type of metric to be read from current context.
+
+        merged: bool
+            control wheather to merge metrics from nested scopes (True)\
+             or access only the current scope value (False) without combining them
+
+        default: Metric | None
+            default value to return when metric was not recorded yet.
+
+        Returns
+        -------
+        Metric | None
+        """
+
+        value: Metric | None = await MetricsContext.read(
+            metric,
+            merged=merged,
+        )
+        if value is None:
+            return default
+
+        return value
+
     @staticmethod
     def log_error(
         message: str,

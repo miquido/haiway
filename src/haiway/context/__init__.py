@@ -4,6 +4,7 @@ from haiway.context.identifier import ScopeIdentifier
 from haiway.context.metrics import (
     MetricsContext,
     MetricsHandler,
+    MetricsReading,
     MetricsRecording,
     MetricsScopeEntering,
     MetricsScopeExiting,
@@ -15,6 +16,7 @@ __all__ = [
     "Disposables",
     "MetricsContext",
     "MetricsHandler",
+    "MetricsReading",
     "MetricsRecording",
     "MetricsScopeEntering",
     "MetricsScopeExiting",
