@@ -85,6 +85,7 @@ def not_missing[Value](
 def when_missing[Value](
     check: Value | Missing,
     /,
+    *,
     value: Value,
 ) -> Value:
     if check is MISSING:

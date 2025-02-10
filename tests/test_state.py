@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 from pytest import raises
 
-from haiway import MISSING, Missing, State, frozenlist
+from haiway import MISSING, Default, Missing, State, frozenlist
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -92,11 +92,15 @@ def test_basic_initializes_with_defaults() -> None:
         string: str = ""
         integer: int = 0
         optional: str | None = None
+        unique: UUID = Default(factory=uuid4)
+        same: UUID = Default(uuid4())
 
     basic = Basics()
     assert basic.string == ""
     assert basic.integer == 0
     assert basic.optional is None
+    assert basic.unique is not Basics().unique
+    assert basic.same is Basics().same
 
 
 def test_basic_equals_checks_properties() -> None:

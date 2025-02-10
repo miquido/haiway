@@ -28,6 +28,8 @@ from haiway.helpers import (
 from haiway.state import AttributePath, AttributeRequirement, State
 from haiway.types import (
     MISSING,
+    Default,
+    DefaultValue,
     Missing,
     frozenlist,
     is_missing,
@@ -39,6 +41,7 @@ from haiway.utils import (
     always,
     as_dict,
     as_list,
+    as_set,
     as_tuple,
     async_always,
     async_noop,
@@ -59,6 +62,8 @@ __all__ = [
     "AsyncQueue",
     "AttributePath",
     "AttributeRequirement",
+    "Default",
+    "DefaultValue",
     "Disposable",
     "Disposables",
     "MetricsContext",
@@ -78,6 +83,7 @@ __all__ = [
     "always",
     "as_dict",
     "as_list",
+    "as_set",
     "as_tuple",
     "async_always",
     "async_noop",
