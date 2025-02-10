@@ -5,9 +5,6 @@ from pathlib import Path
 from re import Pattern
 from types import EllipsisType, NoneType, UnionType
 from typing import Any, Literal, Protocol, Self, Union, is_typeddict
-from typing import Mapping as MappingType  # noqa: UP035
-from typing import Sequence as SequenceType  # noqa: UP035
-from typing import Sequence as SetType  # noqa: UP035
 from uuid import UUID
 
 from haiway.state.attributes import AttributeAnnotation
@@ -443,14 +440,10 @@ VALIDATORS: Mapping[
     str: _prepare_validator_of_type,
     tuple: _prepare_validator_of_tuple,
     frozenset: _prepare_validator_of_set,
-    Literal: _prepare_validator_of_literal,
-    set: _prepare_validator_of_set,
     Set: _prepare_validator_of_set,
-    SetType: _prepare_validator_of_set,
     Sequence: _prepare_validator_of_sequence,
-    SequenceType: _prepare_validator_of_sequence,
     Mapping: _prepare_validator_of_mapping,
-    MappingType: _prepare_validator_of_mapping,
+    Literal: _prepare_validator_of_literal,
     range: _prepare_validator_of_type,
     UUID: _prepare_validator_of_type,
     date: _prepare_validator_of_type,
