@@ -1,5 +1,5 @@
 import typing
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import EllipsisType, GenericAlias
 from typing import (
     Any,
@@ -10,20 +10,41 @@ from typing import (
     cast,
     dataclass_transform,
     final,
+    overload,
 )
 from weakref import WeakValueDictionary
 
 from haiway.state.attributes import AttributeAnnotation, attribute_annotations
 from haiway.state.path import AttributePath
-from haiway.state.validation import (
-    AttributeValidation,
-    AttributeValidator,
-)
-from haiway.types import MISSING, Missing, not_missing
+from haiway.state.validation import AttributeValidation, AttributeValidator
+from haiway.types import MISSING, DefaultValue, Missing, not_missing
 
 __all__ = [
     "State",
 ]
+
+
+@overload
+def Default[Value](
+    value: Value,
+    /,
+) -> Value: ...
+
+
+@overload
+def Default[Value](
+    *,
+    factory: Callable[[], Value],
+) -> Value: ...
+
+
+def Default[Value](
+    value: Value | Missing = MISSING,
+    /,
+    *,
+    factory: Callable[[], Value] | Missing = MISSING,
+) -> Value:  # it is actually a DefaultValue, but type checker has to be fooled
+    return cast(Value, DefaultValue(value, factory=factory))
 
 
 @final
@@ -32,12 +53,12 @@ class StateAttribute[Value]:
         self,
         name: str,
         annotation: AttributeAnnotation,
-        default: Value | Missing,
+        default: DefaultValue[Value],
         validator: AttributeValidation[Value],
     ) -> None:
         self.name: str = name
         self.annotation: AttributeAnnotation = annotation
-        self.default: Value | Missing = default
+        self.default: DefaultValue[Value] = default
         self.validator: AttributeValidation[Value] = validator
 
     def validated(
@@ -45,13 +66,13 @@ class StateAttribute[Value]:
         value: Any | Missing,
         /,
     ) -> Value:
-        return self.validator(self.default if value is MISSING else value)
+        return self.validator(self.default() if value is MISSING else value)
 
 
 @dataclass_transform(
     kw_only_default=True,
     frozen_default=True,
-    field_specifiers=(),
+    field_specifiers=(DefaultValue,),
 )
 class StateMeta(type):
     def __new__(
@@ -81,7 +102,7 @@ class StateMeta(type):
             attributes[key] = StateAttribute(
                 name=key,
                 annotation=annotation.update_required(default is MISSING),
-                default=default,
+                default=_resolve_default(default),
                 validator=AttributeValidator.of(
                     annotation,
                     recursion_guard={
@@ -185,6 +206,18 @@ class StateMeta(type):
 
         else:
             return False  # we have different base / comparing to not parametrized
+
+
+def _resolve_default[Value](
+    value: DefaultValue[Value] | Value | Missing,
+) -> DefaultValue[Value]:
+    if isinstance(value, DefaultValue):
+        return cast(DefaultValue[Value], value)
+
+    return DefaultValue[Value](
+        value,
+        factory=MISSING,
+    )
 
 
 _types_cache: WeakValueDictionary[
