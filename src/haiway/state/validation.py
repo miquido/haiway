@@ -86,6 +86,12 @@ class AttributeValidator[Type]:
         assert self.validation is not MISSING  # nosec: B101
         return self.validation(value)  # pyright: ignore[reportCallIssue, reportUnknownVariableType]
 
+    def __str__(self) -> str:
+        return f"Validator[{self.annotation}]"
+
+    def __repr__(self) -> str:
+        return f"Validator[{self.annotation}]"
+
 
 def _prepare_validator_of_any(
     annotation: AttributeAnnotation,
@@ -391,11 +397,12 @@ def _prepare_validator_of_typed_dict(
             case _:
                 raise TypeError(f"'{value}' is not matching expected type of 'str'")
 
+    formatted_type: str = str(annotation)
     values_validators: dict[str, AttributeValidation[Any]] = {
         key: AttributeValidator.of(element, recursion_guard=recursion_guard)
-        for key, element in annotation.extra.items()
+        for key, element in annotation.extra["attributes"].items()
     }
-    formatted_type: str = str(annotation)
+    required_values: Set[str] = annotation.extra["required"]
 
     def validator(
         value: Any,
@@ -406,8 +413,10 @@ def _prepare_validator_of_typed_dict(
                 validated: MutableMapping[str, Any] = {}
                 for key, validator in values_validators.items():
                     element: Any = elements.get(key, MISSING)
-                    if element is not MISSING:
-                        validated[key_validator(key)] = validator(element)
+                    if element is MISSING and key not in required_values:
+                        continue  # skip missing and not required
+
+                    validated[key_validator(key)] = validator(element)
 
                 # TODO: make sure dict is not mutable with MappingProxyType?
                 return validated
