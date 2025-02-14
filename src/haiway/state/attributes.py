@@ -509,7 +509,10 @@ def _resolve_type_typeddict(
             self_annotation=resolved_attribute,
             recursion_guard=recursion_guard,
         ).update_required(key in annotation.__required_keys__)
-    resolved_attribute.extra = attributes
+    resolved_attribute.extra = {
+        "attributes": attributes,
+        "required": annotation.__required_keys__,
+    }
     return resolved_attribute
 
 
