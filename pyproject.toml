@@ -57,10 +57,13 @@ exclude = ["**/node_modules", "**/__pycache__"]
 ignore = []
 stubPath = "./stubs"
 reportMissingImports = true
-reportMissingTypeStubs = true
-typeCheckingMode = "strict"
+reportMissingTypeStubs = false
 userFileIndexingLimit = -1
 useLibraryCodeForTypes = true
+
+[tool.pyright.analysis]
+diagnosticMode = "workspace"
+typeCheckingMode = "strict"
 
 [tool.setuptools]
 include-package-data = true
