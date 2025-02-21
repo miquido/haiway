@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+
   pull_request:
     branches:
       - "*"
@@ -26,7 +27,9 @@ jobs:
 
       - name: Install
         run: uv sync --all-groups --all-extras --frozen --no-python-downloads
+
       - name: Lint
         run: uv run ruff check --output-format=github ./src ./tests
+
       - name: Test
         run: uv run pytest --rootdir= ./tests --doctest-modules --junitxml=junit/test-results.xml

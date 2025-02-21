@@ -34,4 +34,5 @@ jobs:
       - name: Publish
         env:
           PUBLISH_VERSION: ${{ github.event.release.tag_name }}
+        # force set tag on whatever is checked out to ensure proper version pick
         run: git tag --force $PUBLISH_VERSION && uv build && uv publish
