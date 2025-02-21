@@ -101,6 +101,7 @@ class MetricsHolder:
         )
 
     def __init__(self) -> None:
+        self.root_scope: ScopeIdentifier | None = None
         self.scopes: dict[ScopeIdentifier, MetricsScopeStore] = {}
 
     def record(
@@ -109,7 +110,9 @@ class MetricsHolder:
         /,
         metric: State,
     ) -> None:
+        assert self.root_scope is not None  # nosec: B101
         assert scope in self.scopes  # nosec: B101
+
         metric_type: type[State] = type(metric)
         metrics: dict[type[State], State] = self.scopes[scope].metrics
         if (current := metrics.get(metric_type)) and hasattr(current, "__add__"):
@@ -125,6 +128,9 @@ class MetricsHolder:
         metric: type[Metric],
         merged: bool,
     ) -> Metric | None:
+        assert self.root_scope is not None  # nosec: B101
+        assert scope in self.scopes  # nosec: B101
+
         if merged:
             return self.scopes[scope].merged(metric)
 
@@ -139,7 +145,11 @@ class MetricsHolder:
         assert scope not in self.scopes  # nosec: B101
         scope_metrics = MetricsScopeStore(scope)
         self.scopes[scope] = scope_metrics
-        if not scope.is_root:  # root scopes have no actual parent
+
+        if self.root_scope is None:
+            self.root_scope = scope
+
+        else:
             for key in self.scopes.keys():
                 if key.scope_id == scope.parent_id:
                     self.scopes[key].nested.append(scope_metrics)
@@ -182,9 +192,10 @@ class MetricsLogger:
         items_limit: int | None,
         redact_content: bool,
     ) -> None:
+        self.root_scope: ScopeIdentifier | None = None
+        self.scopes: dict[ScopeIdentifier, MetricsScopeStore] = {}
         self.items_limit: int | None = items_limit
         self.redact_content: bool = redact_content
-        self.scopes: dict[ScopeIdentifier, MetricsScopeStore] = {}
 
     def record(
         self,
@@ -192,7 +203,9 @@ class MetricsLogger:
         /,
         metric: State,
     ) -> None:
+        assert self.root_scope is not None  # nosec: B101
         assert scope in self.scopes  # nosec: B101
+
         metric_type: type[State] = type(metric)
         metrics: dict[type[State], State] = self.scopes[scope].metrics
         if (current := metrics.get(metric_type)) and hasattr(current, "__add__"):
@@ -214,6 +227,9 @@ class MetricsLogger:
         metric: type[Metric],
         merged: bool,
     ) -> Metric | None:
+        assert self.root_scope is not None  # nosec: B101
+        assert scope in self.scopes  # nosec: B101
+
         if merged:
             return self.scopes[scope].merged(metric)
 
@@ -228,7 +244,11 @@ class MetricsLogger:
         assert scope not in self.scopes  # nosec: B101
         scope_metrics = MetricsScopeStore(scope)
         self.scopes[scope] = scope_metrics
-        if not scope.is_root:  # root scopes have no actual parent
+
+        if self.root_scope is None:
+            self.root_scope = scope
+
+        else:
             for key in self.scopes.keys():
                 if key.scope_id == scope.parent_id:
                     self.scopes[key].nested.append(scope_metrics)
@@ -246,7 +266,7 @@ class MetricsLogger:
         assert scope in self.scopes  # nosec: B101
         self.scopes[scope].exited = monotonic()
 
-        if scope.is_root and self.scopes[scope].finished:
+        if scope == self.root_scope and self.scopes[scope].finished:
             if log := _tree_log(
                 self.scopes[scope],
                 list_items_limit=self.items_limit,
