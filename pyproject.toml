@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling",  "hatch-vcs"]
+requires = ["hatchling",  "versioningit"]
 build-backend = "hatchling.build"
 
 [project]
@@ -38,9 +38,7 @@ dev = [
 ]
 
 [tool.hatch.version]
-source = "vcs"
-version_scheme = "no-guess-dev"
-tag-pattern = "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)$"
+source = "versioningit"
 
 [tool.ruff]
 target-version = "py312"

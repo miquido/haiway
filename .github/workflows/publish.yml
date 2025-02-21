@@ -15,6 +15,7 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
           fetch-depth: 1
+          fetch-tags: false
 
       - name: Install uv and set the python version
         uses: astral-sh/setup-uv@v5
@@ -32,5 +33,5 @@ jobs:
 
       - name: Publish
         env:
-          HATCH_VERSION: ${{ github.event.release.tag_name }}
-        run: uv build && uv publish
+          PUBLISH_VERSION: ${{ github.event.release.tag_name }}
+        run: git tag --force $PUBLISH_VERSION && uv build && uv publish
