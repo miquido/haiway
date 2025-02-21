@@ -1,6 +1,6 @@
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Self, final
+from typing import Any, Self, final
 from uuid import uuid4
 
 __all__ = [
@@ -67,6 +67,15 @@ class ScopeIdentifier:
 
     def __str__(self) -> str:
         return self.unique_name
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, self.__class__):
+            return False
+
+        return self.scope_id == other.scope_id and self.trace_id == other.trace_id
+
+    def __hash__(self) -> int:
+        return hash(self.scope_id)
 
     def __enter__(self) -> None:
         assert not hasattr(self, "_token"), "Context reentrance is not allowed"  # nosec: B101
