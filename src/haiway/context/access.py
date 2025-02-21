@@ -196,6 +196,14 @@ class ScopeContext:
 @final
 class ctx:
     @staticmethod
+    def trace_id() -> str:
+        """
+        Get the current context trace identifier.
+        """
+
+        return ScopeIdentifier.current_trace_id()
+
+    @staticmethod
     def scope(
         label: str,
         /,

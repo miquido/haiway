@@ -13,6 +13,14 @@ class ScopeIdentifier:
     _context = ContextVar[Self]("ScopeIdentifier")
 
     @classmethod
+    def current_trace_id(cls) -> str:
+        try:
+            return ScopeIdentifier._context.get().trace_id
+
+        except LookupError as exc:
+            raise RuntimeError("Attempting to access scope identifier outside of scope") from exc
+
+    @classmethod
     def scope(
         cls,
         label: str,
