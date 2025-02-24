@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence, Set
+from typing import overload
 
 __all__ = [
     "as_dict",
@@ -8,24 +9,43 @@ __all__ = [
 ]
 
 
+@overload
 def as_list[T](
     collection: Sequence[T],
     /,
-) -> list[T]:
+) -> list[T]: ...
+
+
+@overload
+def as_list[T](
+    collection: Sequence[T] | None,
+    /,
+) -> list[T] | None: ...
+
+
+def as_list[T](
+    collection: Sequence[T] | None,
+    /,
+) -> list[T] | None:
     """
     Converts any given Sequence into a list.
 
     Parameters
     ----------
-    collection : Sequence[T]
+    collection : Sequence[T] | None
         The input collection to be converted.
 
     Returns
     -------
-    list[T]
-        A new list containing all elements of the input collection,
-        or the original list if it was already one.
+    list[T] | None
+        A new list containing all elements of the input collection,\
+         or the original list if it was already one.
+        None if no value was provided.
     """
+
+    if collection is None:
+        return None
+
     if isinstance(collection, list):
         return collection
 
@@ -33,24 +53,43 @@ def as_list[T](
         return list(collection)
 
 
+@overload
 def as_tuple[T](
     collection: Sequence[T],
     /,
-) -> tuple[T, ...]:
+) -> tuple[T, ...]: ...
+
+
+@overload
+def as_tuple[T](
+    collection: Sequence[T] | None,
+    /,
+) -> tuple[T, ...] | None: ...
+
+
+def as_tuple[T](
+    collection: Sequence[T] | None,
+    /,
+) -> tuple[T, ...] | None:
     """
     Converts any given Sequence into a tuple.
 
     Parameters
     ----------
-    collection : Sequence[T]
+    collection : Sequence[T] | None
         The input collection to be converted.
 
     Returns
     -------
-    tuple[T]
-        A new tuple containing all elements of the input collection,
-        or the original tuple if it was already one.
+    tuple[T] | None
+        A new tuple containing all elements of the input collection,\
+         or the original tuple if it was already one.
+        None if no value was provided.
     """
+
+    if collection is None:
+        return None
+
     if isinstance(collection, tuple):
         return collection
 
@@ -58,10 +97,24 @@ def as_tuple[T](
         return tuple(collection)
 
 
+@overload
 def as_set[T](
     collection: Set[T],
     /,
-) -> set[T]:
+) -> set[T]: ...
+
+
+@overload
+def as_set[T](
+    collection: Set[T] | None,
+    /,
+) -> set[T] | None: ...
+
+
+def as_set[T](
+    collection: Set[T] | None,
+    /,
+) -> set[T] | None:
     """
     Converts any given Set into a set.
 
@@ -73,9 +126,14 @@ def as_set[T](
     Returns
     -------
     set[T]
-        A new set containing all elements of the input collection,
-        or the original set if it was already one.
+        A new set containing all elements of the input collection,\
+         or the original set if it was already one.
+        None if no value was provided.
     """
+
+    if collection is None:
+        return None
+
     if isinstance(collection, set):
         return collection
 
@@ -83,10 +141,24 @@ def as_set[T](
         return set(collection)
 
 
+@overload
 def as_dict[K, V](
     collection: Mapping[K, V],
     /,
-) -> dict[K, V]:
+) -> dict[K, V]: ...
+
+
+@overload
+def as_dict[K, V](
+    collection: Mapping[K, V] | None,
+    /,
+) -> dict[K, V] | None: ...
+
+
+def as_dict[K, V](
+    collection: Mapping[K, V] | None,
+    /,
+) -> dict[K, V] | None:
     """
     Converts any given Mapping into a dict.
 
@@ -98,9 +170,14 @@ def as_dict[K, V](
     Returns
     -------
     dict[K, V]
-        A new dict containing all elements of the input collection,
-        or the original dict if it was already one.
+        A new dict containing all elements of the input collection,\
+         or the original dict if it was already one.
+        None if no value was provided.
     """
+
+    if collection is None:
+        return None
+
     if isinstance(collection, dict):
         return collection
 
