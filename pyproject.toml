@@ -37,11 +37,32 @@ dev = [
   "pytest-asyncio~=0.23",
 ]
 
-[tool.hatch.build]
-sources = ["./src"]
-
 [tool.hatch.metadata.hooks.custom]
-path = "hatch_version.py"
+path = "./hatch_version.py"
+
+[tool.hatch.build.targets.sdist]
+packages = ["./src/haiway", "./hatch_version.py"]
+exclude = [
+  "./hatch_version.py",
+  "./examples",
+  "./guidelines",
+  "./config",
+  "Makefile",
+  "uv.lock",
+  "./.github",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["./src/haiway"]
+exclude = [
+  "./hatch_version.py",
+  "./examples",
+  "./guidelines",
+  "./config",
+  "Makefile",
+  "uv.lock",
+  "./.github",
+]
 
 [tool.ruff]
 target-version = "py312"
