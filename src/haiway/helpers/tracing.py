@@ -74,6 +74,7 @@ def traced[**Args, Result](
                     label=function.__name__,
                 ),
             )
+
         else:
             return _traced_sync(
                 function,
@@ -101,7 +102,7 @@ def _traced_sync[**Args, Result](
                 return result
 
             except BaseException as exc:
-                ctx.record(ResultTrace.of(exc))
+                ctx.record(ResultTrace.of(f"{type(exc)}: {exc}"))
                 raise exc
 
     return mimic_function(
@@ -127,7 +128,7 @@ def _traced_async[**Args, Result](
                 return result
 
             except BaseException as exc:
-                ctx.record(ResultTrace.of(exc))
+                ctx.record(ResultTrace.of(f"{type(exc)}: {exc}"))
                 raise exc
 
     return mimic_function(

@@ -37,6 +37,14 @@ dev = [
   "pytest-asyncio~=0.23",
 ]
 
+
+[tool.hatch.build]
+sources = ["./src"]
+packages = ["./src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["./src"]
+
 [tool.hatch.metadata.hooks.custom]
 path = "hatch_version.py"
 
@@ -67,9 +75,3 @@ useLibraryCodeForTypes = true
 [tool.pyright.analysis]
 diagnosticMode = "workspace"
 typeCheckingMode = "strict"
-
-[tool.setuptools]
-include-package-data = true
-
-[tool.setuptools.packages.find]
-where = ["src"]
