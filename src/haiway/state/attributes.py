@@ -66,6 +66,9 @@ class AttributeAnnotation:
         return self
 
     def __str__(self) -> str:
+        if alias := self.extra.get("TYPE_ALIAS"):
+            return alias
+
         origin_str: str = getattr(self.origin, "__name__", str(self.origin))
         arguments_str: str
         if self.arguments:
@@ -337,7 +340,10 @@ def _resolve_type_alias(
 
     resolved_attribute.origin = resolved.origin
     resolved_attribute.arguments = resolved.arguments
-    resolved_attribute.extra = resolved.extra
+    resolved_attribute.extra = {
+        **resolved.extra,
+        "TYPE_ALIAS": annotation.__name__,
+    }
     resolved_attribute.required = resolved.required
 
     return resolved_attribute
