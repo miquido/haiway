@@ -6,7 +6,7 @@ from collections import abc as collections_abc
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from copy import copy
-from typing import Any, final, get_args, get_origin, overload
+from typing import Any, TypeAliasType, final, get_args, get_origin, overload
 
 from haiway.types import MISSING, Missing, not_missing
 
@@ -48,8 +48,8 @@ class PropertyAttributePathComponent(AttributePathComponent):
         attribute: type[Attribute],
         name: str,
     ) -> None:
-        root_origin: Any = get_origin(root) or root
-        attribute_origin: Any = get_origin(attribute) or attribute
+        root_origin: Any = _unaliased_origin(root)
+        attribute_origin: Any = _unaliased_origin(attribute)
 
         def access(
             subject: Root,
@@ -144,8 +144,8 @@ class SequenceItemAttributePathComponent(AttributePathComponent):
         attribute: type[Attribute],
         index: int,
     ) -> None:
-        root_origin: Any = get_origin(root) or root
-        attribute_origin: Any = get_origin(attribute) or attribute
+        root_origin: Any = _unaliased_origin(root)
+        attribute_origin: Any = _unaliased_origin(attribute)
 
         def access(
             subject: Root,
@@ -218,8 +218,8 @@ class MappingItemAttributePathComponent(AttributePathComponent):
         attribute: type[Attribute],
         key: str | int,
     ) -> None:
-        root_origin: Any = get_origin(root) or root
-        attribute_origin: Any = get_origin(attribute) or attribute
+        root_origin: Any = _unaliased_origin(root)
+        attribute_origin: Any = _unaliased_origin(attribute)
 
         def access(
             subject: Root,
@@ -373,9 +373,9 @@ class AttributePath[Root, Attribute]:
         self,
         key: str | int,
     ) -> Any:
-        match get_origin(self.__attribute__) or self.__attribute__:
+        match _unaliased_origin(self.__attribute__):
             case collections_abc.Mapping | typing.Mapping | builtins.dict:
-                match get_args(self.__attribute__):
+                match get_args(_unaliased(self.__attribute__)):
                     case (builtins.str | builtins.int, element_annotation):
                         return AttributePath[Root, Any](
                             self.__root__,
@@ -403,7 +403,7 @@ class AttributePath[Root, Attribute]:
                         self.__attribute__.__name__,
                     )
 
-                match get_args(self.__attribute__):
+                match get_args(_unaliased(self.__attribute__)):
                     case (element_annotation, builtins.Ellipsis | types.EllipsisType):
                         return AttributePath[Root, Any](
                             self.__root__,
@@ -439,7 +439,7 @@ class AttributePath[Root, Attribute]:
                         self.__attribute__.__name__,
                     )
 
-                match get_args(self.__attribute__):
+                match get_args(_unaliased(self.__attribute__)):
                     case (element_annotation,):
                         return AttributePath[Root, Any](
                             self.__root__,
@@ -484,13 +484,13 @@ class AttributePath[Root, Attribute]:
         /,
         updated: Attribute | Missing = MISSING,
     ) -> Root | Attribute:
-        assert isinstance(root, get_origin(self.__root__) or self.__root__), (  # nosec: B101
+        assert isinstance(root, _unaliased_origin(self.__root__)), (  # nosec: B101
             f"AttributePath '{self.__repr__()}' used on unexpected root of "
             f"'{type(root).__name__}' instead of '{self.__root__.__name__}'"
         )
 
         if not_missing(updated):
-            assert isinstance(updated, get_origin(self.__attribute__) or self.__attribute__), (  # nosec: B101
+            assert isinstance(updated, _unaliased_origin(self.__attribute__)), (  # nosec: B101
                 f"AttributePath '{self.__repr__()}' assigning to unexpected value of "
                 f"'{type(updated).__name__}' instead of '{self.__attribute__.__name__}'"
             )
@@ -516,9 +516,27 @@ class AttributePath[Root, Attribute]:
             for component in self.__components__:
                 resolved = component.access(resolved)
 
-            assert isinstance(resolved, get_origin(self.__attribute__) or self.__attribute__), (  # nosec: B101
+            assert isinstance(resolved, _unaliased_origin(self.__attribute__)), (  # nosec: B101
                 f"AttributePath '{self.__repr__()}' pointing to unexpected value of "
                 f"'{type(resolved).__name__}' instead of '{self.__attribute__.__name__}'"
             )
 
             return resolved
+
+
+def _unaliased_origin(base: type[Any]) -> type[Any]:
+    match base:
+        case TypeAliasType() as aliased:
+            return get_origin(aliased.__value__) or aliased.__value__
+
+        case concrete:
+            return get_origin(concrete) or concrete
+
+
+def _unaliased(base: type[Any]) -> type[Any]:
+    match base:
+        case TypeAliasType() as aliased:
+            return aliased.__value__
+
+        case concrete:
+            return concrete
