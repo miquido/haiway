@@ -1,4 +1,9 @@
-from asyncio import CancelledError, Task, current_task, iscoroutinefunction
+from asyncio import (
+    CancelledError,
+    Task,
+    current_task,
+    iscoroutinefunction,
+)
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,

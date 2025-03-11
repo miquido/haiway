@@ -23,9 +23,6 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         self._waiting: Future[Element] | None = None
         self._finish_reason: BaseException | None = None
 
-    def __del__(self) -> None:
-        self.finish()
-
     @property
     def is_finished(self) -> bool:
         return self._finish_reason is not None
@@ -34,7 +31,6 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         self,
         element: Element,
         /,
-        *elements: Element,
     ) -> None:
         if self.is_finished:
             raise RuntimeError("AsyncQueue is already finished")
@@ -44,8 +40,6 @@ class AsyncQueue[Element](AsyncIterator[Element]):
 
         else:
             self._queue.append(element)
-
-        self._queue.extend(elements)
 
     def finish(
         self,
@@ -57,7 +51,17 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         self._finish_reason = exception or StopAsyncIteration()
 
         if self._waiting is not None and not self._waiting.done():
-            self._waiting.set_exception(self._finish_reason)
+            # checking loop only on finish as the rest of operations
+            # should always have a valid loop in a typical environment
+            # and we are not supporting multithreading yet
+            if get_running_loop() is not self._loop:
+                self._loop.call_soon_threadsafe(
+                    self._waiting.set_exception,
+                    self._finish_reason,
+                )
+
+            else:
+                self._waiting.set_exception(self._finish_reason)
 
     def cancel(self) -> None:
         self.finish(exception=CancelledError())

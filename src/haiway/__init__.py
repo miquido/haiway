@@ -9,7 +9,9 @@ from haiway.context import (
     MetricsScopeExiting,
     MissingContext,
     MissingState,
+    ScopeContext,
     ScopeIdentifier,
+    StateContext,
     ctx,
 )
 from haiway.helpers import (
@@ -78,8 +80,10 @@ __all__ = [
     "MissingContext",
     "MissingState",
     "ResultTrace",
+    "ScopeContext",
     "ScopeIdentifier",
     "State",
+    "StateContext",
     "always",
     "as_dict",
     "as_list",
