@@ -3,10 +3,9 @@ from collections.abc import Iterable
 from contextlib import AbstractAsyncContextManager
 from itertools import chain
 from types import TracebackType
-from typing import final
+from typing import Any, final
 
 from haiway.state import State
-from haiway.utils import freeze
 
 __all__ = [
     "Disposable",
@@ -18,13 +17,37 @@ type Disposable = AbstractAsyncContextManager[Iterable[State] | State | None]
 
 @final
 class Disposables:
+    __slots__ = ("_disposables",)
+
     def __init__(
         self,
         *disposables: Disposable,
     ) -> None:
-        self._disposables: tuple[Disposable, ...] = disposables
+        self._disposables: tuple[Disposable, ...]
+        object.__setattr__(
+            self,
+            "_disposables",
+            disposables,
+        )
 
-        freeze(self)
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def __bool__(self) -> bool:
         return len(self._disposables) > 0

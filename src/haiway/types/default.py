@@ -12,6 +12,8 @@ __all__ = [
 
 @final
 class DefaultValue[Value]:
+    __slots__ = ("_value",)
+
     @overload
     def __init__(
         self,

@@ -2,7 +2,6 @@ from collections.abc import Callable, Collection, Iterable
 from typing import Any, Literal, Self, cast, final
 
 from haiway.state.path import AttributePath
-from haiway.utils import freeze
 
 __all__ = [
     "AttributeRequirement",
@@ -142,6 +141,13 @@ class AttributeRequirement[Root]:
             check=check_contained_in,
         )
 
+    __slots__ = (
+        "_check",
+        "lhs",
+        "operator",
+        "rhs",
+    )
+
     def __init__(
         self,
         lhs: Any,
@@ -157,7 +163,12 @@ class AttributeRequirement[Root]:
         rhs: Any,
         check: Callable[[Root], None],
     ) -> None:
-        self.lhs: Any = lhs
+        self.lhs: Any
+        object.__setattr__(
+            self,
+            "lhs",
+            lhs,
+        )
         self.operator: Literal[
             "equal",
             "not_equal",
@@ -166,11 +177,24 @@ class AttributeRequirement[Root]:
             "contained_in",
             "and",
             "or",
-        ] = operator
-        self.rhs: Any = rhs
-        self._check: Callable[[Root], None] = check
-
-        freeze(self)
+        ]
+        object.__setattr__(
+            self,
+            "operator",
+            operator,
+        )
+        self.rhs: Any
+        object.__setattr__(
+            self,
+            "rhs",
+            rhs,
+        )
+        self._check: Callable[[Root], None]
+        object.__setattr__(
+            self,
+            "_check",
+            check,
+        )
 
     def __and__(
         self,
@@ -227,3 +251,22 @@ class AttributeRequirement[Root]:
         values: Iterable[Root],
     ) -> list[Root]:
         return [value for value in values if self.check(value, raise_exception=False)]
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )

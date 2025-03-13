@@ -133,13 +133,61 @@ class LoggerContext:
                 exc_info=exception,
             )
 
+    __slots__ = (
+        "_entered",
+        "_logger",
+        "_prefix",
+        "_token",
+    )
+
     def __init__(
         self,
         scope: ScopeIdentifier,
         logger: Logger | None,
     ) -> None:
-        self._prefix: str = scope.unique_name
-        self._logger: Logger = logger or getLogger(name=scope.label)
+        self._prefix: str
+        object.__setattr__(
+            self,
+            "_prefix",
+            scope.unique_name,
+        )
+        self._logger: Logger
+        object.__setattr__(
+            self,
+            "_logger",
+            logger or getLogger(name=scope.label),
+        )
+        self._token: Token[LoggerContext] | None
+        object.__setattr__(
+            self,
+            "_token",
+            None,
+        )
+        self._entered: float | None
+        object.__setattr__(
+            self,
+            "_entered",
+            None,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def log(
         self,
@@ -157,10 +205,18 @@ class LoggerContext:
         )
 
     def __enter__(self) -> None:
-        assert not hasattr(self, "_token"), "Context reentrance is not allowed"  # nosec: B101
-        assert not hasattr(self, "_entered"), "Context reentrance is not allowed"  # nosec: B101
-        self._entered: float = monotonic()
-        self._token: Token[LoggerContext] = LoggerContext._context.set(self)
+        assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
+        assert self._entered is None, "Context reentrance is not allowed"  # nosec: B101
+        object.__setattr__(
+            self,
+            "_token",
+            LoggerContext._context.set(self),
+        )
+        object.__setattr__(
+            self,
+            "_entered",
+            monotonic(),
+        )
         self.log(DEBUG, "Entering context...")
 
     def __exit__(
@@ -169,8 +225,18 @@ class LoggerContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert hasattr(self, "_token"), "Unbalanced context enter/exit"  # nosec: B101
+        assert (  # nosec: B101
+            self._token is not None and self._entered is not None
+        ), "Unbalanced context enter/exit"
         LoggerContext._context.reset(self._token)
-        del self._token
+        object.__setattr__(
+            self,
+            "_token",
+            None,
+        )
         self.log(DEBUG, f"...exiting context after {monotonic() - self._entered:.2f}s")
-        del self._entered
+        object.__setattr__(
+            self,
+            "_entered",
+            None,
+        )

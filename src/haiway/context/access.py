@@ -23,7 +23,7 @@ from haiway.context.metrics import MetricsContext, MetricsHandler
 from haiway.context.state import StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.state import State
-from haiway.utils import freeze, mimic_function
+from haiway.utils import mimic_function
 
 __all__ = [
     "ctx",
@@ -32,6 +32,16 @@ __all__ = [
 
 @final
 class ScopeContext:
+    __slots__ = (
+        "_disposables",
+        "_identifier",
+        "_logger_context",
+        "_metrics_context",
+        "_state",
+        "_state_context",
+        "_task_group_context",
+    )
+
     def __init__(
         self,
         label: str,
@@ -40,29 +50,77 @@ class ScopeContext:
         disposables: Disposables | None,
         metrics: MetricsHandler | None,
     ) -> None:
-        self._identifier: ScopeIdentifier = ScopeIdentifier.scope(label)
-        self._logger_context: LoggerContext = LoggerContext(
-            self._identifier,
-            logger=logger,
+        self._identifier: ScopeIdentifier
+        object.__setattr__(
+            self,
+            "_identifier",
+            ScopeIdentifier.scope(label),
         )
-        self._task_group_context: TaskGroupContext = TaskGroupContext()
+        self._logger_context: LoggerContext
+        object.__setattr__(
+            self,
+            "_logger_context",
+            LoggerContext(
+                self._identifier,
+                logger=logger,
+            ),
+        )
+        # postponing task group creation to include only when needed
+        self._task_group_context: TaskGroupContext
         # postponing state creation to include disposables state when prepared
         self._state_context: StateContext
-        self._state: tuple[State, ...] = state
-        self._disposables: Disposables | None = disposables
-        # pre-building metrics context to ensure nested context registering
-        self._metrics_context: MetricsContext = MetricsContext.scope(
-            self._identifier,
-            metrics=metrics,
+        self._state: tuple[State, ...]
+        object.__setattr__(
+            self,
+            "_state",
+            state,
+        )
+        self._disposables: Disposables | None
+        object.__setattr__(
+            self,
+            "_disposables",
+            disposables,
+        )
+        self._metrics_context: MetricsContext
+        object.__setattr__(
+            self,
+            "_metrics_context",
+            # pre-building metrics context to ensure nested context registering
+            MetricsContext.scope(
+                self._identifier,
+                metrics=metrics,
+            ),
         )
 
-        freeze(self)
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def __enter__(self) -> str:
         assert self._disposables is None, "Can't enter synchronous context with disposables"  # nosec: B101
         self._identifier.__enter__()
         self._logger_context.__enter__()
-        self._state_context = StateContext.updated(self._state)
+        # lazily initialize state
+        object.__setattr__(
+            self,
+            "_state_context",
+            StateContext.updated(self._state),
+        )
         self._state_context.__enter__()
         self._metrics_context.__enter__()
 
@@ -101,15 +159,33 @@ class ScopeContext:
     async def __aenter__(self) -> str:
         self._identifier.__enter__()
         self._logger_context.__enter__()
+        # lazily initialize group when needed
+        object.__setattr__(
+            self,
+            "_task_group_context",
+            TaskGroupContext(),
+        )
         await self._task_group_context.__aenter__()
 
+        # lazily initialize state to include disposables results
         if self._disposables is not None:
-            self._state_context = StateContext.updated(
-                (*self._state, *await self._disposables.__aenter__())
+            object.__setattr__(
+                self,
+                "_state_context",
+                StateContext.updated(
+                    (
+                        *self._state,
+                        *await self._disposables.__aenter__(),
+                    )
+                ),
             )
 
         else:
-            self._state_context = StateContext.updated(self._state)
+            object.__setattr__(
+                self,
+                "_state_context",
+                StateContext.updated(self._state),
+            )
 
         self._state_context.__enter__()
         self._metrics_context.__enter__()
@@ -200,6 +276,8 @@ class ScopeContext:
 
 @final
 class ctx:
+    __slots__ = ()
+
     @staticmethod
     def trace_id() -> str:
         """

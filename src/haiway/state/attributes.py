@@ -14,6 +14,7 @@ from typing import (
     TypeVar,
     TypeVarTuple,
     _GenericAlias,  # pyright: ignore
+    final,
     get_args,
     get_origin,
     get_type_hints,
@@ -31,7 +32,15 @@ __all__ = [
 ]
 
 
+@final
 class AttributeAnnotation:
+    __slots__ = (
+        "arguments",
+        "extra",
+        "origin",
+        "required",
+    )
+
     def __init__(
         self,
         *,
@@ -49,6 +58,7 @@ class AttributeAnnotation:
             self.arguments = arguments
 
         self.required: bool = required
+
         self.extra: Mapping[str, Any]
         if extra is None:
             self.extra = {}
@@ -61,7 +71,11 @@ class AttributeAnnotation:
         required: bool,
         /,
     ) -> Self:
-        self.required = self.required and required
+        object.__setattr__(
+            self,
+            "required",
+            self.required and required,
+        )
 
         return self
 

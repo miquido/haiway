@@ -107,6 +107,20 @@ def asynchronous[**Args, Result](
 
 
 class _ExecutorWrapper[**Args, Result]:
+    __slots__ = (
+        "__annotations__",
+        "__defaults__",
+        "__doc__",
+        "__globals__",
+        "__kwdefaults__",
+        "__name__",
+        "__qualname__",
+        "__wrapped__",
+        "_executor",
+        "_function",
+        "_loop",
+    )
+
     def __init__(
         self,
         function: Callable[Args, Result],

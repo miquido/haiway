@@ -41,6 +41,12 @@ class AttributePathComponent(ABC):
 
 @final
 class PropertyAttributePathComponent(AttributePathComponent):
+    __slots__ = (
+        "_access",
+        "_assigning",
+        "_name",
+    )
+
     def __init__[Root, Attribute](
         self,
         root: type[Root],
@@ -104,9 +110,43 @@ class PropertyAttributePathComponent(AttributePathComponent):
 
             return updated  # pyright: ignore[reportUnknownVariableType]
 
-        self._access: Callable[[Any], Any] = access
-        self._assigning: Callable[[Any, Any], Any] = assigning
-        self._name: str = name
+        self._access: Callable[[Any], Any]
+        object.__setattr__(
+            self,
+            "_access",
+            access,
+        )
+        self._assigning: Callable[[Any, Any], Any]
+        object.__setattr__(
+            self,
+            "_assigning",
+            assigning,
+        )
+        self._name: str
+        object.__setattr__(
+            self,
+            "_name",
+            name,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def path_str(
         self,
@@ -137,6 +177,12 @@ class PropertyAttributePathComponent(AttributePathComponent):
 
 @final
 class SequenceItemAttributePathComponent(AttributePathComponent):
+    __slots__ = (
+        "_access",
+        "_assigning",
+        "_index",
+    )
+
     def __init__[Root: Sequence[Any], Attribute](
         self,
         root: type[Root],
@@ -182,9 +228,43 @@ class SequenceItemAttributePathComponent(AttributePathComponent):
             temp_list[index] = value
             return subject.__class__(temp_list)  # pyright: ignore[reportCallIssue, reportUnknownVariableType, reportUnknownMemberType]
 
-        self._access: Callable[[Any], Any] = access
-        self._assigning: Callable[[Any, Any], Any] = assigning
-        self._index: Any = index
+        self._access: Callable[[Any], Any]
+        object.__setattr__(
+            self,
+            "_access",
+            access,
+        )
+        self._assigning: Callable[[Any, Any], Any]
+        object.__setattr__(
+            self,
+            "_assigning",
+            assigning,
+        )
+        self._index: Any
+        object.__setattr__(
+            self,
+            "_index",
+            index,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def path_str(
         self,
@@ -211,6 +291,12 @@ class SequenceItemAttributePathComponent(AttributePathComponent):
 
 @final
 class MappingItemAttributePathComponent(AttributePathComponent):
+    __slots__ = (
+        "_access",
+        "_assigning",
+        "_key",
+    )
+
     def __init__[Root: Mapping[Any, Any], Attribute](
         self,
         root: type[Root],
@@ -256,9 +342,43 @@ class MappingItemAttributePathComponent(AttributePathComponent):
             temp_dict[key] = value
             return subject.__class__(temp_dict)  # pyright: ignore[reportCallIssue, reportUnknownVariableType, reportUnknownMemberType]
 
-        self._access: Callable[[Any], Any] = access
-        self._assigning: Callable[[Any, Any], Any] = assigning
-        self._key: Any = key
+        self._access: Callable[[Any], Any]
+        object.__setattr__(
+            self,
+            "_access",
+            access,
+        )
+        self._assigning: Callable[[Any, Any], Any]
+        object.__setattr__(
+            self,
+            "_assigning",
+            assigning,
+        )
+        self._key: Any
+        object.__setattr__(
+            self,
+            "_key",
+            key,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def path_str(
         self,
@@ -285,6 +405,12 @@ class MappingItemAttributePathComponent(AttributePathComponent):
 
 @final
 class AttributePath[Root, Attribute]:
+    __slots__ = (
+        "__attribute__",
+        "__components__",
+        "__root__",
+    )
+
     @overload
     def __init__(
         self,
@@ -311,9 +437,43 @@ class AttributePath[Root, Attribute]:
         attribute: type[Attribute],
     ) -> None:
         assert components or root == attribute  # nosec: B101
-        self.__root__: type[Root] = root
-        self.__attribute__: type[Attribute] = attribute
-        self.__components__: tuple[AttributePathComponent, ...] = components
+        self.__root__: type[Root]
+        object.__setattr__(
+            self,
+            "__root__",
+            root,
+        )
+        self.__attribute__: type[Attribute]
+        object.__setattr__(
+            self,
+            "__attribute__",
+            attribute,
+        )
+        self.__components__: tuple[AttributePathComponent, ...]
+        object.__setattr__(
+            self,
+            "__components__",
+            components,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     @property
     def components(self) -> Sequence[str]:

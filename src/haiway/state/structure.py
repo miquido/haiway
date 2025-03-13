@@ -49,6 +49,13 @@ def Default[Value](
 
 @final
 class StateAttribute[Value]:
+    __slots__ = (
+        "annotation",
+        "default",
+        "name",
+        "validator",
+    )
+
     def __init__(
         self,
         name: str,
@@ -56,10 +63,30 @@ class StateAttribute[Value]:
         default: DefaultValue[Value],
         validator: AttributeValidation[Value],
     ) -> None:
-        self.name: str = name
-        self.annotation: AttributeAnnotation = annotation
-        self.default: DefaultValue[Value] = default
-        self.validator: AttributeValidation[Value] = validator
+        self.name: str
+        object.__setattr__(
+            self,
+            "name",
+            name,
+        )
+        self.annotation: AttributeAnnotation
+        object.__setattr__(
+            self,
+            "annotation",
+            annotation,
+        )
+        self.default: DefaultValue[Value]
+        object.__setattr__(
+            self,
+            "default",
+            default,
+        )
+        self.validator: AttributeValidation[Value]
+        object.__setattr__(
+            self,
+            "validator",
+            validator,
+        )
 
     def validated(
         self,
@@ -67,6 +94,25 @@ class StateAttribute[Value]:
         /,
     ) -> Value:
         return self.validator(self.default() if value is MISSING else value)
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
 
 @dataclass_transform(

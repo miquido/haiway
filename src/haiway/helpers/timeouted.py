@@ -45,6 +45,19 @@ def timeout[**Args, Result](
 
 
 class _AsyncTimeout[**Args, Result]:
+    __slots__ = (
+        "__annotations__",
+        "__defaults__",
+        "__doc__",
+        "__globals__",
+        "__kwdefaults__",
+        "__name__",
+        "__qualname__",
+        "__wrapped__",
+        "_function",
+        "_timeout",
+    )
+
     def __init__(
         self,
         function: Callable[Args, Coroutine[None, None, Result]],

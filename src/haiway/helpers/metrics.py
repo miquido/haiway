@@ -14,6 +14,14 @@ __all_ = [
 
 
 class MetricsScopeStore:
+    __slots__ = (
+        "entered",
+        "exited",
+        "identifier",
+        "metrics",
+        "nested",
+    )
+
     def __init__(
         self,
         identifier: ScopeIdentifier,
@@ -99,6 +107,11 @@ class MetricsHolder:
             enter_scope=store_handler.enter_scope,
             exit_scope=store_handler.exit_scope,
         )
+
+    __slots__ = (
+        "root_scope",
+        "scopes",
+    )
 
     def __init__(self) -> None:
         self.root_scope: ScopeIdentifier | None = None
@@ -186,6 +199,13 @@ class MetricsLogger:
             enter_scope=logger_handler.enter_scope,
             exit_scope=logger_handler.exit_scope,
         )
+
+    __slots__ = (
+        "items_limit",
+        "redact_content",
+        "root_scope",
+        "scopes",
+    )
 
     def __init__(
         self,

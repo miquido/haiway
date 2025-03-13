@@ -1,7 +1,10 @@
+from base64 import b64decode
+from collections.abc import Callable
 from os import environ, getenv
 from typing import Literal, overload
 
 __all__ = [
+    "getenv_base64",
     "getenv_bool",
     "getenv_float",
     "getenv_int",
@@ -174,6 +177,53 @@ def getenv_str(
 ) -> str | None:
     if value := getenv(key=key):
         return value
+
+    elif required and default is None:
+        raise ValueError(f"Required environment value `{key}` is missing!")
+
+    else:
+        return default
+
+
+@overload
+def getenv_base64[Value](
+    key: str,
+    /,
+    *,
+    decoder: Callable[[bytes], Value],
+) -> Value | None: ...
+
+
+@overload
+def getenv_base64[Value](
+    key: str,
+    /,
+    default: Value,
+    *,
+    decoder: Callable[[bytes], Value],
+) -> Value: ...
+
+
+@overload
+def getenv_base64[Value](
+    key: str,
+    /,
+    *,
+    decoder: Callable[[bytes], Value],
+    required: Literal[True],
+) -> Value: ...
+
+
+def getenv_base64[Value](
+    key: str,
+    /,
+    default: Value | None = None,
+    *,
+    decoder: Callable[[bytes], Value],
+    required: bool = False,
+) -> Value | None:
+    if value := getenv(key=key):
+        return decoder(b64decode(value))
 
     elif required and default is None:
         raise ValueError(f"Required environment value `{key}` is missing!")
