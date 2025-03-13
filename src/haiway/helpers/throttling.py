@@ -89,6 +89,22 @@ def throttle[**Args, Result](
 
 
 class _AsyncThrottle[**Args, Result]:
+    __slots__ = (
+        "__annotations__",
+        "__defaults__",
+        "__doc__",
+        "__globals__",
+        "__kwdefaults__",
+        "__name__",
+        "__qualname__",
+        "__wrapped__",
+        "_entries",
+        "_function",
+        "_limit",
+        "_lock",
+        "_period",
+    )
+
     def __init__(
         self,
         function: Callable[Args, Coroutine[None, None, Result]],

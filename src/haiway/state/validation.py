@@ -4,7 +4,7 @@ from enum import Enum
 from pathlib import Path
 from re import Pattern
 from types import EllipsisType, NoneType, UnionType
-from typing import Any, Literal, Protocol, Self, Union, is_typeddict
+from typing import Any, Literal, Protocol, Self, Union, final, is_typeddict
 from uuid import UUID
 
 from haiway.state.attributes import AttributeAnnotation
@@ -29,6 +29,7 @@ class AttributeValidationError(Exception):
     pass
 
 
+@final
 class AttributeValidator[Type]:
     @classmethod
     def of(
@@ -51,32 +52,86 @@ class AttributeValidator[Type]:
         recursion_guard[str(annotation)] = validator
 
         if common := VALIDATORS.get(annotation.origin):
-            validator.validation = common(annotation, recursion_guard)
+            object.__setattr__(
+                validator,
+                "validation",
+                common(annotation, recursion_guard),
+            )
 
         elif hasattr(annotation.origin, "__IMMUTABLE__"):
-            validator.validation = _prepare_validator_of_type(annotation, recursion_guard)
+            object.__setattr__(
+                validator,
+                "validation",
+                _prepare_validator_of_type(annotation, recursion_guard),
+            )
 
         elif is_typeddict(annotation.origin):
-            validator.validation = _prepare_validator_of_typed_dict(annotation, recursion_guard)
+            object.__setattr__(
+                validator,
+                "validation",
+                _prepare_validator_of_typed_dict(annotation, recursion_guard),
+            )
 
         elif issubclass(annotation.origin, Protocol):
-            validator.validation = _prepare_validator_of_type(annotation, recursion_guard)
+            object.__setattr__(
+                validator,
+                "validation",
+                _prepare_validator_of_type(annotation, recursion_guard),
+            )
 
         elif issubclass(annotation.origin, Enum):
-            validator.validation = _prepare_validator_of_type(annotation, recursion_guard)
+            object.__setattr__(
+                validator,
+                "validation",
+                _prepare_validator_of_type(annotation, recursion_guard),
+            )
 
         else:
             raise TypeError(f"Unsupported type annotation: {annotation}")
 
         return validator
 
+    __slots__ = (
+        "annotation",
+        "validation",
+    )
+
     def __init__(
         self,
         annotation: AttributeAnnotation,
         validation: AttributeValidation[Type] | Missing,
     ) -> None:
-        self.annotation: AttributeAnnotation = annotation
-        self.validation: AttributeValidation[Type] | Missing = validation
+        self.annotation: AttributeAnnotation
+        object.__setattr__(
+            self,
+            "annotation",
+            annotation,
+        )
+        self.validation: AttributeValidation[Type] | Missing
+        object.__setattr__(
+            self,
+            "validation",
+            validation,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def __call__(
         self,

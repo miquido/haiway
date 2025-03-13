@@ -1,11 +1,10 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, MutableMapping
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Self, cast, final
+from typing import Any, Self, cast, final
 
 from haiway.context.types import MissingContext, MissingState
 from haiway.state import State
-from haiway.utils import freeze
 
 __all__ = [
     "ScopeState",
@@ -15,12 +14,37 @@ __all__ = [
 
 @final
 class ScopeState:
+    __slots__ = ("_state",)
+
     def __init__(
         self,
         state: Iterable[State],
     ) -> None:
-        self._state: dict[type[State], State] = {type(element): element for element in state}
-        freeze(self)
+        self._state: MutableMapping[type[State], State]
+        object.__setattr__(
+            self,
+            "_state",
+            {type(element): element for element in state},
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def state[StateType: State](
         self,
@@ -37,6 +61,7 @@ class ScopeState:
         else:
             try:
                 initialized: StateType = state()
+                # we would need a locking here in multithreaded environment
                 self._state[state] = initialized
                 return initialized
 
@@ -65,6 +90,11 @@ class ScopeState:
 @final
 class StateContext:
     _context = ContextVar[ScopeState]("StateContext")
+
+    __slots__ = (
+        "_state",
+        "_token",
+    )
 
     @classmethod
     def current[StateType: State](
@@ -96,11 +126,45 @@ class StateContext:
         self,
         state: ScopeState,
     ) -> None:
-        self._state: ScopeState = state
+        self._state: ScopeState
+        object.__setattr__(
+            self,
+            "_state",
+            state,
+        )
+        self._token: Token[ScopeState] | None
+        object.__setattr__(
+            self,
+            "_token",
+            None,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def __enter__(self) -> None:
-        assert not hasattr(self, "_token"), "Context reentrance is not allowed"  # nosec: B101
-        self._token: Token[ScopeState] = StateContext._context.set(self._state)
+        assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
+        object.__setattr__(
+            self,
+            "_token",
+            StateContext._context.set(self._state),
+        )
 
     def __exit__(
         self,
@@ -108,6 +172,10 @@ class StateContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert hasattr(self, "_token"), "Unbalanced context enter/exit"  # nosec: B101
+        assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         StateContext._context.reset(self._token)
-        del self._token
+        object.__setattr__(
+            self,
+            "_token",
+            None,
+        )

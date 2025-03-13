@@ -48,6 +48,15 @@ class ScopeIdentifier:
             trace_id=current.trace_id,
         )
 
+    __slots__ = (
+        "_token",
+        "label",
+        "parent_id",
+        "scope_id",
+        "trace_id",
+        "unique_name",
+    )
+
     def __init__(
         self,
         trace_id: str,
@@ -55,11 +64,61 @@ class ScopeIdentifier:
         scope_id: str,
         label: str,
     ) -> None:
-        self.trace_id: str = trace_id
-        self.parent_id: str = parent_id
-        self.scope_id: str = scope_id
-        self.label: str = label
-        self.unique_name: str = f"[{trace_id}] [{label}] [{scope_id}]"
+        self.trace_id: str
+        object.__setattr__(
+            self,
+            "trace_id",
+            trace_id,
+        )
+        self.parent_id: str
+        object.__setattr__(
+            self,
+            "parent_id",
+            parent_id,
+        )
+        self.scope_id: str
+        object.__setattr__(
+            self,
+            "scope_id",
+            scope_id,
+        )
+        self.label: str
+        object.__setattr__(
+            self,
+            "label",
+            label,
+        )
+        self.unique_name: str
+        object.__setattr__(
+            self,
+            "unique_name",
+            f"[{trace_id}] [{label}] [{scope_id}]",
+        )
+        self._token: Token[ScopeIdentifier] | None
+        object.__setattr__(
+            self,
+            "_token",
+            None,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     @property
     def is_root(self) -> bool:
@@ -78,8 +137,12 @@ class ScopeIdentifier:
         return hash(self.scope_id)
 
     def __enter__(self) -> None:
-        assert not hasattr(self, "_token"), "Context reentrance is not allowed"  # nosec: B101
-        self._token: Token[ScopeIdentifier] = ScopeIdentifier._context.set(self)
+        assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
+        object.__setattr__(
+            self,
+            "_token",
+            ScopeIdentifier._context.set(self),
+        )
 
     def __exit__(
         self,
@@ -87,6 +150,10 @@ class ScopeIdentifier:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert hasattr(self, "_token"), "Unbalanced context enter/exit"  # nosec: B101
+        assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         ScopeIdentifier._context.reset(self._token)
-        del self._token
+        object.__setattr__(
+            self,
+            "_token",
+            None,
+        )

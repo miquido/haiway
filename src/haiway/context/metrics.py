@@ -1,6 +1,6 @@
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Protocol, Self, final, runtime_checkable
+from typing import Any, Protocol, Self, final, runtime_checkable
 
 from haiway.context.identifier import ScopeIdentifier
 from haiway.context.logging import LoggerContext
@@ -138,17 +138,62 @@ class MetricsContext:
                 exception=exc,
             )
 
+    __slots__ = (
+        "_metrics",
+        "_scope",
+        "_token",
+    )
+
     def __init__(
         self,
         scope: ScopeIdentifier,
         metrics: MetricsHandler | None,
     ) -> None:
-        self._scope: ScopeIdentifier = scope
-        self._metrics: MetricsHandler | None = metrics
+        self._scope: ScopeIdentifier
+        object.__setattr__(
+            self,
+            "_scope",
+            scope,
+        )
+        self._metrics: MetricsHandler | None
+        object.__setattr__(
+            self,
+            "_metrics",
+            metrics,
+        )
+        self._token: Token[MetricsContext] | None
+        object.__setattr__(
+            self,
+            "_token",
+            None,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__},"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     def __enter__(self) -> None:
-        assert not hasattr(self, "_token"), "Context reentrance is not allowed"  # nosec: B101
-        self._token: Token[MetricsContext] = MetricsContext._context.set(self)
+        assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
+        object.__setattr__(
+            self,
+            "_token",
+            MetricsContext._context.set(self),
+        )
         if self._metrics is not None:
             self._metrics.enter_scope(self._scope)
 
@@ -158,8 +203,12 @@ class MetricsContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert hasattr(self, "_token"), "Unbalanced context enter/exit"  # nosec: B101
+        assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         MetricsContext._context.reset(self._token)
-        del self._token
+        object.__setattr__(
+            self,
+            "_token",
+            None,
+        )
         if self._metrics is not None:
             self._metrics.exit_scope(self._scope)

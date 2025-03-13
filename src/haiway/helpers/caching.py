@@ -89,6 +89,21 @@ class _CacheEntry[Entry](NamedTuple):
 
 
 class _SyncCache[**Args, Result]:
+    __slots__ = (
+        "__annotations__",
+        "__defaults__",
+        "__doc__",
+        "__globals__",
+        "__kwdefaults__",
+        "__name__",
+        "__qualname__",
+        "__wrapped__",
+        "_cached",
+        "_function",
+        "_limit",
+        "_next_expire_time",
+    )
+
     def __init__(
         self,
         function: Callable[Args, Result],
@@ -206,6 +221,21 @@ class _SyncCache[**Args, Result]:
 
 
 class _AsyncCache[**Args, Result]:
+    __slots__ = (
+        "__annotations__",
+        "__defaults__",
+        "__doc__",
+        "__globals__",
+        "__kwdefaults__",
+        "__name__",
+        "__qualname__",
+        "__wrapped__",
+        "_cached",
+        "_function",
+        "_limit",
+        "_next_expire_time",
+    )
+
     def __init__(
         self,
         function: Callable[Args, Coroutine[None, None, Result]],
