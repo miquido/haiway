@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence, Set
+from collections.abc import Iterable, Mapping, Set
 from typing import overload
 
 __all__ = [
@@ -11,34 +11,34 @@ __all__ = [
 
 @overload
 def as_list[T](
-    collection: Sequence[T],
+    collection: Iterable[T],
     /,
 ) -> list[T]: ...
 
 
 @overload
 def as_list[T](
-    collection: Sequence[T] | None,
+    collection: Iterable[T] | None,
     /,
 ) -> list[T] | None: ...
 
 
 def as_list[T](
-    collection: Sequence[T] | None,
+    collection: Iterable[T] | None,
     /,
 ) -> list[T] | None:
     """
-    Converts any given Sequence into a list.
+    Converts any given Iterable into a list.
 
     Parameters
     ----------
-    collection : Sequence[T] | None
-        The input collection to be converted.
+    collection : Iterable[T] | None
+        The input to be converted.
 
     Returns
     -------
     list[T] | None
-        A new list containing all elements of the input collection,\
+        A new list containing all elements of the input,\
          or the original list if it was already one.
         None if no value was provided.
     """
@@ -55,34 +55,34 @@ def as_list[T](
 
 @overload
 def as_tuple[T](
-    collection: Sequence[T],
+    collection: Iterable[T],
     /,
 ) -> tuple[T, ...]: ...
 
 
 @overload
 def as_tuple[T](
-    collection: Sequence[T] | None,
+    collection: Iterable[T] | None,
     /,
 ) -> tuple[T, ...] | None: ...
 
 
 def as_tuple[T](
-    collection: Sequence[T] | None,
+    collection: Iterable[T] | None,
     /,
 ) -> tuple[T, ...] | None:
     """
-    Converts any given Sequence into a tuple.
+    Converts any given Iterable into a tuple.
 
     Parameters
     ----------
     collection : Sequence[T] | None
-        The input collection to be converted.
+        The input to be converted.
 
     Returns
     -------
     tuple[T] | None
-        A new tuple containing all elements of the input collection,\
+        A new tuple containing all elements of the input,\
          or the original tuple if it was already one.
         None if no value was provided.
     """
