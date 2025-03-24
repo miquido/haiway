@@ -1,6 +1,6 @@
 # 🚗 haiway 🚕 🚚 🚙
 
-haiway is a framework helping to build better project codebase by leveraging concepts of structured concurrency and functional programming.
+haiway is a framework designed to facilitate the development of applications using the functional programming paradigm combined with structured concurrency concepts. Unlike traditional object-oriented frameworks, haiway emphasizes immutability, pure functions, and context-based state management, enabling developers to build scalable and maintainable applications. By leveraging context managers combined with context vars, haiway ensures safe state propagation in concurrent environments and simplifies dependency injection through function implementation propagation.
 
 ## 🖥️ Install
 
@@ -20,7 +20,7 @@ We welcome any feedback and suggestions! Feel free to open an issue or pull requ
 
 MIT License
 
-Copyright (c) 2024 Miquido
+Copyright (c) 2024-2025 Miquido
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

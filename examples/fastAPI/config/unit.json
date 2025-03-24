@@ -19,19 +19,19 @@
           "uri": "/*"
         },
         "action": {
-          "pass": "applications/server"
+          "pass": "applications/api"
         }
       }
     ]
   },
   "applications": {
-    "server": {
+    "api": {
       "type": "python",
       "protocol": "asgi",
       "path": "/",
       "module": "server",
       "callable": "app",
-      "processes": 1,
+      "processes": 2,
       "environment": {
         "PYTHONOPTIMIZE": "2",
         "HOME": "."

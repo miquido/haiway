@@ -40,7 +40,7 @@ class ContextMiddleware:
         send: Send,
     ) -> None:
         async with ctx.scope(
-            f"ws {scope["path"]}",
+            f"ws {scope['path']}",
             *scope["app"].extra.get("state", ()),
             logger=getLogger("server"),
             metrics=MetricsLogger.handler(),
@@ -80,7 +80,7 @@ class ContextMiddleware:
         send: Send,
     ) -> None:
         async with ctx.scope(
-            f"{scope.get("method", "")} {scope["path"]}",
+            f"{scope.get('method', '')} {scope['path']}",
             *scope["app"].extra.get("state", ()),
             logger=getLogger("server"),
             metrics=MetricsLogger.handler(),

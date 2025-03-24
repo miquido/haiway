@@ -1,9 +1,11 @@
 from uuid import UUID
 
 from fastapi import APIRouter
+from haiway import ctx
 from starlette.responses import Response
 
-from features.todos import complete_todo
+from features.todos import Todos
+from integrations.postgres import Postgres
 
 __all__ = [
     "router",
@@ -22,5 +24,9 @@ router = APIRouter()
     },
 )
 async def complete_todo_endpoint(identifier: UUID) -> Response:
-    await complete_todo(identifier=identifier)
-    return Response(status_code=204)
+    async with ctx.scope(
+        "todo_completion",
+        disposables=(Postgres.connection(),),
+    ):
+        await Todos.complete_todo(identifier=identifier)
+        return Response(status_code=204)

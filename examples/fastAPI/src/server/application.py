@@ -4,7 +4,7 @@ from logging import Logger, getLogger
 from fastapi import FastAPI
 from haiway import Disposables, setup_logging
 
-from integrations.postgres import PostgresClient
+from integrations.postgres import PostgresConnectionPool
 from server.middlewares import ContextMiddleware
 from server.routes import technical_router, todos_router
 
@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
         logger.info("Starting server...")
 
     disposables = Disposables(
-        PostgresClient(),
+        PostgresConnectionPool(),
     )
     async with disposables as state:
         app.extra["state"] = (*state,)

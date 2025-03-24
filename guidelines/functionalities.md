@@ -1,6 +1,6 @@
 ## Functionalities
 
-The haiway framework is a framework designed to facilitate the development of applications using the functional programming paradigm combined with structured concurrency concepts. Unlike traditional object-oriented frameworks, haiway emphasizes immutability, pure functions, and context-based state management, enabling developers to build scalable and maintainable applications. By leveraging context managers combined with context vars, haiway ensures safe state propagation in concurrent environments and simplifies dependency injection through function implementation propagation.
+haiway is a framework designed to facilitate the development of applications using the functional programming paradigm combined with structured concurrency concepts. Unlike traditional object-oriented frameworks, haiway emphasizes immutability, pure functions, and context-based state management, enabling developers to build scalable and maintainable applications. By leveraging context managers combined with context vars, haiway ensures safe state propagation in concurrent environments and simplifies dependency injection through function implementation propagation.
 
 ### Functional basics
 
@@ -28,7 +28,7 @@ Interfaces define the public API of a functionality, specifying the data types a
 from typing import Protocol, Any, runtime_checkable
 from haiway import State
 
-# State representing the argument passed to functions
+# State representing the argument passed to the function
 class FunctionArgument(State):
     value: Any
 
@@ -42,7 +42,7 @@ In the example above, typing.Protocol is used to fully define the function signa
 
 ### Defining state
 
-State represents the immutable data required by functionalities. It is propagated through contexts to maintain consistency and support dependency injection. haiway comes with a helpful base class `State` which utilizes dataclass-like transform combined with runtime  type checking and immutability.
+State represents the immutable data required by functionalities. It is propagated through contexts to maintain consistency and support dependency injection. haiway comes with a helpful base class `State` which utilizes dataclass-like transform combined with runtime type checking and immutability.
 
 ```python
 # state.py
@@ -106,6 +106,25 @@ async def function_call(argument: FunctionArgument) -> None:
 
 The example above shows a simple proxy call that accesses the required contextual details of the implementation.
 
+### Classmethod calls
+
+When possible, preferred way of defining calls is to put them within the functionality state type as class methods. This approach allows easier access to desired functions and improves egonomy over the free functions access.
+
+```python
+# state.py - revisited
+...
+class Functionality(State):
+    # define function call as a class method
+    @classmethod
+    def function_call(cls, argument: FunctionArgument) -> None:
+        # Invoke the function implementation from the contextual state
+        await ctx.state(cls).function(argument=argument)
+
+    function: FunctionSignature
+```
+
+The approach presented above is an equivalent of previous `function_call` defined as a free function. Keeping it within the functionality interface class allows streamlined access and better control over the calls.
+
 ### Using implementation
 
 To utilize the defined functionalities within an application, contexts must be established to provide the necessary state and implementations. Below is an example of how to integrate haiway functionalities into an application.
@@ -128,7 +147,6 @@ async def application_function(argument: FunctionArgument) -> None:
 ```
 
 Going through all of these layers may seem unnecessary at first, but in the long term, it creates a robust, modular system that is easy to manage and work with.
-
 
 ### Flexible arguments
 
@@ -153,6 +171,8 @@ async def function_implementation(argument: FunctionArgument, **extra: Any) -> N
 ```
 
 haiway `State` types allow to create object copies with updated attributes by using `updated` method. The updated object is a swallow copy of the original object allowing to change the state only in local context without affecting other users of that state. When there are no changes to be applied no copy is created. Additionally the `updated` method skips all unnecessary arguments to handle described case without additional code required. However, there is always risk of name collisions, this approach should be carefully considered to avoid any potential issues.
+
+Additionally, this approach allows to utilize additional, implementation specific arguments, hidden beneatch the usual function signatures.
 
 ## Example
 
@@ -198,8 +218,19 @@ class NotesDirectory(State):
 
 # State encapsulating the functionality with its interface
 class Notes(State):
-    create: NoteCreating
-    update: NoteUpdating
+    # Call of note creation function
+    async def create_note(cls, content: str, **extra: Any) -> Note:
+        # Invoke the function implementation from the contextual state
+        await ctx.state(cls).create(content=content, **extra)
+
+    # Call of note update function
+    async def update_note(cls, note: Note, **extra: Any) -> None:
+        # Invoke the function implementation from the contextual state
+        await ctx.state(cls).update(note=note, **extra)
+
+    # instance variables holding function implementations
+    creating: NoteCreating
+    updating: NoteUpdating
 ```
 
 That allows us to provide a concrete implementation. Note that `extra` arguments would allow us to alter the `NotesDirectory` path for a single function call only. This might be very important feature in some cases i.e. when using recursive function calls.
@@ -224,7 +255,7 @@ async def file_note_update(note: Note, **extra: Any) -> None:
 
 
 # Factory function to instantiate the Notes utilizing files implementation
-def files_notes() -> Notes:
+def file_notes() -> Notes:
     return Notes(
         create=file_note_create,
         update=file_note_update,
@@ -232,21 +263,15 @@ def files_notes() -> Notes:
 
 ```
 
-Finally we can provide a helper call function for easier usage.
+You can now use the whole functionality by defining implementation for execution context and calling functionality methods.
 
 ```python
-# notes/calls.py
-from notes.types import Note
-from notes.state import Notes
+# example.py
+from notes import Notes, file_notes, NotesDirectory
 from haiway import ctx
 
-# Call of note creation function
-async def create_note(content: str, **extra: Any) -> Note:
-    # Invoke the function implementation from the contextual state
-    await ctx.state(Notes).create(content=content, **extra)
-
-# Call of note update function
-async def update_note(note: Note, **extra: Any) -> None:
-    # Invoke the function implementation from the contextual state
-    await ctx.state(Notes).update(note=note, **extra)
+# prepare the context with desired implementation
+async with ctx.scope("example", file_notes(), NotesDirectory(path="./examples/note.txt")):
+    # and access its methods contextually
+    await Notes.create_note("This was an example of haiway")
 ```

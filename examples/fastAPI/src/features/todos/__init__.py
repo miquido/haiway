@@ -1,5 +1,5 @@
-from features.todos.calls import complete_todo
+from features.todos.state import Todos
 
 __all__ = [
-    "complete_todo",
+    "Todos",
 ]
