@@ -91,11 +91,6 @@ class ScopeState:
 class StateContext:
     _context = ContextVar[ScopeState]("StateContext")
 
-    __slots__ = (
-        "_state",
-        "_token",
-    )
-
     @classmethod
     def current[StateType: State](
         cls,
@@ -121,6 +116,11 @@ class StateContext:
 
         except LookupError:  # create root scope when missing
             return cls(state=ScopeState(state))
+
+    __slots__ = (
+        "_state",
+        "_token",
+    )
 
     def __init__(
         self,

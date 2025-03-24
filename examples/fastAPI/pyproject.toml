@@ -28,7 +28,7 @@ server = [
 dev = [
   "haiway_fastapi",
   "uvicorn~=0.30",
-  "ruff~=0.8.0",
+  "ruff~=0.11",
   "pyright~=1.1",
   "bandit~=1.7",
 ]
@@ -53,13 +53,10 @@ exclude = ["**/node_modules", "**/__pycache__"]
 ignore = []
 stubPath = "./stubs"
 reportMissingImports = true
-reportMissingTypeStubs = true
-typeCheckingMode = "strict"
+reportMissingTypeStubs = false
 userFileIndexingLimit = -1
 useLibraryCodeForTypes = true
 
-[tool.setuptools]
-include-package-data = true
-
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.pyright.analysis]
+diagnosticMode = "workspace"
+typeCheckingMode = "strict"

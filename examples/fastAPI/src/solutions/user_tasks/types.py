@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol, overload, runtime_checkable
 from uuid import UUID
@@ -45,7 +46,7 @@ class UserTaskFetching(Protocol):
         self,
         *,
         identifier: None = None,
-    ) -> list[UserTask]: ...
+    ) -> Sequence[UserTask]: ...
 
     @overload
     async def __call__(
@@ -58,7 +59,7 @@ class UserTaskFetching(Protocol):
         self,
         *,
         identifier: UUID | None = None,
-    ) -> list[UserTask] | UserTask: ...
+    ) -> Sequence[UserTask] | UserTask: ...
 
 
 @runtime_checkable

@@ -1,64 +1,77 @@
-from collections.abc import Callable
-from types import TracebackType
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Sequence
+from typing import Any
 
-from haiway import State
+from haiway import State, ctx
 
-from integrations.postgres.types import PostgresExecution, PostgresRow
+from integrations.postgres.types import (
+    PostgresConnectionContext,
+    PostgresConnectionPreparing,
+    PostgresRow,
+    PostgresStatementExecuting,
+    PostgresTransactionContext,
+    PostgresTransactionPreparing,
+)
 
 __all__ = [
     "Postgres",
     "PostgresConnection",
-    "PostgresConnectionContext",
-    "PostgresTransactionContext",
 ]
 
 
-@runtime_checkable
-class PostgresTransactionContext(Protocol):
-    async def __aenter__(self) -> None: ...
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> bool | None: ...
-
-
 class PostgresConnection(State):
-    execute: PostgresExecution
-    transaction: Callable[[], PostgresTransactionContext]
+    execute_statement: PostgresStatementExecuting
+    prepare_transaction: PostgresTransactionPreparing
 
+    @classmethod
     async def fetch_one(
-        self,
-        query: str,
+        cls,
+        statement: str,
         /,
         *args: Any,
     ) -> PostgresRow | None:
         return next(
             (
                 result
-                for result in await self.execute(
-                    query,
+                for result in await ctx.state(cls).execute_statement(
+                    statement,
                     *args,
                 )
             ),
             None,
         )
 
+    @classmethod
+    async def fetch(
+        cls,
+        statement: str,
+        /,
+        *args: Any,
+    ) -> Sequence[PostgresRow]:
+        return await ctx.state(cls).execute_statement(
+            statement,
+            *args,
+        )
 
-@runtime_checkable
-class PostgresConnectionContext(Protocol):
-    async def __aenter__(self) -> PostgresConnection: ...
+    @classmethod
+    async def execute(
+        cls,
+        statement: str,
+        /,
+        *args: Any,
+    ) -> None:
+        await ctx.state(cls).execute_statement(
+            statement,
+            *args,
+        )
 
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> bool | None: ...
+    @classmethod
+    def transaction(cls) -> PostgresTransactionContext:
+        return ctx.state(cls).prepare_transaction()
 
 
 class Postgres(State):
-    connection: Callable[[], PostgresConnectionContext]
+    @classmethod
+    def connection(cls) -> PostgresConnectionContext:
+        return ctx.state(cls).prepare_connection()
+
+    prepare_connection: PostgresConnectionPreparing

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from types import TracebackType
 from typing import final
 
@@ -9,18 +10,6 @@ from asyncpg import (  # pyright: ignore[reportMissingTypeStubs]
 from asyncpg.pool import PoolAcquireContext  # pyright: ignore[reportMissingTypeStubs]
 from asyncpg.transaction import Transaction  # pyright: ignore[reportMissingTypeStubs]
 
-from integrations.postgres.state import (
-    PostgresConnection,
-    PostgresConnectionContext,
-    PostgresTransactionContext,
-)
-from integrations.postgres.types import PostgresException, PostgresRow, PostgresValue
-
-__all__ = [
-    "PostgresClient",
-]
-
-
 from integrations.postgres.config import (
     POSTGRES_DATABASE,
     POSTGRES_HOST,
@@ -29,15 +18,36 @@ from integrations.postgres.config import (
     POSTGRES_SSLMODE,
     POSTGRES_USER,
 )
-from integrations.postgres.state import Postgres
+from integrations.postgres.state import (
+    Postgres,
+    PostgresConnection,
+    PostgresConnectionContext,
+    PostgresTransactionContext,
+)
+from integrations.postgres.types import (
+    PostgresException,
+    PostgresRow,
+    PostgresValue,
+)
 
 __all__ = [
-    "PostgresClient",
+    "PostgresConnectionPool",
 ]
 
 
 @final
-class PostgresClient:
+class PostgresConnectionPool:
+    __slots__ = (
+        "_connection_limit",
+        "_database",
+        "_host",
+        "_password",
+        "_pool",
+        "_port",
+        "_ssl",
+        "_user",
+    )
+
     def __init__(  # noqa: PLR0913
         self,
         host: str = POSTGRES_HOST,
@@ -48,20 +58,28 @@ class PostgresClient:
         ssl: str = POSTGRES_SSLMODE,
         connection_limit: int = 1,
     ) -> None:
-        self._pool: Pool = create_pool(
-            min_size=1,
-            max_size=connection_limit,
-            database=database,
-            user=user,
-            password=password,
-            host=host,
-            port=port,
-            ssl=ssl,
-        )
+        self._host: str = host
+        self._port: str = port
+        self._database: str = database
+        self._user: str = user
+        self._password: str = password
+        self._ssl: str = ssl
+        self._connection_limit: int = connection_limit
+        self._pool: Pool
 
     async def __aenter__(self) -> Postgres:
+        self._pool = create_pool(
+            min_size=1,
+            max_size=self._connection_limit,
+            database=self._database,
+            user=self._user,
+            password=self._password,
+            host=self._host,
+            port=self._port,
+            ssl=self._ssl,
+        )
         await self._pool  # initialize pool
-        return Postgres(connection=self.connection)
+        return Postgres(prepare_connection=self.prepare_connection)
 
     async def __aexit__(
         self,
@@ -72,12 +90,14 @@ class PostgresClient:
         if self._pool._initialized:  # pyright: ignore[reportPrivateUsage]
             await self._pool.close()
 
-    def connection(self) -> PostgresConnectionContext:
+    def prepare_connection(self) -> PostgresConnectionContext:
         return _ConnectionContext(pool_context=self._pool.acquire())  # pyright: ignore[reportUnknownMemberType]
 
 
 @final
 class _TransactionContext:
+    __slots__ = ("_transaction_context",)
+
     def __init__(
         self,
         transaction_context: Transaction,
@@ -102,6 +122,8 @@ class _TransactionContext:
 
 @final
 class _ConnectionContext:
+    __slots__ = ("_pool_context",)
+
     def __init__(
         self,
         pool_context: PoolAcquireContext,
@@ -115,12 +137,15 @@ class _ConnectionContext:
             statement: str,
             /,
             *args: PostgresValue,
-        ) -> list[PostgresRow]:
+        ) -> Sequence[PostgresRow]:
             try:
-                return await acquired_connection.fetch(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-                    statement,
-                    *args,
-                )
+                return [
+                    dict(record)  # convert to dict to allow match patterns
+                    for record in await acquired_connection.fetch(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                        statement,
+                        *args,
+                    )
+                ]
 
             except Exception as exc:
                 raise PostgresException("Failed to execute SQL statement") from exc
@@ -129,8 +154,8 @@ class _ConnectionContext:
             return _TransactionContext(transaction_context=acquired_connection.transaction())  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
 
         return PostgresConnection(
-            execute=execute,
-            transaction=transaction,
+            execute_statement=execute,
+            prepare_transaction=transaction,
         )
 
     async def __aexit__(

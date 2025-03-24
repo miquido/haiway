@@ -12,7 +12,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.5.14
 endif
 
-.PHONY: uv_check venv sync update format lint run docker_run
+.PHONY: uv_check venv sync update format lint run migrations docker_run
 
 # Check installed UV version and install if needed
 uv_check:
@@ -81,6 +81,10 @@ lint:
 run:
 	@python -m server
 
-	# Run all services locally using docker-compose.
+# Execute migrations
+migrations:
+	@python -m migrations
+
+# Run all services locally using docker-compose.
 docker_run:
 	@docker compose up --force-recreate --build server

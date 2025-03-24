@@ -8,7 +8,7 @@ The core philosophy behind haiway's package organization is to create a clear se
 
 In software development, especially in large-scale projects, proper organization is crucial. It helps developers navigate the codebase, understand the relationships between different components, and make changes with confidence. haiway's package organization strategy is designed to address these needs by providing a clear structure that scales well with project complexity.
 
-haiway defines five distinct package types, each serving a specific purpose in the overall architecture of your application. Package types are organized by their high level role in building application layers from the most basic and common elements to the most specific and complex functionalities to finally form an application entrypoint. 
+haiway defines five distinct package types, each serving a specific purpose in the overall architecture of your application. Package types are organized by their high level role in building application layers from the most basic and common elements to the most specific and complex functionalities to finally form an application entrypoint.
 
 Here is a high level overview of the project packages structure which will be explained in detail below.
 
@@ -53,7 +53,7 @@ src/
 │       ├── __init__.py
 │       └── ...
 │
-└── commons/ # common utilities and language extensions
+└── commons/ # common types, utilities and language extensions
     ├── __init__.py
     └── ...
 ```
@@ -76,7 +76,7 @@ src/
 └── ...
 ```
 
-Entrypoints are top-level packages within your project's source directory. Your project can have multiple entrypoints, allowing for various ways to interact with your application. No other packages should depend on entrypoint packages. They are the outermost layer of your application architecture. Each entrypoint should be isolated in its own package, promoting a clear separation between different ways of invoking your application.
+Entrypoints are top-level packages within your project's source directory. Your project can have multiple entrypoints, allowing for various ways to interact with your application or splitting its runtime into multiple pieces. No other packages should depend on entrypoint packages. They are the outermost layer of your application architecture. Each entrypoint should be isolated in its own package, promoting a clear separation between different parts of your application.
 
 By keeping entrypoints separate, you maintain flexibility in how your application can be used while ensuring that the core functionality remains independent of any specific interface.
 
@@ -151,7 +151,7 @@ By isolating integrations in their own packages, you make it easier to manage ex
 
 #### Commons
 
-The commons package is a special package that provides shared utilities, extensions, and helper functions used throughout your application. It serves as a foundation for all other packages and may be used to resolve circular dependencies caused by type imports in some cases.
+The commons package is a special package that provides shared utilities, types, extensions, and helper functions used throughout your application. It serves as a foundation for all other packages and may be used to resolve circular dependencies caused by type imports in some cases.
 
 ```
 src/
@@ -165,7 +165,7 @@ src/
 
 Commons package cannot depend on any other package in your application. It should contain only truly common and widely used functionalities. Care should be taken not to overload the commons package with too many responsibilities.
 
-The commons package helps reduce code duplication and provides a centralized location for shared utilities, promoting consistency across your application.
+The commons package helps reduce code duplication and provides a centralized location for shared utilities and types, promoting consistency across your application.
 
 ### Internal package structure
 
@@ -186,7 +186,7 @@ solution_or_feature/
 └── types.py
 ```
 
-`__init__.py`: This file is responsible for exporting the package's public symbols. It's crucial to only export what is intended to be used outside the package. Anything not exported is considered internal and should not be accessed from outside the package. The `__init__.py` file should not import any internal or private elements of the package, especially direct implementations. Typically it would export the calls, state and types contents.
+`__init__.py`: This file is responsible for exporting the package's public symbols. It's crucial to only export what is intended to be used outside the package. Anything not exported is considered internal and should not be accessed from outside the package. The `__init__.py` file should not import any internal or private elements of the package, especially direct implementations of underlying components. Typically it would export the calls, state and types contents.
 
 `types.py`: This file contains definitions for data types, interfaces, and errors used within the package. It should not depend on any other file within the package and should not contain any logic—only type declarations. Types defined here can be partially or fully exported to allow for type annotations and checks in other parts of your application.
 
@@ -194,7 +194,7 @@ solution_or_feature/
 
 `state.py`: This file contains state declarations for the package, used for dependency and data injection. It can use types.py, config.py, and optionally default implementations from other modules. State types should be exported to allow defining and updating implementations and contextual data or configuration. The state should provide default values and/or factory methods for easy configuration.
 
-`calls.py`: This file defines the public interface functions that utilize the package's state and allow access to the package's functionalities. These functions should be exported within `__init__.py`.
+`calls.py`: This file (or files) defines the public interface functions that utilize the package's state and allow access to the package's functionalities including specific implementation factory methods. `calls.py` may be split to multiple files and named after specific implementations for clarity. Calls functions should be exported within `__init__.py`.
 
 Other: Any additional files needed for internal implementation details. These files should be treated as internal and not exported.
 
