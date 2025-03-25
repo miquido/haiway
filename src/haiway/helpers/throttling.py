@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import Callable, Coroutine
 from datetime import timedelta
 from time import monotonic
-from typing import cast, overload
+from typing import Any, cast, overload
 
 from haiway.utils.mimic import mimic_function
 
@@ -18,9 +18,9 @@ __all__ = [
 
 @overload
 def throttle[**Args, Result](
-    function: Callable[Args, Coroutine[None, None, Result]],
+    function: Callable[Args, Coroutine[Any, Any, Result]],
     /,
-) -> Callable[Args, Coroutine[None, None, Result]]: ...
+) -> Callable[Args, Coroutine[Any, Any, Result]]: ...
 
 
 @overload
@@ -29,21 +29,21 @@ def throttle[**Args, Result](
     limit: int = 1,
     period: timedelta | float = 1,
 ) -> Callable[
-    [Callable[Args, Coroutine[None, None, Result]]], Callable[Args, Coroutine[None, None, Result]]
+    [Callable[Args, Coroutine[Any, Any, Result]]], Callable[Args, Coroutine[Any, Any, Result]]
 ]: ...
 
 
 def throttle[**Args, Result](
-    function: Callable[Args, Coroutine[None, None, Result]] | None = None,
+    function: Callable[Args, Coroutine[Any, Any, Result]] | None = None,
     *,
     limit: int = 1,
     period: timedelta | float = 1,
 ) -> (
     Callable[
-        [Callable[Args, Coroutine[None, None, Result]]],
-        Callable[Args, Coroutine[None, None, Result]],
+        [Callable[Args, Coroutine[Any, Any, Result]]],
+        Callable[Args, Coroutine[Any, Any, Result]],
     ]
-    | Callable[Args, Coroutine[None, None, Result]]
+    | Callable[Args, Coroutine[Any, Any, Result]]
 ):
     """\
     Throttle for function calls with custom limit and period time. \
@@ -53,7 +53,7 @@ def throttle[**Args, Result](
 
     Parameters
     ----------
-    function: Callable[Args, Coroutine[None, None, Result]]
+    function: Callable[Args, Coroutine[Any, Any, Result]]
         function to wrap in throttle
     limit: int
         limit of executions in given period, if no period was specified
@@ -63,17 +63,17 @@ def throttle[**Args, Result](
 
     Returns
     -------
-    Callable[[Callable[Args, Coroutine[None, None, Result]]], Callable[Args, Coroutine[None, None, Result]]] \
-    | Callable[Args, Coroutine[None, None, Result]]
+    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Callable[Args, Coroutine[Any, Any, Result]]] \
+    | Callable[Args, Coroutine[Any, Any, Result]]
         provided function wrapped in throttle
     """  # noqa: E501
 
     def _wrap(
-        function: Callable[Args, Coroutine[None, None, Result]],
-    ) -> Callable[Args, Coroutine[None, None, Result]]:
+        function: Callable[Args, Coroutine[Any, Any, Result]],
+    ) -> Callable[Args, Coroutine[Any, Any, Result]]:
         assert iscoroutinefunction(function)  # nosec: B101
         return cast(
-            Callable[Args, Coroutine[None, None, Result]],
+            Callable[Args, Coroutine[Any, Any, Result]],
             _AsyncThrottle(
                 function,
                 limit=limit,
@@ -107,12 +107,12 @@ class _AsyncThrottle[**Args, Result]:
 
     def __init__(
         self,
-        function: Callable[Args, Coroutine[None, None, Result]],
+        function: Callable[Args, Coroutine[Any, Any, Result]],
         /,
         limit: int,
         period: timedelta | float,
     ) -> None:
-        self._function: Callable[Args, Coroutine[None, None, Result]] = function
+        self._function: Callable[Args, Coroutine[Any, Any, Result]] = function
         self._entries: deque[float] = deque()
         self._lock: Lock = Lock()
         self._limit: int = limit

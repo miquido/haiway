@@ -238,8 +238,8 @@ class ScopeContext:
     @overload
     def __call__[Result, **Arguments](
         self,
-        function: Callable[Arguments, Coroutine[None, None, Result]],
-    ) -> Callable[Arguments, Coroutine[None, None, Result]]: ...
+        function: Callable[Arguments, Coroutine[Any, Any, Result]],
+    ) -> Callable[Arguments, Coroutine[Any, Any, Result]]: ...
 
     @overload
     def __call__[Result, **Arguments](
@@ -249,8 +249,8 @@ class ScopeContext:
 
     def __call__[Result, **Arguments](
         self,
-        function: Callable[Arguments, Coroutine[None, None, Result]] | Callable[Arguments, Result],
-    ) -> Callable[Arguments, Coroutine[None, None, Result]] | Callable[Arguments, Result]:
+        function: Callable[Arguments, Coroutine[Any, Any, Result]] | Callable[Arguments, Result],
+    ) -> Callable[Arguments, Coroutine[Any, Any, Result]] | Callable[Arguments, Result]:
         if iscoroutinefunction(function):
 
             async def async_context(
@@ -372,7 +372,7 @@ class ctx:
 
     @staticmethod
     def spawn[Result, **Arguments](
-        function: Callable[Arguments, Coroutine[None, None, Result]],
+        function: Callable[Arguments, Coroutine[Any, Any, Result]],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
@@ -383,7 +383,7 @@ class ctx:
 
         Parameters
         ----------
-        function: Callable[Arguments, Coroutine[None, None, Result]]
+        function: Callable[Arguments, Coroutine[Any, Any, Result]]
             function to be called within the task group
 
         *args: Arguments.args

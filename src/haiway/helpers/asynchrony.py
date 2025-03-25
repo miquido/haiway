@@ -14,9 +14,9 @@ __all__ = [
 
 
 def wrap_async[**Args, Result](
-    function: Callable[Args, Coroutine[None, None, Result]] | Callable[Args, Result],
+    function: Callable[Args, Coroutine[Any, Any, Result]] | Callable[Args, Result],
     /,
-) -> Callable[Args, Coroutine[None, None, Result]]:
+) -> Callable[Args, Coroutine[Any, Any, Result]]:
     if iscoroutinefunction(function):
         return function
 
@@ -30,10 +30,12 @@ def wrap_async[**Args, Result](
 
 
 @overload
-def asynchronous[**Args, Result]() -> Callable[
-    [Callable[Args, Result]],
-    Callable[Args, Coroutine[None, None, Result]],
-]: ...
+def asynchronous[**Args, Result]() -> (
+    Callable[
+        [Callable[Args, Result]],
+        Callable[Args, Coroutine[Any, Any, Result]],
+    ]
+): ...
 
 
 @overload
@@ -43,7 +45,7 @@ def asynchronous[**Args, Result](
     executor: Executor,
 ) -> Callable[
     [Callable[Args, Result]],
-    Callable[Args, Coroutine[None, None, Result]],
+    Callable[Args, Coroutine[Any, Any, Result]],
 ]: ...
 
 
@@ -51,7 +53,7 @@ def asynchronous[**Args, Result](
 def asynchronous[**Args, Result](
     function: Callable[Args, Result],
     /,
-) -> Callable[Args, Coroutine[None, None, Result]]: ...
+) -> Callable[Args, Coroutine[Any, Any, Result]]: ...
 
 
 def asynchronous[**Args, Result](
@@ -62,9 +64,9 @@ def asynchronous[**Args, Result](
 ) -> (
     Callable[
         [Callable[Args, Result]],
-        Callable[Args, Coroutine[None, None, Result]],
+        Callable[Args, Coroutine[Any, Any, Result]],
     ]
-    | Callable[Args, Coroutine[None, None, Result]]
+    | Callable[Args, Coroutine[Any, Any, Result]]
 ):
     """\
     Wrapper for a sync function to convert it to an async function. \
@@ -90,7 +92,7 @@ def asynchronous[**Args, Result](
 
     def wrap(
         wrapped: Callable[Args, Result],
-    ) -> Callable[Args, Coroutine[None, None, Result]]:
+    ) -> Callable[Args, Coroutine[Any, Any, Result]]:
         assert not iscoroutinefunction(wrapped), "Cannot wrap async function in executor"  # nosec: B101
 
         return _ExecutorWrapper(
@@ -152,7 +154,7 @@ class _ExecutorWrapper[**Args, Result]:
         instance: object,
         owner: type | None = None,
         /,
-    ) -> Callable[Args, Coroutine[None, None, Result]]:
+    ) -> Callable[Args, Coroutine[Any, Any, Result]]:
         if owner is None:
             return self
 
@@ -180,8 +182,8 @@ class _ExecutorWrapper[**Args, Result]:
 def _mimic_async[**Args, Result](
     function: Callable[Args, Result],
     /,
-    within: Callable[..., Coroutine[None, None, Result]],
-) -> Callable[Args, Coroutine[None, None, Result]]:
+    within: Callable[..., Coroutine[Any, Any, Result]],
+) -> Callable[Args, Coroutine[Any, Any, Result]]:
     try:
         annotations: Any = getattr(  # noqa: B009
             function,
@@ -192,7 +194,7 @@ def _mimic_async[**Args, Result](
             "__annotations__",
             {
                 **annotations,
-                "return": Coroutine[None, None, annotations.get("return", Any)],
+                "return": Coroutine[Any, Any, annotations.get("return", Any)],
             },
         )
 
@@ -234,6 +236,6 @@ def _mimic_async[**Args, Result](
     )
 
     return cast(
-        Callable[Args, Coroutine[None, None, Result]],
+        Callable[Args, Coroutine[Any, Any, Result]],
         within,
     )

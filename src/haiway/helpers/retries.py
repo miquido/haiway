@@ -1,7 +1,7 @@
 from asyncio import CancelledError, iscoroutinefunction, sleep
 from collections.abc import Callable, Coroutine
 from time import sleep as sleep_sync
-from typing import cast, overload
+from typing import Any, cast, overload
 
 from haiway.context import ctx
 from haiway.utils import mimic_function
@@ -178,12 +178,12 @@ def _wrap_sync[**Args, Result](
 
 
 def _wrap_async[**Args, Result](
-    function: Callable[Args, Coroutine[None, None, Result]],
+    function: Callable[Args, Coroutine[Any, Any, Result]],
     *,
     limit: int,
     delay: Callable[[int, Exception], float] | float | None,
     catching: set[type[Exception]] | tuple[type[Exception], ...],
-) -> Callable[Args, Coroutine[None, None, Result]]:
+) -> Callable[Args, Coroutine[Any, Any, Result]]:
     assert limit > 0, "Limit has to be greater than zero"  # nosec: B101
 
     @mimic_function(function)

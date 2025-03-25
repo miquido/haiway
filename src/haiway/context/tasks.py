@@ -16,7 +16,7 @@ class TaskGroupContext:
     @classmethod
     def run[Result, **Arguments](
         cls,
-        function: Callable[Arguments, Coroutine[None, None, Result]],
+        function: Callable[Arguments, Coroutine[Any, Any, Result]],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
