@@ -3,12 +3,15 @@ from collections import OrderedDict
 from collections.abc import Callable, Coroutine, Hashable
 from functools import _make_key  # pyright: ignore[reportPrivateUsage]
 from time import monotonic
-from typing import NamedTuple, Protocol, cast, overload
+from typing import Any, NamedTuple, Protocol, cast, overload
 
 from haiway.context.access import ctx
 from haiway.utils.mimic import mimic_function
 
 __all__ = [
+    "CacheMakeKey",
+    "CacheRead",
+    "CacheWrite",
     "cache",
 ]
 
@@ -59,7 +62,7 @@ def cache[**Args, Result, Key](
     read: CacheRead[Key, Result],
     write: CacheWrite[Key, Result],
 ) -> Callable[
-    [Callable[Args, Coroutine[None, None, Result]]], Callable[Args, Coroutine[None, None, Result]]
+    [Callable[Args, Coroutine[Any, Any, Result]]], Callable[Args, Coroutine[Any, Any, Result]]
 ]: ...
 
 
@@ -73,8 +76,8 @@ def cache[**Args, Result, Key](  # noqa: PLR0913
     write: CacheWrite[Key, Result] | None = None,
 ) -> (
     Callable[
-        [Callable[Args, Coroutine[None, None, Result]]],
-        Callable[Args, Coroutine[None, None, Result]],
+        [Callable[Args, Coroutine[Any, Any, Result]]],
+        Callable[Args, Coroutine[Any, Any, Result]],
     ]
     | Callable[[Callable[Args, Result]], Callable[Args, Result]]
     | Callable[Args, Result]
@@ -317,13 +320,13 @@ class _AsyncCache[**Args, Result]:
 
     def __init__(
         self,
-        function: Callable[Args, Coroutine[None, None, Result]],
+        function: Callable[Args, Coroutine[Any, Any, Result]],
         /,
         limit: int,
         expiration: float | None,
         make_key: CacheMakeKey[Args, Hashable],
     ) -> None:
-        self._function: Callable[Args, Coroutine[None, None, Result]] = function
+        self._function: Callable[Args, Coroutine[Any, Any, Result]] = function
         self._cached: OrderedDict[Hashable, _CacheEntry[Result]] = OrderedDict()
         self._limit: int = limit
         self._make_key: CacheMakeKey[Args, Hashable] = make_key
@@ -348,7 +351,7 @@ class _AsyncCache[**Args, Result]:
         instance: object | None,
         owner: type | None = None,
         /,
-    ) -> Callable[Args, Coroutine[None, None, Result]]:
+    ) -> Callable[Args, Coroutine[Any, Any, Result]]:
         assert owner is None and instance is None, "cache does not work for classes"  # nosec: B101
         return self
 
@@ -405,13 +408,13 @@ class _CustomCache[**Args, Result, Key]:
 
     def __init__(
         self,
-        function: Callable[Args, Coroutine[None, None, Result]],
+        function: Callable[Args, Coroutine[Any, Any, Result]],
         /,
         make_key: CacheMakeKey[Args, Key],
         read: CacheRead[Key, Result],
         write: CacheWrite[Key, Result],
     ) -> None:
-        self._function: Callable[Args, Coroutine[None, None, Result]] = function
+        self._function: Callable[Args, Coroutine[Any, Any, Result]] = function
         self._make_key: CacheMakeKey[Args, Key] = make_key
         self._read: CacheRead[Key, Result] = read
         self._write: CacheWrite[Key, Result] = write

@@ -37,7 +37,7 @@ def always[Value](
 def async_always[Value](
     value: Value,
     /,
-) -> Callable[..., Coroutine[None, None, Value]]:
+) -> Callable[..., Coroutine[Any, Any, Value]]:
     """
     Factory method creating async functions returning always the same value.
 
@@ -48,7 +48,7 @@ def async_always[Value](
 
     Returns
     -------
-    Callable[..., Coroutine[None, None, Value]]
+    Callable[..., Coroutine[Any, Any, Value]]
         async function ignoring arguments and always returning the provided value.
     """
 
