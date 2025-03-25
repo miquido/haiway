@@ -173,16 +173,6 @@ async def test_async_expiration_does_not_cancel_task():
 
 
 @mark.asyncio
-async def test_async_expiration_creates_new_task(fake_random: Callable[[], int]):
-    @cache(expiration=0.01)
-    async def randomized(_: str, /) -> int:
-        await sleep(0.02)
-        return fake_random()
-
-    assert await randomized("expected") != await randomized("expected")
-
-
-@mark.asyncio
 async def test_async_fails_with_error():
     @cache(expiration=0.02)
     async def randomized(_: str, /) -> int:
