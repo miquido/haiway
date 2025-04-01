@@ -11,7 +11,6 @@ from collections.abc import (
     Coroutine,
     Iterable,
 )
-from contextvars import Context, copy_context
 from logging import Logger
 from types import TracebackType
 from typing import Any, final, overload
@@ -24,6 +23,7 @@ from haiway.context.state import StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.state import State
 from haiway.utils import mimic_function
+from haiway.utils.stream import AsyncStream
 
 __all__ = [
     "ctx",
@@ -37,7 +37,6 @@ class ScopeContext:
         "_identifier",
         "_logger_context",
         "_metrics_context",
-        "_state",
         "_state_context",
         "_task_group_context",
     )
@@ -67,13 +66,12 @@ class ScopeContext:
         )
         # postponing task group creation to include only when needed
         self._task_group_context: TaskGroupContext
-        # postponing state creation to include disposables state when prepared
+        # prepare state context to capture current state
         self._state_context: StateContext
-        self._state: tuple[State, ...]
         object.__setattr__(
             self,
-            "_state",
-            state,
+            "_state_context",
+            StateContext.updated(state),
         )
         self._disposables: Disposables | None
         object.__setattr__(
@@ -115,12 +113,6 @@ class ScopeContext:
         assert self._disposables is None, "Can't enter synchronous context with disposables"  # nosec: B101
         self._identifier.__enter__()
         self._logger_context.__enter__()
-        # lazily initialize state
-        object.__setattr__(
-            self,
-            "_state_context",
-            StateContext.updated(self._state),
-        )
         self._state_context.__enter__()
         self._metrics_context.__enter__()
 
@@ -169,22 +161,15 @@ class ScopeContext:
 
         # lazily initialize state to include disposables results
         if self._disposables is not None:
+            assert self._state_context._token is None  # nosec: B101
             object.__setattr__(
                 self,
                 "_state_context",
-                StateContext.updated(
-                    (
-                        *self._state,
-                        *await self._disposables.__aenter__(),
-                    )
+                StateContext(
+                    state=self._state_context._state.updated(
+                        await self._disposables.__aenter__(),
+                    ),
                 ),
-            )
-
-        else:
-            object.__setattr__(
-                self,
-                "_state_context",
-                StateContext.updated(self._state),
             )
 
         self._state_context.__enter__()
@@ -401,12 +386,12 @@ class ctx:
         return TaskGroupContext.run(function, *args, **kwargs)
 
     @staticmethod
-    def stream[Result, **Arguments](
-        source: Callable[Arguments, AsyncGenerator[Result, None]],
+    def stream[Element, **Arguments](
+        source: Callable[Arguments, AsyncGenerator[Element, None]],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
-    ) -> AsyncIterator[Result]:
+    ) -> AsyncIterator[Element]:
         """
         Stream results produced by a generator within the proper context state.
 
@@ -427,25 +412,22 @@ class ctx:
             iterator for accessing generated results
         """
 
-        # prepare context snapshot
-        context_snapshot: Context = copy_context()
+        output_stream = AsyncStream[Element]()
 
-        # prepare nested context
-        streaming_context: ScopeContext = ctx.scope(
-            getattr(
-                source,
-                "__name__",
-                "streaming",
-            )
-        )
-
-        async def generator() -> AsyncGenerator[Result, None]:
-            async with streaming_context:
+        @ctx.scope("stream")
+        async def stream() -> None:
+            try:
                 async for result in source(*args, **kwargs):
-                    yield result
+                    await output_stream.send(result)
 
-        # finally return it as an iterator
-        return context_snapshot.run(generator)
+            except BaseException as exc:
+                output_stream.finish(exception=exc)
+
+            else:
+                output_stream.finish()
+
+        TaskGroupContext.run(stream)
+        return output_stream
 
     @staticmethod
     def check_cancellation() -> None:
@@ -488,7 +470,7 @@ class ctx:
         StateType
             resolved state instance
         """
-        return StateContext.current(
+        return StateContext.state(
             state,
             default=default,
         )

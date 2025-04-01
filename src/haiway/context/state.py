@@ -92,7 +92,7 @@ class StateContext:
     _context = ContextVar[ScopeState]("StateContext")
 
     @classmethod
-    def current[StateType: State](
+    def state[StateType: State](
         cls,
         state: type[StateType],
         /,

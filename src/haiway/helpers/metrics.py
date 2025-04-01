@@ -15,6 +15,7 @@ __all_ = [
 
 class MetricsScopeStore:
     __slots__ = (
+        "allow_exit",
         "entered",
         "exited",
         "identifier",
@@ -31,6 +32,7 @@ class MetricsScopeStore:
         self.entered: float = monotonic()
         self.metrics: dict[type[State], State] = {}
         self.exited: float | None = None
+        self.allow_exit: bool = False
         self.nested: list[MetricsScopeStore] = []
 
     @property
@@ -115,7 +117,7 @@ class MetricsHolder:
 
     def __init__(self) -> None:
         self.root_scope: ScopeIdentifier | None = None
-        self.scopes: dict[ScopeIdentifier, MetricsScopeStore] = {}
+        self.scopes: dict[str, MetricsScopeStore] = {}
 
     def record(
         self,
@@ -124,10 +126,10 @@ class MetricsHolder:
         metric: State,
     ) -> None:
         assert self.root_scope is not None  # nosec: B101
-        assert scope in self.scopes  # nosec: B101
+        assert scope.scope_id in self.scopes  # nosec: B101
 
         metric_type: type[State] = type(metric)
-        metrics: dict[type[State], State] = self.scopes[scope].metrics
+        metrics: dict[type[State], State] = self.scopes[scope.scope_id].metrics
         if (current := metrics.get(metric_type)) and hasattr(current, "__add__"):
             metrics[type(metric)] = current.__add__(metric)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
 
@@ -142,29 +144,29 @@ class MetricsHolder:
         merged: bool,
     ) -> Metric | None:
         assert self.root_scope is not None  # nosec: B101
-        assert scope in self.scopes  # nosec: B101
+        assert scope.scope_id in self.scopes  # nosec: B101
 
         if merged:
-            return self.scopes[scope].merged(metric)
+            return self.scopes[scope.scope_id].merged(metric)
 
         else:
-            return cast(Metric | None, self.scopes[scope].metrics.get(metric))
+            return cast(Metric | None, self.scopes[scope.scope_id].metrics.get(metric))
 
     def enter_scope[Metric: State](
         self,
         scope: ScopeIdentifier,
         /,
     ) -> None:
-        assert scope not in self.scopes  # nosec: B101
+        assert scope.scope_id not in self.scopes  # nosec: B101
         scope_metrics = MetricsScopeStore(scope)
-        self.scopes[scope] = scope_metrics
+        self.scopes[scope.scope_id] = scope_metrics
 
         if self.root_scope is None:
             self.root_scope = scope
 
         else:
             for key in self.scopes.keys():
-                if key.scope_id == scope.parent_id:
+                if key == scope.parent_id:
                     self.scopes[key].nested.append(scope_metrics)
                     return
 
@@ -177,8 +179,18 @@ class MetricsHolder:
         scope: ScopeIdentifier,
         /,
     ) -> None:
-        assert scope in self.scopes  # nosec: B101
-        self.scopes[scope].exited = monotonic()
+        assert self.root_scope is not None  # nosec: B101
+        assert scope.scope_id in self.scopes  # nosec: B101
+
+        self.scopes[scope.scope_id].allow_exit = True
+
+        if not all(nested.exited for nested in self.scopes[scope.scope_id].nested):
+            return  # not completed yet
+
+        self.scopes[scope.scope_id].exited = monotonic()
+
+        if scope != self.root_scope and self.scopes[scope.parent_id].allow_exit:
+            self.exit_scope(self.scopes[scope.parent_id].identifier)
 
 
 @final
@@ -213,7 +225,7 @@ class MetricsLogger:
         redact_content: bool,
     ) -> None:
         self.root_scope: ScopeIdentifier | None = None
-        self.scopes: dict[ScopeIdentifier, MetricsScopeStore] = {}
+        self.scopes: dict[str, MetricsScopeStore] = {}
         self.items_limit: int | None = items_limit
         self.redact_content: bool = redact_content
 
@@ -224,10 +236,10 @@ class MetricsLogger:
         metric: State,
     ) -> None:
         assert self.root_scope is not None  # nosec: B101
-        assert scope in self.scopes  # nosec: B101
+        assert scope.scope_id in self.scopes  # nosec: B101
 
         metric_type: type[State] = type(metric)
-        metrics: dict[type[State], State] = self.scopes[scope].metrics
+        metrics: dict[type[State], State] = self.scopes[scope.scope_id].metrics
         if (current := metrics.get(metric_type)) and hasattr(current, "__add__"):
             metrics[type(metric)] = current.__add__(metric)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
 
@@ -248,29 +260,29 @@ class MetricsLogger:
         merged: bool,
     ) -> Metric | None:
         assert self.root_scope is not None  # nosec: B101
-        assert scope in self.scopes  # nosec: B101
+        assert scope.scope_id in self.scopes  # nosec: B101
 
         if merged:
-            return self.scopes[scope].merged(metric)
+            return self.scopes[scope.scope_id].merged(metric)
 
         else:
-            return cast(Metric | None, self.scopes[scope].metrics.get(metric))
+            return cast(Metric | None, self.scopes[scope.scope_id].metrics.get(metric))
 
     def enter_scope[Metric: State](
         self,
         scope: ScopeIdentifier,
         /,
     ) -> None:
-        assert scope not in self.scopes  # nosec: B101
+        assert scope.scope_id not in self.scopes  # nosec: B101
         scope_metrics = MetricsScopeStore(scope)
-        self.scopes[scope] = scope_metrics
+        self.scopes[scope.scope_id] = scope_metrics
 
         if self.root_scope is None:
             self.root_scope = scope
 
         else:
             for key in self.scopes.keys():
-                if key.scope_id == scope.parent_id:
+                if key == scope.parent_id:
                     self.scopes[key].nested.append(scope_metrics)
                     return
 
@@ -283,12 +295,22 @@ class MetricsLogger:
         scope: ScopeIdentifier,
         /,
     ) -> None:
-        assert scope in self.scopes  # nosec: B101
-        self.scopes[scope].exited = monotonic()
+        assert self.root_scope is not None  # nosec: B101
+        assert scope.scope_id in self.scopes  # nosec: B101
 
-        if scope == self.root_scope and self.scopes[scope].finished:
+        self.scopes[scope.scope_id].allow_exit = True
+
+        if not all(nested.exited for nested in self.scopes[scope.scope_id].nested):
+            return  # not completed yet
+
+        self.scopes[scope.scope_id].exited = monotonic()
+
+        if scope != self.root_scope and self.scopes[scope.parent_id].allow_exit:
+            self.exit_scope(self.scopes[scope.parent_id].identifier)
+
+        elif scope == self.root_scope and self.scopes[self.root_scope.scope_id].finished:
             if log := _tree_log(
-                self.scopes[scope],
+                self.scopes[scope.scope_id],
                 list_items_limit=self.items_limit,
                 redact_content=self.redact_content,
             ):

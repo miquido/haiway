@@ -40,6 +40,7 @@ from haiway.types import (
 )
 from haiway.utils import (
     AsyncQueue,
+    AsyncStream,
     always,
     as_dict,
     as_list,
@@ -63,6 +64,7 @@ __all__ = [
     "MISSING",
     "ArgumentsTrace",
     "AsyncQueue",
+    "AsyncStream",
     "AttributePath",
     "AttributeRequirement",
     "Default",
