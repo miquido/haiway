@@ -1,5 +1,5 @@
 from asyncio import CancelledError, sleep
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator
 
 from pytest import mark, raises
 
@@ -77,14 +77,11 @@ async def test_streaming_context_variables_access_is_preserved():
         with ctx.scope("nested", ctx.state(TestState).updated(value=value)):
             yield ctx.state(TestState)
 
-    stream: AsyncIterator[TestState]
     async with ctx.scope("test", TestState(value=42)):
         elements: list[TestState] = []
 
-        stream = ctx.stream(generator, 10)
-
-    async for element in stream:
-        elements.append(element)
+        async for element in ctx.stream(generator, 10):
+            elements.append(element)
 
     assert elements == [
         TestState(value=42),
@@ -109,14 +106,11 @@ async def test_nested_streaming_streams_correctly():
             async for item in ctx.stream(inner, value):
                 yield item
 
-    stream: AsyncIterator[TestState]
     async with ctx.scope("test", TestState(value=42)):
         elements: list[TestState] = []
 
-        stream = ctx.stream(outer, 10)
-
-    async for element in stream:
-        elements.append(element)
+        async for element in ctx.stream(outer, 10):
+            elements.append(element)
 
     assert elements == [
         TestState(value=42),

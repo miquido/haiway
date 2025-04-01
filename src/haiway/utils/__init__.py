@@ -13,9 +13,11 @@ from haiway.utils.logs import setup_logging
 from haiway.utils.mimic import mimic_function
 from haiway.utils.noop import async_noop, noop
 from haiway.utils.queue import AsyncQueue
+from haiway.utils.stream import AsyncStream
 
 __all__ = [
     "AsyncQueue",
+    "AsyncStream",
     "always",
     "as_dict",
     "as_list",
