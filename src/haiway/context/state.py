@@ -1,10 +1,12 @@
-from collections.abc import Iterable, MutableMapping
+from asyncio import iscoroutinefunction
+from collections.abc import Callable, Coroutine, Iterable, MutableMapping
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Any, Self, cast, final
+from typing import Any, Self, cast, final, overload
 
 from haiway.context.types import MissingContext, MissingState
 from haiway.state import State
+from haiway.utils.mimic import mimic_function
 
 __all__ = [
     "ScopeState",
@@ -179,3 +181,41 @@ class StateContext:
             "_token",
             None,
         )
+
+    @overload
+    def __call__[Result, **Arguments](
+        self,
+        function: Callable[Arguments, Coroutine[Any, Any, Result]],
+    ) -> Callable[Arguments, Coroutine[Any, Any, Result]]: ...
+
+    @overload
+    def __call__[Result, **Arguments](
+        self,
+        function: Callable[Arguments, Result],
+    ) -> Callable[Arguments, Result]: ...
+
+    def __call__[Result, **Arguments](
+        self,
+        function: Callable[Arguments, Coroutine[Any, Any, Result]] | Callable[Arguments, Result],
+    ) -> Callable[Arguments, Coroutine[Any, Any, Result]] | Callable[Arguments, Result]:
+        if iscoroutinefunction(function):
+
+            async def async_context(
+                *args: Arguments.args,
+                **kwargs: Arguments.kwargs,
+            ) -> Result:
+                with self:
+                    return await function(*args, **kwargs)
+
+            return mimic_function(function, within=async_context)
+
+        else:
+
+            def sync_context(
+                *args: Arguments.args,
+                **kwargs: Arguments.kwargs,
+            ) -> Result:
+                with self:
+                    return function(*args, **kwargs)  # pyright: ignore[reportReturnType]
+
+            return mimic_function(function, within=sync_context)  # pyright: ignore[reportReturnType]

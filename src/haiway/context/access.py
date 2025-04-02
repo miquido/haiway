@@ -1,6 +1,7 @@
 from asyncio import (
     CancelledError,
     Task,
+    TaskGroup,
     current_task,
     iscoroutinefunction,
 )
@@ -45,6 +46,7 @@ class ScopeContext:
         self,
         label: str,
         logger: Logger | None,
+        task_group: TaskGroup | None,
         state: tuple[State, ...],
         disposables: Disposables | None,
         metrics: MetricsHandler | None,
@@ -64,8 +66,16 @@ class ScopeContext:
                 logger=logger,
             ),
         )
-        # postponing task group creation to include only when needed
-        self._task_group_context: TaskGroupContext
+        self._task_group_context: TaskGroupContext | None
+        object.__setattr__(
+            self,
+            "_task_group_context",
+            TaskGroupContext(
+                task_group=task_group,
+            )
+            if task_group is not None or self._identifier.is_root
+            else None,
+        )
         # prepare state context to capture current state
         self._state_context: StateContext
         object.__setattr__(
@@ -110,6 +120,9 @@ class ScopeContext:
         )
 
     def __enter__(self) -> str:
+        assert (  # nosec: B101
+            self._task_group_context is None or self._identifier.is_root
+        ), "Can't enter synchronous context with task group"
         assert self._disposables is None, "Can't enter synchronous context with disposables"  # nosec: B101
         self._identifier.__enter__()
         self._logger_context.__enter__()
@@ -151,23 +164,19 @@ class ScopeContext:
     async def __aenter__(self) -> str:
         self._identifier.__enter__()
         self._logger_context.__enter__()
-        # lazily initialize group when needed
-        object.__setattr__(
-            self,
-            "_task_group_context",
-            TaskGroupContext(),
-        )
-        await self._task_group_context.__aenter__()
+
+        if task_group := self._task_group_context:
+            await task_group.__aenter__()
 
         # lazily initialize state to include disposables results
-        if self._disposables is not None:
+        if disposables := self._disposables:
             assert self._state_context._token is None  # nosec: B101
             object.__setattr__(
                 self,
                 "_state_context",
                 StateContext(
                     state=self._state_context._state.updated(
-                        await self._disposables.__aenter__(),
+                        await disposables.__aenter__(),
                     ),
                 ),
             )
@@ -183,18 +192,19 @@ class ScopeContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if self._disposables is not None:
-            await self._disposables.__aexit__(
+        if disposables := self._disposables:
+            await disposables.__aexit__(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
             )
 
-        await self._task_group_context.__aexit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
+        if task_group := self._task_group_context:
+            await task_group.__aexit__(
+                exc_type=exc_type,
+                exc_val=exc_val,
+                exc_tb=exc_tb,
+            )
 
         self._metrics_context.__exit__(
             exc_type=exc_type,
@@ -278,6 +288,7 @@ class ctx:
         *state: State,
         disposables: Disposables | Iterable[Disposable] | None = None,
         logger: Logger | None = None,
+        task_group: TaskGroup | None = None,
         metrics: MetricsHandler | None = None,
     ) -> ScopeContext:
         """
@@ -301,6 +312,10 @@ class ctx:
         logger: Logger | None
             logger used within the scope context, when not provided current logger will be used\
              if any, otherwise the logger with the scope name will be requested.
+
+        task_group: TaskGroup | None
+            task group used for spawning and joining tasks within the context. Root scope will
+             always have task group created even when not set.
 
         metrics_store: MetricsStore | None = None
             metrics storage solution responsible for recording and storing metrics.\
@@ -328,6 +343,7 @@ class ctx:
         return ScopeContext(
             label=label,
             logger=logger,
+            task_group=task_group,
             state=state,
             disposables=resolved_disposables,
             metrics=metrics,

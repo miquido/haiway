@@ -66,7 +66,7 @@ def cache[**Args, Result, Key](
 ]: ...
 
 
-def cache[**Args, Result, Key](  # noqa: PLR0913
+def cache[**Args, Result, Key](
     function: Callable[Args, Result] | None = None,
     *,
     limit: int | None = None,
