@@ -40,12 +40,13 @@ class TaskGroupContext:
 
     def __init__(
         self,
+        task_group: TaskGroup | None = None,
     ) -> None:
         self._group: TaskGroup
         object.__setattr__(
             self,
             "_group",
-            TaskGroup(),
+            task_group if task_group is not None else TaskGroup(),
         )
         self._token: Token[TaskGroup] | None
         object.__setattr__(
