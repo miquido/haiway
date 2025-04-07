@@ -143,3 +143,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
                 "_waiting",
                 None,
             )
+
+    def clear(self) -> None:
+        if self._waiting is None or self._waiting.done():
+            self._queue.clear()
