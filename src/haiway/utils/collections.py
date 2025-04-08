@@ -1,11 +1,14 @@
 from collections.abc import Iterable, Mapping, Set
-from typing import overload
+from typing import Any, cast, overload
+
+from haiway.types.missing import MISSING
 
 __all__ = [
     "as_dict",
     "as_list",
     "as_set",
     "as_tuple",
+    "without_missing",
 ]
 
 
@@ -183,3 +186,42 @@ def as_dict[K, V](
 
     else:
         return dict(collection)
+
+
+@overload
+def without_missing[T: Mapping[str, Any]](
+    mapping: Mapping[str, Any],
+    /,
+) -> Mapping[str, Any]: ...
+
+
+@overload
+def without_missing[T: Mapping[str, Any]](
+    mapping: Mapping[str, Any],
+    /,
+    *,
+    typed: type[T],
+) -> T: ...
+
+
+def without_missing[T: Mapping[str, Any]](
+    mapping: Mapping[str, Any],
+    /,
+    *,
+    typed: type[T] | None = None,
+) -> T | Mapping[str, Any]:
+    """
+    Strip items with missing values.
+
+    Parameters
+    ----------
+    mapping : Mapping[K, V]
+        The input mapping to be stripped.
+
+    Returns
+    -------
+    T | dict[str, Any]
+        A new mapping containing all items of the input mapping,\
+         except items with missing values.
+    """
+    return cast(T, {key: value for key, value in mapping.items() if value is not MISSING})

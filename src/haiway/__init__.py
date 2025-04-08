@@ -58,6 +58,7 @@ from haiway.utils import (
     mimic_function,
     noop,
     setup_logging,
+    without_missing,
 )
 
 __all__ = [
@@ -115,5 +116,6 @@ __all__ = [
     "timeout",
     "traced",
     "when_missing",
+    "without_missing",
     "wrap_async",
 ]

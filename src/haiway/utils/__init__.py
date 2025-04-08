@@ -1,5 +1,5 @@
 from haiway.utils.always import always, async_always
-from haiway.utils.collections import as_dict, as_list, as_set, as_tuple
+from haiway.utils.collections import as_dict, as_list, as_set, as_tuple, without_missing
 from haiway.utils.env import (
     getenv_base64,
     getenv_bool,
@@ -35,4 +35,5 @@ __all__ = [
     "mimic_function",
     "noop",
     "setup_logging",
+    "without_missing",
 ]
