@@ -20,7 +20,7 @@ from haiway.context.disposables import Disposable, Disposables
 from haiway.context.identifier import ScopeIdentifier
 from haiway.context.logging import LoggerContext
 from haiway.context.metrics import MetricsContext, MetricsHandler
-from haiway.context.state import StateContext
+from haiway.context.state import ScopeState, StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.state import State
 from haiway.utils import mimic_function
@@ -70,9 +70,7 @@ class ScopeContext:
         object.__setattr__(
             self,
             "_task_group_context",
-            TaskGroupContext(
-                task_group=task_group,
-            )
+            TaskGroupContext(task_group=task_group)
             if task_group is not None or self._identifier.is_root
             else None,
         )
@@ -175,8 +173,11 @@ class ScopeContext:
                 self,
                 "_state_context",
                 StateContext(
-                    state=self._state_context._state.updated(
-                        await disposables.__aenter__(),
+                    state=ScopeState(
+                        (
+                            *await disposables.__aenter__(),
+                            *self._state_context._state._state.values(),
+                        )
                     ),
                 ),
             )
