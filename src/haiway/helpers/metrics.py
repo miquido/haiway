@@ -105,7 +105,6 @@ class MetricsHolder:
         store_handler: Self = cls()
         return MetricsHandler(
             record=store_handler.record,
-            read=store_handler.read,
             enter_scope=store_handler.enter_scope,
             exit_scope=store_handler.exit_scope,
         )
@@ -134,23 +133,6 @@ class MetricsHolder:
             metrics[type(metric)] = current.__add__(metric)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
 
         metrics[type(metric)] = metric
-
-    async def read[Metric: State](
-        self,
-        scope: ScopeIdentifier,
-        /,
-        *,
-        metric: type[Metric],
-        merged: bool,
-    ) -> Metric | None:
-        assert self.root_scope is not None  # nosec: B101
-        assert scope.scope_id in self.scopes  # nosec: B101
-
-        if merged:
-            return self.scopes[scope.scope_id].merged(metric)
-
-        else:
-            return cast(Metric | None, self.scopes[scope.scope_id].metrics.get(metric))
 
     def enter_scope[Metric: State](
         self,
@@ -207,7 +189,6 @@ class MetricsLogger:
         )
         return MetricsHandler(
             record=logger_handler.record,
-            read=logger_handler.read,
             enter_scope=logger_handler.enter_scope,
             exit_scope=logger_handler.exit_scope,
         )
@@ -250,23 +231,6 @@ class MetricsLogger:
             redact_content=self.redact_content,
         ):
             ctx.log_debug(f"Recorded metric:\n⎡ {type(metric).__qualname__}:{log}\n⌊")
-
-    async def read[Metric: State](
-        self,
-        scope: ScopeIdentifier,
-        /,
-        *,
-        metric: type[Metric],
-        merged: bool,
-    ) -> Metric | None:
-        assert self.root_scope is not None  # nosec: B101
-        assert scope.scope_id in self.scopes  # nosec: B101
-
-        if merged:
-            return self.scopes[scope.scope_id].merged(metric)
-
-        else:
-            return cast(Metric | None, self.scopes[scope.scope_id].metrics.get(metric))
 
     def enter_scope[Metric: State](
         self,
