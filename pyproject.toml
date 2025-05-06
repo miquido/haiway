@@ -29,12 +29,12 @@ Repository = "https://github.com/miquido/haiway.git"
 [project.optional-dependencies]
 dev = [
   "haiway",
-  "ruff~=0.11",
+  "bandit~=1.8",
   "pyright~=1.1",
-  "bandit~=1.7",
-  "pytest~=7.4",
-  "pytest-cov~=4.1",
-  "pytest-asyncio~=0.23",
+  "pytest~=8.3",
+  "pytest-asyncio~=0.26",
+  "pytest-cov~=6.1",
+  "ruff~=0.11",
 ]
 
 [tool.ruff]
