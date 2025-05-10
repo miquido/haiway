@@ -10,11 +10,11 @@ from uuid import UUID
 from haiway.state.attributes import AttributeAnnotation
 from haiway.types import MISSING, Missing
 
-__all__ = [
+__all__ = (
     "AttributeValidation",
     "AttributeValidationError",
     "AttributeValidator",
-]
+)
 
 
 class AttributeValidation[Type](Protocol):

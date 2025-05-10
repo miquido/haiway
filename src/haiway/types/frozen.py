@@ -1,5 +1,3 @@
-__all__ = [
-    "frozenlist",
-]
+__all__ = ("frozenlist",)
 
 type frozenlist[Value] = tuple[Value, ...]

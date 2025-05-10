@@ -25,11 +25,11 @@ from typing import (
 from haiway import types as haiway_types
 from haiway.types import MISSING, Missing
 
-__all__ = [
+__all__ = (
     "AttributeAnnotation",
     "attribute_annotations",
     "resolve_attribute_annotation",
-]
+)
 
 
 @final

@@ -15,7 +15,7 @@ from haiway.utils.noop import async_noop, noop
 from haiway.utils.queue import AsyncQueue
 from haiway.utils.stream import AsyncStream
 
-__all__ = [
+__all__ = (
     "AsyncQueue",
     "AsyncStream",
     "always",
@@ -36,4 +36,4 @@ __all__ = [
     "noop",
     "setup_logging",
     "without_missing",
-]
+)

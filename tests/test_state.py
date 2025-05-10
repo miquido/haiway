@@ -177,9 +177,9 @@ def test_dict_skips_missing_properties() -> None:
         string: str
         integer: int | Missing | None
 
-    assert Basics(string="a", integer=1).as_dict() == {"string": "a", "integer": 1}
-    assert Basics(string="a", integer=MISSING).as_dict() == {"string": "a"}
-    assert Basics(string="a", integer=None).as_dict() == {"string": "a", "integer": None}
+    assert Basics(string="a", integer=1).to_mapping() == {"string": "a", "integer": 1}
+    assert Basics(string="a", integer=MISSING).to_mapping() == {"string": "a"}
+    assert Basics(string="a", integer=None).to_mapping() == {"string": "a", "integer": None}
 
 
 def test_initialization_allows_missing_properties() -> None:

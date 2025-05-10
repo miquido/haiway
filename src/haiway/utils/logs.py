@@ -2,9 +2,7 @@ from logging.config import dictConfig
 
 from haiway.utils.env import getenv_bool
 
-__all__ = [
-    "setup_logging",
-]
+__all__ = ("setup_logging",)
 
 
 def setup_logging(

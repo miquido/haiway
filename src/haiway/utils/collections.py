@@ -3,13 +3,13 @@ from typing import Any, cast, overload
 
 from haiway.types.missing import MISSING
 
-__all__ = [
+__all__ = (
     "as_dict",
     "as_list",
     "as_set",
     "as_tuple",
     "without_missing",
-]
+)
 
 
 @overload

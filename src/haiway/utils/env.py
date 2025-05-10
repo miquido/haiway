@@ -3,14 +3,14 @@ from collections.abc import Callable
 from os import environ, getenv
 from typing import Literal, overload
 
-__all__ = [
+__all__ = (
     "getenv_base64",
     "getenv_bool",
     "getenv_float",
     "getenv_int",
     "getenv_str",
     "load_env",
-]
+)
 
 
 @overload
