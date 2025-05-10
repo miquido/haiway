@@ -8,10 +8,10 @@ from haiway.context.types import MissingContext, MissingState
 from haiway.state import State
 from haiway.utils.mimic import mimic_function
 
-__all__ = [
+__all__ = (
     "ScopeState",
     "StateContext",
-]
+)
 
 
 @final

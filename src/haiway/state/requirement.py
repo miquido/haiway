@@ -3,9 +3,7 @@ from typing import Any, Literal, Self, cast, final
 
 from haiway.state.path import AttributePath
 
-__all__ = [
-    "AttributeRequirement",
-]
+__all__ = ("AttributeRequirement",)
 
 
 @final

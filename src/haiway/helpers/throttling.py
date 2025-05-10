@@ -11,9 +11,7 @@ from typing import Any, cast, overload
 
 from haiway.utils.mimic import mimic_function
 
-__all__ = [
-    "throttle",
-]
+__all__ = ("throttle",)
 
 
 @overload

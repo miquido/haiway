@@ -3,9 +3,7 @@ from types import TracebackType
 from typing import Any, Self, final
 from uuid import uuid4
 
-__all__ = [
-    "ScopeIdentifier",
-]
+__all__ = ("ScopeIdentifier",)
 
 
 @final

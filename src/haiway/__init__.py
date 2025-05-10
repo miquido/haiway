@@ -1,13 +1,16 @@
 from haiway.context import (
     Disposable,
     Disposables,
-    MetricsContext,
-    MetricsHandler,
-    MetricsRecording,
-    MetricsScopeEntering,
-    MetricsScopeExiting,
     MissingContext,
     MissingState,
+    Observability,
+    ObservabilityContext,
+    ObservabilityEventRecording,
+    ObservabilityLevel,
+    ObservabilityLogRecording,
+    ObservabilityMetricRecording,
+    ObservabilityScopeEntering,
+    ObservabilityScopeExiting,
     ScopeContext,
     ScopeIdentifier,
     StateContext,
@@ -15,8 +18,6 @@ from haiway.context import (
 )
 from haiway.helpers import (
     ArgumentsTrace,
-    MetricsHolder,
-    MetricsLogger,
     ResultTrace,
     asynchronous,
     cache,
@@ -40,6 +41,7 @@ from haiway.types import (
 from haiway.utils import (
     AsyncQueue,
     AsyncStream,
+    ImmutableDict,
     always,
     as_dict,
     as_list,
@@ -60,7 +62,7 @@ from haiway.utils import (
     without_missing,
 )
 
-__all__ = [
+__all__ = (
     "MISSING",
     "ArgumentsTrace",
     "AsyncQueue",
@@ -71,16 +73,18 @@ __all__ = [
     "DefaultValue",
     "Disposable",
     "Disposables",
-    "MetricsContext",
-    "MetricsHandler",
-    "MetricsHolder",
-    "MetricsLogger",
-    "MetricsRecording",
-    "MetricsScopeEntering",
-    "MetricsScopeExiting",
+    "ImmutableDict",
     "Missing",
     "MissingContext",
     "MissingState",
+    "Observability",
+    "ObservabilityContext",
+    "ObservabilityEventRecording",
+    "ObservabilityLevel",
+    "ObservabilityLogRecording",
+    "ObservabilityMetricRecording",
+    "ObservabilityScopeEntering",
+    "ObservabilityScopeExiting",
     "ResultTrace",
     "ScopeContext",
     "ScopeIdentifier",
@@ -116,4 +120,4 @@ __all__ = [
     "when_missing",
     "without_missing",
     "wrap_async",
-]
+)

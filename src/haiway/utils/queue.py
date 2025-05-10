@@ -3,9 +3,7 @@ from collections import deque
 from collections.abc import AsyncIterator
 from typing import Any
 
-__all__ = [
-    "AsyncQueue",
-]
+__all__ = ("AsyncQueue",)
 
 
 class AsyncQueue[Element](AsyncIterator[Element]):

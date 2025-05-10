@@ -4,10 +4,10 @@ from typing import Any, cast, final, overload
 from haiway.types.missing import MISSING, Missing, not_missing
 from haiway.utils.always import always
 
-__all__ = [
+__all__ = (
     "Default",
     "DefaultValue",
-]
+)
 
 
 @final

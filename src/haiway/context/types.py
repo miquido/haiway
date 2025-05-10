@@ -1,7 +1,7 @@
-__all__ = [
+__all__ = (
     "MissingContext",
     "MissingState",
-]
+)
 
 
 class MissingContext(Exception):

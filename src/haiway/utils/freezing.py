@@ -1,8 +1,6 @@
 from typing import Any
 
-__all__ = [
-    "freeze",
-]
+__all__ = ("freeze",)
 
 
 def freeze(

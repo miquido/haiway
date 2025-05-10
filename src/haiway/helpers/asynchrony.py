@@ -7,10 +7,10 @@ from typing import Any, cast, overload
 
 from haiway.types.missing import MISSING, Missing
 
-__all__ = [
+__all__ = (
     "asynchronous",
     "wrap_async",
-]
+)
 
 
 def wrap_async[**Args, Result](
@@ -30,10 +30,12 @@ def wrap_async[**Args, Result](
 
 
 @overload
-def asynchronous[**Args, Result]() -> Callable[
-    [Callable[Args, Result]],
-    Callable[Args, Coroutine[Any, Any, Result]],
-]: ...
+def asynchronous[**Args, Result]() -> (
+    Callable[
+        [Callable[Args, Result]],
+        Callable[Args, Coroutine[Any, Any, Result]],
+    ]
+): ...
 
 
 @overload

@@ -4,9 +4,7 @@ from contextvars import ContextVar, Token, copy_context
 from types import TracebackType
 from typing import Any, final
 
-__all__ = [
-    "TaskGroupContext",
-]
+__all__ = ("TaskGroupContext",)
 
 
 @final

@@ -1,12 +1,12 @@
 from typing import Any, Final, TypeGuard, cast, final
 
-__all__ = [
+__all__ = (
     "MISSING",
     "Missing",
     "is_missing",
     "not_missing",
     "when_missing",
-]
+)
 
 
 class MissingType(type):

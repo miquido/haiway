@@ -4,9 +4,7 @@ from typing import Any
 
 from haiway.utils.mimic import mimic_function
 
-__all__ = [
-    "timeout",
-]
+__all__ = ("timeout",)
 
 
 def timeout[**Args, Result](

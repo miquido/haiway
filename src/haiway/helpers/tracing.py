@@ -7,11 +7,11 @@ from haiway.state import State
 from haiway.types import MISSING, Missing
 from haiway.utils import mimic_function
 
-__all__ = [
+__all__ = (
     "ArgumentsTrace",
     "ResultTrace",
     "traced",
-]
+)
 
 
 class ArgumentsTrace(State):
@@ -120,14 +120,14 @@ def _traced_sync[**Args, Result](
         **kwargs: Args.kwargs,
     ) -> Result:
         with ctx.scope(label):
-            ctx.record(ArgumentsTrace.of(*args, **kwargs))
+            ctx.event(ArgumentsTrace.of(*args, **kwargs))
             try:
                 result: Result = function(*args, **kwargs)
-                ctx.record(ResultTrace.of(result))
+                ctx.event(ResultTrace.of(result))
                 return result
 
             except BaseException as exc:
-                ctx.record(ResultTrace.of(f"{type(exc)}: {exc}"))
+                ctx.event(ResultTrace.of(f"{type(exc)}: {exc}"))
                 raise exc
 
     return mimic_function(
@@ -146,14 +146,14 @@ def _traced_async[**Args, Result](
         **kwargs: Args.kwargs,
     ) -> Result:
         with ctx.scope(label):
-            ctx.record(ArgumentsTrace.of(*args, **kwargs))
+            ctx.event(ArgumentsTrace.of(*args, **kwargs))
             try:
                 result: Result = await function(*args, **kwargs)
-                ctx.record(ResultTrace.of(result))
+                ctx.event(ResultTrace.of(result))
                 return result
 
             except BaseException as exc:
-                ctx.record(ResultTrace.of(f"{type(exc)}: {exc}"))
+                ctx.event(ResultTrace.of(f"{type(exc)}: {exc}"))
                 raise exc
 
     return mimic_function(

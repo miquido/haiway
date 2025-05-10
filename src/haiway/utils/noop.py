@@ -1,9 +1,9 @@
 from typing import Any
 
-__all__ = [
+__all__ = (
     "async_noop",
     "noop",
-]
+)
 
 
 def noop(

@@ -1,10 +1,10 @@
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-__all__ = [
+__all__ = (
     "always",
     "async_always",
-]
+)
 
 
 def always[Value](

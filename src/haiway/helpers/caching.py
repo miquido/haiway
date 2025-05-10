@@ -8,12 +8,12 @@ from typing import Any, NamedTuple, Protocol, cast, overload
 from haiway.context.access import ctx
 from haiway.utils.mimic import mimic_function
 
-__all__ = [
+__all__ = (
     "CacheMakeKey",
     "CacheRead",
     "CacheWrite",
     "cache",
-]
+)
 
 
 class CacheMakeKey[**Args, Key](Protocol):
