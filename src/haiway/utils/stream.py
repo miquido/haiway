@@ -6,9 +6,7 @@ from asyncio import (
 )
 from collections.abc import AsyncIterator
 
-__all__ = [
-    "AsyncStream",
-]
+__all__ = ("AsyncStream",)
 
 
 class AsyncStream[Element](AsyncIterator[Element]):

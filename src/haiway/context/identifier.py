@@ -3,9 +3,7 @@ from types import TracebackType
 from typing import Any, Self, final
 from uuid import uuid4
 
-__all__ = [
-    "ScopeIdentifier",
-]
+__all__ = ("ScopeIdentifier",)
 
 
 @final
@@ -33,10 +31,11 @@ class ScopeIdentifier:
         except LookupError:
             # create root scope when missing
             trace_id: str = uuid4().hex
+            scope_id: str = uuid4().hex
             return cls(
                 label=label,
-                scope_id=uuid4().hex,
-                parent_id=trace_id,  # trace_id is parent_id for root
+                scope_id=scope_id,
+                parent_id=scope_id,  # own id is parent_id for root
                 trace_id=trace_id,
             )
 

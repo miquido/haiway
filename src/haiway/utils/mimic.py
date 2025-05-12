@@ -1,9 +1,7 @@
 from collections.abc import Callable
 from typing import Any, cast, overload
 
-__all__ = [
-    "mimic_function",
-]
+__all__ = ("mimic_function",)
 
 
 @overload

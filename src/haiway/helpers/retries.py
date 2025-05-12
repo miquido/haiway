@@ -6,9 +6,7 @@ from typing import Any, cast, overload
 from haiway.context import ctx
 from haiway.utils import mimic_function
 
-__all__ = [
-    "retry",
-]
+__all__ = ("retry",)
 
 
 @overload

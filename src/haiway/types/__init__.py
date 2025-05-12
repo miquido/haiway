@@ -2,7 +2,7 @@ from haiway.types.default import Default, DefaultValue
 from haiway.types.frozen import frozenlist
 from haiway.types.missing import MISSING, Missing, is_missing, not_missing, when_missing
 
-__all__ = [
+__all__ = (
     "MISSING",
     "Default",
     "DefaultValue",
@@ -11,4 +11,4 @@ __all__ = [
     "is_missing",
     "not_missing",
     "when_missing",
-]
+)

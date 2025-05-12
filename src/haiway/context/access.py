@@ -18,17 +18,14 @@ from typing import Any, final, overload
 
 from haiway.context.disposables import Disposable, Disposables
 from haiway.context.identifier import ScopeIdentifier
-from haiway.context.logging import LoggerContext
-from haiway.context.metrics import MetricsContext, MetricsHandler
+from haiway.context.observability import Observability, ObservabilityContext, ObservabilityLevel
 from haiway.context.state import ScopeState, StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.state import State
 from haiway.utils import mimic_function
 from haiway.utils.stream import AsyncStream
 
-__all__ = [
-    "ctx",
-]
+__all__ = ("ctx",)
 
 
 @final
@@ -36,8 +33,7 @@ class ScopeContext:
     __slots__ = (
         "_disposables",
         "_identifier",
-        "_logger_context",
-        "_metrics_context",
+        "_observability_context",
         "_state_context",
         "_task_group_context",
     )
@@ -45,34 +41,16 @@ class ScopeContext:
     def __init__(
         self,
         label: str,
-        logger: Logger | None,
         task_group: TaskGroup | None,
         state: tuple[State, ...],
         disposables: Disposables | None,
-        metrics: MetricsHandler | None,
+        observability: Observability | Logger | None,
     ) -> None:
         self._identifier: ScopeIdentifier
         object.__setattr__(
             self,
             "_identifier",
             ScopeIdentifier.scope(label),
-        )
-        self._logger_context: LoggerContext
-        object.__setattr__(
-            self,
-            "_logger_context",
-            LoggerContext(
-                self._identifier,
-                logger=logger,
-            ),
-        )
-        self._task_group_context: TaskGroupContext | None
-        object.__setattr__(
-            self,
-            "_task_group_context",
-            TaskGroupContext(task_group=task_group)
-            if task_group is not None or self._identifier.is_root
-            else None,
         )
         # prepare state context to capture current state
         self._state_context: StateContext
@@ -87,15 +65,23 @@ class ScopeContext:
             "_disposables",
             disposables,
         )
-        self._metrics_context: MetricsContext
+        self._observability_context: ObservabilityContext
         object.__setattr__(
             self,
-            "_metrics_context",
-            # pre-building metrics context to ensure nested context registering
-            MetricsContext.scope(
+            "_observability_context",
+            # pre-building observability context to ensure nested context registering
+            ObservabilityContext.scope(
                 self._identifier,
-                metrics=metrics,
+                observability=observability,
             ),
+        )
+        self._task_group_context: TaskGroupContext | None
+        object.__setattr__(
+            self,
+            "_task_group_context",
+            TaskGroupContext(task_group=task_group)
+            if task_group is not None or self._identifier.is_root
+            else None,
         )
 
     def __setattr__(
@@ -123,9 +109,8 @@ class ScopeContext:
         ), "Can't enter synchronous context with task group"
         assert self._disposables is None, "Can't enter synchronous context with disposables"  # nosec: B101
         self._identifier.__enter__()
-        self._logger_context.__enter__()
+        self._observability_context.__enter__()
         self._state_context.__enter__()
-        self._metrics_context.__enter__()
 
         return self._identifier.trace_id
 
@@ -135,24 +120,16 @@ class ScopeContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        self._metrics_context.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-
         self._state_context.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
         )
-
-        self._logger_context.__exit__(
+        self._observability_context.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
         )
-
         self._identifier.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
@@ -161,7 +138,7 @@ class ScopeContext:
 
     async def __aenter__(self) -> str:
         self._identifier.__enter__()
-        self._logger_context.__enter__()
+        self._observability_context.__enter__()
 
         if task_group := self._task_group_context:
             await task_group.__aenter__()
@@ -183,7 +160,6 @@ class ScopeContext:
             )
 
         self._state_context.__enter__()
-        self._metrics_context.__enter__()
 
         return self._identifier.trace_id
 
@@ -207,19 +183,13 @@ class ScopeContext:
                 exc_tb=exc_tb,
             )
 
-        self._metrics_context.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-
         self._state_context.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
         )
 
-        self._logger_context.__exit__(
+        self._observability_context.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
@@ -288,9 +258,8 @@ class ctx:
         /,
         *state: State,
         disposables: Disposables | Iterable[Disposable] | None = None,
-        logger: Logger | None = None,
         task_group: TaskGroup | None = None,
-        metrics: MetricsHandler | None = None,
+        observability: Observability | Logger | None = None,
     ) -> ScopeContext:
         """
         Prepare scope context with given parameters. When called within an existing context\
@@ -310,18 +279,14 @@ class ctx:
              be added to the scope state. Using asynchronous context is required if any disposables\
              were provided.
 
-        logger: Logger | None
-            logger used within the scope context, when not provided current logger will be used\
-             if any, otherwise the logger with the scope name will be requested.
-
         task_group: TaskGroup | None
             task group used for spawning and joining tasks within the context. Root scope will
              always have task group created even when not set.
 
-        metrics_store: MetricsStore | None = None
-            metrics storage solution responsible for recording and storing metrics.\
-             Metrics recroding will be ignored if storage is not provided.
-            Assigning metrics_store within existing context will result in an error.
+        observability: Observability | Logger | None = None
+            observability solution responsible for recording and storing metrics, logs and events.\
+             Assigning observability within existing context will result in an error.
+            When not provided, logger with the scope name will be requested and used.
 
         Returns
         -------
@@ -343,11 +308,10 @@ class ctx:
 
         return ScopeContext(
             label=label,
-            logger=logger,
             task_group=task_group,
             state=state,
             disposables=resolved_disposables,
-            metrics=metrics,
+            observability=observability,
         )
 
     @staticmethod
@@ -493,27 +457,6 @@ class ctx:
         )
 
     @staticmethod
-    def record(
-        metric: State,
-        /,
-    ) -> None:
-        """
-        Record metric within current scope context.
-
-        Parameters
-        ----------
-        metric: State
-            value of metric to be recorded. When a metric implements __add__ it will be added to\
-             current value if any, otherwise subsequent calls may replace existing value.
-
-        Returns
-        -------
-        None
-        """
-
-        MetricsContext.record(metric)
-
-    @staticmethod
     def log_error(
         message: str,
         /,
@@ -540,7 +483,8 @@ class ctx:
         None
         """
 
-        LoggerContext.log_error(
+        ObservabilityContext.record_log(
+            ObservabilityLevel.ERROR,
             message,
             *args,
             exception=exception,
@@ -573,7 +517,8 @@ class ctx:
         None
         """
 
-        LoggerContext.log_warning(
+        ObservabilityContext.record_log(
+            ObservabilityLevel.WARNING,
             message,
             *args,
             exception=exception,
@@ -602,9 +547,11 @@ class ctx:
         None
         """
 
-        LoggerContext.log_info(
+        ObservabilityContext.record_log(
+            ObservabilityLevel.INFO,
             message,
             *args,
+            exception=None,
         )
 
     @staticmethod
@@ -634,8 +581,65 @@ class ctx:
         None
         """
 
-        LoggerContext.log_debug(
+        ObservabilityContext.record_log(
+            ObservabilityLevel.DEBUG,
             message,
             *args,
             exception=exception,
+        )
+
+    @staticmethod
+    def event(
+        event: State,
+        /,
+        *,
+        level: ObservabilityLevel = ObservabilityLevel.INFO,
+    ) -> None:
+        """
+        Record event within current scope context.
+
+        Parameters
+        ----------
+        event: State
+            contents of event to be recorded.
+
+        Returns
+        -------
+        None
+        """
+
+        ObservabilityContext.record_event(
+            event,
+            level=level,
+        )
+
+    @staticmethod
+    def metric(
+        metric: str,
+        /,
+        *,
+        value: float | int,
+        unit: str | None = None,
+    ) -> None:
+        """
+        Record metric within current scope context.
+
+        Parameters
+        ----------
+        metric: State
+            name of metric to be recorded.
+        value: float | int
+            value of metric to be recorded.
+        unit: str | None = None
+            unit of metric to be recorded.
+
+        Returns
+        -------
+        None
+        """
+
+        ObservabilityContext.record_metric(
+            metric,
+            value=value,
+            unit=unit,
         )

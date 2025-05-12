@@ -10,9 +10,7 @@ from typing import Any, TypeAliasType, final, get_args, get_origin, overload
 
 from haiway.types import MISSING, Missing, not_missing
 
-__all__ = [
-    "AttributePath",
-]
+__all__ = ("AttributePath",)
 
 
 class AttributePathComponent(ABC):

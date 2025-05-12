@@ -7,10 +7,10 @@ from typing import Any, final
 
 from haiway.state import State
 
-__all__ = [
+__all__ = (
     "Disposable",
     "Disposables",
-]
+)
 
 type Disposable = AbstractAsyncContextManager[Iterable[State] | State | None]
 
