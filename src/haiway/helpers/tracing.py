@@ -96,11 +96,10 @@ def _traced_sync[**Args, Result](
         **kwargs: Args.kwargs,
     ) -> Result:
         with ctx.scope(label):
-            for idx, arg in enumerate(args):
-                ctx.attributes(**{f"[{idx}]": f"{arg}"})
-
-            for key, arg in kwargs.items():
-                ctx.attributes(**{key: f"{arg}"})
+            ctx.attributes(
+                **{f"[{idx}]": f"{arg}" for idx, arg in enumerate(args) if arg is not MISSING}
+            )
+            ctx.attributes(**{key: f"{arg}" for key, arg in kwargs.items() if arg is not MISSING})
 
             try:
                 result: Result = function(*args, **kwargs)
