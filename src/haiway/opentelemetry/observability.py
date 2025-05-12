@@ -2,7 +2,6 @@ import os
 from collections.abc import Mapping
 from typing import Any, Self, final
 
-###
 from opentelemetry import metrics, trace
 from opentelemetry._logs import get_logger, set_logger_provider
 from opentelemetry._logs._internal import Logger
@@ -32,6 +31,9 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExport
 from opentelemetry.trace import Span, StatusCode, Tracer
 
 from haiway.context import Observability, ObservabilityLevel, ScopeIdentifier
+
+###
+from haiway.context.observability import ObservabilityAttribute
 from haiway.state import State
 
 __all__ = ("OpenTelemetry",)
@@ -159,6 +161,18 @@ class ScopeStore:
             attributes=attributes,
         )
 
+    def record_attribute(
+        self,
+        name: str,
+        /,
+        *,
+        value: ObservabilityAttribute,
+    ) -> None:
+        self.span.set_attribute(
+            name,
+            value=value,
+        )
+
 
 @final
 class OpenTelemetry:
@@ -259,6 +273,7 @@ class OpenTelemetry:
             message: str,
             *args: Any,
             exception: BaseException | None,
+            **extra: Any,
         ) -> None:
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
@@ -279,6 +294,7 @@ class OpenTelemetry:
             *,
             level: ObservabilityLevel,
             event: State,
+            **extra: Any,
         ) -> None:
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
@@ -295,6 +311,7 @@ class OpenTelemetry:
             metric: str,
             value: float | int,
             unit: str | None,
+            **extra: Any,
         ) -> None:
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
@@ -307,6 +324,20 @@ class OpenTelemetry:
                 value=value,
                 unit=unit,
             )
+
+        def attributes_recording(
+            scope: ScopeIdentifier,
+            /,
+            **attributes: ObservabilityAttribute,
+        ) -> None:
+            if not attributes:
+                return
+
+            for attribute, value in attributes.items():
+                scopes[scope.scope_id].record_attribute(
+                    attribute,
+                    value=value,
+                )
 
         def scope_entering[Metric: State](
             scope: ScopeIdentifier,
@@ -407,6 +438,7 @@ class OpenTelemetry:
             log_recording=log_recording,
             event_recording=event_recording,
             metric_recording=metric_recording,
+            attributes_recording=attributes_recording,
             scope_entering=scope_entering,
             scope_exiting=scope_exiting,
         )

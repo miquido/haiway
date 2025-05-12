@@ -18,7 +18,12 @@ from typing import Any, final, overload
 
 from haiway.context.disposables import Disposable, Disposables
 from haiway.context.identifier import ScopeIdentifier
-from haiway.context.observability import Observability, ObservabilityContext, ObservabilityLevel
+from haiway.context.observability import (
+    Observability,
+    ObservabilityAttribute,
+    ObservabilityContext,
+    ObservabilityLevel,
+)
 from haiway.context.state import ScopeState, StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.state import State
@@ -462,6 +467,7 @@ class ctx:
         /,
         *args: Any,
         exception: BaseException | None = None,
+        **extra: Any,
     ) -> None:
         """
         Log using ERROR level within current scope context. When there is no current scope\
@@ -488,6 +494,7 @@ class ctx:
             message,
             *args,
             exception=exception,
+            **extra,
         )
 
     @staticmethod
@@ -496,6 +503,7 @@ class ctx:
         /,
         *args: Any,
         exception: Exception | None = None,
+        **extra: Any,
     ) -> None:
         """
         Log using WARNING level within current scope context. When there is no current scope\
@@ -522,6 +530,7 @@ class ctx:
             message,
             *args,
             exception=exception,
+            **extra,
         )
 
     @staticmethod
@@ -529,6 +538,7 @@ class ctx:
         message: str,
         /,
         *args: Any,
+        **extra: Any,
     ) -> None:
         """
         Log using INFO level within current scope context. When there is no current scope\
@@ -552,6 +562,7 @@ class ctx:
             message,
             *args,
             exception=None,
+            **extra,
         )
 
     @staticmethod
@@ -560,6 +571,7 @@ class ctx:
         /,
         *args: Any,
         exception: Exception | None = None,
+        **extra: Any,
     ) -> None:
         """
         Log using DEBUG level within current scope context. When there is no current scope\
@@ -582,10 +594,7 @@ class ctx:
         """
 
         ObservabilityContext.record_log(
-            ObservabilityLevel.DEBUG,
-            message,
-            *args,
-            exception=exception,
+            ObservabilityLevel.DEBUG, message, *args, exception=exception, **extra
         )
 
     @staticmethod
@@ -594,6 +603,7 @@ class ctx:
         /,
         *,
         level: ObservabilityLevel = ObservabilityLevel.INFO,
+        **extra: Any,
     ) -> None:
         """
         Record event within current scope context.
@@ -611,6 +621,7 @@ class ctx:
         ObservabilityContext.record_event(
             event,
             level=level,
+            **extra,
         )
 
     @staticmethod
@@ -620,6 +631,7 @@ class ctx:
         *,
         value: float | int,
         unit: str | None = None,
+        **extra: Any,
     ) -> None:
         """
         Record metric within current scope context.
@@ -642,4 +654,24 @@ class ctx:
             metric,
             value=value,
             unit=unit,
+            **extra,
+        )
+
+    @staticmethod
+    def attributes(**attributes: ObservabilityAttribute) -> None:
+        """
+        Record attributes within current scope context.
+
+        Parameters
+        ----------
+        **attributes: ObservabilityAttribute,
+            attributes to be recorded within current context.
+
+        Returns
+        -------
+        None
+        """
+
+        ObservabilityContext.record_attributes(
+            **attributes,
         )

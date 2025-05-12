@@ -3,6 +3,8 @@ from haiway.context.disposables import Disposable, Disposables
 from haiway.context.identifier import ScopeIdentifier
 from haiway.context.observability import (
     Observability,
+    ObservabilityAttribute,
+    ObservabilityAttributesRecording,
     ObservabilityContext,
     ObservabilityEventRecording,
     ObservabilityLevel,
@@ -20,6 +22,8 @@ __all__ = (
     "MissingContext",
     "MissingState",
     "Observability",
+    "ObservabilityAttribute",
+    "ObservabilityAttributesRecording",
     "ObservabilityContext",
     "ObservabilityEventRecording",
     "ObservabilityLevel",

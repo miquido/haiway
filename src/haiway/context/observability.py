@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from contextvars import ContextVar, Token
 from enum import IntEnum
 from logging import DEBUG as DEBUG_LOGGING
@@ -19,6 +20,8 @@ __all__ = (
     "INFO",
     "WARNING",
     "Observability",
+    "ObservabilityAttribute",
+    "ObservabilityAttributesRecording",
     "ObservabilityContext",
     "ObservabilityEventRecording",
     "ObservabilityLevel",
@@ -42,6 +45,10 @@ WARNING: Final[int] = ObservabilityLevel.WARNING
 INFO: Final[int] = ObservabilityLevel.INFO
 DEBUG: Final[int] = ObservabilityLevel.DEBUG
 
+type ObservabilityAttribute = (
+    Sequence[str] | Sequence[float] | Sequence[int] | Sequence[bool] | str | float | int | bool
+)
+
 
 @runtime_checkable
 class ObservabilityLogRecording(Protocol):
@@ -53,6 +60,7 @@ class ObservabilityLogRecording(Protocol):
         message: str,
         *args: Any,
         exception: BaseException | None,
+        **extra: Any,
     ) -> None: ...
 
 
@@ -65,6 +73,7 @@ class ObservabilityEventRecording(Protocol):
         *,
         level: ObservabilityLevel,
         event: State,
+        **extra: Any,
     ) -> None: ...
 
 
@@ -78,6 +87,17 @@ class ObservabilityMetricRecording(Protocol):
         metric: str,
         value: float | int,
         unit: str | None,
+        **extra: Any,
+    ) -> None: ...
+
+
+@runtime_checkable
+class ObservabilityAttributesRecording(Protocol):
+    def __call__(
+        self,
+        scope: ScopeIdentifier,
+        /,
+        **attributes: ObservabilityAttribute,
     ) -> None: ...
 
 
@@ -103,6 +123,7 @@ class ObservabilityScopeExiting(Protocol):
 
 class Observability:  # avoiding State inheritance to prevent propagation as scope state
     __slots__ = (
+        "attributes_recording",
         "event_recording",
         "log_recording",
         "metric_recording",
@@ -115,6 +136,7 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
         log_recording: ObservabilityLogRecording,
         metric_recording: ObservabilityMetricRecording,
         event_recording: ObservabilityEventRecording,
+        attributes_recording: ObservabilityAttributesRecording,
         scope_entering: ObservabilityScopeEntering,
         scope_exiting: ObservabilityScopeExiting,
     ) -> None:
@@ -136,6 +158,13 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
             "event_recording",
             event_recording,
         )
+        self.attributes_recording: ObservabilityAttributesRecording
+        object.__setattr__(
+            self,
+            "attributes_recording",
+            attributes_recording,
+        )
+
         self.scope_entering: ObservabilityScopeEntering
         object.__setattr__(
             self,
@@ -180,6 +209,7 @@ def _logger_observability(
         message: str,
         *args: Any,
         exception: BaseException | None,
+        **extra: Any,
     ) -> None:
         logger.log(
             level,
@@ -194,6 +224,7 @@ def _logger_observability(
         *,
         level: ObservabilityLevel,
         event: State,
+        **extra: Any,
     ) -> None:
         logger.log(
             level,
@@ -207,10 +238,25 @@ def _logger_observability(
         metric: str,
         value: float | int,
         unit: str | None,
+        **extra: Any,
     ) -> None:
         logger.log(
             INFO,
-            f"{scope.unique_name} Recorded metric - {metric}:{value}{unit or ''}",
+            f"{scope.unique_name} Recorded metric: {metric}={value}{unit or ''}",
+        )
+
+    def attributes_recording(
+        scope: ScopeIdentifier,
+        /,
+        **attributes: ObservabilityAttribute,
+    ) -> None:
+        if not attributes:
+            return
+
+        logger.log(
+            INFO,
+            f"{scope.unique_name} Recorded attributes:"
+            f"\n{'\n'.join([f'{k}: {v}' for k, v in attributes.items()])}",
         )
 
     def scope_entering[Metric: State](
@@ -238,6 +284,7 @@ def _logger_observability(
         log_recording=log_recording,
         event_recording=event_recording,
         metric_recording=metric_recording,
+        attributes_recording=attributes_recording,
         scope_entering=scope_entering,
         scope_exiting=scope_exiting,
     )
@@ -302,6 +349,7 @@ class ObservabilityContext:
         /,
         *args: Any,
         exception: BaseException | None,
+        **extra: Any,
     ) -> None:
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
@@ -313,6 +361,7 @@ class ObservabilityContext:
                     message,
                     *args,
                     exception=exception,
+                    **extra,
                 )
 
         except LookupError:
@@ -330,6 +379,7 @@ class ObservabilityContext:
         /,
         *,
         level: ObservabilityLevel,
+        **extra: Any,
     ) -> None:
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
@@ -339,6 +389,7 @@ class ObservabilityContext:
                     context._scope,
                     level=level,
                     event=event,
+                    **extra,
                 )
 
         except Exception as exc:
@@ -356,6 +407,7 @@ class ObservabilityContext:
         *,
         value: float | int,
         unit: str | None,
+        **extra: Any,
     ) -> None:
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
@@ -366,12 +418,34 @@ class ObservabilityContext:
                     metric=metric,
                     value=value,
                     unit=unit,
+                    **extra,
                 )
 
         except Exception as exc:
             cls.record_log(
                 ERROR,
                 f"Failed to record metric: {metric}",
+                exception=exc,
+            )
+
+    @classmethod
+    def record_attributes(
+        cls,
+        **attributes: ObservabilityAttribute,
+    ) -> None:
+        try:  # catch exceptions - we don't wan't to blow up on observability
+            context: Self = cls._context.get()
+
+            if context.observability is not None:
+                context.observability.attributes_recording(
+                    context._scope,
+                    **attributes,
+                )
+
+        except Exception as exc:
+            cls.record_log(
+                ERROR,
+                f"Failed to record attributes: {attributes}",
                 exception=exc,
             )
 
