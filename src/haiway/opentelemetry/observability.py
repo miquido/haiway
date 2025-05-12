@@ -1,6 +1,6 @@
 import os
 from collections.abc import Mapping
-from typing import Any, Self, final
+from typing import Any, Self, cast, final
 
 from opentelemetry import metrics, trace
 from opentelemetry._logs import get_logger, set_logger_provider
@@ -31,10 +31,9 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExport
 from opentelemetry.trace import Span, StatusCode, Tracer
 
 from haiway.context import Observability, ObservabilityLevel, ScopeIdentifier
-
-###
 from haiway.context.observability import ObservabilityAttribute
 from haiway.state import State
+from haiway.types import MISSING
 
 __all__ = ("OpenTelemetry",)
 
@@ -168,10 +167,11 @@ class ScopeStore:
         *,
         value: ObservabilityAttribute,
     ) -> None:
-        self.span.set_attribute(
-            name,
-            value=value,
-        )
+        if value is not None and value is not MISSING:
+            self.span.set_attribute(
+                name,
+                value=cast(Any, value),
+            )
 
 
 @final

@@ -10,9 +10,8 @@ from types import TracebackType
 from typing import Any, Final, Protocol, Self, final, runtime_checkable
 
 from haiway.context.identifier import ScopeIdentifier
-
-# from haiway.context.logging import LoggerContext
 from haiway.state import State
+from haiway.types import MISSING, Missing
 
 __all__ = (
     "DEBUG",
@@ -46,7 +45,16 @@ INFO: Final[int] = ObservabilityLevel.INFO
 DEBUG: Final[int] = ObservabilityLevel.DEBUG
 
 type ObservabilityAttribute = (
-    Sequence[str] | Sequence[float] | Sequence[int] | Sequence[bool] | str | float | int | bool
+    Sequence[str]
+    | Sequence[float]
+    | Sequence[int]
+    | Sequence[bool]
+    | str
+    | float
+    | int
+    | bool
+    | None
+    | Missing
 )
 
 
@@ -256,7 +264,7 @@ def _logger_observability(
         logger.log(
             INFO,
             f"{scope.unique_name} Recorded attributes:"
-            f"\n{'\n'.join([f'{k}: {v}' for k, v in attributes.items()])}",
+            f"\n{'\n'.join(f'{k}: {v}' for k, v in attributes.items() if v is not None and v is not MISSING)}",  # noqa: E501
         )
 
     def scope_entering[Metric: State](

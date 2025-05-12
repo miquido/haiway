@@ -1,10 +1,11 @@
-from collections.abc import Sequence
 from logging import Logger
 from time import monotonic
 from typing import Any
 
 from haiway.context import Observability, ObservabilityLevel, ScopeIdentifier
+from haiway.context.observability import ObservabilityAttribute
 from haiway.state import State
+from haiway.types import MISSING
 
 __all__ = ("LoggerObservability",)
 
@@ -133,14 +134,14 @@ def LoggerObservability(  # noqa: C901, PLR0915
     def attributes_recording(
         scope: ScopeIdentifier,
         /,
-        **attributes: Sequence[str | float | int] | str | float | int,
+        **attributes: ObservabilityAttribute,
     ) -> None:
         if not attributes:
             return
 
         attributes_str: str = (
             f"{scope.unique_name} Attributes:"
-            f"\n{'\n'.join([f'{k}: {v}' for k, v in attributes.items()])}"
+            f"\n{'\n'.join(f'{k}: {v}' for k, v in attributes.items() if v is not None and v is not MISSING)}"  # noqa: E501
         )
         if summarize_context:  # store only for summary
             scopes[scope.scope_id].store.append(attributes_str)
