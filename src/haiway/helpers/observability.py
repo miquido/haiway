@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from logging import Logger
 from time import monotonic
 from typing import Any
@@ -60,7 +61,7 @@ class ScopeStore:
         return True  # successfully completed
 
 
-def LoggerObservability(  # noqa: C901
+def LoggerObservability(  # noqa: C901, PLR0915
     logger: Logger,
     /,
     *,
@@ -76,6 +77,7 @@ def LoggerObservability(  # noqa: C901
         message: str,
         *args: Any,
         exception: BaseException | None,
+        **extra: Any,
     ) -> None:
         assert root_scope is not None  # nosec: B101
         assert scope.scope_id in scopes  # nosec: B101
@@ -93,6 +95,7 @@ def LoggerObservability(  # noqa: C901
         *,
         level: ObservabilityLevel,
         event: State,
+        **extra: Any,
     ) -> None:
         assert root_scope is not None  # nosec: B101
         assert scope.scope_id in scopes  # nosec: B101
@@ -113,17 +116,38 @@ def LoggerObservability(  # noqa: C901
         metric: str,
         value: float | int,
         unit: str | None,
+        **extra: Any,
     ) -> None:
         assert root_scope is not None  # nosec: B101
         assert scope.scope_id in scopes  # nosec: B101
 
-        metric_str: str = f"Metric - {metric}:{value}{unit or ''}"
+        metric_str: str = f"Metric: {metric}={value}{unit or ''}"
         if summarize_context:  # store only for summary
             scopes[scope.scope_id].store.append(metric_str)
 
         logger.log(
             ObservabilityLevel.INFO,
             f"{scope.unique_name} {metric_str}",
+        )
+
+    def attributes_recording(
+        scope: ScopeIdentifier,
+        /,
+        **attributes: Sequence[str | float | int] | str | float | int,
+    ) -> None:
+        if not attributes:
+            return
+
+        attributes_str: str = (
+            f"{scope.unique_name} Attributes:"
+            f"\n{'\n'.join([f'{k}: {v}' for k, v in attributes.items()])}"
+        )
+        if summarize_context:  # store only for summary
+            scopes[scope.scope_id].store.append(attributes_str)
+
+        logger.log(
+            ObservabilityLevel.INFO,
+            attributes_str,
         )
 
     def scope_entering[Metric: State](
@@ -196,6 +220,7 @@ def LoggerObservability(  # noqa: C901
         log_recording=log_recording,
         event_recording=event_recording,
         metric_recording=metric_recording,
+        attributes_recording=attributes_recording,
         scope_entering=scope_entering,
         scope_exiting=scope_exiting,
     )

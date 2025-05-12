@@ -4,6 +4,8 @@ from haiway.context import (
     MissingContext,
     MissingState,
     Observability,
+    ObservabilityAttribute,
+    ObservabilityAttributesRecording,
     ObservabilityContext,
     ObservabilityEventRecording,
     ObservabilityLevel,
@@ -17,7 +19,7 @@ from haiway.context import (
     ctx,
 )
 from haiway.helpers import (
-    ArgumentsTrace,
+    LoggerObservability,
     ResultTrace,
     asynchronous,
     cache,
@@ -63,7 +65,6 @@ from haiway.utils import (
 
 __all__ = (
     "MISSING",
-    "ArgumentsTrace",
     "AsyncQueue",
     "AsyncStream",
     "AttributePath",
@@ -72,10 +73,13 @@ __all__ = (
     "DefaultValue",
     "Disposable",
     "Disposables",
+    "LoggerObservability",
     "Missing",
     "MissingContext",
     "MissingState",
     "Observability",
+    "ObservabilityAttribute",
+    "ObservabilityAttributesRecording",
     "ObservabilityContext",
     "ObservabilityEventRecording",
     "ObservabilityLevel",

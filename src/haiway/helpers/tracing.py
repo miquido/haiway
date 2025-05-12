@@ -1,5 +1,5 @@
 from asyncio import iscoroutinefunction
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Coroutine
 from typing import Any, Self, cast, overload
 
 from haiway.context import ctx
@@ -8,41 +8,9 @@ from haiway.types import MISSING, Missing
 from haiway.utils import mimic_function
 
 __all__ = (
-    "ArgumentsTrace",
     "ResultTrace",
     "traced",
 )
-
-
-class ArgumentsTrace(State):
-    if __debug__:
-
-        @classmethod
-        def of(
-            cls,
-            *args: Any,
-            **kwargs: Any,
-        ) -> Self:
-            return cls(
-                args=[f"{arg}" for arg in args] if args else MISSING,
-                kwargs=[f"{key}:{arg}" for key, arg in kwargs.items()] if kwargs else MISSING,
-            )
-
-    else:  # remove tracing for non debug runs to prevent accidental secret leaks
-
-        @classmethod
-        def of(
-            cls,
-            *args: Any,
-            **kwargs: Any,
-        ) -> Self:
-            return cls(
-                args=MISSING,
-                kwargs=MISSING,
-            )
-
-    args: Sequence[str] | Missing
-    kwargs: Sequence[str] | Missing
 
 
 class ResultTrace(State):
@@ -128,7 +96,12 @@ def _traced_sync[**Args, Result](
         **kwargs: Args.kwargs,
     ) -> Result:
         with ctx.scope(label):
-            ctx.event(ArgumentsTrace.of(*args, **kwargs))
+            for idx, arg in enumerate(args):
+                ctx.attributes(**{f"[{idx}]": f"{arg}"})
+
+            for key, arg in kwargs.items():
+                ctx.attributes(**{key: f"{arg}"})
+
             try:
                 result: Result = function(*args, **kwargs)
                 ctx.event(ResultTrace.of(result))
@@ -154,7 +127,12 @@ def _traced_async[**Args, Result](
         **kwargs: Args.kwargs,
     ) -> Result:
         with ctx.scope(label):
-            ctx.event(ArgumentsTrace.of(*args, **kwargs))
+            for idx, arg in enumerate(args):
+                ctx.attributes(**{f"[{idx}]": f"{arg}"})
+
+            for key, arg in kwargs.items():
+                ctx.attributes(**{key: f"{arg}"})
+
             try:
                 result: Result = await function(*args, **kwargs)
                 ctx.event(ResultTrace.of(result))
