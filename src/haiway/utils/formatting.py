@@ -119,7 +119,7 @@ def _mapping_str(
             continue  # skip empty items
 
     if parts:
-        return "{\n  " + "\n".join(parts) + "\n}"
+        return "{\n" + "\n".join(parts) + "\n}"
 
     else:
         return "{}"
@@ -145,7 +145,7 @@ def _sequence_str(
             continue  # skip empty elements
 
     if parts:
-        return "[\n  " + "\n".join(parts) + "\n]"
+        return "[\n" + "\n".join(parts) + "\n]"
 
     else:
         return "[]"

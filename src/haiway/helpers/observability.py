@@ -129,10 +129,10 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
         metric_str: str
         if attributes:
-            metric_str = f"Metric: {metric}={value}{unit or ''}\n{format_str(attributes)}"
+            metric_str = f"Metric: {metric} = {value}{unit or ''}\n{format_str(attributes)}"
 
         else:
-            metric_str = f"Metric: {metric}={value}{unit or ''}"
+            metric_str = f"Metric: {metric} = {value}{unit or ''}"
 
         if debug_context:  # store only for summary
             scopes[scope.scope_id].store.append(metric_str)
