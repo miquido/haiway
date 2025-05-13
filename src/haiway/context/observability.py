@@ -244,14 +244,14 @@ def _logger_observability(
         if attributes:
             logger.log(
                 level,
-                f"{scope.unique_name} Recorded metric: {metric}={value}{unit or ''}"
+                f"{scope.unique_name} Recorded metric: {metric} = {value}{unit or ''}"
                 f"\n{format_str(attributes)}",
             )
 
         else:
             logger.log(
                 level,
-                f"{scope.unique_name} Recorded metric: {metric}={value}{unit or ''}",
+                f"{scope.unique_name} Recorded metric: {metric} = {value}{unit or ''}",
             )
 
     def attributes_recording(
