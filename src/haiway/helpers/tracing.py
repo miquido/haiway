@@ -3,6 +3,7 @@ from collections.abc import Callable, Coroutine
 from typing import Any, cast, overload
 
 from haiway.context import ctx
+from haiway.context.observability import ObservabilityLevel
 from haiway.types import MISSING
 from haiway.utils import mimic_function
 from haiway.utils.formatting import format_str
@@ -20,6 +21,7 @@ def traced[**Args, Result](
 @overload
 def traced[**Args, Result](
     *,
+    level: ObservabilityLevel = ObservabilityLevel.DEBUG,
     label: str,
 ) -> Callable[[Callable[Args, Result]], Callable[Args, Result]]: ...
 
@@ -28,6 +30,7 @@ def traced[**Args, Result](
     function: Callable[Args, Result] | None = None,
     /,
     *,
+    level: ObservabilityLevel = ObservabilityLevel.DEBUG,
     label: str | None = None,
 ) -> Callable[[Callable[Args, Result]], Callable[Args, Result]] | Callable[Args, Result]:
     def wrap(
@@ -40,6 +43,7 @@ def traced[**Args, Result](
                     _traced_async(
                         wrapped,
                         label=label or wrapped.__name__,
+                        level=level,
                     ),
                 )
 
@@ -47,6 +51,7 @@ def traced[**Args, Result](
                 return _traced_sync(
                     wrapped,
                     label=label or wrapped.__name__,
+                    level=level,
                 )
 
         else:  # do not trace on non debug runs
@@ -63,6 +68,7 @@ def _traced_sync[**Args, Result](
     function: Callable[Args, Result],
     /,
     label: str,
+    level: ObservabilityLevel,
 ) -> Callable[Args, Result]:
     def traced(
         *args: Args.args,
@@ -70,17 +76,20 @@ def _traced_sync[**Args, Result](
     ) -> Result:
         with ctx.scope(label):
             ctx.record(
+                level,
                 attributes={
                     f"[{idx}]": f"{arg}" for idx, arg in enumerate(args) if arg is not MISSING
-                }
+                },
             )
             ctx.record(
-                attributes={key: f"{arg}" for key, arg in kwargs.items() if arg is not MISSING}
+                level,
+                attributes={key: f"{arg}" for key, arg in kwargs.items() if arg is not MISSING},
             )
 
             try:
                 result: Result = function(*args, **kwargs)
                 ctx.record(
+                    level,
                     event="result",
                     attributes={"value": format_str(result)},
                 )
@@ -88,6 +97,7 @@ def _traced_sync[**Args, Result](
 
             except BaseException as exc:
                 ctx.record(
+                    level,
                     event="result",
                     attributes={"error": f"{type(exc)}: {exc}"},
                 )
@@ -103,6 +113,7 @@ def _traced_async[**Args, Result](
     function: Callable[Args, Coroutine[Any, Any, Result]],
     /,
     label: str,
+    level: ObservabilityLevel,
 ) -> Callable[Args, Coroutine[Any, Any, Result]]:
     async def traced(
         *args: Args.args,
@@ -110,17 +121,20 @@ def _traced_async[**Args, Result](
     ) -> Result:
         with ctx.scope(label):
             ctx.record(
+                level,
                 attributes={
                     f"[{idx}]": f"{arg}" for idx, arg in enumerate(args) if arg is not MISSING
-                }
+                },
             )
             ctx.record(
-                attributes={key: f"{arg}" for key, arg in kwargs.items() if arg is not MISSING}
+                level,
+                attributes={key: f"{arg}" for key, arg in kwargs.items() if arg is not MISSING},
             )
 
             try:
                 result: Result = await function(*args, **kwargs)
                 ctx.record(
+                    level,
                     event="result",
                     attributes={"value": format_str(result)},
                 )
@@ -128,6 +142,7 @@ def _traced_async[**Args, Result](
 
             except BaseException as exc:
                 ctx.record(
+                    level,
                     event="result",
                     attributes={"error": f"{type(exc)}: {exc}"},
                 )

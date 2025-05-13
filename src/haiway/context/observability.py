@@ -7,7 +7,7 @@ from logging import INFO as INFO_LOGGING
 from logging import WARNING as WARNING_LOGGING
 from logging import Logger, getLogger
 from types import TracebackType
-from typing import Any, Final, Protocol, Self, final, runtime_checkable
+from typing import Any, Protocol, Self, final, runtime_checkable
 
 from haiway.context.identifier import ScopeIdentifier
 from haiway.state import State
@@ -15,10 +15,6 @@ from haiway.types import Missing
 from haiway.utils.formatting import format_str
 
 __all__ = (
-    "DEBUG",
-    "ERROR",
-    "INFO",
-    "WARNING",
     "Observability",
     "ObservabilityAttribute",
     "ObservabilityAttributesRecording",
@@ -39,11 +35,6 @@ class ObservabilityLevel(IntEnum):
     INFO = INFO_LOGGING
     DEBUG = DEBUG_LOGGING
 
-
-ERROR: Final[int] = ObservabilityLevel.ERROR
-WARNING: Final[int] = ObservabilityLevel.WARNING
-INFO: Final[int] = ObservabilityLevel.INFO
-DEBUG: Final[int] = ObservabilityLevel.DEBUG
 
 type ObservabilityAttribute = (
     Sequence[str]
@@ -282,7 +273,7 @@ def _logger_observability(
         /,
     ) -> None:
         logger.log(
-            DEBUG,
+            ObservabilityLevel.DEBUG,
             f"{scope.unique_name} Entering scope: {scope.label}",
         )
 
@@ -293,7 +284,7 @@ def _logger_observability(
         exception: BaseException | None,
     ) -> None:
         logger.log(
-            DEBUG,
+            ObservabilityLevel.DEBUG,
             f"{scope.unique_name} Exiting scope: {scope.label}",
             exc_info=exception,
         )
@@ -410,7 +401,7 @@ class ObservabilityContext:
 
         except Exception as exc:
             cls.record_log(
-                ERROR,
+                ObservabilityLevel.ERROR,
                 f"Failed to record event: {type(event).__qualname__}",
                 exception=exc,
             )
@@ -441,7 +432,7 @@ class ObservabilityContext:
 
         except Exception as exc:
             cls.record_log(
-                ERROR,
+                ObservabilityLevel.ERROR,
                 f"Failed to record metric: {metric}",
                 exception=exc,
             )
@@ -466,7 +457,7 @@ class ObservabilityContext:
 
         except Exception as exc:
             cls.record_log(
-                ERROR,
+                ObservabilityLevel.ERROR,
                 "Failed to record attributes",
                 exception=exc,
             )

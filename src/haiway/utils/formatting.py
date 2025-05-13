@@ -67,6 +67,9 @@ def _object_str(
     other: object,
     /,
 ) -> str:
+    if not hasattr(other, "__dict__"):
+        return str(other)
+
     variables: ItemsView[str, Any] = vars(other).items()
 
     parts: list[str] = [f"┍━ {type(other).__name__}:"]
