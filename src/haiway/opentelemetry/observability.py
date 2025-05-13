@@ -29,6 +29,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SpanExporter
 from opentelemetry.trace import Span, StatusCode, Tracer
+from opentelemetry.trace.span import SpanContext
 
 from haiway.context import Observability, ObservabilityLevel, ScopeIdentifier
 from haiway.context.observability import ObservabilityAttribute
@@ -44,9 +45,9 @@ class ScopeStore:
         "_counters",
         "_exited",
         "_histograms",
+        "_span_context",
         "identifier",
         "logger",
-        "logger_2",
         "meter",
         "nested",
         "span",
@@ -67,6 +68,7 @@ class ScopeStore:
         self._exited: bool = False
         self._completed: bool = False
         self.span: Span = span
+        self._span_context: SpanContext = span.get_span_context()
         self.meter: Meter = meter
         self.logger: Logger = logger
 
@@ -104,16 +106,16 @@ class ScopeStore:
     ) -> None:
         self.logger.emit(
             LogRecord(
-                span_id=self.span.get_span_context().span_id,
-                trace_id=self.span.get_span_context().trace_id,
-                trace_flags=self.span.get_span_context().trace_flags,
+                span_id=self._span_context.span_id,
+                trace_id=self._span_context.trace_id,
+                trace_flags=self._span_context.trace_flags,
                 body=message,
                 severity_text=level.name,
                 severity_number=SEVERITY_MAPPING[level],
                 attributes={
-                    "trace_id": self.identifier.trace_id,
-                    "scope_id": self.identifier.scope_id,
-                    "parent_id": self.identifier.parent_id,
+                    "context.trace_id": self.identifier.trace_id,
+                    "context.scope_id": self.identifier.scope_id,
+                    "context.parent_id": self.identifier.parent_id,
                 },
             )
         )
@@ -127,12 +129,18 @@ class ScopeStore:
 
     def record_event(
         self,
-        event: State,
+        event: str,
         /,
+        *,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         self.span.add_event(
-            str(type(event).__name__),
-            attributes=event.to_mapping(recursive=True),
+            event,
+            attributes={
+                key: cast(Any, value)
+                for key, value in attributes.items()
+                if value is not None and value is not MISSING
+            },
         )
 
     def record_metric(
@@ -142,13 +150,8 @@ class ScopeStore:
         *,
         value: float | int,
         unit: str | None,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        attributes: Mapping[str, Any] = {
-            "trace_id": self.identifier.trace_id,
-            "scope_id": self.identifier.scope_id,
-            "parent_id": self.identifier.parent_id,
-        }
-
         if name not in self._counters:
             self._counters[name] = self.meter.create_counter(
                 name=name,
@@ -157,7 +160,18 @@ class ScopeStore:
 
         self._counters[name].add(
             value,
-            attributes=attributes,
+            attributes={
+                **{
+                    "context.trace_id": self.identifier.trace_id,
+                    "context.scope_id": self.identifier.scope_id,
+                    "context.parent_id": self.identifier.parent_id,
+                },
+                **{
+                    key: cast(Any, value)
+                    for key, value in attributes.items()
+                    if value is not None and value is not MISSING
+                },
+            },
         )
 
     def record_attribute(
@@ -193,8 +207,8 @@ class OpenTelemetry:
             {
                 "service.name": service,
                 "service.version": version,
-                "deployment.environment": environment,
                 "service.pid": os.getpid(),
+                "deployment.environment": environment,
                 **(attributes if attributes is not None else {}),
             },
         )
@@ -273,7 +287,6 @@ class OpenTelemetry:
             message: str,
             *args: Any,
             exception: BaseException | None,
-            **extra: Any,
         ) -> None:
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
@@ -291,10 +304,10 @@ class OpenTelemetry:
         def event_recording(
             scope: ScopeIdentifier,
             /,
-            *,
             level: ObservabilityLevel,
-            event: State,
-            **extra: Any,
+            *,
+            event: str,
+            attributes: Mapping[str, ObservabilityAttribute],
         ) -> None:
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
@@ -302,16 +315,20 @@ class OpenTelemetry:
             if level < observed_level:
                 return
 
-            scopes[scope.scope_id].record_event(event)
+            scopes[scope.scope_id].record_event(
+                event,
+                attributes=attributes,
+            )
 
         def metric_recording(
             scope: ScopeIdentifier,
             /,
+            level: ObservabilityLevel,
             *,
             metric: str,
             value: float | int,
             unit: str | None,
-            **extra: Any,
+            attributes: Mapping[str, ObservabilityAttribute],
         ) -> None:
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
@@ -323,13 +340,18 @@ class OpenTelemetry:
                 metric,
                 value=value,
                 unit=unit,
+                attributes=attributes,
             )
 
         def attributes_recording(
             scope: ScopeIdentifier,
             /,
-            **attributes: ObservabilityAttribute,
+            level: ObservabilityLevel,
+            attributes: Mapping[str, ObservabilityAttribute],
         ) -> None:
+            if level < observed_level:
+                return
+
             if not attributes:
                 return
 
@@ -363,9 +385,9 @@ class OpenTelemetry:
                             parent_id=scope.parent_id,
                         ),
                         attributes={
-                            "trace_id": scope.trace_id,
-                            "scope_id": scope.scope_id,
-                            "parent_id": scope.parent_id,
+                            "context.trace_id": scope.trace_id,
+                            "context.scope_id": scope.scope_id,
+                            "context.parent_id": scope.parent_id,
                         },
                     ),
                     meter=meter,
@@ -390,9 +412,9 @@ class OpenTelemetry:
                             ),
                         ),
                         attributes={
-                            "trace_id": scope.trace_id,
-                            "scope_id": scope.scope_id,
-                            "parent_id": scope.parent_id,
+                            "context.trace_id": scope.trace_id,
+                            "context.scope_id": scope.scope_id,
+                            "context.parent_id": scope.parent_id,
                         },
                     ),
                     meter=meter,

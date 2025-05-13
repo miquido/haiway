@@ -11,6 +11,7 @@ from collections.abc import (
     Callable,
     Coroutine,
     Iterable,
+    Mapping,
 )
 from logging import Logger
 from types import TracebackType
@@ -597,81 +598,69 @@ class ctx:
             ObservabilityLevel.DEBUG, message, *args, exception=exception, **extra
         )
 
+    @overload
     @staticmethod
-    def event(
-        event: State,
+    def record(
+        level: ObservabilityLevel = ObservabilityLevel.DEBUG,
         /,
         *,
-        level: ObservabilityLevel = ObservabilityLevel.INFO,
-        **extra: Any,
-    ) -> None:
-        """
-        Record event within current scope context.
+        attributes: Mapping[str, ObservabilityAttribute],
+    ) -> None: ...
 
-        Parameters
-        ----------
-        event: State
-            contents of event to be recorded.
-
-        Returns
-        -------
-        None
-        """
-
-        ObservabilityContext.record_event(
-            event,
-            level=level,
-            **extra,
-        )
-
+    @overload
     @staticmethod
-    def metric(
+    def record(
+        level: ObservabilityLevel = ObservabilityLevel.DEBUG,
+        /,
+        *,
+        event: str,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None: ...
+
+    @overload
+    @staticmethod
+    def record(
+        level: ObservabilityLevel = ObservabilityLevel.DEBUG,
+        /,
+        *,
         metric: str,
-        /,
-        *,
         value: float | int,
         unit: str | None = None,
-        **extra: Any,
-    ) -> None:
-        """
-        Record metric within current scope context.
-
-        Parameters
-        ----------
-        metric: State
-            name of metric to be recorded.
-        value: float | int
-            value of metric to be recorded.
-        unit: str | None = None
-            unit of metric to be recorded.
-
-        Returns
-        -------
-        None
-        """
-
-        ObservabilityContext.record_metric(
-            metric,
-            value=value,
-            unit=unit,
-            **extra,
-        )
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None: ...
 
     @staticmethod
-    def attributes(**attributes: ObservabilityAttribute) -> None:
-        """
-        Record attributes within current scope context.
+    def record(
+        level: ObservabilityLevel = ObservabilityLevel.DEBUG,
+        /,
+        *,
+        event: str | None = None,
+        metric: str | None = None,
+        value: float | int | None = None,
+        unit: str | None = None,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None:
+        if event is not None:
+            assert metric is None  # nosec: B101
+            ObservabilityContext.record_event(
+                level,
+                event,
+                attributes=attributes or {},
+            )
 
-        Parameters
-        ----------
-        **attributes: ObservabilityAttribute,
-            attributes to be recorded within current context.
+        elif metric is not None:
+            assert event is None  # nosec: B101
+            assert value is not None  # nosec: B101
+            ObservabilityContext.record_metric(
+                level,
+                metric,
+                value=value,
+                unit=unit,
+                attributes=attributes or {},
+            )
 
-        Returns
-        -------
-        None
-        """
-
-        ObservabilityContext.record_attributes(
-            **attributes,
-        )
+        else:
+            ObservabilityContext.record_attributes(
+                level,
+                attributes=attributes or {},
+            )

@@ -1,11 +1,12 @@
-from logging import Logger
+from collections.abc import Mapping
+from logging import Logger, getLogger
 from time import monotonic
 from typing import Any
 
 from haiway.context import Observability, ObservabilityLevel, ScopeIdentifier
 from haiway.context.observability import ObservabilityAttribute
 from haiway.state import State
-from haiway.types import MISSING
+from haiway.utils.formatting import format_str
 
 __all__ = ("LoggerObservability",)
 
@@ -63,12 +64,13 @@ class ScopeStore:
 
 
 def LoggerObservability(  # noqa: C901, PLR0915
-    logger: Logger,
+    logger: Logger | None = None,
     /,
     *,
-    summarize_context: bool = __debug__,
+    debug_context: bool = __debug__,
 ) -> Observability:
     root_scope: ScopeIdentifier | None = None
+    root_logger: Logger | None = logger
     scopes: dict[str, ScopeStore] = {}
 
     def log_recording(
@@ -78,12 +80,12 @@ def LoggerObservability(  # noqa: C901, PLR0915
         message: str,
         *args: Any,
         exception: BaseException | None,
-        **extra: Any,
     ) -> None:
         assert root_scope is not None  # nosec: B101
+        assert root_logger is not None  # nosec: B101
         assert scope.scope_id in scopes  # nosec: B101
 
-        logger.log(
+        root_logger.log(
             level,
             f"{scope.unique_name} {message}",
             *args,
@@ -93,19 +95,20 @@ def LoggerObservability(  # noqa: C901, PLR0915
     def event_recording(
         scope: ScopeIdentifier,
         /,
-        *,
         level: ObservabilityLevel,
-        event: State,
-        **extra: Any,
+        *,
+        event: str,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         assert root_scope is not None  # nosec: B101
+        assert root_logger is not None  # nosec: B101
         assert scope.scope_id in scopes  # nosec: B101
 
-        event_str: str = f"Event:\n{event.to_str(pretty=True)}"
-        if summarize_context:  # store only for summary
+        event_str: str = f"Event: {event} {format_str(attributes)}"
+        if debug_context:  # store only for summary
             scopes[scope.scope_id].store.append(event_str)
 
-        logger.log(
+        root_logger.log(
             level,
             f"{scope.unique_name} {event_str}",
         )
@@ -113,41 +116,50 @@ def LoggerObservability(  # noqa: C901, PLR0915
     def metric_recording(
         scope: ScopeIdentifier,
         /,
+        level: ObservabilityLevel,
         *,
         metric: str,
         value: float | int,
         unit: str | None,
-        **extra: Any,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         assert root_scope is not None  # nosec: B101
+        assert root_logger is not None  # nosec: B101
         assert scope.scope_id in scopes  # nosec: B101
 
-        metric_str: str = f"Metric: {metric}={value}{unit or ''}"
-        if summarize_context:  # store only for summary
+        metric_str: str
+        if attributes:
+            metric_str = f"Metric: {metric}={value}{unit or ''}\n{format_str(attributes)}"
+
+        else:
+            metric_str = f"Metric: {metric}={value}{unit or ''}"
+
+        if debug_context:  # store only for summary
             scopes[scope.scope_id].store.append(metric_str)
 
-        logger.log(
-            ObservabilityLevel.INFO,
+        root_logger.log(
+            level,
             f"{scope.unique_name} {metric_str}",
         )
 
     def attributes_recording(
         scope: ScopeIdentifier,
         /,
-        **attributes: ObservabilityAttribute,
+        level: ObservabilityLevel,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
+        assert root_scope is not None  # nosec: B101
+        assert root_logger is not None  # nosec: B101
+
         if not attributes:
             return
 
-        attributes_str: str = (
-            f"{scope.unique_name} Attributes:"
-            f"\n{'\n'.join(f'{k}: {v}' for k, v in attributes.items() if v is not None and v is not MISSING)}"  # noqa: E501
-        )
-        if summarize_context:  # store only for summary
+        attributes_str: str = f"Attributes: {format_str(attributes)}"
+        if debug_context:  # store only for summary
             scopes[scope.scope_id].store.append(attributes_str)
 
-        logger.log(
-            ObservabilityLevel.INFO,
+        root_logger.log(
+            level,
             attributes_str,
         )
 
@@ -159,17 +171,20 @@ def LoggerObservability(  # noqa: C901, PLR0915
         scope_store: ScopeStore = ScopeStore(scope)
         scopes[scope.scope_id] = scope_store
 
-        logger.log(
-            ObservabilityLevel.INFO,
-            f"{scope.unique_name} Entering scope: {scope.label}",
-        )
-
         nonlocal root_scope
+        nonlocal root_logger
         if root_scope is None:
             root_scope = scope
+            root_logger = logger or getLogger(scope.label)
 
         else:
             scopes[scope.parent_id].nested.append(scope_store)
+
+        assert root_logger is not None  # nosec: B101
+        root_logger.log(
+            ObservabilityLevel.INFO,
+            f"{scope.unique_name} Entering scope: {scope.label}",
+        )
 
     def scope_exiting[Metric: State](
         scope: ScopeIdentifier,
@@ -178,8 +193,10 @@ def LoggerObservability(  # noqa: C901, PLR0915
         exception: BaseException | None,
     ) -> None:
         nonlocal root_scope
+        nonlocal root_logger
         nonlocal scopes
         assert root_scope is not None  # nosec: B101
+        assert root_logger is not None  # nosec: B101
         assert scope.scope_id in scopes  # nosec: B101
 
         scopes[scope.scope_id].exit()
@@ -187,15 +204,15 @@ def LoggerObservability(  # noqa: C901, PLR0915
         if not scopes[scope.scope_id].try_complete():
             return  # not completed yet or already completed
 
-        logger.log(
+        root_logger.log(
             ObservabilityLevel.INFO,
             f"{scope.unique_name} Exiting scope: {scope.label}",
         )
         metric_str: str = f"Metric - scope_time:{scopes[scope.scope_id].time:.3f}s"
-        if summarize_context:  # store only for summary
+        if debug_context:  # store only for summary
             scopes[scope.scope_id].store.append(metric_str)
 
-        logger.log(
+        root_logger.log(
             ObservabilityLevel.INFO,
             f"{scope.unique_name} {metric_str}",
         )
@@ -207,14 +224,15 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
         # check for root completion
         if scopes[root_scope.scope_id].completed:
-            if summarize_context:
-                logger.log(
+            if debug_context:
+                root_logger.log(
                     ObservabilityLevel.DEBUG,
                     f"Observability summary:\n{_tree_summary(scopes[root_scope.scope_id])}",
                 )
 
             # finished root - cleanup state
             root_scope = None
+            root_logger = None
             scopes = {}
 
     return Observability(
