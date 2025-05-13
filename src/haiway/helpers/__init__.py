@@ -4,14 +4,13 @@ from haiway.helpers.observability import LoggerObservability
 from haiway.helpers.retries import retry
 from haiway.helpers.throttling import throttle
 from haiway.helpers.timeouted import timeout
-from haiway.helpers.tracing import ResultTrace, traced
+from haiway.helpers.tracing import traced
 
 __all__ = (
     "CacheMakeKey",
     "CacheRead",
     "CacheWrite",
     "LoggerObservability",
-    "ResultTrace",
     "asynchronous",
     "cache",
     "retry",

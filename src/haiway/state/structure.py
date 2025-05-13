@@ -1,5 +1,5 @@
 import typing
-from collections.abc import ItemsView, Mapping, Sequence
+from collections.abc import Mapping
 from types import EllipsisType, GenericAlias
 from typing import (
     Any,
@@ -366,15 +366,8 @@ class State(metaclass=StateMeta):
     ) -> Self:
         return self.__replace__(**kwargs)
 
-    def to_str(
-        self,
-        pretty: bool = False,
-    ) -> str:
-        if pretty:
-            return _state_str(self)
-
-        else:
-            return self.__str__()
+    def to_str(self) -> str:
+        return self.__str__()
 
     def to_mapping(
         self,
@@ -448,144 +441,3 @@ class State(metaclass=StateMeta):
                 **kwargs,
             }
         )
-
-
-def _attribute_str(
-    *,
-    key: str,
-    value: str,
-) -> str:
-    return f"┝ {key}: {value}"
-
-
-def _element_str(
-    *,
-    key: Any,
-    value: Any,
-) -> str:
-    return f"[{key}]: {value}"
-
-
-def _state_str(
-    state: State,
-    /,
-) -> str:
-    variables: ItemsView[str, Any] = vars(state).items()
-
-    parts: list[str] = [f"┍━ {type(state).__name__}:"]
-    for key, value in variables:
-        value_string: str | None = _value_str(value)
-
-        if value_string:
-            parts.append(
-                _attribute_str(
-                    key=key,
-                    value=value_string,
-                )
-            )
-
-        else:
-            continue  # skip empty elements
-
-    if parts:
-        return "\n".join(parts) + "\n┕━"
-
-    else:
-        return "╍"
-
-
-def _mapping_str(
-    dictionary: Mapping[Any, Any],
-    /,
-) -> str | None:
-    elements: ItemsView[Any, Any] = dictionary.items()
-
-    parts: list[str] = []
-    for key, value in elements:
-        value_string: str | None = _value_str(value)
-
-        if value_string:
-            parts.append(
-                _element_str(
-                    key=key,
-                    value=value_string,
-                )
-            )
-
-        else:
-            continue  # skip empty elements
-
-    if parts:
-        return "\n|  " + "\n".join(parts).replace("\n", "\n|  ")
-
-    else:
-        return None
-
-
-def _sequence_str(
-    sequence: Sequence[Any],
-    /,
-) -> str | None:
-    parts: list[str] = []
-    for idx, element in enumerate(sequence):
-        element_string: str | None = _value_str(element)
-
-        if element_string:
-            parts.append(
-                _element_str(
-                    key=idx,
-                    value=element_string,
-                )
-            )
-
-        else:
-            continue  # skip empty elements
-
-    if parts:
-        return "\n|  " + "\n".join(parts).replace("\n", "\n|  ")
-
-    else:
-        return None
-
-
-def _raw_value_str(
-    value: Any,
-    /,
-) -> str | None:
-    if value is MISSING:
-        return None  # skip missing
-
-    else:
-        return str(value).strip().replace("\n", "\n|  ")
-
-
-def _value_str(  # noqa: PLR0911
-    value: Any,
-    /,
-) -> str | None:
-    # check for string
-    if isinstance(value, str):
-        if "\n" in value:
-            return f'"""\n{value}\n"""'.replace("\n", "\n|  ")
-
-        else:
-            return f'"{value}"'
-
-    # check for bytes
-    elif isinstance(value, bytes):
-        return f'b"{value}"'
-
-    # try unpack state
-    elif isinstance(value, State):
-        return _state_str(value)
-
-    # try unpack mapping
-    elif isinstance(value, Mapping):
-        return _mapping_str(value)
-
-    # try unpack sequence
-    elif isinstance(value, Sequence):
-        return _sequence_str(value)
-
-    else:  # fallback to other
-        return _raw_value_str(value)

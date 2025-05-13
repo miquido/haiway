@@ -8,6 +8,7 @@ from haiway.utils.env import (
     getenv_str,
     load_env,
 )
+from haiway.utils.formatting import format_str
 from haiway.utils.freezing import freeze
 from haiway.utils.logs import setup_logging
 from haiway.utils.mimic import mimic_function
@@ -25,6 +26,7 @@ __all__ = (
     "as_tuple",
     "async_always",
     "async_noop",
+    "format_str",
     "freeze",
     "getenv_base64",
     "getenv_bool",

@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar, Token
 from enum import IntEnum
 from logging import DEBUG as DEBUG_LOGGING
@@ -11,7 +11,8 @@ from typing import Any, Final, Protocol, Self, final, runtime_checkable
 
 from haiway.context.identifier import ScopeIdentifier
 from haiway.state import State
-from haiway.types import MISSING, Missing
+from haiway.types import Missing
+from haiway.utils.formatting import format_str
 
 __all__ = (
     "DEBUG",
@@ -68,7 +69,6 @@ class ObservabilityLogRecording(Protocol):
         message: str,
         *args: Any,
         exception: BaseException | None,
-        **extra: Any,
     ) -> None: ...
 
 
@@ -78,10 +78,10 @@ class ObservabilityEventRecording(Protocol):
         self,
         scope: ScopeIdentifier,
         /,
-        *,
         level: ObservabilityLevel,
-        event: State,
-        **extra: Any,
+        *,
+        event: str,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None: ...
 
 
@@ -91,11 +91,12 @@ class ObservabilityMetricRecording(Protocol):
         self,
         scope: ScopeIdentifier,
         /,
+        level: ObservabilityLevel,
         *,
         metric: str,
         value: float | int,
         unit: str | None,
-        **extra: Any,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None: ...
 
 
@@ -105,7 +106,8 @@ class ObservabilityAttributesRecording(Protocol):
         self,
         scope: ScopeIdentifier,
         /,
-        **attributes: ObservabilityAttribute,
+        level: ObservabilityLevel,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None: ...
 
 
@@ -217,7 +219,6 @@ def _logger_observability(
         message: str,
         *args: Any,
         exception: BaseException | None,
-        **extra: Any,
     ) -> None:
         logger.log(
             level,
@@ -229,42 +230,51 @@ def _logger_observability(
     def event_recording(
         scope: ScopeIdentifier,
         /,
-        *,
         level: ObservabilityLevel,
-        event: State,
-        **extra: Any,
+        *,
+        event: str,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         logger.log(
             level,
-            f"{scope.unique_name} Recorded event:\n{event.to_str(pretty=True)}",
+            f"{scope.unique_name} Recorded event: {event} {format_str(attributes)}",
         )
 
     def metric_recording(
         scope: ScopeIdentifier,
         /,
+        level: ObservabilityLevel,
         *,
         metric: str,
         value: float | int,
         unit: str | None,
-        **extra: Any,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        logger.log(
-            INFO,
-            f"{scope.unique_name} Recorded metric: {metric}={value}{unit or ''}",
-        )
+        if attributes:
+            logger.log(
+                level,
+                f"{scope.unique_name} Recorded metric: {metric}={value}{unit or ''}"
+                f"\n{format_str(attributes)}",
+            )
+
+        else:
+            logger.log(
+                level,
+                f"{scope.unique_name} Recorded metric: {metric}={value}{unit or ''}",
+            )
 
     def attributes_recording(
         scope: ScopeIdentifier,
         /,
-        **attributes: ObservabilityAttribute,
+        level: ObservabilityLevel,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         if not attributes:
             return
 
         logger.log(
-            INFO,
-            f"{scope.unique_name} Recorded attributes:"
-            f"\n{'\n'.join(f'{k}: {v}' for k, v in attributes.items() if v is not None and v is not MISSING)}",  # noqa: E501
+            level,
+            f"{scope.unique_name} Recorded attributes: {format_str(attributes)}",
         )
 
     def scope_entering[Metric: State](
@@ -357,7 +367,6 @@ class ObservabilityContext:
         /,
         *args: Any,
         exception: BaseException | None,
-        **extra: Any,
     ) -> None:
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
@@ -369,7 +378,6 @@ class ObservabilityContext:
                     message,
                     *args,
                     exception=exception,
-                    **extra,
                 )
 
         except LookupError:
@@ -383,11 +391,11 @@ class ObservabilityContext:
     @classmethod
     def record_event(
         cls,
-        event: State,
+        level: ObservabilityLevel,
+        event: str,
         /,
         *,
-        level: ObservabilityLevel,
-        **extra: Any,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
@@ -397,7 +405,7 @@ class ObservabilityContext:
                     context._scope,
                     level=level,
                     event=event,
-                    **extra,
+                    attributes=attributes,
                 )
 
         except Exception as exc:
@@ -410,12 +418,13 @@ class ObservabilityContext:
     @classmethod
     def record_metric(
         cls,
+        level: ObservabilityLevel,
         metric: str,
         /,
         *,
         value: float | int,
         unit: str | None,
-        **extra: Any,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
@@ -423,10 +432,11 @@ class ObservabilityContext:
             if context.observability is not None:
                 context.observability.metric_recording(
                     context._scope,
+                    level=level,
                     metric=metric,
                     value=value,
                     unit=unit,
-                    **extra,
+                    attributes=attributes,
                 )
 
         except Exception as exc:
@@ -439,7 +449,10 @@ class ObservabilityContext:
     @classmethod
     def record_attributes(
         cls,
-        **attributes: ObservabilityAttribute,
+        level: ObservabilityLevel,
+        /,
+        *,
+        attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
@@ -447,13 +460,14 @@ class ObservabilityContext:
             if context.observability is not None:
                 context.observability.attributes_recording(
                     context._scope,
-                    **attributes,
+                    level=level,
+                    attributes=attributes,
                 )
 
         except Exception as exc:
             cls.record_log(
                 ERROR,
-                f"Failed to record attributes: {attributes}",
+                "Failed to record attributes",
                 exception=exc,
             )
 

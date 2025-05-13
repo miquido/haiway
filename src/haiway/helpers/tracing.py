@@ -1,40 +1,13 @@
 from asyncio import iscoroutinefunction
 from collections.abc import Callable, Coroutine
-from typing import Any, Self, cast, overload
+from typing import Any, cast, overload
 
 from haiway.context import ctx
-from haiway.state import State
-from haiway.types import MISSING, Missing
+from haiway.types import MISSING
 from haiway.utils import mimic_function
+from haiway.utils.formatting import format_str
 
-__all__ = (
-    "ResultTrace",
-    "traced",
-)
-
-
-class ResultTrace(State):
-    if __debug__:
-
-        @classmethod
-        def of(
-            cls,
-            value: Any,
-            /,
-        ) -> Self:
-            return cls(result=f"{value}")
-
-    else:  # remove tracing for non debug runs to prevent accidental secret leaks
-
-        @classmethod
-        def of(
-            cls,
-            value: Any,
-            /,
-        ) -> Self:
-            return cls(result=MISSING)
-
-    result: str | Missing
+__all__ = ("traced",)
 
 
 @overload
@@ -96,18 +69,28 @@ def _traced_sync[**Args, Result](
         **kwargs: Args.kwargs,
     ) -> Result:
         with ctx.scope(label):
-            ctx.attributes(
-                **{f"[{idx}]": f"{arg}" for idx, arg in enumerate(args) if arg is not MISSING}
+            ctx.record(
+                attributes={
+                    f"[{idx}]": f"{arg}" for idx, arg in enumerate(args) if arg is not MISSING
+                }
             )
-            ctx.attributes(**{key: f"{arg}" for key, arg in kwargs.items() if arg is not MISSING})
+            ctx.record(
+                attributes={key: f"{arg}" for key, arg in kwargs.items() if arg is not MISSING}
+            )
 
             try:
                 result: Result = function(*args, **kwargs)
-                ctx.event(ResultTrace.of(result))
+                ctx.record(
+                    event="result",
+                    attributes={"value": format_str(result)},
+                )
                 return result
 
             except BaseException as exc:
-                ctx.event(ResultTrace.of(f"{type(exc)}: {exc}"))
+                ctx.record(
+                    event="result",
+                    attributes={"error": f"{type(exc)}: {exc}"},
+                )
                 raise exc
 
     return mimic_function(
@@ -126,19 +109,28 @@ def _traced_async[**Args, Result](
         **kwargs: Args.kwargs,
     ) -> Result:
         with ctx.scope(label):
-            for idx, arg in enumerate(args):
-                ctx.attributes(**{f"[{idx}]": f"{arg}"})
-
-            for key, arg in kwargs.items():
-                ctx.attributes(**{key: f"{arg}"})
+            ctx.record(
+                attributes={
+                    f"[{idx}]": f"{arg}" for idx, arg in enumerate(args) if arg is not MISSING
+                }
+            )
+            ctx.record(
+                attributes={key: f"{arg}" for key, arg in kwargs.items() if arg is not MISSING}
+            )
 
             try:
                 result: Result = await function(*args, **kwargs)
-                ctx.event(ResultTrace.of(result))
+                ctx.record(
+                    event="result",
+                    attributes={"value": format_str(result)},
+                )
                 return result
 
             except BaseException as exc:
-                ctx.event(ResultTrace.of(f"{type(exc)}: {exc}"))
+                ctx.record(
+                    event="result",
+                    attributes={"error": f"{type(exc)}: {exc}"},
+                )
                 raise exc
 
     return mimic_function(

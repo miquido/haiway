@@ -20,7 +20,6 @@ from haiway.context import (
 )
 from haiway.helpers import (
     LoggerObservability,
-    ResultTrace,
     asynchronous,
     cache,
     retry,
@@ -87,7 +86,6 @@ __all__ = (
     "ObservabilityMetricRecording",
     "ObservabilityScopeEntering",
     "ObservabilityScopeExiting",
-    "ResultTrace",
     "ScopeContext",
     "ScopeIdentifier",
     "State",
