@@ -1,17 +1,17 @@
 import os
 from collections.abc import Mapping
-from typing import Any, Self, cast, final
+from typing import Any, ClassVar, Self, cast, final
 
 from opentelemetry import metrics, trace
 from opentelemetry._logs import get_logger, set_logger_provider
 from opentelemetry._logs._internal import Logger
 from opentelemetry._logs.severity import SeverityNumber
-from opentelemetry.context import Context
+from opentelemetry.context import Context, attach, detach, get_current
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.metrics._internal import Meter
-from opentelemetry.metrics._internal.instrument import Counter, Histogram
+from opentelemetry.metrics._internal.instrument import Counter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal import LogRecord
 from opentelemetry.sdk._logs._internal.export import (
@@ -21,10 +21,7 @@ from opentelemetry.sdk._logs._internal.export import (
 )
 from opentelemetry.sdk.metrics import MeterProvider as SdkMeterProvider
 from opentelemetry.sdk.metrics._internal.export import MetricExporter
-from opentelemetry.sdk.metrics.export import (
-    ConsoleMetricExporter,
-    PeriodicExportingMetricReader,
-)
+from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SpanExporter
@@ -44,8 +41,8 @@ class ScopeStore:
         "_completed",
         "_counters",
         "_exited",
-        "_histograms",
-        "_span_context",
+        "_token",
+        "context",
         "identifier",
         "logger",
         "meter",
@@ -57,6 +54,7 @@ class ScopeStore:
         self,
         identifier: ScopeIdentifier,
         /,
+        context: Context,
         span: Span,
         meter: Meter,
         logger: Logger,
@@ -64,13 +62,16 @@ class ScopeStore:
         self.identifier: ScopeIdentifier = identifier
         self.nested: list[ScopeStore] = []
         self._counters: dict[str, Counter] = {}
-        self._histograms: dict[str, Histogram] = {}
         self._exited: bool = False
         self._completed: bool = False
         self.span: Span = span
-        self._span_context: SpanContext = span.get_span_context()
         self.meter: Meter = meter
         self.logger: Logger = logger
+        self.context: Context = trace.set_span_in_context(
+            span,
+            context,
+        )
+        self._token: Any = attach(self.context)
 
     @property
     def exited(self) -> bool:
@@ -96,6 +97,8 @@ class ScopeStore:
 
         self._completed = True
         self.span.end()
+
+        detach(self._token)
         return True  # successfully completed
 
     def record_log(
@@ -104,11 +107,12 @@ class ScopeStore:
         /,
         level: ObservabilityLevel,
     ) -> None:
+        span_context: SpanContext = self.span.get_span_context()
         self.logger.emit(
             LogRecord(
-                span_id=self._span_context.span_id,
-                trace_id=self._span_context.trace_id,
-                trace_flags=self._span_context.trace_flags,
+                span_id=span_context.span_id,
+                trace_id=span_context.trace_id,
+                trace_flags=span_context.trace_flags,
                 body=message,
                 severity_text=level.name,
                 severity_number=SEVERITY_MAPPING[level],
@@ -174,14 +178,15 @@ class ScopeStore:
             },
         )
 
-    def record_attribute(
+    def record_attributes(
         self,
-        name: str,
+        attributes: Mapping[str, ObservabilityAttribute],
         /,
-        *,
-        value: ObservabilityAttribute,
     ) -> None:
-        if value is not None and value is not MISSING:
+        for name, value in attributes.items():
+            if value is None or value is MISSING:
+                continue
+
             self.span.set_attribute(
                 name,
                 value=cast(Any, value),
@@ -190,6 +195,9 @@ class ScopeStore:
 
 @final
 class OpenTelemetry:
+    service: ClassVar[str]
+    environment: ClassVar[str]
+
     @classmethod
     def configure(
         cls,
@@ -199,9 +207,11 @@ class OpenTelemetry:
         environment: str,
         otlp_endpoint: str | None = None,
         insecure: bool = True,
-        export_interval_millis: int = 10000,
+        export_interval_millis: int = 5000,
         attributes: Mapping[str, Any] | None = None,
     ) -> type[Self]:
+        cls.service = service
+        cls.environment = environment
         # Create shared resource for both metrics and traces
         resource: Resource = Resource.create(
             {
@@ -274,7 +284,7 @@ class OpenTelemetry:
         cls,
         level: ObservabilityLevel = ObservabilityLevel.INFO,
     ) -> Observability:
-        tracer: Tracer | None = None
+        tracer: Tracer = trace.get_tracer(cls.service)
         meter: Meter | None = None
         root_scope: ScopeIdentifier | None = None
         scopes: dict[str, ScopeStore] = {}
@@ -355,17 +365,12 @@ class OpenTelemetry:
             if not attributes:
                 return
 
-            for attribute, value in attributes.items():
-                scopes[scope.scope_id].record_attribute(
-                    attribute,
-                    value=value,
-                )
+            scopes[scope.scope_id].record_attributes(attributes)
 
         def scope_entering[Metric: State](
             scope: ScopeIdentifier,
             /,
         ) -> None:
-            nonlocal tracer
             assert scope.scope_id not in scopes  # nosec: B101
 
             nonlocal root_scope
@@ -373,17 +378,14 @@ class OpenTelemetry:
 
             scope_store: ScopeStore
             if root_scope is None:
-                tracer = trace.get_tracer(scope.trace_id)
                 meter = metrics.get_meter(scope.trace_id)
+                context: Context = get_current()
                 scope_store = ScopeStore(
                     scope,
+                    context=context,
                     span=tracer.start_span(
                         name=scope.label,
-                        context=Context(
-                            trace_id=scope.trace_id,
-                            scope_id=scope.scope_id,
-                            parent_id=scope.parent_id,
-                        ),
+                        context=context,
                         attributes={
                             "context.trace_id": scope.trace_id,
                             "context.scope_id": scope.scope_id,
@@ -396,21 +398,13 @@ class OpenTelemetry:
                 root_scope = scope
 
             else:
-                assert tracer is not None  # nosec: B101
                 assert meter is not None  # nosec: B101
-
                 scope_store = ScopeStore(
                     scope,
+                    context=scopes[scope.parent_id].context,
                     span=tracer.start_span(
                         name=scope.label,
-                        context=trace.set_span_in_context(
-                            scopes[scope.parent_id].span,
-                            Context(
-                                trace_id=scope.trace_id,
-                                scope_id=scope.scope_id,
-                                parent_id=scope.parent_id,
-                            ),
-                        ),
+                        context=scopes[scope.parent_id].context,
                         attributes={
                             "context.trace_id": scope.trace_id,
                             "context.scope_id": scope.scope_id,
@@ -432,6 +426,7 @@ class OpenTelemetry:
         ) -> None:
             nonlocal root_scope
             nonlocal scopes
+            nonlocal meter
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
 
@@ -446,14 +441,19 @@ class OpenTelemetry:
                 return  # not completed yet or already completed
 
             # try complete parent scopes
-            parent_id: str = scope.parent_id
-            while scopes[parent_id].try_complete():
-                parent_id = scopes[parent_id].identifier.parent_id
+            if scope != root_scope:
+                parent_id: str = scope.parent_id
+                while scopes[parent_id].try_complete():
+                    if scopes[parent_id].identifier == root_scope:
+                        break
+
+                    parent_id = scopes[parent_id].identifier.parent_id
 
             # check for root completion
             if scopes[root_scope.scope_id].completed:
                 # finished root - cleanup state
                 root_scope = None
+                meter = None
                 scopes = {}
 
         return Observability(
