@@ -218,9 +218,13 @@ def LoggerObservability(  # noqa: C901, PLR0915
         )
 
         # try complete parent scopes
-        parent_id: str = scope.parent_id
-        while scopes[parent_id].try_complete():
-            parent_id = scopes[parent_id].identifier.parent_id
+        if scope != root_scope:
+            parent_id: str = scope.parent_id
+            while scopes[parent_id].try_complete():
+                if scopes[parent_id].identifier == root_scope:
+                    break
+
+                parent_id = scopes[parent_id].identifier.parent_id
 
         # check for root completion
         if scopes[root_scope.scope_id].completed:
