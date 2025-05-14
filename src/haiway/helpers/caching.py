@@ -263,7 +263,7 @@ class _SyncCache[**Args, Result]:
         owner: type | None = None,
         /,
     ) -> Callable[Args, Result]:
-        assert owner is None and instance is None, "cache does not work for classes"  # nosec: B101
+        assert instance is None, "cache does not work for classes"  # nosec: B101
         return self
 
     def __call__(
@@ -352,7 +352,7 @@ class _AsyncCache[**Args, Result]:
         owner: type | None = None,
         /,
     ) -> Callable[Args, Coroutine[Any, Any, Result]]:
-        assert owner is None and instance is None, "cache does not work for classes"  # nosec: B101
+        assert instance is None, "cache does not work for classes"  # nosec: B101
         return self
 
     async def __call__(
