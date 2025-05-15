@@ -33,6 +33,37 @@ def traced[**Args, Result](
     level: ObservabilityLevel = ObservabilityLevel.DEBUG,
     label: str | None = None,
 ) -> Callable[[Callable[Args, Result]], Callable[Args, Result]] | Callable[Args, Result]:
+    """
+    Decorator that adds tracing to functions, recording inputs, outputs, and exceptions.
+
+    Automatically records function arguments, return values, and any exceptions
+    within the current observability context. The recorded data can be used for
+    debugging, performance analysis, and understanding program execution flow.
+
+    In non-debug builds (when __debug__ is False), this decorator has no effect
+    and returns the original function to avoid performance impact in production.
+
+    Parameters
+    ----------
+    function: Callable[Args, Result] | None
+        The function to be traced
+    level: ObservabilityLevel
+        The observability level at which to record trace information (default: DEBUG)
+    label: str | None
+        Custom label for the trace; defaults to the function name if not provided
+
+    Returns
+    -------
+    Callable
+        A decorated function that performs the same operation as the original
+        but with added tracing
+
+    Notes
+    -----
+    Works with both synchronous and asynchronous functions. For asynchronous
+    functions, properly awaits the result before recording it.
+    """
+
     def wrap(
         wrapped: Callable[Args, Result],
     ) -> Callable[Args, Result]:

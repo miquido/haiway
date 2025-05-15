@@ -44,6 +44,32 @@ def getenv_bool(
     *,
     required: bool = False,
 ) -> bool | None:
+    """
+    Get a boolean value from an environment variable.
+
+    Interprets 'true', '1', and 't' (case-insensitive) as True,
+    any other value as False.
+
+    Parameters
+    ----------
+    key : str
+        The environment variable name to retrieve
+    default : bool | None, optional
+        Value to return if the environment variable is not set
+    required : bool, default=False
+        If True and the environment variable is not set and no default is provided,
+        raises a ValueError
+
+    Returns
+    -------
+    bool | None
+        The boolean value from the environment variable, or the default value
+
+    Raises
+    ------
+    ValueError
+        If required=True, the environment variable is not set, and no default is provided
+    """
     if value := getenv(key=key):
         return value.lower() in ("true", "1", "t")
 
@@ -85,6 +111,30 @@ def getenv_int(
     *,
     required: bool = False,
 ) -> int | None:
+    """
+    Get an integer value from an environment variable.
+
+    Parameters
+    ----------
+    key : str
+        The environment variable name to retrieve
+    default : int | None, optional
+        Value to return if the environment variable is not set
+    required : bool, default=False
+        If True and the environment variable is not set and no default is provided,
+        raises a ValueError
+
+    Returns
+    -------
+    int | None
+        The integer value from the environment variable, or the default value
+
+    Raises
+    ------
+    ValueError
+        If the environment variable is set but cannot be converted to an integer,
+        or if required=True, the environment variable is not set, and no default is provided
+    """
     if value := getenv(key=key):
         try:
             return int(value)
@@ -130,6 +180,30 @@ def getenv_float(
     *,
     required: bool = False,
 ) -> float | None:
+    """
+    Get a float value from an environment variable.
+
+    Parameters
+    ----------
+    key : str
+        The environment variable name to retrieve
+    default : float | None, optional
+        Value to return if the environment variable is not set
+    required : bool, default=False
+        If True and the environment variable is not set and no default is provided,
+        raises a ValueError
+
+    Returns
+    -------
+    float | None
+        The float value from the environment variable, or the default value
+
+    Raises
+    ------
+    ValueError
+        If the environment variable is set but cannot be converted to a float,
+        or if required=True, the environment variable is not set, and no default is provided
+    """
     if value := getenv(key=key):
         try:
             return float(value)
@@ -175,6 +249,29 @@ def getenv_str(
     *,
     required: bool = False,
 ) -> str | None:
+    """
+    Get a string value from an environment variable.
+
+    Parameters
+    ----------
+    key : str
+        The environment variable name to retrieve
+    default : str | None, optional
+        Value to return if the environment variable is not set
+    required : bool, default=False
+        If True and the environment variable is not set and no default is provided,
+        raises a ValueError
+
+    Returns
+    -------
+    str | None
+        The string value from the environment variable, or the default value
+
+    Raises
+    ------
+    ValueError
+        If required=True, the environment variable is not set, and no default is provided
+    """
     if value := getenv(key=key):
         return value
 
@@ -222,6 +319,31 @@ def getenv_base64[Value](
     decoder: Callable[[bytes], Value],
     required: bool = False,
 ) -> Value | None:
+    """
+    Get a base64-encoded value from an environment variable and decode it.
+
+    Parameters
+    ----------
+    key : str
+        The environment variable name to retrieve
+    default : Value | None, optional
+        Value to return if the environment variable is not set
+    decoder : Callable[[bytes], Value]
+        Function to decode the base64-decoded bytes into the desired type
+    required : bool, default=False
+        If True and the environment variable is not set and no default is provided,
+        raises a ValueError
+
+    Returns
+    -------
+    Value | None
+        The decoded value from the environment variable, or the default value
+
+    Raises
+    ------
+    ValueError
+        If required=True, the environment variable is not set, and no default is provided
+    """
     if value := getenv(key=key):
         return decoder(b64decode(value))
 

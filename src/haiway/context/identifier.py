@@ -8,10 +8,33 @@ __all__ = ("ScopeIdentifier",)
 
 @final
 class ScopeIdentifier:
+    """
+    Identifies and manages scope context identities.
+
+    ScopeIdentifier maintains a context-local scope identity including trace ID,
+    scope ID, and parent ID. It provides a hierarchical structure for tracking
+    execution scopes, supporting both root scopes and nested child scopes.
+
+    This class is immutable after instantiation.
+    """
+
     _context = ContextVar[Self]("ScopeIdentifier")
 
     @classmethod
     def current_trace_id(cls) -> str:
+        """
+        Get the trace ID of the current scope.
+
+        Returns
+        -------
+        str
+            The trace ID of the current scope context
+
+        Raises
+        ------
+        RuntimeError
+            If called outside of a scope context
+        """
         try:
             return ScopeIdentifier._context.get().trace_id
 
@@ -24,6 +47,23 @@ class ScopeIdentifier:
         label: str,
         /,
     ) -> Self:
+        """
+        Create a new scope identifier.
+
+        If called within an existing scope, creates a nested scope with a new ID
+        but the same trace ID. If called outside any scope, creates a root scope
+        with new trace and scope IDs.
+
+        Parameters
+        ----------
+        label: str
+            The name of the scope
+
+        Returns
+        -------
+        Self
+            A newly created scope identifier
+        """
         current: Self
         try:  # check for current scope
             current = cls._context.get()
@@ -121,6 +161,16 @@ class ScopeIdentifier:
 
     @property
     def is_root(self) -> bool:
+        """
+        Check if this scope is a root scope.
+
+        A root scope is one that was created outside of any other scope.
+
+        Returns
+        -------
+        bool
+            True if this is a root scope, False if it's a nested scope
+        """
         return self.trace_id == self.parent_id
 
     def __str__(self) -> str:
@@ -136,6 +186,16 @@ class ScopeIdentifier:
         return hash(self.scope_id)
 
     def __enter__(self) -> None:
+        """
+        Enter this scope identifier's context.
+
+        Sets this identifier as the current scope identifier in the context.
+
+        Raises
+        ------
+        AssertionError
+            If this context is already active
+        """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         object.__setattr__(
             self,
@@ -149,6 +209,25 @@ class ScopeIdentifier:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        """
+        Exit this scope identifier's context.
+
+        Restores the previous scope identifier in the context.
+
+        Parameters
+        ----------
+        exc_type: type[BaseException] | None
+            Type of exception that caused the exit
+        exc_val: BaseException | None
+            Exception instance that caused the exit
+        exc_tb: TracebackType | None
+            Traceback for the exception
+
+        Raises
+        ------
+        AssertionError
+            If this context is not active
+        """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         ScopeIdentifier._context.reset(self._token)
         object.__setattr__(

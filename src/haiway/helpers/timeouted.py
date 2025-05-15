@@ -14,23 +14,38 @@ def timeout[**Args, Result](
     [Callable[Args, Coroutine[Any, Any, Result]]],
     Callable[Args, Coroutine[Any, Any, Result]],
 ]:
-    """\
-    Timeout wrapper for a function call. \
-    When the timeout time will pass before function returns function execution will be \
-    cancelled and TimeoutError exception will raise. Make sure that wrapped \
-    function handles cancellation properly.
-    This wrapper is not thread safe.
+    """
+    Add a timeout to an asynchronous function.
+
+    This decorator enforces a maximum execution time for the decorated function.
+    If the function does not complete within the specified timeout period, it
+    will be cancelled and a TimeoutError will be raised.
 
     Parameters
     ----------
     timeout: float
-        timeout time in seconds
+        Maximum execution time in seconds allowed for the function
 
     Returns
     -------
-    Callable[[Callable[_Args, _Result]], Callable[_Args, _Result]] | Callable[_Args, _Result]
-        function wrapper adding timeout
-    """
+    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Callable[Args, Coroutine[Any, Any, Result]]]
+        A decorator that can be applied to an async function to add timeout behavior
+
+    Notes
+    -----
+    - Works only with asynchronous functions.
+    - The wrapped function will be properly cancelled when the timeout occurs.
+    - Not thread-safe, should only be used within a single event loop.
+    - The original function should handle cancellation properly to ensure
+      resources are released when timeout occurs.
+
+    Examples
+    --------
+    >>> @timeout(5.0)
+    ... async def fetch_data(url):
+    ...     # Will raise TimeoutError if it takes more than 5 seconds
+    ...     return await http_client.get(url)
+    """  # noqa: E501
 
     def _wrap(
         function: Callable[Args, Coroutine[Any, Any, Result]],

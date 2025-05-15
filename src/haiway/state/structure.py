@@ -23,6 +23,15 @@ __all__ = ("State",)
 
 @final
 class StateAttribute[Value]:
+    """
+    Represents an attribute in a State class with its metadata.
+
+    This class holds information about a specific attribute in a State class,
+    including its name, type annotation, default value, and validation rules.
+    It is used internally by the State metaclass to manage state attributes
+    and ensure their immutability and type safety.
+    """
+
     __slots__ = (
         "annotation",
         "default",
@@ -37,6 +46,20 @@ class StateAttribute[Value]:
         default: DefaultValue[Value],
         validator: AttributeValidation[Value],
     ) -> None:
+        """
+        Initialize a new StateAttribute.
+
+        Parameters
+        ----------
+        name : str
+            The name of the attribute
+        annotation : AttributeAnnotation
+            The type annotation of the attribute
+        default : DefaultValue[Value]
+            The default value provider for the attribute
+        validator : AttributeValidation[Value]
+            The validation function for the attribute values
+        """
         self.name: str
         object.__setattr__(
             self,
@@ -67,6 +90,22 @@ class StateAttribute[Value]:
         value: Any | Missing,
         /,
     ) -> Value:
+        """
+        Validate and potentially transform the provided value.
+
+        If the value is MISSING, the default value is used instead.
+        The value (or default) is then passed through the validator.
+
+        Parameters
+        ----------
+        value : Any | Missing
+            The value to validate, or MISSING to use the default
+
+        Returns
+        -------
+        Value
+            The validated and potentially transformed value
+        """
         return self.validator(self.default() if value is MISSING else value)
 
     def __setattr__(
@@ -95,6 +134,21 @@ class StateAttribute[Value]:
     field_specifiers=(DefaultValue,),
 )
 class StateMeta(type):
+    """
+    Metaclass for State classes that manages attribute definitions and validation.
+
+    This metaclass is responsible for:
+    - Processing attribute annotations and defaults
+    - Creating StateAttribute instances for each attribute
+    - Setting up validation for attributes
+    - Managing generic type parameters and specialization
+    - Creating immutable class instances
+
+    The dataclass_transform decorator allows State classes to be treated
+    like dataclasses by static type checkers while using custom initialization
+    and validation logic.
+    """
+
     def __new__(
         cls,
         /,
@@ -104,6 +158,27 @@ class StateMeta(type):
         type_parameters: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
+        """
+        Create a new State class with processed attributes and validation.
+
+        Parameters
+        ----------
+        name : str
+            The name of the new class
+        bases : tuple[type, ...]
+            The base classes
+        namespace : dict[str, Any]
+            The class namespace (attributes and methods)
+        type_parameters : dict[str, Any] | None
+            Type parameters for generic specialization
+        **kwargs : Any
+            Additional arguments for class creation
+
+        Returns
+        -------
+        Any
+            The new class object
+        """
         state_type = type.__new__(
             cls,
             name,
@@ -143,12 +218,45 @@ class StateMeta(type):
         cls,
         value: Any,
         /,
-    ) -> Any: ...
+    ) -> Any:
+        """
+        Placeholder for the validator method that will be implemented in each State class.
+
+        This method validates and potentially transforms a value to ensure it
+        conforms to the class's requirements.
+
+        Parameters
+        ----------
+        value : Any
+            The value to validate
+
+        Returns
+        -------
+        Any
+            The validated value
+        """
+        ...
 
     def __instancecheck__(
         self,
         instance: Any,
     ) -> bool:
+        """
+        Check if an instance is an instance of this class.
+
+        Implements isinstance() behavior for State classes, with special handling
+        for generic type parameters and validation.
+
+        Parameters
+        ----------
+        instance : Any
+            The instance to check
+
+        Returns
+        -------
+        bool
+            True if the instance is an instance of this class, False otherwise
+        """
         # check for type match
         if self.__subclasscheck__(type(instance)):  # pyright: ignore[reportUnknownArgumentType]
             return True
@@ -172,6 +280,27 @@ class StateMeta(type):
         self,
         subclass: type[Any],
     ) -> bool:
+        """
+        Check if a class is a subclass of this class.
+
+        Implements issubclass() behavior for State classes, with special handling
+        for generic type parameters.
+
+        Parameters
+        ----------
+        subclass : type[Any]
+            The class to check
+
+        Returns
+        -------
+        bool
+            True if the class is a subclass of this class, False otherwise
+
+        Raises
+        ------
+        RuntimeError
+            If there is an issue with type parametrization
+        """
         # check if we are the same class for early exit
         if self == subclass:
             return True
@@ -231,6 +360,19 @@ class StateMeta(type):
 def _resolve_default[Value](
     value: DefaultValue[Value] | Value | Missing,
 ) -> DefaultValue[Value]:
+    """
+    Ensure a value is wrapped in a DefaultValue container.
+
+    Parameters
+    ----------
+    value : DefaultValue[Value] | Value | Missing
+        The value or default value container to resolve
+
+    Returns
+    -------
+    DefaultValue[Value]
+        The value wrapped in a DefaultValue container
+    """
     if isinstance(value, DefaultValue):
         return cast(DefaultValue[Value], value)
 
@@ -252,6 +394,44 @@ _types_cache: WeakValueDictionary[
 class State(metaclass=StateMeta):
     """
     Base class for immutable data structures.
+
+    State provides a framework for creating immutable, type-safe data classes
+    with validation. It's designed to represent application state that can be
+    safely shared and updated in a predictable manner.
+
+    Key features:
+    - Immutable: Instances cannot be modified after creation
+    - Type-safe: Attributes are validated based on type annotations
+    - Generic: Can be parameterized with type variables
+    - Declarative: Uses a class-based declaration syntax similar to dataclasses
+    - Validated: Custom validation rules can be applied to attributes
+
+    State classes can be created by subclassing State and declaring attributes:
+
+    ```python
+    class User(State):
+        name: str
+        age: int
+        email: str | None = None
+    ```
+
+    Instances are created using standard constructor syntax:
+
+    ```python
+    user = User(name="Alice", age=30)
+    ```
+
+    New instances with updated values can be created from existing ones:
+
+    ```python
+    updated_user = user.updated(age=31)
+    ```
+
+    Path-based updates are also supported:
+
+    ```python
+    updated_user = user.updating(User._.age, 31)
+    ```
     """
 
     _: ClassVar[Self]
@@ -264,6 +444,27 @@ class State(metaclass=StateMeta):
         cls,
         type_argument: tuple[type[Any], ...] | type[Any],
     ) -> type[Self]:
+        """
+        Create a specialized version of a generic State class.
+
+        This method enables the generic type syntax Class[TypeArg] for State classes.
+
+        Parameters
+        ----------
+        type_argument : tuple[type[Any], ...] | type[Any]
+            The type arguments to specialize the class with
+
+        Returns
+        -------
+        type[Self]
+            A specialized version of the class
+
+        Raises
+        ------
+        AssertionError
+            If the class is not generic or is already specialized,
+            or if the number of type arguments doesn't match the parameters
+        """
         assert Generic in cls.__bases__, "Can't specialize non generic type!"  # nosec: B101
         assert cls.__TYPE_PARAMETERS__ is None, "Can't specialize already specialized type!"  # nosec: B101
 
@@ -322,6 +523,24 @@ class State(metaclass=StateMeta):
         value: Any,
         /,
     ) -> Self:
+        """
+        Validate and convert a value to an instance of this class.
+
+        Parameters
+        ----------
+        value : Any
+            The value to validate and convert
+
+        Returns
+        -------
+        Self
+            An instance of this class
+
+        Raises
+        ------
+        TypeError
+            If the value cannot be converted to an instance of this class
+        """
         match value:
             case validated if isinstance(validated, cls):
                 return validated
@@ -336,6 +555,23 @@ class State(metaclass=StateMeta):
         self,
         **kwargs: Any,
     ) -> None:
+        """
+        Initialize a new State instance.
+
+        Creates a new instance with the provided attribute values.
+        Attributes not specified will use their default values.
+        All attributes are validated according to their type annotations.
+
+        Parameters
+        ----------
+        **kwargs : Any
+            Attribute values for the new instance
+
+        Raises
+        ------
+        Exception
+            If validation fails for any attribute
+        """
         for name, attribute in self.__ATTRIBUTES__.items():
             object.__setattr__(
                 self,  # pyright: ignore[reportUnknownArgumentType]
@@ -354,6 +590,26 @@ class State(metaclass=StateMeta):
         /,
         value: Value,
     ) -> Self:
+        """
+        Create a new instance with an updated value at the specified path.
+
+        Parameters
+        ----------
+        path : AttributePath[Self, Value] | Value
+            An attribute path created with Class._.attribute syntax
+        value : Value
+            The new value for the specified attribute
+
+        Returns
+        -------
+        Self
+            A new instance with the updated value
+
+        Raises
+        ------
+        AssertionError
+            If path is not an AttributePath
+        """
         assert isinstance(  # nosec: B101
             path, AttributePath
         ), "Prepare parameter path by using Self._.path.to.property or explicitly"
@@ -364,15 +620,52 @@ class State(metaclass=StateMeta):
         self,
         **kwargs: Any,
     ) -> Self:
+        """
+        Create a new instance with updated attribute values.
+
+        This method creates a new instance with the same attribute values as this
+        instance, but with any provided values updated.
+
+        Parameters
+        ----------
+        **kwargs : Any
+            New values for attributes to update
+
+        Returns
+        -------
+        Self
+            A new instance with updated values
+        """
         return self.__replace__(**kwargs)
 
     def to_str(self) -> str:
+        """
+        Convert this instance to a string representation.
+
+        Returns
+        -------
+        str
+            A string representation of this instance
+        """
         return self.__str__()
 
     def to_mapping(
         self,
         recursive: bool = False,
     ) -> Mapping[str, Any]:
+        """
+        Convert this instance to a mapping of attribute names to values.
+
+        Parameters
+        ----------
+        recursive : bool, default=False
+            If True, nested State instances are also converted to mappings
+
+        Returns
+        -------
+        Mapping[str, Any]
+            A mapping of attribute names to values
+        """
         dict_result: dict[str, Any] = {}
         for key in self.__ATTRIBUTES__.keys():
             value: Any | Missing = getattr(self, key, MISSING)
@@ -385,6 +678,14 @@ class State(metaclass=StateMeta):
         return dict_result
 
     def __str__(self) -> str:
+        """
+        Get a string representation of this instance.
+
+        Returns
+        -------
+        str
+            A string representation in the format "ClassName(attr1: value1, attr2: value2)"
+        """
         attributes: str = ", ".join([f"{key}: {value}" for key, value in vars(self).items()])
         return f"{self.__class__.__name__}({attributes})"
 
@@ -395,6 +696,22 @@ class State(metaclass=StateMeta):
         self,
         other: Any,
     ) -> bool:
+        """
+        Check if this instance is equal to another object.
+
+        Two State instances are considered equal if they are instances of the
+        same class or subclass and have equal values for all attributes.
+
+        Parameters
+        ----------
+        other : Any
+            The object to compare with
+
+        Returns
+        -------
+        bool
+            True if the objects are equal, False otherwise
+        """
         if not issubclass(other.__class__, self.__class__):
             return False
 
@@ -423,18 +740,59 @@ class State(metaclass=StateMeta):
         )
 
     def __copy__(self) -> Self:
+        """
+        Create a shallow copy of this instance.
+
+        Since State is immutable, this returns the instance itself.
+
+        Returns
+        -------
+        Self
+            This instance
+        """
         return self  # State is immutable, no need to provide an actual copy
 
     def __deepcopy__(
         self,
         memo: dict[int, Any] | None,
     ) -> Self:
+        """
+        Create a deep copy of this instance.
+
+        Since State is immutable, this returns the instance itself.
+
+        Parameters
+        ----------
+        memo : dict[int, Any] | None
+            Memoization dictionary for already copied objects
+
+        Returns
+        -------
+        Self
+            This instance
+        """
         return self  # State is immutable, no need to provide an actual copy
 
     def __replace__(
         self,
         **kwargs: Any,
     ) -> Self:
+        """
+        Create a new instance with replaced attribute values.
+
+        This internal method is used by updated() to create a new instance
+        with updated values.
+
+        Parameters
+        ----------
+        **kwargs : Any
+            New values for attributes to replace
+
+        Returns
+        -------
+        Self
+            A new instance with replaced values
+        """
         return self.__class__(
             **{
                 **vars(self),

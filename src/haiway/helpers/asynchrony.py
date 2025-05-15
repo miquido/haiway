@@ -17,6 +17,24 @@ def wrap_async[**Args, Result](
     function: Callable[Args, Coroutine[Any, Any, Result]] | Callable[Args, Result],
     /,
 ) -> Callable[Args, Coroutine[Any, Any, Result]]:
+    """
+    Convert a synchronous function to an asynchronous one if it isn't already.
+
+    Takes a function that may be either synchronous or asynchronous and ensures it
+    returns a coroutine. If the input function is already asynchronous, it is returned
+    unchanged. If it's synchronous, it wraps it in an async function that executes
+    the original function and returns its result.
+
+    Parameters
+    ----------
+    function: Callable[Args, Coroutine[Any, Any, Result]] | Callable[Args, Result]
+        The function to ensure is asynchronous, can be either sync or async
+
+    Returns
+    -------
+    Callable[Args, Coroutine[Any, Any, Result]]
+        An asynchronous function that returns a coroutine
+    """
     if iscoroutinefunction(function):
         return function
 
@@ -57,6 +75,7 @@ def asynchronous[**Args, Result](
 def asynchronous[**Args, Result](
     function: Callable[Args, Result] | None = None,
     /,
+    *,
     loop: AbstractEventLoop | None = None,
     executor: Executor | Missing = MISSING,
 ) -> (
@@ -66,26 +85,56 @@ def asynchronous[**Args, Result](
     ]
     | Callable[Args, Coroutine[Any, Any, Result]]
 ):
-    """\
-    Wrapper for a sync function to convert it to an async function. \
-    When specified an executor, it can be used to wrap long running or blocking synchronous \
-    operations within coroutines system.
+    """
+    Convert a synchronous function to an asynchronous one that runs in an executor.
+
+    This decorator transforms synchronous, potentially blocking functions into
+    asynchronous coroutines that execute in an event loop's executor, allowing
+    them to be used with async/await syntax without blocking the event loop.
+
+    Can be used as a simple decorator (@asynchronous) or with configuration
+    parameters (@asynchronous(executor=my_executor)).
 
     Parameters
     ----------
-    function: Callable[Args, Result]
-        function to be wrapped as running in loop executor.
+    function: Callable[Args, Result] | None
+        The synchronous function to be wrapped. When used as a simple decorator,
+        this parameter is provided automatically.
     loop: AbstractEventLoop | None
-        loop used to call the function. When None was provided the loop currently running while \
-        executing the function will be used. Default is None.
+        The event loop to run the function in. When None is provided, the currently
+        running loop while executing the function will be used. Default is None.
     executor: Executor | Missing
-        executor used to run the function. When not provided (Missing) default loop executor\
-         will be used.
+        The executor used to run the function. When not provided, the default loop
+        executor will be used. Useful for CPU-bound tasks or operations that would
+        otherwise block the event loop.
 
     Returns
     -------
-    Callable[_Args, _Result]
-        function wrapped to async using loop executor.
+    Callable
+        When used as @asynchronous: Returns the wrapped function that can be awaited.
+        When used as @asynchronous(...): Returns a decorator that can be applied to a function.
+
+    Notes
+    -----
+    The function preserves the original function's signature, docstring, and other attributes.
+    Context variables from the calling context are preserved when executing in the executor.
+
+    Examples
+    --------
+    Basic usage:
+
+    >>> @asynchronous
+    ... def cpu_intensive_task(data):
+    ...     # This runs in the default executor
+    ...     return process_data(data)
+    ...
+    >>> await cpu_intensive_task(my_data)  # Non-blocking
+
+    With custom executor:
+
+    >>> @asynchronous(executor=process_pool)
+    ... def cpu_intensive_task(data):
+    ...     return process_data(data)
     """
 
     def wrap(

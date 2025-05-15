@@ -72,32 +72,73 @@ def retry[**Args, Result](
     delay: Callable[[int, Exception], float] | float | None = None,
     catching: set[type[Exception]] | tuple[type[Exception], ...] | type[Exception] = Exception,
 ) -> Callable[[Callable[Args, Result]], Callable[Args, Result]] | Callable[Args, Result]:
-    """\
-    Function wrapper retrying the wrapped function again on fail. \
-    Works for both sync and async functions. \
-    It is not allowed to be used on class methods. \
-    This wrapper is not thread safe.
+    """
+    Automatically retry a function on failure.
+
+    This decorator attempts to execute a function and, if it fails with a specified
+    exception type, retries the execution up to a configurable number of times,
+    with an optional delay between attempts.
+
+    Can be used as a simple decorator (@retry) or with configuration
+    parameters (@retry(limit=3, delay=1.0)).
 
     Parameters
     ----------
-    function: Callable[_Args_T, _Result_T]
-        function to wrap in auto retry, either sync or async.
+    function: Callable[Args, Result] | None
+        The function to wrap with retry logic. When used as a simple decorator,
+        this parameter is provided automatically.
     limit: int
-        limit of retries, default is 1
+        Maximum number of retry attempts. Default is 1, meaning the function
+        will be called at most twice (initial attempt + 1 retry).
     delay: Callable[[int, Exception], float] | float | None
-        retry delay time in seconds, either concrete value or a function producing it, \
-        default is None (no delay)
-    catching: set[type[Exception]] | type[Exception] | None
-        Exception types that are triggering auto retry. Retry will trigger only when \
-        exceptions of matching types (including subclasses) will occur. CancelledError \
-        will be always propagated even if specified explicitly.
-        Default is Exception - all subclasses of Exception will be handled.
+        Delay between retry attempts in seconds. Can be:
+          - None: No delay between retries (default)
+          - float: Fixed delay in seconds
+          - Callable: A function that calculates delay based on attempt number
+            and the caught exception, allowing for backoff strategies
+    catching: set[type[Exception]] | tuple[type[Exception], ...] | type[Exception]
+        Exception types that should trigger retry. Can be a single exception type,
+        a set, or a tuple of exception types. Default is Exception (all exception
+        types except for CancelledError, which is always propagated).
 
     Returns
     -------
-    Callable[[Callable[_Args_T, _Result_T]], Callable[_Args_T, _Result_T]] | \
-    Callable[_Args_T, _Result_T]
-        function wrapper for adding auto retry or a wrapped function
+    Callable
+        When used as @retry: Returns the wrapped function with retry logic.
+        When used as @retry(...): Returns a decorator that can be applied to a function.
+
+    Notes
+    -----
+    - Works with both synchronous and asynchronous functions.
+    - Not thread-safe; concurrent invocations are not coordinated.
+    - Cannot be used on class methods.
+    - Always propagates asyncio.CancelledError regardless of catching parameter.
+    - The function preserves the original function's signature, docstring, and other attributes.
+
+    Examples
+    --------
+    Basic usage:
+
+    >>> @retry
+    ... def fetch_data():
+    ...     # Will retry once if any exception occurs
+    ...     return external_api.fetch()
+
+    With configuration:
+
+    >>> @retry(limit=3, delay=2.0, catching=ConnectionError)
+    ... async def connect():
+    ...     # Will retry up to 3 times with 2 second delays on ConnectionError
+    ...     return await establish_connection()
+
+    With exponential backoff:
+
+    >>> def backoff(attempt, exception):
+    ...     return 0.5 * (2 ** attempt)  # 1s, 2s, 4s, ...
+    ...
+    >>> @retry(limit=5, delay=backoff)
+    ... def unreliable_operation():
+    ...     return perform_operation()
     """
 
     def _wrap(
