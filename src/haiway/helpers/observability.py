@@ -12,6 +12,13 @@ __all__ = ("LoggerObservability",)
 
 
 class ScopeStore:
+    """
+    Internal class for storing scope information during observability tracking.
+
+    Tracks timing information, nested scopes, and recorded events for a specific scope.
+    Used by LoggerObservability to maintain the hierarchy of scopes and their data.
+    """
+
     __slots__ = (
         "_completed",
         "_exited",
@@ -35,21 +42,44 @@ class ScopeStore:
 
     @property
     def time(self) -> float:
+        """Calculate the elapsed time in seconds since this scope was entered."""
         return (self._completed or monotonic()) - self.entered
 
     @property
     def exited(self) -> bool:
+        """Check if this scope has been exited."""
         return self._exited is not None
 
     def exit(self) -> None:
+        """Mark this scope as exited and record the exit time."""
         assert self._exited is None  # nosec: B101
         self._exited = monotonic()
 
     @property
     def completed(self) -> bool:
+        """
+        Check if this scope and all its nested scopes are completed.
+
+        A scope is considered completed when it has been exited and all its
+        nested scopes have also been completed.
+        """
         return self._completed is not None and all(nested.completed for nested in self.nested)
 
     def try_complete(self) -> bool:
+        """
+        Try to mark this scope as completed.
+
+        A scope can only be completed if:
+        - It has been exited
+        - It has not already been completed
+        - All its nested scopes are completed
+
+        Returns
+        -------
+        bool
+            True if the scope was successfully marked as completed,
+            False if any completion condition was not met
+        """
         if self._exited is None:
             return False  # not elegible for completion yet
 
@@ -69,6 +99,35 @@ def LoggerObservability(  # noqa: C901, PLR0915
     *,
     debug_context: bool = __debug__,
 ) -> Observability:
+    """
+    Create an Observability implementation that uses a standard Python logger.
+
+    This factory function creates an Observability instance that uses a Logger for recording
+    various types of observability data including logs, events, metrics, and attributes.
+    It maintains a hierarchical scope structure that tracks timing information and provides
+    a summary of all recorded data when the root scope exits.
+
+    Parameters
+    ----------
+    logger: Logger | None
+        The logger to use for recording observability data. If None, a logger will be
+        created based on the scope label when the first scope is entered.
+    debug_context: bool
+        Whether to store and display a detailed hierarchical summary when the root scope
+        exits. Defaults to True in debug mode (__debug__) and False otherwise.
+
+    Returns
+    -------
+    Observability
+        An Observability instance that uses the specified logger (or a default one)
+        for recording observability data.
+
+    Notes
+    -----
+    The created Observability instance tracks timing for each scope and records it
+    when the scope exits. When the root scope exits and debug_context is True,
+    it produces a hierarchical summary of all recorded events, metrics, and attributes.
+    """
     root_scope: ScopeIdentifier | None = None
     root_logger: Logger | None = logger
     scopes: dict[str, ScopeStore] = {}
@@ -250,6 +309,19 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
 
 def _tree_summary(scope_store: ScopeStore) -> str:
+    """
+    Generate a hierarchical text representation of a scope and its nested scopes.
+
+    Parameters
+    ----------
+    scope_store: ScopeStore
+        The scope store to generate a summary for
+
+    Returns
+    -------
+    str
+        A formatted string representation of the scope hierarchy with recorded events
+    """
     elements: list[str] = [
         f"┍━ {scope_store.identifier.label} [{scope_store.identifier.scope_id}]:"
     ]

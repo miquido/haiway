@@ -36,6 +36,17 @@ __all__ = ("ctx",)
 
 @final
 class ScopeContext:
+    """
+    Context manager for executing code within a defined scope.
+
+    ScopeContext manages scope-related data and behavior including identity, state,
+    observability, and task coordination. It enforces immutability and provides both
+    synchronous and asynchronous context management interfaces.
+
+    This class should not be instantiated directly; use the ctx.scope() factory method
+    to create scope contexts.
+    """
+
     __slots__ = (
         "_disposables",
         "_identifier",
@@ -248,6 +259,15 @@ class ScopeContext:
 
 @final
 class ctx:
+    """
+    Static access to the current scope context.
+
+    Provides static methods for accessing and manipulating the current scope context,
+    including creating scopes, accessing state, logging, and task management.
+
+    This class is not meant to be instantiated; all methods are static.
+    """
+
     __slots__ = ()
 
     @staticmethod
@@ -420,6 +440,14 @@ class ctx:
     def check_cancellation() -> None:
         """
         Check if current asyncio task is cancelled, raises CancelledError if so.
+
+        Allows cooperative cancellation by checking and responding to cancellation
+        requests at appropriate points in the code.
+
+        Raises
+        ------
+        CancelledError
+            If the current task has been cancelled
         """
 
         if (task := current_task()) and task.cancelled():
@@ -428,7 +456,15 @@ class ctx:
     @staticmethod
     def cancel() -> None:
         """
-        Cancel current asyncio task
+        Cancel current asyncio task.
+
+        Cancels the current running asyncio task. This will result in a CancelledError
+        being raised in the task.
+
+        Raises
+        ------
+        RuntimeError
+            If called outside of an asyncio task
         """
 
         if task := current_task():
@@ -605,7 +641,31 @@ class ctx:
         /,
         *,
         attributes: Mapping[str, ObservabilityAttribute],
-    ) -> None: ...
+    ) -> None:
+        """
+        Record observability data within the current scope context.
+
+        This method has three different forms:
+        1. Record standalone attributes
+        2. Record a named event with optional attributes
+        3. Record a metric with a value and optional unit and attributes
+
+        Parameters
+        ----------
+        level: ObservabilityLevel
+            Severity level for the recording (default: DEBUG)
+        attributes: Mapping[str, ObservabilityAttribute]
+            Key-value attributes to record
+        event: str
+            Name of the event to record
+        metric: str
+            Name of the metric to record
+        value: float | int
+            Numeric value of the metric
+        unit: str | None
+            Optional unit for the metric
+        """
+        ...
 
     @overload
     @staticmethod

@@ -10,6 +10,33 @@ def format_str(  # noqa: PLR0911
     value: Any,
     /,
 ) -> str:
+    """
+    Format any Python value into a readable string representation.
+
+    Creates a human-readable string representation of complex data structures,
+    with proper indentation and formatting for nested structures. This is especially
+    useful for logging, debugging, and observability contexts.
+
+    Parameters
+    ----------
+    value : Any
+        The value to format as a string
+
+    Returns
+    -------
+    str
+        A formatted string representation of the input value
+
+    Notes
+    -----
+    - Strings are quoted, with multi-line strings using triple quotes
+    - Bytes are prefixed with 'b' and quoted
+    - Mappings (like dictionaries) are formatted with keys and values
+    - Sequences (like lists) are formatted with indices and values
+    - Objects are formatted with their attribute names and values
+    - MISSING values are converted to empty strings
+    - Nested structures maintain proper indentation
+    """
     # check for string
     if isinstance(value, str):
         if "\n" in value:

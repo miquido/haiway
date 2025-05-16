@@ -29,6 +29,13 @@ __all__ = (
 
 
 class ObservabilityLevel(IntEnum):
+    """
+    Defines the severity levels for observability recordings.
+
+    These levels correspond to standard logging levels, allowing consistent
+    severity indication across different types of observability records.
+    """
+
     # values from logging package
     ERROR = ERROR_LOGGING
     WARNING = WARNING_LOGGING
@@ -48,10 +55,23 @@ type ObservabilityAttribute = (
     | None
     | Missing
 )
+"""
+A type representing values that can be recorded as observability attributes.
+
+Includes scalar types (strings, numbers, booleans), sequences of these types,
+None, or Missing marker.
+"""
 
 
 @runtime_checkable
 class ObservabilityLogRecording(Protocol):
+    """
+    Protocol for recording log messages in an observability system.
+
+    Implementations should handle formatting and storing log messages
+    with appropriate contextual information from the scope.
+    """
+
     def __call__(
         self,
         scope: ScopeIdentifier,
@@ -65,6 +85,13 @@ class ObservabilityLogRecording(Protocol):
 
 @runtime_checkable
 class ObservabilityEventRecording(Protocol):
+    """
+    Protocol for recording events in an observability system.
+
+    Implementations should handle recording named events with
+    associated attributes and appropriate contextual information.
+    """
+
     def __call__(
         self,
         scope: ScopeIdentifier,
@@ -78,6 +105,13 @@ class ObservabilityEventRecording(Protocol):
 
 @runtime_checkable
 class ObservabilityMetricRecording(Protocol):
+    """
+    Protocol for recording metrics in an observability system.
+
+    Implementations should handle recording numeric measurements with
+    optional units and associated attributes.
+    """
+
     def __call__(
         self,
         scope: ScopeIdentifier,
@@ -93,6 +127,13 @@ class ObservabilityMetricRecording(Protocol):
 
 @runtime_checkable
 class ObservabilityAttributesRecording(Protocol):
+    """
+    Protocol for recording standalone attributes in an observability system.
+
+    Implementations should handle recording contextual attributes
+    that are not directly associated with logs, events, or metrics.
+    """
+
     def __call__(
         self,
         scope: ScopeIdentifier,
@@ -104,6 +145,12 @@ class ObservabilityAttributesRecording(Protocol):
 
 @runtime_checkable
 class ObservabilityScopeEntering(Protocol):
+    """
+    Protocol for handling scope entry in an observability system.
+
+    Implementations should record when execution enters a new scope.
+    """
+
     def __call__[Metric: State](
         self,
         scope: ScopeIdentifier,
@@ -113,6 +160,13 @@ class ObservabilityScopeEntering(Protocol):
 
 @runtime_checkable
 class ObservabilityScopeExiting(Protocol):
+    """
+    Protocol for handling scope exit in an observability system.
+
+    Implementations should record when execution exits a scope,
+    including any exceptions that caused the exit.
+    """
+
     def __call__[Metric: State](
         self,
         scope: ScopeIdentifier,
@@ -123,6 +177,16 @@ class ObservabilityScopeExiting(Protocol):
 
 
 class Observability:  # avoiding State inheritance to prevent propagation as scope state
+    """
+    Container for observability recording functions.
+
+    Provides a unified interface for recording various types of observability
+    data including logs, events, metrics, and attributes. Also handles recording
+    when scopes are entered and exited.
+
+    This class is immutable after initialization.
+    """
+
     __slots__ = (
         "attributes_recording",
         "event_recording",
@@ -141,6 +205,24 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
         scope_entering: ObservabilityScopeEntering,
         scope_exiting: ObservabilityScopeExiting,
     ) -> None:
+        """
+        Initialize an Observability container with recording functions.
+
+        Parameters
+        ----------
+        log_recording: ObservabilityLogRecording
+            Function for recording log messages
+        metric_recording: ObservabilityMetricRecording
+            Function for recording metrics
+        event_recording: ObservabilityEventRecording
+            Function for recording events
+        attributes_recording: ObservabilityAttributesRecording
+            Function for recording attributes
+        scope_entering: ObservabilityScopeEntering
+            Function called when a scope is entered
+        scope_exiting: ObservabilityScopeExiting
+            Function called when a scope is exited
+        """
         self.log_recording: ObservabilityLogRecording
         object.__setattr__(
             self,
@@ -203,6 +285,23 @@ def _logger_observability(
     logger: Logger,
     /,
 ) -> Observability:
+    """
+    Create an Observability instance that uses a Logger for recording.
+
+    Adapts a standard Python logger to the Observability interface,
+    mapping observability concepts to log messages.
+
+    Parameters
+    ----------
+    logger: Logger
+        The logger to use for recording observability data
+
+    Returns
+    -------
+    Observability
+        An Observability instance that uses the logger
+    """
+
     def log_recording(
         scope: ScopeIdentifier,
         /,
@@ -301,6 +400,16 @@ def _logger_observability(
 
 @final
 class ObservabilityContext:
+    """
+    Context manager for observability within a scope.
+
+    Manages observability recording within a context, propagating the
+    appropriate observability handler and scope information. Records
+    scope entry and exit events automatically.
+
+    This class is immutable after initialization.
+    """
+
     _context = ContextVar[Self]("ObservabilityContext")
 
     @classmethod
@@ -311,6 +420,25 @@ class ObservabilityContext:
         *,
         observability: Observability | Logger | None,
     ) -> Self:
+        """
+        Create an observability context for a scope.
+
+        If called within an existing context, inherits the observability
+        handler unless a new one is specified. If called outside any context,
+        creates a new root context with the specified or default observability.
+
+        Parameters
+        ----------
+        scope: ScopeIdentifier
+            The scope identifier this context is associated with
+        observability: Observability | Logger | None
+            The observability handler to use, or None to inherit or create default
+
+        Returns
+        -------
+        Self
+            A new observability context
+        """
         current: Self
         try:  # check for current scope
             current = cls._context.get()
@@ -359,6 +487,22 @@ class ObservabilityContext:
         *args: Any,
         exception: BaseException | None,
     ) -> None:
+        """
+        Record a log message in the current observability context.
+
+        If no context is active, falls back to the root logger.
+
+        Parameters
+        ----------
+        level: ObservabilityLevel
+            The severity level for this log message
+        message: str
+            The log message text, may contain format placeholders
+        *args: Any
+            Format arguments for the message
+        exception: BaseException | None
+            Optional exception to associate with the log
+        """
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
 
@@ -388,6 +532,21 @@ class ObservabilityContext:
         *,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
+        """
+        Record an event in the current observability context.
+
+        Records a named event with associated attributes. Falls back to logging
+        an error if recording fails.
+
+        Parameters
+        ----------
+        level: ObservabilityLevel
+            The severity level for this event
+        event: str
+            The name of the event
+        attributes: Mapping[str, ObservabilityAttribute]
+            Key-value attributes associated with the event
+        """
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
 
@@ -417,6 +576,25 @@ class ObservabilityContext:
         unit: str | None,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
+        """
+        Record a metric in the current observability context.
+
+        Records a numeric measurement with an optional unit and associated attributes.
+        Falls back to logging an error if recording fails.
+
+        Parameters
+        ----------
+        level: ObservabilityLevel
+            The severity level for this metric
+        metric: str
+            The name of the metric
+        value: float | int
+            The numeric value of the metric
+        unit: str | None
+            Optional unit for the metric (e.g., "ms", "bytes")
+        attributes: Mapping[str, ObservabilityAttribute]
+            Key-value attributes associated with the metric
+        """
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
 
@@ -445,6 +623,19 @@ class ObservabilityContext:
         *,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
+        """
+        Record standalone attributes in the current observability context.
+
+        Records key-value attributes not directly associated with a specific log,
+        event, or metric. Falls back to logging an error if recording fails.
+
+        Parameters
+        ----------
+        level: ObservabilityLevel
+            The severity level for these attributes
+        attributes: Mapping[str, ObservabilityAttribute]
+            Key-value attributes to record
+        """
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
 
@@ -512,6 +703,16 @@ class ObservabilityContext:
         )
 
     def __enter__(self) -> None:
+        """
+        Enter this observability context.
+
+        Sets this context as the current one and records scope entry.
+
+        Raises
+        ------
+        AssertionError
+            If attempting to re-enter an already active context
+        """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         object.__setattr__(
             self,
@@ -526,6 +727,25 @@ class ObservabilityContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        """
+        Exit this observability context.
+
+        Restores the previous context and records scope exit.
+
+        Parameters
+        ----------
+        exc_type: type[BaseException] | None
+            Type of exception that caused the exit
+        exc_val: BaseException | None
+            Exception instance that caused the exit
+        exc_tb: TracebackType | None
+            Traceback for the exception
+
+        Raises
+        ------
+        AssertionError
+            If the context is not active
+        """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         ObservabilityContext._context.reset(self._token)
         object.__setattr__(

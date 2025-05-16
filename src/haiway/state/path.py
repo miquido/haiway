@@ -14,19 +14,58 @@ __all__ = ("AttributePath",)
 
 
 class AttributePathComponent(ABC):
+    """
+    Abstract base class for components in an attribute path.
+
+    This class defines the interface for components that make up an attribute path,
+    such as property access, sequence item access, or mapping item access.
+    Each component knows how to access and update values at its position in the path.
+    """
+
     @abstractmethod
     def path_str(
         self,
         current: str | None = None,
         /,
-    ) -> str: ...
+    ) -> str:
+        """
+        Convert this path component to a string representation.
+
+        Parameters
+        ----------
+        current : str | None
+            The current path string to append to
+
+        Returns
+        -------
+        str
+            String representation of the path including this component
+        """
 
     @abstractmethod
     def access(
         self,
         subject: Any,
         /,
-    ) -> Any: ...
+    ) -> Any:
+        """
+        Access the property value from the subject.
+
+        Parameters
+        ----------
+        subject : Any
+            The object to access the property from
+
+        Returns
+        -------
+        Any
+            The value of the property
+
+        Raises
+        ------
+        AttributeError
+            If the property doesn't exist on the subject
+        """
 
     @abstractmethod
     def assigning(
@@ -34,7 +73,28 @@ class AttributePathComponent(ABC):
         subject: Any,
         /,
         value: Any,
-    ) -> Any: ...
+    ) -> Any:
+        """
+        Create a new object with an updated value at this path component.
+
+        Parameters
+        ----------
+        subject : Any
+            The original object to update
+        value : Any
+            The new value to assign at this path component
+
+        Returns
+        -------
+        Any
+            A new object with the updated value
+
+        Raises
+        ------
+        TypeError
+            If the subject cannot be updated with the given value
+        """
+        ...
 
 
 @final
@@ -151,17 +211,43 @@ class PropertyAttributePathComponent(AttributePathComponent):
         current: str | None = None,
         /,
     ) -> str:
-        if current:
-            return f"{current}.{self._name}"
+        """
+        Convert this property component to a string representation.
+
+        Parameters
+        ----------
+        current : str | None
+            The current path string to append to
+
+        Returns
+        -------
+        str
+            String representation with the property appended
+        """
+        if current in (None, ""):
+            return self._name
 
         else:
-            return self._name
+            return f"{current}.{self._name}"
 
     def access(
         self,
         subject: Any,
         /,
     ) -> Any:
+        """
+        Access the property value from the subject.
+
+        Parameters
+        ----------
+        subject : Any
+            The object to access the property from
+
+        Returns
+        -------
+        Any
+            The value of the property
+        """
         return self._access(subject)
 
     def assigning(
@@ -170,11 +256,38 @@ class PropertyAttributePathComponent(AttributePathComponent):
         /,
         value: Any,
     ) -> Any:
+        """
+        Create a new subject with an updated property value.
+
+        Parameters
+        ----------
+        subject : Any
+            The original object
+        value : Any
+            The new value for the property
+
+        Returns
+        -------
+        Any
+            A new object with the updated property value
+
+        Raises
+        ------
+        TypeError
+            If the subject doesn't support property updates
+        """
         return self._assigning(subject, value)
 
 
 @final
-class SequenceItemAttributePathComponent(AttributePathComponent):
+class SequenceItemAttributePathComponent[Owner, Value](AttributePathComponent):
+    """
+    Path component for accessing items in a sequence by index.
+
+    This component represents sequence item access using index notation (seq[index])
+    in an attribute path. It provides type-safe access and updates for sequence items.
+    """
+
     __slots__ = (
         "_access",
         "_assigning",
@@ -269,6 +382,19 @@ class SequenceItemAttributePathComponent(AttributePathComponent):
         current: str | None = None,
         /,
     ) -> str:
+        """
+        Convert this sequence item component to a string representation.
+
+        Parameters
+        ----------
+        current : str | None
+            The current path string to append to
+
+        Returns
+        -------
+        str
+            String representation with the sequence index appended
+        """
         return f"{current or ''}[{self._index}]"
 
     def access(
@@ -276,6 +402,24 @@ class SequenceItemAttributePathComponent(AttributePathComponent):
         subject: Any,
         /,
     ) -> Any:
+        """
+        Access the sequence item from the subject.
+
+        Parameters
+        ----------
+        subject : Any
+            The sequence to access the item from
+
+        Returns
+        -------
+        Any
+            The value at the specified index
+
+        Raises
+        ------
+        IndexError
+            If the index is out of bounds
+        """
         return self._access(subject)
 
     def assigning(
@@ -284,6 +428,26 @@ class SequenceItemAttributePathComponent(AttributePathComponent):
         /,
         value: Any,
     ) -> Any:
+        """
+        Create a new sequence with an updated item value.
+
+        Parameters
+        ----------
+        subject : Any
+            The original sequence
+        value : Any
+            The new value for the item
+
+        Returns
+        -------
+        Any
+            A new sequence with the updated item
+
+        Raises
+        ------
+        TypeError
+            If the subject doesn't support item updates
+        """
         return self._assigning(subject, value)
 
 
@@ -383,6 +547,19 @@ class MappingItemAttributePathComponent(AttributePathComponent):
         current: str | None = None,
         /,
     ) -> str:
+        """
+        Convert this mapping item component to a string representation.
+
+        Parameters
+        ----------
+        current : str | None
+            The current path string to append to
+
+        Returns
+        -------
+        str
+            String representation with the mapping key appended
+        """
         return f"{current or ''}[{self._key}]"
 
     def access(
@@ -390,6 +567,24 @@ class MappingItemAttributePathComponent(AttributePathComponent):
         subject: Any,
         /,
     ) -> Any:
+        """
+        Access the mapping item from the subject.
+
+        Parameters
+        ----------
+        subject : Any
+            The mapping to access the item from
+
+        Returns
+        -------
+        Any
+            The value associated with the key
+
+        Raises
+        ------
+        KeyError
+            If the key doesn't exist in the mapping
+        """
         return self._access(subject)
 
     def assigning(
@@ -398,11 +593,70 @@ class MappingItemAttributePathComponent(AttributePathComponent):
         /,
         value: Any,
     ) -> Any:
+        """
+        Create a new mapping with an updated item value.
+
+        Parameters
+        ----------
+        subject : Any
+            The original mapping
+        value : Any
+            The new value for the item
+
+        Returns
+        -------
+        Any
+            A new mapping with the updated item
+
+        Raises
+        ------
+        TypeError
+            If the subject doesn't support item updates
+        """
         return self._assigning(subject, value)
 
 
 @final
 class AttributePath[Root, Attribute]:
+    """
+    Represents a path to an attribute within a nested structure.
+
+    AttributePath enables type-safe attribute access and updates for complex
+    nested structures, particularly State objects. It provides a fluent interface
+    for building paths using attribute access (obj.attr) and item access (obj[key])
+    syntax.
+
+    The class is generic over two type parameters:
+    - Root: The type of the root object the path starts from
+    - Attribute: The type of the attribute the path points to
+
+    AttributePaths are immutable and can be reused. When applied to different
+    root objects, they will access the same nested path in each object.
+
+    Examples
+    --------
+    Creating paths:
+    ```python
+    # Access user.name
+    User._.name
+
+    # Access users[0].address.city
+    User._.users[0].address.city
+
+    # Access data["key"]
+    Data._["key"]
+    ```
+
+    Using paths:
+    ```python
+    # Get value
+    name = User._.name(user)
+
+    # Update value
+    updated_user = user.updating(User._.name, "New Name")
+    ```
+    """
+
     __slots__ = (
         "__attribute__",
         "__components__",
@@ -425,7 +679,24 @@ class AttributePath[Root, Attribute]:
         /,
         *components: AttributePathComponent,
         attribute: type[Attribute],
-    ) -> None: ...
+    ) -> None:
+        """
+        Initialize a new attribute path.
+
+        Parameters
+        ----------
+        root : type[Root]
+            The root type this path starts from
+        *components : AttributePathComponent
+            Path components defining the traversal from root to attribute
+        attribute : type[Attribute]
+            The type of the attribute at the end of this path
+
+        Raises
+        ------
+        AssertionError
+            If no components are provided and root != attribute
+        """
 
     def __init__(
         self,
@@ -475,9 +746,27 @@ class AttributePath[Root, Attribute]:
 
     @property
     def components(self) -> Sequence[str]:
+        """
+        Get the components of this path as strings.
+
+        Returns
+        -------
+        Sequence[str]
+            String representations of each path component
+        """
         return tuple(component.path_str() for component in self.__components__)
 
     def __str__(self) -> str:
+        """
+        Get a string representation of this path.
+
+        The string starts empty and builds up by appending each component.
+
+        Returns
+        -------
+        str
+            A string representation of the path (e.g., ".attr1.attr2[0]")
+        """
         path: str = ""
         for component in self.__components__:
             path = component.path_str(path)
@@ -485,6 +774,16 @@ class AttributePath[Root, Attribute]:
         return path
 
     def __repr__(self) -> str:
+        """
+        Get a detailed string representation of this path.
+
+        Unlike __str__, this includes the root type name at the beginning.
+
+        Returns
+        -------
+        str
+            A detailed string representation of the path (e.g., "User.name[0]")
+        """
         path: str = self.__root__.__name__
         for component in self.__components__:
             path = component.path_str(path)
@@ -495,6 +794,28 @@ class AttributePath[Root, Attribute]:
         self,
         name: str,
     ) -> Any:
+        """
+        Extend the path with property access to the specified attribute.
+
+        This method is called when using dot notation (path.attribute) on an
+        AttributePath instance. It creates a new AttributePath that includes
+        the additional property access.
+
+        Parameters
+        ----------
+        name : str
+            The attribute name to access
+
+        Returns
+        -------
+        AttributePath
+            A new AttributePath extended with the attribute access
+
+        Raises
+        ------
+        AttributeError
+            If the attribute is not found or cannot be accessed
+        """
         try:
             return object.__getattribute__(self, name)
 
@@ -531,6 +852,54 @@ class AttributePath[Root, Attribute]:
         self,
         key: str | int,
     ) -> Any:
+        """
+        Extend the path with item access using the specified key.
+
+        This method is called when using item access notation (path[key]) on an
+        AttributePath instance. It creates a new AttributePath that includes the
+        additional item access component.
+
+        Parameters
+        ----------
+        key : str | int
+            The key or index to access. String keys are used for mapping access
+            and integer keys for sequence/tuple access.
+
+        Returns
+        -------
+        AttributePath
+            A new AttributePath extended with the item access component
+
+        Raises
+        ------
+        TypeError
+            If the key type is incompatible with the attribute type or if the
+            attribute type does not support item access
+        """
+        """
+        Extend the path with item access using the specified key.
+
+        This method is called when using item access notation (path[key]) on an
+        AttributePath instance. It creates a new AttributePath that includes the
+        additional item access component.
+
+        Parameters
+        ----------
+        key : str | int
+            The key or index to access. String keys are used for mapping access
+            and integer keys for sequence/tuple access.
+
+        Returns
+        -------
+        AttributePath
+            A new AttributePath extended with the item access component
+
+        Raises
+        ------
+        TypeError
+            If the key type is incompatible with the attribute type or if the
+            attribute type does not support item access
+        """
         match _unaliased_origin(self.__attribute__):
             case collections_abc.Mapping | typing.Mapping | builtins.dict:
                 match get_args(_unaliased(self.__attribute__)):
@@ -624,17 +993,63 @@ class AttributePath[Root, Attribute]:
     @overload
     def __call__(
         self,
-        root: Root,
+        source: Root,
         /,
-    ) -> Attribute: ...
+    ) -> Attribute:
+        """
+        Access the attribute value at this path in the source object.
+
+        This overload is used when retrieving a value without updating it.
+
+        Parameters
+        ----------
+        source : Root
+            The source object to access the attribute in
+
+        Returns
+        -------
+        Attribute
+            The attribute value at this path
+
+        Raises
+        ------
+        AttributeError
+            If any component in the path doesn't exist
+        TypeError
+            If any component in the path is of the wrong type
+        """
 
     @overload
     def __call__(
         self,
-        root: Root,
+        source: Root,
         /,
         updated: Attribute,
-    ) -> Root: ...
+    ) -> Root:
+        """
+        Create a new root object with an updated attribute value at this path.
+
+        This overload is used when updating a value.
+
+        Parameters
+        ----------
+        source : Root
+            The source object to update
+        updated : Attribute
+            The new value to set at this path
+
+        Returns
+        -------
+        Root
+            A new root object with the updated attribute value
+
+        Raises
+        ------
+        AttributeError
+            If any component in the path doesn't exist
+        TypeError
+            If any component in the path is of the wrong type
+        """
 
     def __call__(
         self,

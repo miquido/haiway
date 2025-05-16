@@ -34,6 +34,14 @@ __all__ = (
 
 @final
 class AttributeAnnotation:
+    """
+    Represents a type annotation for a State attribute with additional metadata.
+
+    This class encapsulates information about a type annotation, including its
+    origin type, type arguments, whether it's required, and any extra metadata.
+    It's used internally by the State system to track and validate attribute types.
+    """
+
     __slots__ = (
         "arguments",
         "extra",
@@ -49,6 +57,20 @@ class AttributeAnnotation:
         required: bool = True,
         extra: Mapping[str, Any] | None = None,
     ) -> None:
+        """
+        Initialize a new attribute annotation.
+
+        Parameters
+        ----------
+        origin : Any
+            The base type of the annotation (e.g., str, int, List)
+        arguments : Sequence[Any] | None
+            Type arguments for generic types (e.g., T in List[T])
+        required : bool
+            Whether this attribute is required (cannot be omitted)
+        extra : Mapping[str, Any] | None
+            Additional metadata about the annotation
+        """
         self.origin: Any = origin
         self.arguments: Sequence[Any]
         if arguments is None:
@@ -71,6 +93,22 @@ class AttributeAnnotation:
         required: bool,
         /,
     ) -> Self:
+        """
+        Update the required flag for this annotation.
+
+        The resulting required flag is the logical AND of the current
+        flag and the provided value.
+
+        Parameters
+        ----------
+        required : bool
+            New required flag value to combine with the existing one
+
+        Returns
+        -------
+        Self
+            This annotation with the updated required flag
+        """
         object.__setattr__(
             self,
             "required",
@@ -80,6 +118,17 @@ class AttributeAnnotation:
         return self
 
     def __str__(self) -> str:
+        """
+        Convert this annotation to a string representation.
+
+        Returns a readable string representation of the type, including
+        its origin type and any type arguments.
+
+        Returns
+        -------
+        str
+            String representation of this annotation
+        """
         if alias := self.extra.get("TYPE_ALIAS"):
             return alias
 
@@ -103,6 +152,29 @@ def attribute_annotations(
     /,
     type_parameters: Mapping[str, Any],
 ) -> Mapping[str, AttributeAnnotation]:
+    """
+    Extract and process type annotations from a class.
+
+    This function analyzes a class's type hints and converts them to AttributeAnnotation
+    objects, which provide rich type information used by the State system for validation
+    and other type-related operations.
+
+    Parameters
+    ----------
+    cls : type[Any]
+        The class to extract annotations from
+    type_parameters : Mapping[str, Any]
+        Type parameters to substitute in generic type annotations
+
+    Returns
+    -------
+    Mapping[str, AttributeAnnotation]
+        A mapping of attribute names to their processed type annotations
+
+    Notes
+    -----
+    Private attributes (prefixed with underscore) and ClassVars are ignored.
+    """
     self_annotation = AttributeAnnotation(
         origin=cls,
         # ignore arguments here, State (and draive.DataModel) will have them resolved at this stage
@@ -573,6 +645,38 @@ def resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912
     self_annotation: AttributeAnnotation | None,
     recursion_guard: MutableMapping[str, AttributeAnnotation],
 ) -> AttributeAnnotation:
+    """
+    Resolve a Python type annotation into an AttributeAnnotation object.
+
+    This function analyzes any Python type annotation and converts it into
+    an AttributeAnnotation that captures its structure, including handling
+    for special types like unions, optionals, literals, generics, etc.
+
+    Parameters
+    ----------
+    annotation : Any
+        The type annotation to resolve
+    module : str
+        The module where the annotation is defined (for resolving ForwardRefs)
+    type_parameters : Mapping[str, Any]
+        Type parameters to substitute in generic type annotations
+    self_annotation : AttributeAnnotation | None
+        The annotation for Self references, if available
+    recursion_guard : MutableMapping[str, AttributeAnnotation]
+        Cache to prevent infinite recursion for recursive types
+
+    Returns
+    -------
+    AttributeAnnotation
+        A resolved AttributeAnnotation representing the input annotation
+
+    Raises
+    ------
+    RuntimeError
+        If a Self annotation is used but self_annotation is not provided
+    TypeError
+        If the annotation is of an unsupported type
+    """
     match get_origin(annotation) or annotation:
         case types.NoneType | None:
             return _resolve_none(

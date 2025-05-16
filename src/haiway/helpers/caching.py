@@ -17,6 +17,17 @@ __all__ = (
 
 
 class CacheMakeKey[**Args, Key](Protocol):
+    """
+    Protocol for generating cache keys from function arguments.
+
+    Implementations of this protocol are responsible for creating a unique key
+    based on the arguments passed to a function, which can then be used for
+    cache lookups.
+
+    The key must be consistent for the same set of arguments, and different
+    for different sets of arguments that should be cached separately.
+    """
+
     def __call__(
         self,
         *args: Args.args,
@@ -25,6 +36,16 @@ class CacheMakeKey[**Args, Key](Protocol):
 
 
 class CacheRead[Key, Value](Protocol):
+    """
+    Protocol for reading values from a cache.
+
+    Implementations of this protocol are responsible for retrieving cached values
+    based on a key. If the key is not present in the cache, None should be returned.
+
+    This is designed as an asynchronous operation to support remote caches where
+    retrieval might involve network operations.
+    """
+
     async def __call__(
         self,
         key: Key,
@@ -32,6 +53,16 @@ class CacheRead[Key, Value](Protocol):
 
 
 class CacheWrite[Key, Value](Protocol):
+    """
+    Protocol for writing values to a cache.
+
+    Implementations of this protocol are responsible for storing values in a cache
+    using the specified key. Any existing value with the same key should be overwritten.
+
+    This is designed as an asynchronous operation to support remote caches where
+    writing might involve network operations.
+    """
+
     async def __call__(
         self,
         key: Key,

@@ -8,6 +8,21 @@ __all__ = ("AttributeRequirement",)
 
 @final
 class AttributeRequirement[Root]:
+    """
+    Represents a requirement or constraint on an attribute value.
+
+    This class provides a way to define and check constraints on attribute values
+    within State objects. It supports various comparison operations like equality,
+    containment, and logical combinations of requirements.
+
+    The class is generic over the Root type, which is the type of object that
+    contains the attribute being constrained.
+
+    Requirements can be combined using logical operators:
+    - & (AND): Both requirements must be met
+    - | (OR): At least one requirement must be met
+    """
+
     @classmethod
     def equal[Parameter](
         cls,
@@ -15,6 +30,26 @@ class AttributeRequirement[Root]:
         /,
         path: AttributePath[Root, Parameter] | Parameter,
     ) -> Self:
+        """
+        Create a requirement that an attribute equals a specific value.
+
+        Parameters
+        ----------
+        value : Parameter
+            The value to check equality against
+        path : AttributePath[Root, Parameter] | Parameter
+            The path to the attribute to check
+
+        Returns
+        -------
+        Self
+            A new requirement instance
+
+        Raises
+        ------
+        AssertionError
+            If path is not an AttributePath
+        """
         assert isinstance(  # nosec: B101
             path, AttributePath
         ), "Prepare attribute path by using Self._.path.to.property or explicitly"
@@ -38,6 +73,26 @@ class AttributeRequirement[Root]:
         /,
         path: AttributePath[Root, Parameter] | Parameter,
     ) -> Self:
+        """
+        Create a requirement that an attribute does not equal a specific value.
+
+        Parameters
+        ----------
+        value : Parameter
+            The value to check inequality against
+        path : AttributePath[Root, Parameter] | Parameter
+            The path to the attribute to check
+
+        Returns
+        -------
+        Self
+            A new requirement instance
+
+        Raises
+        ------
+        AssertionError
+            If path is not an AttributePath
+        """
         assert isinstance(  # nosec: B101
             path, AttributePath
         ), "Prepare attribute path by using Self._.path.to.property or explicitly"
@@ -68,6 +123,26 @@ class AttributeRequirement[Root]:
         | list[Parameter]
         | set[Parameter],
     ) -> Self:
+        """
+        Create a requirement that a collection attribute contains a specific value.
+
+        Parameters
+        ----------
+        value : Parameter
+            The value that should be contained in the collection
+        path : AttributePath[Root, Collection[Parameter] | ...] | Collection[Parameter] | ...
+            The path to the collection attribute to check
+
+        Returns
+        -------
+        Self
+            A new requirement instance
+
+        Raises
+        ------
+        AssertionError
+            If path is not an AttributePath
+        """
         assert isinstance(  # nosec: B101
             path, AttributePath
         ), "Prepare attribute path by using Self._.path.to.property or explicitly"
@@ -98,6 +173,26 @@ class AttributeRequirement[Root]:
         | list[Parameter]
         | set[Parameter],
     ) -> Self:
+        """
+        Create a requirement that a collection attribute contains any of the specified values.
+
+        Parameters
+        ----------
+        value : Collection[Parameter]
+            The collection of values, any of which should be contained
+        path : AttributePath[Root, Collection[Parameter] | ...] | Collection[Parameter] | ...
+            The path to the collection attribute to check
+
+        Returns
+        -------
+        Self
+            A new requirement instance
+
+        Raises
+        ------
+        AssertionError
+            If path is not an AttributePath
+        """
         assert isinstance(  # nosec: B101
             path, AttributePath
         ), "Prepare attribute path by using Self._.path.to.property or explicitly"
@@ -123,6 +218,26 @@ class AttributeRequirement[Root]:
         /,
         path: AttributePath[Root, Parameter] | Parameter,
     ) -> Self:
+        """
+        Create a requirement that an attribute value is contained in a specific collection.
+
+        Parameters
+        ----------
+        value : Collection[Parameter]
+            The collection that should contain the attribute value
+        path : AttributePath[Root, Parameter] | Parameter
+            The path to the attribute to check
+
+        Returns
+        -------
+        Self
+            A new requirement instance
+
+        Raises
+        ------
+        AssertionError
+            If path is not an AttributePath
+        """
         assert isinstance(  # nosec: B101
             path, AttributePath
         ), "Prepare attribute path by using Self._.path.to.property or explicitly"
@@ -161,6 +276,20 @@ class AttributeRequirement[Root]:
         rhs: Any,
         check: Callable[[Root], None],
     ) -> None:
+        """
+        Initialize a new attribute requirement.
+
+        Parameters
+        ----------
+        lhs : Any
+            The left-hand side of the requirement (typically a path or value)
+        operator : Literal["equal", "not_equal", "contains", "contains_any", "contained_in", "and", "or"]
+            The operator that defines the type of requirement
+        rhs : Any
+            The right-hand side of the requirement (typically a value or path)
+        check : Callable[[Root], None]
+            A function that validates the requirement, raising ValueError if not met
+        """  # noqa: E501
         self.lhs: Any
         object.__setattr__(
             self,
@@ -198,6 +327,23 @@ class AttributeRequirement[Root]:
         self,
         other: Self,
     ) -> Self:
+        """
+        Combine this requirement with another using logical AND.
+
+        Creates a new requirement that is satisfied only if both this requirement
+        and the other requirement are satisfied.
+
+        Parameters
+        ----------
+        other : Self
+            Another requirement to combine with this one
+
+        Returns
+        -------
+        Self
+            A new requirement representing the logical AND of both requirements
+        """
+
         def check_and(root: Root) -> None:
             self.check(root)
             other.check(root)
@@ -213,6 +359,23 @@ class AttributeRequirement[Root]:
         self,
         other: Self,
     ) -> Self:
+        """
+        Combine this requirement with another using logical OR.
+
+        Creates a new requirement that is satisfied if either this requirement
+        or the other requirement is satisfied.
+
+        Parameters
+        ----------
+        other : Self
+            Another requirement to combine with this one
+
+        Returns
+        -------
+        Self
+            A new requirement representing the logical OR of both requirements
+        """
+
         def check_or(root: Root) -> None:
             try:
                 self.check(root)
@@ -233,6 +396,26 @@ class AttributeRequirement[Root]:
         *,
         raise_exception: bool = True,
     ) -> bool:
+        """
+        Check if the requirement is satisfied by the given root object.
+
+        Parameters
+        ----------
+        root : Root
+            The object to check the requirement against
+        raise_exception : bool, default=True
+            If True, raises an exception when the requirement is not met
+
+        Returns
+        -------
+        bool
+            True if the requirement is satisfied, False otherwise
+
+        Raises
+        ------
+        ValueError
+            If the requirement is not satisfied and raise_exception is True
+        """
         try:
             self._check(root)
             return True
@@ -248,6 +431,19 @@ class AttributeRequirement[Root]:
         self,
         values: Iterable[Root],
     ) -> list[Root]:
+        """
+        Filter an iterable of values, keeping only those that satisfy this requirement.
+
+        Parameters
+        ----------
+        values : Iterable[Root]
+            The values to filter
+
+        Returns
+        -------
+        list[Root]
+            A list containing only the values that satisfy this requirement
+        """
         return [value for value in values if self.check(value, raise_exception=False)]
 
     def __setattr__(

@@ -37,6 +37,14 @@ __all__ = ("OpenTelemetry",)
 
 
 class ScopeStore:
+    """
+    Internal class for storing and managing OpenTelemetry scope data.
+
+    This class tracks scope state including its span, meter, logger, and context.
+    It manages the lifecycle of OpenTelemetry resources for a specific scope,
+    including recording logs, metrics, events, and maintaining the context hierarchy.
+    """
+
     __slots__ = (
         "_completed",
         "_counters",
@@ -59,6 +67,22 @@ class ScopeStore:
         meter: Meter,
         logger: Logger,
     ) -> None:
+        """
+        Initialize a new scope store with OpenTelemetry resources.
+
+        Parameters
+        ----------
+        identifier : ScopeIdentifier
+            The identifier for this scope
+        context : Context
+            The OpenTelemetry context for this scope
+        span : Span
+            The OpenTelemetry span for this scope
+        meter : Meter
+            The OpenTelemetry meter for recording metrics
+        logger : Logger
+            The OpenTelemetry logger for recording logs
+        """
         self.identifier: ScopeIdentifier = identifier
         self.nested: list[ScopeStore] = []
         self._counters: dict[str, Counter] = {}
@@ -75,17 +99,59 @@ class ScopeStore:
 
     @property
     def exited(self) -> bool:
+        """
+        Check if this scope has been marked as exited.
+
+        Returns
+        -------
+        bool
+            True if the scope has been exited, False otherwise
+        """
         return self._exited
 
     def exit(self) -> None:
+        """
+        Mark this scope as exited.
+
+        Raises
+        ------
+        AssertionError
+            If the scope has already been exited
+        """
         assert not self._exited  # nosec: B101
         self._exited = True
 
     @property
     def completed(self) -> bool:
+        """
+        Check if this scope and all its nested scopes are completed.
+
+        A scope is considered completed when it has been marked as completed
+        and all of its nested scopes are also completed.
+
+        Returns
+        -------
+        bool
+            True if the scope and all nested scopes are completed
+        """
         return self._completed and all(nested.completed for nested in self.nested)
 
     def try_complete(self) -> bool:
+        """
+        Try to complete this scope if all conditions are met.
+
+        A scope can be completed if:
+        - It has been exited
+        - It has not already been completed
+        - All nested scopes are completed
+
+        When completed, the span is ended and the context token is detached.
+
+        Returns
+        -------
+        bool
+            True if the scope was successfully completed, False otherwise
+        """
         if not self._exited:
             return False  # not elegible for completion yet
 
@@ -107,6 +173,19 @@ class ScopeStore:
         /,
         level: ObservabilityLevel,
     ) -> None:
+        """
+        Record a log message with the specified level.
+
+        Creates a LogRecord with the current span context and scope identifiers,
+        and emits it through the OpenTelemetry logger.
+
+        Parameters
+        ----------
+        message : str
+            The log message to record
+        level : ObservabilityLevel
+            The severity level of the log
+        """
         span_context: SpanContext = self.span.get_span_context()
         self.logger.emit(
             LogRecord(
@@ -129,6 +208,14 @@ class ScopeStore:
         exception: BaseException,
         /,
     ) -> None:
+        """
+        Record an exception in the current span.
+
+        Parameters
+        ----------
+        exception : BaseException
+            The exception to record
+        """
         self.span.record_exception(exception)
 
     def record_event(
@@ -138,6 +225,16 @@ class ScopeStore:
         *,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
+        """
+        Record an event in the current span.
+
+        Parameters
+        ----------
+        event : str
+            The name of the event to record
+        attributes : Mapping[str, ObservabilityAttribute]
+            Attributes to attach to the event
+        """
         self.span.add_event(
             event,
             attributes={
@@ -156,6 +253,23 @@ class ScopeStore:
         unit: str | None,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
+        """
+        Record a metric with the given name, value, and attributes.
+
+        Creates a counter if one does not already exist for the metric name,
+        and adds the value to it with the provided attributes.
+
+        Parameters
+        ----------
+        name : str
+            The name of the metric to record
+        value : float | int
+            The value to add to the metric
+        unit : str | None
+            The unit of the metric (if any)
+        attributes : Mapping[str, ObservabilityAttribute]
+            Attributes to attach to the metric
+        """
         if name not in self._counters:
             self._counters[name] = self.meter.create_counter(
                 name=name,
@@ -183,6 +297,16 @@ class ScopeStore:
         attributes: Mapping[str, ObservabilityAttribute],
         /,
     ) -> None:
+        """
+        Record attributes in the current span.
+
+        Sets each attribute on the span, skipping None and MISSING values.
+
+        Parameters
+        ----------
+        attributes : Mapping[str, ObservabilityAttribute]
+            Attributes to set on the span
+        """
         for name, value in attributes.items():
             if value is None or value is MISSING:
                 continue
@@ -195,6 +319,17 @@ class ScopeStore:
 
 @final
 class OpenTelemetry:
+    """
+    Integration with OpenTelemetry for distributed tracing, metrics, and logging.
+
+    This class provides a bridge between Haiway's observability abstractions and
+    the OpenTelemetry SDK, enabling distributed tracing, metrics collection, and
+    structured logging with minimal configuration.
+
+    The class must be configured once at application startup using the configure()
+    class method before it can be used.
+    """
+
     service: ClassVar[str]
     environment: ClassVar[str]
 
@@ -210,6 +345,36 @@ class OpenTelemetry:
         export_interval_millis: int = 5000,
         attributes: Mapping[str, Any] | None = None,
     ) -> type[Self]:
+        """
+        Configure the OpenTelemetry integration.
+
+        This method must be called once at application startup to configure the
+        OpenTelemetry SDK with the appropriate service information, exporters,
+        and resource attributes.
+
+        Parameters
+        ----------
+        service : str
+            The name of the service
+        version : str
+            The version of the service
+        environment : str
+            The deployment environment (e.g., "production", "staging")
+        otlp_endpoint : str | None, optional
+            The OTLP endpoint URL to export telemetry data to. If None, console
+            exporters will be used instead.
+        insecure : bool, default=True
+            Whether to use insecure connections to the OTLP endpoint
+        export_interval_millis : int, default=5000
+            How often to export metrics, in milliseconds
+        attributes : Mapping[str, Any] | None, optional
+            Additional resource attributes to include with all telemetry
+
+        Returns
+        -------
+        type[Self]
+            The OpenTelemetry class, for method chaining
+        """
         cls.service = service
         cls.environment = environment
         # Create shared resource for both metrics and traces
@@ -284,6 +449,28 @@ class OpenTelemetry:
         cls,
         level: ObservabilityLevel = ObservabilityLevel.INFO,
     ) -> Observability:
+        """
+        Create an Observability implementation using OpenTelemetry.
+
+        This method creates an Observability implementation that bridges Haiway's
+        observability abstractions to OpenTelemetry, allowing transparent usage
+        of OpenTelemetry for distributed tracing, metrics, and logging.
+
+        Parameters
+        ----------
+        level : ObservabilityLevel, default=ObservabilityLevel.INFO
+            The minimum observability level to record
+
+        Returns
+        -------
+        Observability
+            An Observability implementation that uses OpenTelemetry
+
+        Notes
+        -----
+        The OpenTelemetry class must be configured using configure() before
+        calling this method.
+        """
         tracer: Tracer = trace.get_tracer(cls.service)
         meter: Meter | None = None
         root_scope: ScopeIdentifier | None = None
@@ -472,3 +659,4 @@ SEVERITY_MAPPING = {
     ObservabilityLevel.WARNING: SeverityNumber.WARN,
     ObservabilityLevel.ERROR: SeverityNumber.ERROR,
 }
+"""Mapping from Haiway ObservabilityLevel to OpenTelemetry SeverityNumber."""

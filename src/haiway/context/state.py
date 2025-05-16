@@ -16,6 +16,14 @@ __all__ = (
 
 @final
 class ScopeState:
+    """
+    Container for state objects within a scope.
+
+    Stores state objects by their type, allowing retrieval by type.
+    Only one state of a given type can be stored at a time.
+    This class is immutable after initialization.
+    """
+
     __slots__ = ("_state",)
 
     def __init__(
@@ -54,6 +62,30 @@ class ScopeState:
         /,
         default: StateType | None = None,
     ) -> StateType:
+        """
+        Get a state object by its type.
+
+        If the state type is not found, attempts to use a provided default
+        or instantiate a new instance of the type. Raises MissingState
+        if neither is possible.
+
+        Parameters
+        ----------
+        state: type[StateType]
+            The type of state to retrieve
+        default: StateType | None
+            Optional default value to use if state not found
+
+        Returns
+        -------
+        StateType
+            The requested state object
+
+        Raises
+        ------
+        MissingState
+            If state not found and default not provided or instantiation fails
+        """
         if state in self._state:
             return cast(StateType, self._state[state])
 
@@ -77,6 +109,22 @@ class ScopeState:
         self,
         state: Iterable[State],
     ) -> Self:
+        """
+        Create a new ScopeState with updated state objects.
+
+        Combines the current state with new state objects, with new state
+        objects overriding existing ones of the same type.
+
+        Parameters
+        ----------
+        state: Iterable[State]
+            New state objects to add or replace
+
+        Returns
+        -------
+        Self
+            A new ScopeState with the combined state
+        """
         if state:
             return self.__class__(
                 [
@@ -91,6 +139,14 @@ class ScopeState:
 
 @final
 class StateContext:
+    """
+    Context manager for state within a scope.
+
+    Manages state propagation and access within a context. Provides
+    methods to retrieve state by type and create updated state contexts.
+    This class is immutable after initialization.
+    """
+
     _context = ContextVar[ScopeState]("StateContext")
 
     @classmethod
@@ -100,6 +156,31 @@ class StateContext:
         /,
         default: StateType | None = None,
     ) -> StateType:
+        """
+        Get a state object by type from the current context.
+
+        Retrieves a state object of the specified type from the current context.
+        If not found, uses the provided default or attempts to create a new instance.
+
+        Parameters
+        ----------
+        state: type[StateType]
+            The type of state to retrieve
+        default: StateType | None
+            Optional default value to use if state not found
+
+        Returns
+        -------
+        StateType
+            The requested state object
+
+        Raises
+        ------
+        MissingContext
+            If called outside of a state context
+        MissingState
+            If state not found and default not provided or instantiation fails
+        """
         try:
             return cls._context.get().state(state, default=default)
 
@@ -112,6 +193,22 @@ class StateContext:
         state: Iterable[State],
         /,
     ) -> Self:
+        """
+        Create a new StateContext with updated state.
+
+        If called within an existing context, inherits and updates that context's state.
+        If called outside any context, creates a new root context.
+
+        Parameters
+        ----------
+        state: Iterable[State]
+            New state objects to add or replace
+
+        Returns
+        -------
+        Self
+            A new StateContext with the combined state
+        """
         try:
             # update current scope context
             return cls(state=cls._context.get().updated(state=state))
@@ -161,6 +258,16 @@ class StateContext:
         )
 
     def __enter__(self) -> None:
+        """
+        Enter this state context.
+
+        Sets this context's state as the current state in the context.
+
+        Raises
+        ------
+        AssertionError
+            If attempting to re-enter an already active context
+        """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         object.__setattr__(
             self,
@@ -174,6 +281,25 @@ class StateContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        """
+        Exit this state context.
+
+        Restores the previous state context.
+
+        Parameters
+        ----------
+        exc_type: type[BaseException] | None
+            Type of exception that caused the exit
+        exc_val: BaseException | None
+            Exception instance that caused the exit
+        exc_tb: TracebackType | None
+            Traceback for the exception
+
+        Raises
+        ------
+        AssertionError
+            If the context is not active
+        """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         StateContext._context.reset(self._token)
         object.__setattr__(
