@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from logging import Logger, getLogger
 from time import monotonic
 from typing import Any
+from uuid import UUID, uuid4
 
 from haiway.context import Observability, ObservabilityLevel, ScopeIdentifier
 from haiway.context.observability import ObservabilityAttribute
@@ -130,7 +131,16 @@ def LoggerObservability(  # noqa: C901, PLR0915
     """
     root_scope: ScopeIdentifier | None = None
     root_logger: Logger | None = logger
-    scopes: dict[str, ScopeStore] = {}
+    scopes: dict[UUID, ScopeStore] = {}
+
+    trace_id: UUID = uuid4()
+    trace_id_hex: str = trace_id.hex
+
+    def trace_identifying(
+        scope: ScopeIdentifier,
+        /,
+    ) -> UUID:
+        return trace_id
 
     def log_recording(
         scope: ScopeIdentifier,
@@ -146,7 +156,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
         root_logger.log(
             level,
-            f"{scope.unique_name} {message}",
+            f"[{trace_id_hex}] {scope.unique_name} {message}",
             *args,
             exc_info=exception,
         )
@@ -169,7 +179,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
         root_logger.log(
             level,
-            f"{scope.unique_name} {event_str}",
+            f"[{trace_id_hex}] {scope.unique_name} {event_str}",
         )
 
     def metric_recording(
@@ -188,17 +198,17 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
         metric_str: str
         if attributes:
-            metric_str = f"Metric: {metric} = {value}{unit or ''}\n{format_str(attributes)}"
+            metric_str = f"Metric: {metric} = {value} {unit or ''}\n{format_str(attributes)}"
 
         else:
-            metric_str = f"Metric: {metric} = {value}{unit or ''}"
+            metric_str = f"Metric: {metric} = {value} {unit or ''}"
 
         if debug_context:  # store only for summary
             scopes[scope.scope_id].store.append(metric_str)
 
         root_logger.log(
             level,
-            f"{scope.unique_name} {metric_str}",
+            f"[{trace_id_hex}] {scope.unique_name} {metric_str}",
         )
 
     def attributes_recording(
@@ -219,7 +229,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
         root_logger.log(
             level,
-            attributes_str,
+            f"[{trace_id_hex}] {scope.unique_name} {attributes_str}",
         )
 
     def scope_entering[Metric: State](
@@ -242,7 +252,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         assert root_logger is not None  # nosec: B101
         root_logger.log(
             ObservabilityLevel.INFO,
-            f"{scope.unique_name} Entering scope: {scope.label}",
+            f"[{trace_id_hex}] {scope.unique_name} Entering scope: {scope.label}",
         )
 
     def scope_exiting[Metric: State](
@@ -265,7 +275,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
         root_logger.log(
             ObservabilityLevel.INFO,
-            f"{scope.unique_name} Exiting scope: {scope.label}",
+            f"[{trace_id_hex}] {scope.unique_name} Exiting scope: {scope.label}",
         )
         metric_str: str = f"Metric - scope_time:{scopes[scope.scope_id].time:.3f}s"
         if debug_context:  # store only for summary
@@ -273,12 +283,12 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
         root_logger.log(
             ObservabilityLevel.INFO,
-            f"{scope.unique_name} {metric_str}",
+            f"[{trace_id_hex}] {scope.unique_name} {metric_str}",
         )
 
         # try complete parent scopes
         if scope != root_scope:
-            parent_id: str = scope.parent_id
+            parent_id: UUID = scope.parent_id
             while scopes[parent_id].try_complete():
                 if scopes[parent_id].identifier == root_scope:
                     break
@@ -299,6 +309,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
             scopes = {}
 
     return Observability(
+        trace_identifying=trace_identifying,
         log_recording=log_recording,
         event_recording=event_recording,
         metric_recording=metric_recording,

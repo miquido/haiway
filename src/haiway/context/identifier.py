@@ -1,7 +1,7 @@
 from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import Any, Self, final
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 __all__ = ("ScopeIdentifier",)
 
@@ -11,7 +11,7 @@ class ScopeIdentifier:
     """
     Identifies and manages scope context identities.
 
-    ScopeIdentifier maintains a context-local scope identity including trace ID,
+    ScopeIdentifier maintains a context-local scope identity including
     scope ID, and parent ID. It provides a hierarchical structure for tracking
     execution scopes, supporting both root scopes and nested child scopes.
 
@@ -21,25 +21,11 @@ class ScopeIdentifier:
     _context = ContextVar[Self]("ScopeIdentifier")
 
     @classmethod
-    def current_trace_id(cls) -> str:
-        """
-        Get the trace ID of the current scope.
-
-        Returns
-        -------
-        str
-            The trace ID of the current scope context
-
-        Raises
-        ------
-        RuntimeError
-            If called outside of a scope context
-        """
-        try:
-            return ScopeIdentifier._context.get().trace_id
-
-        except LookupError as exc:
-            raise RuntimeError("Attempting to access scope identifier outside of scope") from exc
+    def current(
+        cls,
+        /,
+    ) -> Self:
+        return cls._context.get()
 
     @classmethod
     def scope(
@@ -50,9 +36,8 @@ class ScopeIdentifier:
         """
         Create a new scope identifier.
 
-        If called within an existing scope, creates a nested scope with a new ID
-        but the same trace ID. If called outside any scope, creates a root scope
-        with new trace and scope IDs.
+        If called within an existing scope, creates a nested scope with a new ID.
+        If called outside any scope, creates a root scope with new scope ID.
 
         Parameters
         ----------
@@ -70,21 +55,19 @@ class ScopeIdentifier:
 
         except LookupError:
             # create root scope when missing
-            trace_id: str = uuid4().hex
-            scope_id: str = uuid4().hex
+
+            scope_id: UUID = uuid4()
             return cls(
                 label=label,
                 scope_id=scope_id,
                 parent_id=scope_id,  # own id is parent_id for root
-                trace_id=trace_id,
             )
 
         # create nested scope otherwise
         return cls(
             label=label,
-            scope_id=uuid4().hex,
+            scope_id=uuid4(),
             parent_id=current.scope_id,
-            trace_id=current.trace_id,
         )
 
     __slots__ = (
@@ -92,30 +75,22 @@ class ScopeIdentifier:
         "label",
         "parent_id",
         "scope_id",
-        "trace_id",
         "unique_name",
     )
 
     def __init__(
         self,
-        trace_id: str,
-        parent_id: str,
-        scope_id: str,
+        parent_id: UUID,
+        scope_id: UUID,
         label: str,
     ) -> None:
-        self.trace_id: str
-        object.__setattr__(
-            self,
-            "trace_id",
-            trace_id,
-        )
-        self.parent_id: str
+        self.parent_id: UUID
         object.__setattr__(
             self,
             "parent_id",
             parent_id,
         )
-        self.scope_id: str
+        self.scope_id: UUID
         object.__setattr__(
             self,
             "scope_id",
@@ -131,7 +106,7 @@ class ScopeIdentifier:
         object.__setattr__(
             self,
             "unique_name",
-            f"[{trace_id}] [{label}] [{scope_id}]",
+            f"[{label}] [{scope_id.hex}]",
         )
         self._token: Token[ScopeIdentifier] | None
         object.__setattr__(
@@ -171,7 +146,7 @@ class ScopeIdentifier:
         bool
             True if this is a root scope, False if it's a nested scope
         """
-        return self.trace_id == self.parent_id
+        return self.scope_id == self.parent_id
 
     def __str__(self) -> str:
         return self.unique_name
@@ -180,7 +155,7 @@ class ScopeIdentifier:
         if not isinstance(other, self.__class__):
             return False
 
-        return self.scope_id == other.scope_id and self.trace_id == other.trace_id
+        return self.scope_id == other.scope_id
 
     def __hash__(self) -> int:
         return hash(self.scope_id)

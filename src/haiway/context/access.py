@@ -129,7 +129,7 @@ class ScopeContext:
         self._observability_context.__enter__()
         self._state_context.__enter__()
 
-        return self._identifier.trace_id
+        return self._observability_context.observability.trace_identifying(self._identifier).hex
 
     def __exit__(
         self,
@@ -178,7 +178,7 @@ class ScopeContext:
 
         self._state_context.__enter__()
 
-        return self._identifier.trace_id
+        return self._observability_context.observability.trace_identifying(self._identifier).hex
 
     async def __aexit__(
         self,
@@ -271,12 +271,32 @@ class ctx:
     __slots__ = ()
 
     @staticmethod
-    def trace_id() -> str:
+    def trace_id(
+        scope_identifier: ScopeIdentifier | None = None,
+    ) -> str:
         """
-        Get the current context trace identifier.
-        """
+        Get the trace identifier for the specified scope or current scope.
 
-        return ScopeIdentifier.current_trace_id()
+        The trace identifier is a unique identifier that can be used to correlate
+        logs, events, and metrics across different components and services.
+
+        Parameters
+        ----------
+        scope_identifier: ScopeIdentifier | None, default=None
+            The scope identifier to get the trace ID for. If None, the current scope's
+            trace ID is returned.
+
+        Returns
+        -------
+        str
+            The hexadecimal representation of the trace ID
+
+        Raises
+        ------
+        RuntimeError
+            If called outside of any scope context
+        """
+        return ObservabilityContext.trace_id(scope_identifier)
 
     @staticmethod
     def scope(
