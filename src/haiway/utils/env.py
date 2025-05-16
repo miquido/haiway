@@ -358,22 +358,32 @@ def load_env(
     path: str | None = None,
     override: bool = True,
 ) -> None:
-    """\
-    Minimalist implementation of environment variables file loader. \
-    When the file is not available configuration won't be loaded.
-    Allows only subset of formatting:
-    - lines starting with '#' are ignored
-    - other comments are not allowed
-    - each element is in a new line
-    - each element must be a `key=value` pair without whitespaces or additional characters
-    - keys without values are ignored
+    """
+    Load environment variables from a .env file.
+
+    A minimalist implementation that reads key-value pairs from the specified file
+    and sets them as environment variables. If the file doesn't exist, the function
+    silently continues without loading any variables.
+
+    The file format follows these rules:
+    - Lines starting with '#' are treated as comments and ignored
+    - Each variable must be on a separate line in the format `KEY=VALUE`
+    - No spaces or additional characters are allowed around the '=' sign
+    - Keys without values are ignored
+    - Inline comments are not supported
 
     Parameters
     ----------
-    path: str
-        custom path to load environment variables, default is '.env'
-    override: bool
-        override existing variables on conflict if True, otherwise keep existing
+    path : str | None, default=None
+        Path to the environment file. If None, defaults to '.env'
+    override : bool, default=True
+        If True, overrides existing environment variables with values from the file.
+        If False, only sets variables that don't already exist in the environment.
+
+    Returns
+    -------
+    None
+        This function modifies the environment variables but doesn't return anything.
     """
 
     try:

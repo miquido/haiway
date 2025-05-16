@@ -36,14 +36,15 @@ def as_list[T](
     Parameters
     ----------
     collection : Iterable[T] | None
-        The input to be converted.
+        The input collection to be converted to a list.
+        If None is provided, None is returned.
 
     Returns
     -------
     list[T] | None
-        A new list containing all elements of the input,\
-         or the original list if it was already one.
-        None if no value was provided.
+        A new list containing all elements of the input collection,
+        or the original list if it was already one.
+        Returns None if None was provided.
     """
 
     if collection is None:
@@ -79,15 +80,16 @@ def as_tuple[T](
 
     Parameters
     ----------
-    collection : Sequence[T] | None
-        The input to be converted.
+    collection : Iterable[T] | None
+        The input collection to be converted to a tuple.
+        If None is provided, None is returned.
 
     Returns
     -------
-    tuple[T] | None
-        A new tuple containing all elements of the input,\
-         or the original tuple if it was already one.
-        None if no value was provided.
+    tuple[T, ...] | None
+        A new tuple containing all elements of the input collection,
+        or the original tuple if it was already one.
+        Returns None if None was provided.
     """
 
     if collection is None:
@@ -123,15 +125,16 @@ def as_set[T](
 
     Parameters
     ----------
-    collection : Set[T]
-        The input collection to be converted.
+    collection : Set[T] | None
+        The input collection to be converted to a set.
+        If None is provided, None is returned.
 
     Returns
     -------
-    set[T]
-        A new set containing all elements of the input collection,\
-         or the original set if it was already one.
-        None if no value was provided.
+    set[T] | None
+        A new set containing all elements of the input collection,
+        or the original set if it was already one.
+        Returns None if None was provided.
     """
 
     if collection is None:
@@ -167,15 +170,16 @@ def as_dict[K, V](
 
     Parameters
     ----------
-    collection : Mapping[K, V]
-        The input collection to be converted.
+    collection : Mapping[K, V] | None
+        The input collection to be converted to a dict.
+        If None is provided, None is returned.
 
     Returns
     -------
-    dict[K, V]
-        A new dict containing all elements of the input collection,\
-         or the original dict if it was already one.
-        None if no value was provided.
+    dict[K, V] | None
+        A new dict containing all elements of the input collection,
+        or the original dict if it was already one.
+        Returns None if None was provided.
     """
 
     if collection is None:
@@ -211,17 +215,21 @@ def without_missing[T: Mapping[str, Any]](
     typed: type[T] | None = None,
 ) -> T | Mapping[str, Any]:
     """
-    Strip items with missing values.
+    Create a new mapping without any items that have MISSING values.
 
     Parameters
     ----------
-    mapping : Mapping[K, V]
-        The input mapping to be stripped.
+    mapping : Mapping[str, Any]
+        The input mapping to be filtered.
+    typed : type[T] | None, default=None
+        Optional type to cast the result to. If provided, the result will be
+        cast to this type before returning.
 
     Returns
     -------
-    T | dict[str, Any]
-        A new mapping containing all items of the input mapping,\
-         except items with missing values.
+    T | Mapping[str, Any]
+        A new mapping containing all items of the input mapping,
+        except items with MISSING values. If typed is provided,
+        the result is cast to that type.
     """
     return cast(T, {key: value for key, value in mapping.items() if value is not MISSING})

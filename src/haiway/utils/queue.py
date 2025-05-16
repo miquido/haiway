@@ -9,7 +9,25 @@ __all__ = ("AsyncQueue",)
 class AsyncQueue[Element](AsyncIterator[Element]):
     """
     Asynchronous queue supporting iteration and finishing.
-    Cannot be concurrently consumed by multiple readers.
+
+    A queue implementation optimized for asynchronous workflows, providing async
+    iteration over elements and supporting operations like enqueuing elements,
+    finishing the queue, and cancellation.
+
+    Cannot be concurrently consumed by multiple readers - only one consumer
+    can iterate through the queue at a time.
+
+    Parameters
+    ----------
+    *elements : Element
+        Initial elements to populate the queue with
+    loop : AbstractEventLoop | None, default=None
+        Event loop to use for async operations. If None, the running loop is used.
+
+    Notes
+    -----
+    This class is immutable with respect to its attributes after initialization.
+    Any attempt to modify its attributes directly will raise an AttributeError.
     """
 
     __slots__ = (
@@ -70,6 +88,14 @@ class AsyncQueue[Element](AsyncIterator[Element]):
 
     @property
     def is_finished(self) -> bool:
+        """
+        Check if the queue has been marked as finished.
+
+        Returns
+        -------
+        bool
+            True if the queue has been finished, False otherwise
+        """
         return self._finish_reason is not None
 
     def enqueue(
@@ -77,6 +103,22 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         element: Element,
         /,
     ) -> None:
+        """
+        Add an element to the queue.
+
+        If a consumer is waiting for an element, it will be immediately notified.
+        Otherwise, the element is appended to the queue.
+
+        Parameters
+        ----------
+        element : Element
+            The element to add to the queue
+
+        Raises
+        ------
+        RuntimeError
+            If the queue has already been finished
+        """
         if self.is_finished:
             raise RuntimeError("AsyncQueue is already finished")
 
@@ -90,6 +132,19 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         self,
         exception: BaseException | None = None,
     ) -> None:
+        """
+        Mark the queue as finished, optionally with an exception.
+
+        After finishing, no more elements can be enqueued. Any waiting consumers
+        will be notified with the provided exception or StopAsyncIteration.
+        If the queue is already finished, this method does nothing.
+
+        Parameters
+        ----------
+        exception : BaseException | None, default=None
+            Optional exception to raise in consumers. If None, StopAsyncIteration
+            is used to signal normal completion.
+        """
         if self.is_finished:
             return  # already finished, ignore
 
@@ -113,6 +168,12 @@ class AsyncQueue[Element](AsyncIterator[Element]):
                 self._waiting.set_exception(self._finish_reason)  # pyright: ignore[reportArgumentType]
 
     def cancel(self) -> None:
+        """
+        Cancel the queue with a CancelledError exception.
+
+        This is a convenience method that calls finish() with a CancelledError.
+        Any waiting consumers will receive this exception.
+        """
         self.finish(exception=CancelledError())
 
     async def __anext__(self) -> Element:
@@ -143,5 +204,11 @@ class AsyncQueue[Element](AsyncIterator[Element]):
             )
 
     def clear(self) -> None:
+        """
+        Clear all pending elements from the queue.
+
+        This method removes all elements currently in the queue. It will only
+        clear the queue if no consumer is currently waiting for an element.
+        """
         if self._waiting is None or self._waiting.done():
             self._queue.clear()

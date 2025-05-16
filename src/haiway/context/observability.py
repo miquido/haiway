@@ -8,6 +8,7 @@ from logging import WARNING as WARNING_LOGGING
 from logging import Logger, getLogger
 from types import TracebackType
 from typing import Any, Protocol, Self, final, runtime_checkable
+from uuid import UUID, uuid4
 
 from haiway.context.identifier import ScopeIdentifier
 from haiway.state import State
@@ -25,6 +26,7 @@ __all__ = (
     "ObservabilityMetricRecording",
     "ObservabilityScopeEntering",
     "ObservabilityScopeExiting",
+    "ObservabilityTraceIdentifying",
 )
 
 
@@ -61,6 +63,19 @@ A type representing values that can be recorded as observability attributes.
 Includes scalar types (strings, numbers, booleans), sequences of these types,
 None, or Missing marker.
 """
+
+
+@runtime_checkable
+class ObservabilityTraceIdentifying(Protocol):
+    """
+    Protocol for accessing trace identifier in an observability system.
+    """
+
+    def __call__(
+        self,
+        scope: ScopeIdentifier,
+        /,
+    ) -> UUID: ...
 
 
 @runtime_checkable
@@ -194,10 +209,12 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
         "metric_recording",
         "scope_entering",
         "scope_exiting",
+        "trace_identifying",
     )
 
     def __init__(
         self,
+        trace_identifying: ObservabilityTraceIdentifying,
         log_recording: ObservabilityLogRecording,
         metric_recording: ObservabilityMetricRecording,
         event_recording: ObservabilityEventRecording,
@@ -210,6 +227,8 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
 
         Parameters
         ----------
+        trace_identifying: ObservabilityTraceIdentifying
+            Function for identifying traces
         log_recording: ObservabilityLogRecording
             Function for recording log messages
         metric_recording: ObservabilityMetricRecording
@@ -223,6 +242,12 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
         scope_exiting: ObservabilityScopeExiting
             Function called when a scope is exited
         """
+        self.trace_identifying: ObservabilityTraceIdentifying
+        object.__setattr__(
+            self,
+            "trace_identifying",
+            trace_identifying,
+        )
         self.log_recording: ObservabilityLogRecording
         object.__setattr__(
             self,
@@ -247,7 +272,6 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
             "attributes_recording",
             attributes_recording,
         )
-
         self.scope_entering: ObservabilityScopeEntering
         object.__setattr__(
             self,
@@ -302,6 +326,15 @@ def _logger_observability(
         An Observability instance that uses the logger
     """
 
+    trace_id: UUID = uuid4()
+    trace_id_hex: str = trace_id.hex
+
+    def trace_identifying(
+        scope: ScopeIdentifier,
+        /,
+    ) -> UUID:
+        return trace_id
+
     def log_recording(
         scope: ScopeIdentifier,
         /,
@@ -312,7 +345,7 @@ def _logger_observability(
     ) -> None:
         logger.log(
             level,
-            f"{scope.unique_name} {message}",
+            f"[{trace_id_hex}] {scope.unique_name} {message}",
             *args,
             exc_info=exception,
         )
@@ -327,7 +360,8 @@ def _logger_observability(
     ) -> None:
         logger.log(
             level,
-            f"{scope.unique_name} Recorded event: {event} {format_str(attributes)}",
+            f"[{trace_id_hex}] {scope.unique_name} Recorded event:"
+            f" {event} {format_str(attributes)}",
         )
 
     def metric_recording(
@@ -343,14 +377,16 @@ def _logger_observability(
         if attributes:
             logger.log(
                 level,
-                f"{scope.unique_name} Recorded metric: {metric} = {value}{unit or ''}"
+                f"[{trace_id_hex}] {scope.unique_name} Recorded metric:"
+                f" {metric} = {value} {unit or ''}"
                 f"\n{format_str(attributes)}",
             )
 
         else:
             logger.log(
                 level,
-                f"{scope.unique_name} Recorded metric: {metric} = {value}{unit or ''}",
+                f"[{trace_id_hex}] {scope.unique_name} Recorded metric:"
+                f" {metric} = {value} {unit or ''}",
             )
 
     def attributes_recording(
@@ -364,7 +400,7 @@ def _logger_observability(
 
         logger.log(
             level,
-            f"{scope.unique_name} Recorded attributes: {format_str(attributes)}",
+            f"[{trace_id_hex}] {scope.unique_name} Recorded attributes: {format_str(attributes)}",
         )
 
     def scope_entering[Metric: State](
@@ -373,7 +409,7 @@ def _logger_observability(
     ) -> None:
         logger.log(
             ObservabilityLevel.DEBUG,
-            f"{scope.unique_name} Entering scope: {scope.label}",
+            f"[{trace_id_hex}] {scope.unique_name} Entering scope: {scope.label}",
         )
 
     def scope_exiting[Metric: State](
@@ -389,6 +425,7 @@ def _logger_observability(
         )
 
     return Observability(
+        trace_identifying=trace_identifying,
         log_recording=log_recording,
         event_recording=event_recording,
         metric_recording=metric_recording,
@@ -477,6 +514,45 @@ class ObservabilityContext:
             scope=scope,
             observability=resolved_observability,
         )
+
+    @classmethod
+    def trace_id(
+        cls,
+        scope_identifier: ScopeIdentifier | None = None,
+    ) -> str:
+        """
+        Get the hexadecimal trace identifier for the specified scope or current scope.
+
+        This class method retrieves the trace identifier from the current observability context,
+        which can be used to correlate logs, events, and metrics across different components.
+
+        Parameters
+        ----------
+        scope_identifier: ScopeIdentifier | None, default=None
+            The scope identifier to get the trace ID for. If None, the current scope's
+            trace ID is returned.
+
+        Returns
+        -------
+        str
+            The hexadecimal representation of the trace ID
+
+        Raises
+        ------
+        RuntimeError
+            If called outside of any scope context
+        """
+        try:
+            return (
+                cls._context.get()
+                .observability.trace_identifying(
+                    scope_identifier if scope_identifier is not None else ScopeIdentifier.current()
+                )
+                .hex
+            )
+
+        except LookupError as exc:
+            raise RuntimeError("Attempting to access scope identifier outside of scope") from exc
 
     @classmethod
     def record_log(

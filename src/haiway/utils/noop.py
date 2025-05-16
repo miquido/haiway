@@ -11,7 +11,23 @@ def noop(
     **kwargs: Any,
 ) -> None:
     """
-    Placeholder function doing nothing (no operation).
+    Placeholder function that accepts any arguments and does nothing.
+
+    This utility function is useful for cases where a callback is required
+    but no action should be taken, such as in testing, as a default handler,
+    or as a placeholder during development.
+
+    Parameters
+    ----------
+    *args: Any
+        Any positional arguments, which are ignored
+    **kwargs: Any
+        Any keyword arguments, which are ignored
+
+    Returns
+    -------
+    None
+        This function performs no operation and returns nothing
     """
 
 
@@ -20,5 +36,21 @@ async def async_noop(
     **kwargs: Any,
 ) -> None:
     """
-    Placeholder async function doing nothing (no operation).
+    Asynchronous placeholder function that accepts any arguments and does nothing.
+
+    This utility function is useful for cases where an async callback is required
+    but no action should be taken, such as in testing, as a default async handler,
+    or as a placeholder during asynchronous workflow development.
+
+    Parameters
+    ----------
+    *args: Any
+        Any positional arguments, which are ignored
+    **kwargs: Any
+        Any keyword arguments, which are ignored
+
+    Returns
+    -------
+    None
+        This function performs no operation and returns nothing
     """

@@ -1,6 +1,7 @@
 import os
 from collections.abc import Mapping
 from typing import Any, ClassVar, Self, cast, final
+from uuid import UUID
 
 from opentelemetry import metrics, trace
 from opentelemetry._logs import get_logger, set_logger_provider
@@ -195,11 +196,6 @@ class ScopeStore:
                 body=message,
                 severity_text=level.name,
                 severity_number=SEVERITY_MAPPING[level],
-                attributes={
-                    "context.trace_id": self.identifier.trace_id,
-                    "context.scope_id": self.identifier.scope_id,
-                    "context.parent_id": self.identifier.parent_id,
-                },
             )
         )
 
@@ -279,16 +275,9 @@ class ScopeStore:
         self._counters[name].add(
             value,
             attributes={
-                **{
-                    "context.trace_id": self.identifier.trace_id,
-                    "context.scope_id": self.identifier.scope_id,
-                    "context.parent_id": self.identifier.parent_id,
-                },
-                **{
-                    key: cast(Any, value)
-                    for key, value in attributes.items()
-                    if value is not None and value is not MISSING
-                },
+                key: cast(Any, value)
+                for key, value in attributes.items()
+                if value is not None and value is not MISSING
             },
         )
 
@@ -474,8 +463,38 @@ class OpenTelemetry:
         tracer: Tracer = trace.get_tracer(cls.service)
         meter: Meter | None = None
         root_scope: ScopeIdentifier | None = None
-        scopes: dict[str, ScopeStore] = {}
+        scopes: dict[UUID, ScopeStore] = {}
         observed_level: ObservabilityLevel = level
+
+        def trace_identifying(
+            scope: ScopeIdentifier,
+            /,
+        ) -> UUID:
+            """
+            Get the unique trace identifier for a scope.
+
+            This function retrieves the OpenTelemetry trace ID for the specified scope
+            and converts it to a UUID for compatibility with Haiway's observability system.
+
+            Parameters
+            ----------
+            scope: ScopeIdentifier
+                The scope identifier to get the trace ID for
+
+            Returns
+            -------
+            UUID
+                A UUID representation of the OpenTelemetry trace ID
+
+            Raises
+            ------
+            AssertionError
+                If called outside an initialized scope context
+            """
+            assert root_scope is not None  # nosec: B101
+            assert scope.scope_id in scopes  # nosec: B101
+
+            return UUID(int=scopes[scope.scope_id].span.get_span_context().trace_id)
 
         def log_recording(
             scope: ScopeIdentifier,
@@ -485,6 +504,25 @@ class OpenTelemetry:
             *args: Any,
             exception: BaseException | None,
         ) -> None:
+            """
+            Record a log message using OpenTelemetry logging.
+
+            Creates a log record with the appropriate severity level and attributes
+            based on the current scope context.
+
+            Parameters
+            ----------
+            scope: ScopeIdentifier
+                The scope identifier the log is associated with
+            level: ObservabilityLevel
+                The severity level for this log message
+            message: str
+                The log message text, may contain format placeholders
+            *args: Any
+                Format arguments for the message
+            exception: BaseException | None
+                Optional exception to associate with the log
+            """
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
 
@@ -506,6 +544,23 @@ class OpenTelemetry:
             event: str,
             attributes: Mapping[str, ObservabilityAttribute],
         ) -> None:
+            """
+            Record an event using OpenTelemetry spans.
+
+            Creates a span event with the specified name and attributes in the
+            current active span for the scope.
+
+            Parameters
+            ----------
+            scope: ScopeIdentifier
+                The scope identifier the event is associated with
+            level: ObservabilityLevel
+                The severity level for this event
+            event: str
+                The name of the event
+            attributes: Mapping[str, ObservabilityAttribute]
+                Key-value attributes associated with the event
+            """
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
 
@@ -527,6 +582,27 @@ class OpenTelemetry:
             unit: str | None,
             attributes: Mapping[str, ObservabilityAttribute],
         ) -> None:
+            """
+            Record a metric using OpenTelemetry metrics.
+
+            Records a numeric measurement using the appropriate OpenTelemetry
+            instrument type based on the metric name and value type.
+
+            Parameters
+            ----------
+            scope: ScopeIdentifier
+                The scope identifier the metric is associated with
+            level: ObservabilityLevel
+                The severity level for this metric
+            metric: str
+                The name of the metric
+            value: float | int
+                The numeric value of the metric
+            unit: str | None
+                Optional unit for the metric (e.g., "ms", "bytes")
+            attributes: Mapping[str, ObservabilityAttribute]
+                Key-value attributes associated with the metric
+            """
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101
 
@@ -546,6 +622,21 @@ class OpenTelemetry:
             level: ObservabilityLevel,
             attributes: Mapping[str, ObservabilityAttribute],
         ) -> None:
+            """
+            Record standalone attributes using OpenTelemetry span attributes.
+
+            Records key-value attributes by adding them to the current active span
+            for the scope.
+
+            Parameters
+            ----------
+            scope: ScopeIdentifier
+                The scope identifier the attributes are associated with
+            level: ObservabilityLevel
+                The severity level for these attributes
+            attributes: Mapping[str, ObservabilityAttribute]
+                Key-value attributes to record
+            """
             if level < observed_level:
                 return
 
@@ -558,6 +649,27 @@ class OpenTelemetry:
             scope: ScopeIdentifier,
             /,
         ) -> None:
+            """
+            Handle scope entry by creating a new OpenTelemetry span.
+
+            This method is called when a new scope is entered. It creates a new
+            OpenTelemetry span for the scope and sets up the appropriate parent-child
+            relationships with existing spans.
+
+            Parameters
+            ----------
+            scope: ScopeIdentifier
+                The identifier for the scope being entered
+
+            Returns
+            -------
+            None
+
+            Notes
+            -----
+            This method initializes the scopes dictionary entry for the new scope
+            and creates meter instruments if this is the first scope entry.
+            """
             assert scope.scope_id not in scopes  # nosec: B101
 
             nonlocal root_scope
@@ -565,19 +677,18 @@ class OpenTelemetry:
 
             scope_store: ScopeStore
             if root_scope is None:
-                meter = metrics.get_meter(scope.trace_id)
-                context: Context = get_current()
+                meter = metrics.get_meter(scope.label)
+                context: Context = Context(
+                    **get_current(),
+                    # trace_id=scope.trace_id,
+                    # span_id=scope.scope_id,
+                )
                 scope_store = ScopeStore(
                     scope,
                     context=context,
                     span=tracer.start_span(
                         name=scope.label,
                         context=context,
-                        attributes={
-                            "context.trace_id": scope.trace_id,
-                            "context.scope_id": scope.scope_id,
-                            "context.parent_id": scope.parent_id,
-                        },
                     ),
                     meter=meter,
                     logger=get_logger(scope.label),
@@ -592,11 +703,6 @@ class OpenTelemetry:
                     span=tracer.start_span(
                         name=scope.label,
                         context=scopes[scope.parent_id].context,
-                        attributes={
-                            "context.trace_id": scope.trace_id,
-                            "context.scope_id": scope.scope_id,
-                            "context.parent_id": scope.parent_id,
-                        },
                     ),
                     meter=meter,
                     logger=get_logger(scope.label),
@@ -611,6 +717,28 @@ class OpenTelemetry:
             *,
             exception: BaseException | None,
         ) -> None:
+            """
+            Handle scope exit by completing the OpenTelemetry span.
+
+            This method is called when a scope is exited. It marks the scope as exited,
+            attempts to complete it, and ends the associated OpenTelemetry span.
+
+            Parameters
+            ----------
+            scope: ScopeIdentifier
+                The identifier for the scope being exited
+            exception: BaseException | None
+                Optional exception that caused the scope to exit
+
+            Returns
+            -------
+            None
+
+            Notes
+            -----
+            This method ensures proper cleanup of spans, including recording any
+            exception that occurred during the scope's execution.
+            """
             nonlocal root_scope
             nonlocal scopes
             nonlocal meter
@@ -629,7 +757,7 @@ class OpenTelemetry:
 
             # try complete parent scopes
             if scope != root_scope:
-                parent_id: str = scope.parent_id
+                parent_id: UUID = scope.parent_id
                 while scopes[parent_id].try_complete():
                     if scopes[parent_id].identifier == root_scope:
                         break
@@ -644,6 +772,7 @@ class OpenTelemetry:
                 scopes = {}
 
         return Observability(
+            trace_identifying=trace_identifying,
             log_recording=log_recording,
             event_recording=event_recording,
             metric_recording=metric_recording,

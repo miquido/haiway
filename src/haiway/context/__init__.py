@@ -12,6 +12,7 @@ from haiway.context.observability import (
     ObservabilityMetricRecording,
     ObservabilityScopeEntering,
     ObservabilityScopeExiting,
+    ObservabilityTraceIdentifying,
 )
 from haiway.context.state import StateContext
 from haiway.context.types import MissingContext, MissingState
@@ -31,6 +32,7 @@ __all__ = (
     "ObservabilityMetricRecording",
     "ObservabilityScopeEntering",
     "ObservabilityScopeExiting",
+    "ObservabilityTraceIdentifying",
     "ScopeContext",
     "ScopeIdentifier",
     "StateContext",
