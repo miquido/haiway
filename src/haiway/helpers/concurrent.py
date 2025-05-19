@@ -8,7 +8,7 @@ from haiway.context import ctx
 __all__ = ("process_concurrently",)
 
 
-async def process_concurrently[Element](  # noqa: C901
+async def process_concurrently[Element](  # noqa: C901, PLR0912
     source: AsyncIterator[Element],
     /,
     handler: Callable[[Element], Coroutine[Any, Any, None]],
@@ -37,12 +37,16 @@ async def process_concurrently[Element](  # noqa: C901
     assert concurrent_tasks > 0  # nosec: B101
     running: set[Task[None]] = set()
     try:
-        while element := await anext(source, None):
+        while True:
+            element: Element = await anext(source)
+            running.add(ctx.spawn(handler, element))
             if len(running) < concurrent_tasks:
-                running.add(ctx.spawn(handler, element))
                 continue  # keep spawning tasks
 
-            completed, running = await wait(running, return_when=FIRST_COMPLETED)
+            completed, running = await wait(
+                running,
+                return_when=FIRST_COMPLETED,
+            )
 
             for task in completed:
                 if exc := task.exception():
@@ -61,14 +65,21 @@ async def process_concurrently[Element](  # noqa: C901
 
         raise exc
 
-    finally:
-        completed, _ = await wait(running, return_when=ALL_COMPLETED)
-        for task in completed:
-            if exc := task.exception():
-                if not ignore_exceptions:
-                    raise exc
+    except StopAsyncIteration:
+        pass  # just stop and proceed to finally
 
-                ctx.log_error(
-                    f"Concurrent processing error - {type(exc)}: {exc}",
-                    exception=exc,
-                )
+    finally:
+        if running:
+            completed, _ = await wait(
+                running,
+                return_when=ALL_COMPLETED,
+            )
+            for task in completed:
+                if exc := task.exception():
+                    if not ignore_exceptions:
+                        raise exc
+
+                    ctx.log_error(
+                        f"Concurrent processing error - {type(exc)}: {exc}",
+                        exception=exc,
+                    )

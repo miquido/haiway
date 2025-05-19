@@ -551,6 +551,14 @@ class State(metaclass=StateMeta):
             case _:
                 raise TypeError(f"Expected '{cls.__name__}', received '{type(value).__name__}'")
 
+    @classmethod
+    def from_mapping(
+        cls,
+        value: Mapping[str, Any],
+        /,
+    ) -> Self:
+        return cls(**value)
+
     def __init__(
         self,
         **kwargs: Any,
