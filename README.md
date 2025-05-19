@@ -1,5 +1,9 @@
 # 🚗 haiway 🚕 🚚 🚙
 
+![Python Version](https://img.shields.io/badge/Python-3.12+-blue)
+![License](https://img.shields.io/badge/License-MIT-green)
+![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/miquido/haiway?utm_source=oss&utm_medium=github&utm_campaign=miquido%2Fhaiway&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
+
 haiway is a framework designed to facilitate the development of applications using the functional programming paradigm combined with structured concurrency concepts. Unlike traditional object-oriented frameworks, haiway emphasizes immutability, pure functions, and context-based state management, enabling developers to build scalable and maintainable applications. By leveraging context managers combined with context vars, haiway ensures safe state propagation in concurrent environments and simplifies dependency injection through function implementation propagation.
 
 ## 🖥️ Install
