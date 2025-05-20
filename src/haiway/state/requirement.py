@@ -199,7 +199,7 @@ class AttributeRequirement[Root]:
 
         def check_contains_any(root: Root) -> None:
             checked: Any = cast(AttributePath[Root, Parameter], path)(root)
-            if any(element in checked for element in value):
+            if not any(element in checked for element in value):
                 raise ValueError(
                     f"{checked} does not contain any of {value} for '{path.__repr__()}'"
                 )
