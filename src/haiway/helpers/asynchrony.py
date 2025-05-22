@@ -137,7 +137,7 @@ def _mimic_async[**Args, Result](
             function,
             "__annotations__",
         )
-        setattr(  # noqa: B010
+        object.__setattr__(
             within,
             "__annotations__",
             {
@@ -160,7 +160,7 @@ def _mimic_async[**Args, Result](
         "__globals__",
     ):
         try:
-            setattr(
+            object.__setattr__(
                 within,
                 attribute,
                 getattr(
@@ -177,7 +177,7 @@ def _mimic_async[**Args, Result](
     except AttributeError:
         pass
 
-    setattr(  # noqa: B010 - mimic functools.wraps behavior for correct signature checks
+    object.__setattr__(  # mimic functools.wraps behavior for correct signature checks
         within,
         "__wrapped__",
         function,
