@@ -1,4 +1,4 @@
-from haiway.helpers.asynchrony import asynchronous, wrap_async
+from haiway.helpers.asynchrony import asynchronous
 from haiway.helpers.caching import CacheMakeKey, CacheRead, CacheWrite, cache
 from haiway.helpers.concurrent import process_concurrently
 from haiway.helpers.observability import LoggerObservability
@@ -19,5 +19,4 @@ __all__ = (
     "throttle",
     "timeout",
     "traced",
-    "wrap_async",
 )

@@ -1,0 +1,259 @@
+## Package Structure
+
+Organize your project into five distinct package types:
+
+```
+src/
+├── commons/                # Shared utilities, types, extensions
+├── integrations/           # Third-party service connections
+│   ├── integration_a/
+│   └── integration_b/
+├── solutions/              # Low-level utilities
+│   ├── solution_a/
+│   └── solution_b/
+├── features/               # High-level functionalities
+│   ├── feature_a/
+│   └── feature_b/
+└── entrypoints/            # Application entry points
+    ├── entrypoint_a/
+    └── entrypoint_b/
+```
+
+Each functionality package should contain:
+- `__init__.py`: Exports public API only
+- `types.py`: Type definitions using Protocol and State
+- `state.py`: State declarations with classmethod helpers
+- `config.py`: Configuration constants
+
+## Implementing Types
+
+Define interfaces using Protocol and data using State:
+
+```python
+from typing import Protocol, Any, runtime_checkable
+from haiway import State
+
+# Data structure
+class UserData(State):
+    id: str
+    name: str
+    email: str | None = None
+
+# Function interface
+@runtime_checkable
+class UserFetching(Protocol):
+    async def __call__(self, id: str) -> UserData: ...
+```
+
+## State Management
+
+Define states for configuration and functionality containers:
+
+```python
+from haiway import State
+from .types import UserFetching, UserData
+
+# Configuration state
+class UserServiceConfig(State):
+    api_url: str = "https://api.example.com"
+    timeout_seconds: int = 30
+
+# Functionality container
+class UserService(State):
+    # Function implementations
+    fetching: UserFetching
+
+    # Class method interface
+    @classmethod
+    async def fetch_user(cls, id: str) -> UserData:
+        return await ctx.state(cls).fetching(id)
+```
+
+## Implementing Functions
+
+Create concrete implementations and factory methods:
+
+```python
+from haiway import ctx
+from .types import UserData
+from .state import UserService, UserServiceConfig
+
+# Concrete implementation
+async def http_user_fetching(id: str) -> UserData:
+    config = ctx.state(UserServiceConfig)
+    # Implementation using config.api_url
+    # ...
+    return UserData(id=id, name="Example User")
+
+# Factory function providing implementation
+def HTTPUserService() -> UserService:
+    return UserService(fetching=http_user_fetching)
+```
+
+## Using Context Scopes
+
+Establish context with state and implementations:
+
+```python
+from haiway import ctx
+from .state import UserService, UserServiceConfig
+from .implementation import HTTPUserService
+
+async def main():
+    # Set up execution context
+    async with ctx.scope(
+        "main",
+        HTTPUserService(),
+        UserServiceConfig(api_url="https://custom-api.example.com")
+    ):
+        # Use functionality through class methods
+        user = await UserService.fetch_user("user-123")
+        print(f"Found user: {user.name}")
+```
+
+## Managing State Updates
+
+Create state variants without mutation:
+
+```python
+# Current state
+config = ctx.state(UserServiceConfig)
+
+# Create new instance with updated values
+dev_config = config.updated(api_url="https://dev-api.example.com")
+
+# Use in context
+async with ctx.scope("dev-context", dev_config):
+    # Operations will use dev_config
+    pass
+```
+
+## Complete Example: Notes Manager
+
+```python
+from typing import Protocol, Any, runtime_checkable
+from uuid import UUID, uuid4
+from datetime import datetime
+from haiway import State, ctx
+
+# Types
+class Note(State):
+    id: UUID
+    content: str
+    created_at: datetime
+    updated_at: datetime
+
+@runtime_checkable
+class NoteCreating(Protocol):
+    async def __call__(self, content: str) -> Note: ...
+
+@runtime_checkable
+class NoteFinding(Protocol):
+    async def __call__(self, id: UUID) -> Note | None: ...
+
+# State
+class NotesConfig(State):
+    storage_path: str = "./notes"
+
+class NotesService(State):
+    creating: NoteCreating
+    finding: NoteFinding
+
+    @classmethod
+    async def create_note(cls, content: str) -> Note:
+        return await ctx.state(cls).creating(content)
+
+    @classmethod
+    async def find_note(cls, id: UUID) -> Note | None:
+        return await ctx.state(cls).finding(id)
+
+# Implementation
+async def file_note_creating(content: str) -> Note:
+    now = datetime.now()
+    note = Note(
+        id=uuid4(),
+        content=content,
+        created_at=now,
+        updated_at=now
+    )
+
+    config = ctx.state(NotesConfig)
+    # Save note to file at config.storage_path
+    # ...
+
+    return note
+
+async def file_note_finding(id: UUID) -> Note | None:
+    config = ctx.state(NotesConfig)
+    # Find note in files at config.storage_path
+    # ...
+
+    # Return found note or None
+    # For demonstration:
+    return Note(
+        id=id,
+        content="Example note content",
+        created_at=datetime.now(),
+        updated_at=datetime.now()
+    )
+
+# Factory
+def FileNotesService() -> NotesService:
+    return NotesService(
+        creating=file_note_creating,
+        finding=file_note_finding
+    )
+
+# Usage
+async def run_notes_app():
+    async with ctx.scope(
+        "notes-app",
+        FileNotesService(),
+        NotesConfig(storage_path="./my_notes")
+    ):
+        # Create a note
+        new_note = await NotesService.create_note("This is a test note")
+        print(f"Created note with ID: {new_note.id}")
+
+        # Find the note
+        found_note = await NotesService.find_note(new_note.id)
+        if found_note:
+            print(f"Found note: {found_note.content}")
+```
+
+## Best Practices
+
+1. **Type Definitions**
+   - Use Protocol for function interfaces
+   - Use State for data structures
+   - Apply runtime_checkable for better type safety
+
+2. **State Management**
+   - Keep states immutable
+   - Use .updated() for state variants
+   - Define defaults for optional values
+
+3. **Function Implementations**
+   - Access context through ctx.state()
+   - Keep functions pure when possible
+   - Return new objects instead of modifying existing ones
+
+4. **Class Method Interface**
+   - Define classmethods for cleaner API
+   - Use cls parameter to access current state
+   - Follow consistent naming (verb_noun pattern)
+
+5. **Context Usage**
+   - Use descriptive context names
+   - Group related states in single context
+   - Keep context hierarchy shallow
+
+6. **Package Organization**
+   - Separate interfaces from implementations
+   - Export only public API from __init__.py
+   - Group related functionality in dedicated packages
+
+7. **Error Handling**
+   - Define custom error types in types.py
+   - Handle errors explicitly at appropriate levels
+   - Maintain immutability in error cases

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 from pytest import raises
 
-from haiway import MISSING, Default, Missing, State, frozenlist
+from haiway import MISSING, Default, Missing, State
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -36,7 +36,7 @@ def test_basic_initializes_with_arguments() -> None:
         literal: Literal["A", "B"]
         sequence: Sequence[str]
         string_set: Set[str]
-        frozen: frozenlist[int]
+        frozen: tuple[int, ...]
         integer: int
         union: str | int
         optional: str | None
