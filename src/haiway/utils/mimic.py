@@ -40,7 +40,7 @@ def mimic_function[**Args, Result](
             "__globals__",
         ):
             try:
-                setattr(
+                object.__setattr__(
                     target,
                     attribute,
                     getattr(
@@ -57,7 +57,7 @@ def mimic_function[**Args, Result](
         except AttributeError:
             pass
 
-        setattr(  # noqa: B010 - mimic functools.wraps behavior for correct signature checks
+        object.__setattr__(  # mimic functools.wraps behavior for correct signature checks
             target,
             "__wrapped__",
             function,
