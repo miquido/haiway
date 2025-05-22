@@ -7,51 +7,16 @@ from typing import Any, cast, overload
 
 from haiway.types.missing import MISSING, Missing
 
-__all__ = (
-    "asynchronous",
-    "wrap_async",
-)
-
-
-def wrap_async[**Args, Result](
-    function: Callable[Args, Coroutine[Any, Any, Result]] | Callable[Args, Result],
-    /,
-) -> Callable[Args, Coroutine[Any, Any, Result]]:
-    """
-    Convert a synchronous function to an asynchronous one if it isn't already.
-
-    Takes a function that may be either synchronous or asynchronous and ensures it
-    returns a coroutine. If the input function is already asynchronous, it is returned
-    unchanged. If it's synchronous, it wraps it in an async function that executes
-    the original function and returns its result.
-
-    Parameters
-    ----------
-    function: Callable[Args, Coroutine[Any, Any, Result]] | Callable[Args, Result]
-        The function to ensure is asynchronous, can be either sync or async
-
-    Returns
-    -------
-    Callable[Args, Coroutine[Any, Any, Result]]
-        An asynchronous function that returns a coroutine
-    """
-    if iscoroutinefunction(function):
-        return function
-
-    else:
-
-        async def async_function(*args: Args.args, **kwargs: Args.kwargs) -> Result:
-            return cast(Callable[Args, Result], function)(*args, **kwargs)
-
-        _mimic_async(function, within=async_function)
-        return async_function
+__all__ = ("asynchronous",)
 
 
 @overload
-def asynchronous[**Args, Result]() -> Callable[
-    [Callable[Args, Result]],
-    Callable[Args, Coroutine[Any, Any, Result]],
-]: ...
+def asynchronous[**Args, Result]() -> (
+    Callable[
+        [Callable[Args, Result]],
+        Callable[Args, Coroutine[Any, Any, Result]],
+    ]
+): ...
 
 
 @overload
@@ -142,88 +107,24 @@ def asynchronous[**Args, Result](
     ) -> Callable[Args, Coroutine[Any, Any, Result]]:
         assert not iscoroutinefunction(wrapped), "Cannot wrap async function in executor"  # nosec: B101
 
-        return _ExecutorWrapper(
-            wrapped,
-            loop=loop,
-            executor=cast(Executor | None, None if executor is MISSING else executor),
-        )
+        async def asynchronous(
+            *args: Args.args,
+            **kwargs: Args.kwargs,
+        ) -> Result:
+            context: Context = copy_context()
+            return await (loop or get_running_loop()).run_in_executor(
+                cast(Executor | None, None if executor is MISSING else executor),
+                context.run,
+                partial(wrapped, *args, **kwargs),
+            )
+
+        return _mimic_async(wrapped, within=asynchronous)
 
     if function := function:
         return wrap(wrapped=function)
 
     else:
         return wrap
-
-
-class _ExecutorWrapper[**Args, Result]:
-    __slots__ = (
-        "__annotations__",
-        "__defaults__",
-        "__doc__",
-        "__globals__",
-        "__kwdefaults__",
-        "__name__",
-        "__qualname__",
-        "__wrapped__",
-        "_executor",
-        "_function",
-        "_loop",
-    )
-
-    def __init__(
-        self,
-        function: Callable[Args, Result],
-        /,
-        loop: AbstractEventLoop | None,
-        executor: Executor | None,
-    ) -> None:
-        self._function: Callable[Args, Result] = function
-        self._loop: AbstractEventLoop | None = loop
-        self._executor: Executor | None = executor
-
-        # mimic function attributes if able
-        _mimic_async(function, within=self)
-
-    async def __call__(
-        self,
-        *args: Args.args,
-        **kwargs: Args.kwargs,
-    ) -> Result:
-        context: Context = copy_context()
-        return await (self._loop or get_running_loop()).run_in_executor(
-            self._executor,
-            context.run,
-            partial(self._function, *args, **kwargs),
-        )
-
-    def __get__(
-        self,
-        instance: object,
-        owner: type | None = None,
-        /,
-    ) -> Callable[Args, Coroutine[Any, Any, Result]]:
-        if owner is None:
-            return self
-
-        else:
-            return _mimic_async(
-                self._function,
-                within=partial(
-                    self.__method_call__,
-                    instance,
-                ),
-            )
-
-    async def __method_call__(
-        self,
-        __method_self: object,
-        *args: Args.args,
-        **kwargs: Args.kwargs,
-    ) -> Result:
-        return await (self._loop or get_running_loop()).run_in_executor(
-            self._executor,
-            partial(self._function, __method_self, *args, **kwargs),
-        )
 
 
 def _mimic_async[**Args, Result](

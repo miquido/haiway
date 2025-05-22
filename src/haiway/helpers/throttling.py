@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import Callable, Coroutine
 from datetime import timedelta
 from time import monotonic
-from typing import Any, cast, overload
+from typing import Any, overload
 
 from haiway.utils.mimic import mimic_function
 
@@ -97,14 +97,38 @@ def throttle[**Args, Result](
         function: Callable[Args, Coroutine[Any, Any, Result]],
     ) -> Callable[Args, Coroutine[Any, Any, Result]]:
         assert iscoroutinefunction(function)  # nosec: B101
-        return cast(
-            Callable[Args, Coroutine[Any, Any, Result]],
-            _AsyncThrottle(
-                function,
-                limit=limit,
-                period=period,
-            ),
-        )
+        entries: deque[float] = deque()
+        lock: Lock = Lock()
+        throttle_period: float
+        match period:
+            case timedelta() as delta:
+                throttle_period = delta.total_seconds()
+
+            case period_seconds:
+                throttle_period = period_seconds
+
+        async def throttle(
+            *args: Args.args,
+            **kwargs: Args.kwargs,
+        ) -> Result:
+            async with lock:
+                time_now: float = monotonic()
+                while entries:  # cleanup old entries
+                    if entries[0] + throttle_period <= time_now:
+                        entries.popleft()
+
+                    else:
+                        break
+
+                if len(entries) >= limit:
+                    await sleep(entries[0] - time_now)
+
+                entries.append(monotonic())
+
+            return await function(*args, **kwargs)
+
+        # mimic function attributes if able
+        return mimic_function(function, within=throttle)
 
     if function := function:
         return _wrap(function)
