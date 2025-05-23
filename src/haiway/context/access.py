@@ -302,7 +302,7 @@ class ctx:
     def scope(
         label: str,
         /,
-        *state: State,
+        *state: State | None,
         disposables: Disposables | Iterable[Disposable] | None = None,
         task_group: TaskGroup | None = None,
         observability: Observability | Logger | None = None,
@@ -316,7 +316,7 @@ class ctx:
         label: str
             name of the scope context
 
-        *state: State | Disposable
+        *state: State | None
             state propagated within the scope context, will be merged with current state by\
              replacing current with provided on conflict.
 
@@ -355,14 +355,14 @@ class ctx:
         return ScopeContext(
             label=label,
             task_group=task_group,
-            state=state,
+            state=tuple(element for element in state if element is not None),
             disposables=resolved_disposables,
             observability=observability,
         )
 
     @staticmethod
     def updated(
-        *state: State,
+        *state: State | None,
     ) -> StateContext:
         """
         Update scope context with given state. When called within an existing context\
@@ -370,7 +370,7 @@ class ctx:
 
         Parameters
         ----------
-        *state: State
+        *state: State | None
             state propagated within the updated scope context, will be merged with current if any\
              by replacing current with provided on conflict
 
@@ -380,7 +380,7 @@ class ctx:
             state part of context object intended to enter context manager with it
         """
 
-        return StateContext.updated(state)
+        return StateContext.updated(element for element in state if element is not None)
 
     @staticmethod
     def spawn[Result, **Arguments](
