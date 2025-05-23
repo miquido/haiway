@@ -31,13 +31,17 @@ Define interfaces using Protocol and data using State:
 
 ```python
 from typing import Protocol, Any, runtime_checkable
+from collections.abc import Sequence, Mapping, Set
 from haiway import State
 
-# Data structure
+# Data structure - use abstract collection types
 class UserData(State):
     id: str
     name: str
     email: str | None = None
+    tags: Sequence[str] = ()           # Not list[str] - becomes tuple
+    metadata: Mapping[str, str] = {}   # Not dict[str, str] - stays dict
+    roles: Set[str] = frozenset()      # Not set[str] - becomes frozenset
 
 # Function interface
 @runtime_checkable
@@ -132,6 +136,7 @@ async with ctx.scope("dev-context", dev_config):
 
 ```python
 from typing import Protocol, Any, runtime_checkable
+from collections.abc import Sequence
 from uuid import UUID, uuid4
 from datetime import datetime
 from haiway import State, ctx
@@ -142,6 +147,7 @@ class Note(State):
     content: str
     created_at: datetime
     updated_at: datetime
+    tags: Sequence[str] = ()  # Use Sequence, not list
 
 @runtime_checkable
 class NoteCreating(Protocol):
@@ -232,6 +238,8 @@ async def run_notes_app():
    - Keep states immutable
    - Use .updated() for state variants
    - Define defaults for optional values
+   - Use abstract collection types: Sequence[T] not list[T], Mapping[K,V] not dict[K,V], Set[T] not set[T]
+   - Lists become tuples, sets become frozensets for immutability
 
 3. **Function Implementations**
    - Access context through ctx.state()
@@ -257,3 +265,24 @@ async def run_notes_app():
    - Define custom error types in types.py
    - Handle errors explicitly at appropriate levels
    - Maintain immutability in error cases
+
+## State Type Validation
+
+State classes validate all supported Python types:
+
+- **Basic Types**: int, str, bool, float, bytes, None
+- **Collection Types**: 
+  - Sequence[T] (converts lists to tuples)
+  - Mapping[K,V] (keeps as dict)
+  - Set[T] (converts to frozenset)
+  - tuple[T, ...] (fixed/variable length)
+- **Special Types**: UUID, datetime, date, time, timedelta, timezone, Path, re.Pattern
+- **Union Types**: str | None, int | float
+- **Literal Types**: Literal["a", "b", "c"] 
+- **Enum Types**: Standard Enum and StrEnum classes
+- **Callable Types**: Function types and Protocol interfaces
+- **TypedDict**: Structure validation with Required/NotRequired
+- **Nested State**: Recursive validation including generics
+- **Any Type**: Accepts any value without validation
+
+**Critical Rule**: Always use abstract collection types (Sequence, Mapping, Set) instead of concrete types (list, dict, set) to ensure immutability and proper validation.
