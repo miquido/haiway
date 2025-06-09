@@ -99,7 +99,7 @@ class AttributeRequirement[Root]:
             path, AttributePath
         ), "Prepare attribute path by using Self._.path.to.property or explicitly"
 
-        def check_like(root: Root) -> None:
+        def check_text_match(root: Root) -> None:
             checked: Any = cast(AttributePath[Root, str], path)(root)
             if not isinstance(checked, str):
                 raise ValueError(
@@ -140,9 +140,9 @@ class AttributeRequirement[Root]:
 
         return cls(
             path,
-            "like",
+            "text_match",
             value,
-            check=check_like,
+            check=check_text_match,
         )
 
     @classmethod
@@ -345,7 +345,7 @@ class AttributeRequirement[Root]:
         lhs: Any,
         operator: Literal[
             "equal",
-            "like",
+            "text_match",
             "not_equal",
             "contains",
             "contains_any",
@@ -378,7 +378,7 @@ class AttributeRequirement[Root]:
         )
         self.operator: Literal[
             "equal",
-            "like",
+            "text_match",
             "not_equal",
             "contains",
             "contains_any",
