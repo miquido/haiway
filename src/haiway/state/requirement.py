@@ -1,4 +1,6 @@
-from collections.abc import Callable, Collection, Iterable
+import re
+import unicodedata
+from collections.abc import Callable, Collection, Iterable, Sequence, Set
 from typing import Any, Literal, Self, cast, final
 
 from haiway.state.path import AttributePath
@@ -64,6 +66,83 @@ class AttributeRequirement[Root]:
             "equal",
             value,
             check=check_equal,
+        )
+
+    @classmethod
+    def text_match[Parameter](
+        cls,
+        value: str,
+        /,
+        path: AttributePath[Root, str] | str,
+    ) -> Self:
+        """
+        Create a requirement that performs text matching on an attribute.
+
+        Parameters
+        ----------
+        value : str
+            The search term (can contain multiple words separated by spaces/punctuation)
+        path : AttributePath[Root, str] | str
+            The path to the string attribute to search in
+
+        Returns
+        -------
+        Self
+            A new requirement instance
+
+        Raises
+        ------
+        AssertionError
+            If path is not an AttributePath
+        """
+        assert isinstance(  # nosec: B101
+            path, AttributePath
+        ), "Prepare attribute path by using Self._.path.to.property or explicitly"
+
+        def check_like(root: Root) -> None:
+            checked: Any = cast(AttributePath[Root, str], path)(root)
+            if not isinstance(checked, str):
+                raise ValueError(
+                    f"Attribute value must be a string for like operation, got {type(checked)}"
+                    f" for '{path.__repr__()}'"
+                )
+
+            # Perform full text search with proper Unicode support and word boundaries
+            def tokenize_text(text: str) -> Sequence[str]:
+                # Normalize and case-fold the text
+                normalized = unicodedata.normalize("NFC", text).casefold()
+                # Split on word boundaries and filter out empty strings
+                # re.UNICODE handles international characters, multiline text works by default
+                tokens = re.findall(r"\b\w+\b", normalized, re.UNICODE)
+                return tokens
+
+            # Tokenize both search terms and target text
+            search_tokens: Sequence[str] = tokenize_text(value)
+            target_tokens: Sequence[str] = tokenize_text(checked)
+            target_tokens_set: Set[str] = set(target_tokens)
+
+            # Check if all search tokens are found as complete words in target text
+            missing_terms = [
+                original_term
+                for original_term, token in zip(
+                    value.split(),
+                    search_tokens,
+                    strict=False,
+                )
+                if token not in target_tokens_set
+            ]
+
+            if missing_terms:
+                raise ValueError(
+                    f"Text search failed: '{checked}' is not like '{value}'. "
+                    f"Missing tokens: {missing_terms} for '{path.__repr__()}'"
+                )
+
+        return cls(
+            path,
+            "like",
+            value,
+            check=check_like,
         )
 
     @classmethod
@@ -266,6 +345,7 @@ class AttributeRequirement[Root]:
         lhs: Any,
         operator: Literal[
             "equal",
+            "like",
             "not_equal",
             "contains",
             "contains_any",
@@ -298,6 +378,7 @@ class AttributeRequirement[Root]:
         )
         self.operator: Literal[
             "equal",
+            "like",
             "not_equal",
             "contains",
             "contains_any",
