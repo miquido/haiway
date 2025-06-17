@@ -1,4 +1,10 @@
-from asyncio import gather
+from asyncio import (
+    AbstractEventLoop,
+    gather,
+    get_running_loop,
+    run_coroutine_threadsafe,
+    wrap_future,
+)
 from collections.abc import Iterable
 from contextlib import AbstractAsyncContextManager
 from itertools import chain
@@ -34,7 +40,7 @@ class Disposables:
     The class is immutable after initialization.
     """
 
-    __slots__ = ("_disposables",)
+    __slots__ = ("_disposables", "_loop")
 
     def __init__(
         self,
@@ -53,6 +59,12 @@ class Disposables:
             self,
             "_disposables",
             disposables,
+        )
+        self._loop: AbstractEventLoop | None
+        object.__setattr__(
+            self,
+            "_loop",
+            None,
         )
 
     def __setattr__(
@@ -111,6 +123,12 @@ class Disposables:
         Iterable[State]
             Collection of State objects from all disposables.
         """
+        assert self._loop is None  # nosec: B101
+        object.__setattr__(
+            self,
+            "_loop",
+            get_running_loop(),
+        )
         return [
             *chain.from_iterable(
                 state
@@ -119,6 +137,25 @@ class Disposables:
                 )
             )
         ]
+
+    async def _cleanup(
+        self,
+        /,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> list[bool | BaseException | None]:
+        return await gather(
+            *[
+                disposable.__aexit__(
+                    exc_type,
+                    exc_val,
+                    exc_tb,
+                )
+                for disposable in self._disposables
+            ],
+            return_exceptions=True,
+        )
 
     async def __aexit__(
         self,
@@ -146,19 +183,39 @@ class Disposables:
         BaseExceptionGroup
             If multiple disposables raise exceptions during exit
         """
-        results: list[bool | BaseException | None] = await gather(
-            *[
-                disposable.__aexit__(
+
+        assert self._loop is not None  # nosec: B101
+        results: list[bool | BaseException | None]
+
+        try:
+            current_loop: AbstractEventLoop = get_running_loop()
+            if self._loop != current_loop:
+                results = await wrap_future(
+                    run_coroutine_threadsafe(
+                        self._cleanup(
+                            exc_type,
+                            exc_val,
+                            exc_tb,
+                        ),
+                        loop=self._loop,
+                    )
+                )
+
+            else:
+                results = await self._cleanup(
                     exc_type,
                     exc_val,
                     exc_tb,
                 )
-                for disposable in self._disposables
-            ],
-            return_exceptions=True,
-        )
+
+        finally:
+            object.__setattr__(
+                self,
+                "_loop",
+                None,
+            )
 
         exceptions: list[BaseException] = [exc for exc in results if isinstance(exc, BaseException)]
 
         if len(exceptions) > 1:
-            raise BaseExceptionGroup("Disposing errors", exceptions)
+            raise BaseExceptionGroup("Disposables cleanup errors", exceptions)
