@@ -11,12 +11,10 @@ __all__ = ("asynchronous",)
 
 
 @overload
-def asynchronous[**Args, Result]() -> (
-    Callable[
-        [Callable[Args, Result]],
-        Callable[Args, Coroutine[Any, Any, Result]],
-    ]
-): ...
+def asynchronous[**Args, Result]() -> Callable[
+    [Callable[Args, Result]],
+    Callable[Args, Coroutine[Any, Any, Result]],
+]: ...
 
 
 @overload

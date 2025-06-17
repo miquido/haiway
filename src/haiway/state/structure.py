@@ -728,6 +728,14 @@ class State(metaclass=StateMeta):
             for key in self.__ATTRIBUTES__.keys()
         )
 
+    def __hash__(self) -> int:
+        return hash(
+            (
+                self.__class__,
+                *tuple(getattr(self, key, MISSING) for key in sorted(self.__ATTRIBUTES__.keys())),
+            )
+        )
+
     def __setattr__(
         self,
         name: str,

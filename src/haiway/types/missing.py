@@ -47,6 +47,9 @@ class Missing(metaclass=MissingType):
     def __bool__(self) -> bool:
         return False
 
+    def __hash__(self) -> int:
+        return hash(self.__class__)
+
     def __eq__(
         self,
         value: object,

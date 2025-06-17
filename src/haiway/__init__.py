@@ -13,6 +13,8 @@ from haiway.context import (
     ctx,
 )
 from haiway.helpers import (
+    File,
+    FileAccess,
     LoggerObservability,
     asynchronous,
     cache,
@@ -63,6 +65,8 @@ __all__ = (
     "DefaultValue",
     "Disposable",
     "Disposables",
+    "File",
+    "FileAccess",
     "LoggerObservability",
     "Missing",
     "MissingContext",
