@@ -729,12 +729,22 @@ class State(metaclass=StateMeta):
         )
 
     def __hash__(self) -> int:
-        return hash(
-            (
-                self.__class__,
-                *tuple(getattr(self, key, MISSING) for key in sorted(self.__ATTRIBUTES__.keys())),
-            )
-        )
+        hash_values: list[int] = []
+        for key in self.__ATTRIBUTES__.keys():
+            value: Any = getattr(self, key, MISSING)
+
+            # Skip MISSING values to ensure consistent hashing
+            if value is MISSING:
+                continue
+
+            # Convert to hashable representation
+            try:
+                hash_values.append(hash(value))
+
+            except TypeError:
+                continue  # skip unhashable
+
+        return hash((self.__class__, tuple(hash_values)))
 
     def __setattr__(
         self,

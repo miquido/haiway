@@ -1,5 +1,0 @@
-*
-!./pyproject.toml
-!./config/unit.json
-!./src
-!./uv.lock
