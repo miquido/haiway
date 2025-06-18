@@ -1,6 +1,7 @@
 from asyncio import iscoroutinefunction
 from collections.abc import Callable, Coroutine, Iterable, MutableMapping
 from contextvars import ContextVar, Token
+from threading import Lock
 from types import TracebackType
 from typing import Any, Self, cast, final, overload
 
@@ -24,7 +25,7 @@ class ScopeState:
     This class is immutable after initialization.
     """
 
-    __slots__ = ("_state",)
+    __slots__ = ("_lock", "_state")
 
     def __init__(
         self,
@@ -35,6 +36,12 @@ class ScopeState:
             self,
             "_state",
             {type(element): element for element in state},
+        )
+        self._lock: Lock
+        object.__setattr__(
+            self,
+            "_lock",
+            Lock(),
         )
 
     def __setattr__(
@@ -55,6 +62,43 @@ class ScopeState:
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
         )
+
+    def check_state[StateType: State](
+        self,
+        state: type[StateType],
+        /,
+    ) -> bool:
+        """
+        Check state object availability by its type.
+
+        If the state type is not found, attempts to instantiate a new instance of\
+         the type if possible.
+
+        Parameters
+        ----------
+        state: type[StateType]
+            The type of state to check
+
+        Returns
+        -------
+        bool
+            True if state is available, otherwise False.
+        """
+        if state in self._state:
+            return True
+
+        else:
+            with self._lock:
+                if state in self._state:
+                    return True
+
+                try:
+                    initialized: StateType = state()
+                    self._state[state] = initialized
+                    return True
+
+                except BaseException:
+                    return False  # unavailable, we don't care the exception
 
     def state[StateType: State](
         self,
@@ -93,17 +137,20 @@ class ScopeState:
             return default
 
         else:
-            try:
-                initialized: StateType = state()
-                # we would need a locking here in multithreaded environment
-                self._state[state] = initialized
-                return initialized
+            with self._lock:
+                if state in self._state:
+                    return cast(StateType, self._state[state])
 
-            except Exception as exc:
-                raise MissingState(
-                    f"{state.__qualname__} is not defined in current scope"
-                    " and failed to provide a default value"
-                ) from exc
+                try:
+                    initialized: StateType = state()
+                    self._state[state] = initialized
+                    return initialized
+
+                except Exception as exc:
+                    raise MissingState(
+                        f"{state.__qualname__} is not defined in current scope"
+                        " and failed to provide a default value"
+                    ) from exc
 
     def updated(
         self,
@@ -148,6 +195,33 @@ class StateContext:
     """
 
     _context = ContextVar[ScopeState]("StateContext")
+
+    @classmethod
+    def check_state[StateType: State](
+        cls,
+        state: type[StateType],
+        /,
+    ) -> bool:
+        """
+        Check if state object is available in the current context.
+
+        Verifies if state object of the specified type is available the current context.
+
+        Parameters
+        ----------
+        state: type[StateType]
+            The type of state to check
+
+        Returns
+        -------
+        bool
+            True if state is available, otherwise False.
+        """
+        try:
+            return cls._context.get().check_state(state)
+
+        except LookupError:
+            return False  # no context no state
 
     @classmethod
     def state[StateType: State](
