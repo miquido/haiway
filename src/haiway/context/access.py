@@ -539,6 +539,8 @@ class ctx:
     def check_state[StateType: State](
         state: type[StateType],
         /,
+        *,
+        instantiate_defaults: bool = False,
     ) -> bool:
         """
         Check if state object is available in the current context.
@@ -551,12 +553,18 @@ class ctx:
         state: type[StateType]
             The type of state to check
 
+        instantiate_defaults: bool = False
+            Control if default value should be instantiated during check.
+
         Returns
         -------
         bool
             True if state is available, otherwise False.
         """
-        return StateContext.check_state(state)
+        return StateContext.check_state(
+            state,
+            instantiate_defaults=instantiate_defaults,
+        )
 
     @staticmethod
     def state[StateType: State](

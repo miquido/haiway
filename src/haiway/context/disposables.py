@@ -12,7 +12,7 @@ from itertools import chain
 from types import TracebackType
 from typing import Any, final
 
-from haiway.context.state import ScopeState, StateContext
+from haiway.context.state import StateContext
 from haiway.state import State
 from haiway.utils.mimic import mimic_function
 
@@ -195,19 +195,25 @@ class Disposables:
                 return multiple
 
     async def prepare(self) -> Iterable[State]:
+        """
+        Enter all contained disposables asynchronously.
+
+        Enters all disposables in parallel and collects any State objects they return.
+        """
         assert self._loop is None  # nosec: B101
         object.__setattr__(
             self,
             "_loop",
             get_running_loop(),
         )
-        return [
-            *chain.from_iterable(
+
+        return tuple(
+            chain.from_iterable(
                 await gather(
                     *[self._setup(disposable) for disposable in self._disposables],
                 )
             )
-        ]
+        )
 
     async def __aenter__(self) -> None:
         """
@@ -218,7 +224,7 @@ class Disposables:
         """
 
         assert self._state_context is None, "Context reentrance is not allowed"  # nosec: B101
-        state_context = StateContext(state=ScopeState(await self.prepare()))
+        state_context = StateContext.updated(await self.prepare())
         state_context.__enter__()
         object.__setattr__(
             self,
@@ -252,6 +258,26 @@ class Disposables:
         exc_val: BaseException | None = None,
         exc_tb: TracebackType | None = None,
     ) -> None:
+        """
+        Exit all contained disposables asynchronously.
+
+        Properly disposes of all resources by calling their __aexit__ methods in parallel.
+        If multiple disposables raise exceptions, they are collected into a BaseExceptionGroup.
+
+        Parameters
+        ----------
+        exc_type: type[BaseException] | None
+            The type of exception that caused the context to be exited
+        exc_val: BaseException | None
+            The exception that caused the context to be exited
+        exc_tb: TracebackType | None
+            The traceback for the exception that caused the context to be exited
+
+        Raises
+        ------
+        BaseExceptionGroup
+            If multiple disposables raise exceptions during exit
+        """
         assert self._loop is not None  # nosec: B101
         results: list[bool | BaseException | None]
 
@@ -306,6 +332,7 @@ class Disposables:
 
         Properly disposes of all resources by calling their __aexit__ methods in parallel.
         If multiple disposables raise exceptions, they are collected into a BaseExceptionGroup.
+        Additionally, produced state context will be also exited resetting state to previous.
 
         Parameters
         ----------

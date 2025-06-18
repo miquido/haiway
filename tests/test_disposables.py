@@ -128,7 +128,7 @@ def test_non_empty_disposables_is_truthy():
 async def test_setup_with_no_disposables():
     disposables = Disposables()
     result = await disposables.prepare()
-    assert result == []
+    assert result == ()
     assert disposables._loop is not None
 
 
@@ -137,7 +137,7 @@ async def test_setup_with_disposable_returning_none():
     mock = MockDisposable(enter_return=None)
     disposables = Disposables(mock)
     result = await disposables.prepare()
-    assert result == []
+    assert result == ()
     assert mock.enter_called
     assert disposables._loop is not None
 

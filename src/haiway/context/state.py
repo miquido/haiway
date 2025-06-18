@@ -67,6 +67,8 @@ class ScopeState:
         self,
         state: type[StateType],
         /,
+        *,
+        instantiate_defaults: bool = False,
     ) -> bool:
         """
         Check state object availability by its type.
@@ -79,6 +81,9 @@ class ScopeState:
         state: type[StateType]
             The type of state to check
 
+        instantiate_defaults: bool = False
+            Control if default value should be instantiated during check.
+
         Returns
         -------
         bool
@@ -87,7 +92,7 @@ class ScopeState:
         if state in self._state:
             return True
 
-        else:
+        elif instantiate_defaults:
             with self._lock:
                 if state in self._state:
                     return True
@@ -99,6 +104,9 @@ class ScopeState:
 
                 except BaseException:
                     return False  # unavailable, we don't care the exception
+
+        else:
+            return False
 
     def state[StateType: State](
         self,
@@ -201,6 +209,7 @@ class StateContext:
         cls,
         state: type[StateType],
         /,
+        instantiate_defaults: bool = False,
     ) -> bool:
         """
         Check if state object is available in the current context.
@@ -212,13 +221,19 @@ class StateContext:
         state: type[StateType]
             The type of state to check
 
+        instantiate_defaults: bool = False
+            Control if default value should be instantiated during check.
+
         Returns
         -------
         bool
             True if state is available, otherwise False.
         """
         try:
-            return cls._context.get().check_state(state)
+            return cls._context.get().check_state(
+                state,
+                instantiate_defaults=instantiate_defaults,
+            )
 
         except LookupError:
             return False  # no context no state
