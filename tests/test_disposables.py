@@ -7,6 +7,7 @@ from pytest import mark, raises
 
 from haiway import State
 from haiway.context import Disposables
+from haiway.context.access import ctx
 
 
 class ExampleState(State):
@@ -124,42 +125,42 @@ def test_non_empty_disposables_is_truthy():
 
 
 @mark.asyncio
-async def test_enter_with_no_disposables():
+async def test_setup_with_no_disposables():
     disposables = Disposables()
-    result = await disposables.__aenter__()
+    result = await disposables.prepare()
     assert result == []
     assert disposables._loop is not None
 
 
 @mark.asyncio
-async def test_enter_with_disposable_returning_none():
+async def test_setup_with_disposable_returning_none():
     mock = MockDisposable(enter_return=None)
     disposables = Disposables(mock)
-    result = await disposables.__aenter__()
+    result = await disposables.prepare()
     assert result == []
     assert mock.enter_called
     assert disposables._loop is not None
 
 
 @mark.asyncio
-async def test_enter_with_disposable_returning_single_state():
+async def test_setup_with_disposable_returning_single_state():
     test_state = ExampleState(value="test")
     mock = MockDisposable(enter_return=test_state)
     disposables = Disposables(mock)
-    result = tuple(await disposables.__aenter__())
+    result = tuple(await disposables.prepare())
     assert len(result) == 1
     assert result[0] is test_state
     assert mock.enter_called
 
 
 @mark.asyncio
-async def test_enter_with_disposable_returning_multiple_states():
+async def test_setup_with_disposable_returning_multiple_states():
     state1 = ExampleState(value="first")
     state2 = AnotherExampleState(data=42)
     states = [state1, state2]
     mock = MockDisposable(enter_return=states)
     disposables = Disposables(mock)
-    result = tuple(await disposables.__aenter__())
+    result = tuple(await disposables.prepare())
     assert len(result) == 2
     assert state1 in result
     assert state2 in result
@@ -167,7 +168,7 @@ async def test_enter_with_disposable_returning_multiple_states():
 
 
 @mark.asyncio
-async def test_enter_with_multiple_disposables_mixed_returns():
+async def test_setup_with_multiple_disposables_mixed_returns():
     state1 = ExampleState(value="single")
     state2 = AnotherExampleState(data=100)
     state3 = ExampleState(value="another")
@@ -177,7 +178,7 @@ async def test_enter_with_multiple_disposables_mixed_returns():
     mock3 = MockDisposable(enter_return=[state2, state3])
 
     disposables = Disposables(mock1, mock2, mock3)
-    result = tuple(await disposables.__aenter__())
+    result = tuple(await disposables.prepare())
 
     assert len(result) == 3
     assert state1 in result
@@ -187,31 +188,29 @@ async def test_enter_with_multiple_disposables_mixed_returns():
 
 
 @mark.asyncio
-async def test_enter_sets_loop_correctly():
+async def test_setup_sets_loop_correctly():
     disposables = Disposables()
     current_loop = asyncio.get_running_loop()
-    await disposables.__aenter__()
+    await disposables.prepare()
     assert disposables._loop is current_loop
 
 
 @mark.asyncio
-async def test_exit_with_no_disposables():
-    """Test exiting empty Disposables."""
+async def test_dispose_with_no_disposables():
     disposables = Disposables()
-    await disposables.__aenter__()
-    await disposables.__aexit__(None, None, None)
+    await disposables.prepare()
+    await disposables.dispose(None, None, None)
     assert disposables._loop is None
 
 
 @mark.asyncio
-async def test_exit_with_successful_cleanup():
-    """Test exiting with successful cleanup of all disposables."""
+async def test_dispose_with_successful_cleanup():
     mock1 = MockDisposable()
     mock2 = MockDisposable()
     disposables = Disposables(mock1, mock2)
 
-    await disposables.__aenter__()
-    await disposables.__aexit__(None, None, None)
+    await disposables.prepare()
+    await disposables.dispose(None, None, None)
 
     assert mock1.exit_called
     assert mock2.exit_called
@@ -221,14 +220,14 @@ async def test_exit_with_successful_cleanup():
 
 
 @mark.asyncio
-async def test_exit_with_exception_context():
+async def test_dispose_with_exception_context():
     mock = MockDisposable()
     disposables = Disposables(mock)
 
-    await disposables.__aenter__()
+    await disposables.prepare()
 
     exc = ValueError("test exception")
-    await disposables.__aexit__(type(exc), exc, exc.__traceback__)
+    await disposables.dispose(type(exc), exc, exc.__traceback__)
 
     assert mock.exit_called
     assert mock.exit_args[0] is type(exc)
@@ -237,17 +236,17 @@ async def test_exit_with_exception_context():
 
 
 @mark.asyncio
-async def test_exit_with_multiple_exceptions_creates_group():
+async def test_dispose_with_multiple_exceptions_creates_group():
     exc1 = RuntimeError("error 1")
     exc2 = ValueError("error 2")
     mock1 = MockDisposable(exit_exception=exc1)
     mock2 = MockDisposable(exit_exception=exc2)
     disposables = Disposables(mock1, mock2)
 
-    await disposables.__aenter__()
+    await disposables.prepare()
 
     with raises(BaseExceptionGroup) as exc_info:
-        await disposables.__aexit__(None, None, None)
+        await disposables.dispose(None, None, None)
 
     exception_group = exc_info.value
     assert "Disposables cleanup errors" in str(exception_group)
@@ -258,29 +257,30 @@ async def test_exit_with_multiple_exceptions_creates_group():
 
 
 @mark.asyncio
-async def test_exit_with_single_exception_is_swallowed():
+async def test_dispose_with_single_exception_is_risen():
     exc = RuntimeError("cleanup failed")
     mock = MockDisposable(exit_exception=exc)
     disposables = Disposables(mock)
 
-    await disposables.__aenter__()
+    await disposables.prepare()
 
-    # Single exception does not get re-raised due to current implementation
-    await disposables.__aexit__(None, None, None)
+    with raises(RuntimeError, match="cleanup failed"):
+        await disposables.dispose(None, None, None)
+
     assert disposables._loop is None
 
 
 @mark.asyncio
-async def test_exit_resets_loop_even_on_exception():
+async def test_dispose_resets_loop_even_on_exception():
     exc = RuntimeError("cleanup failed")
     mock = MockDisposable(exit_exception=exc)
     disposables = Disposables(mock)
 
-    await disposables.__aenter__()
+    await disposables.prepare()
     assert disposables._loop is not None
 
-    # Single exception case - it gets handled but not re-raised
-    await disposables.__aexit__(None, None, None)
+    with raises(RuntimeError, match="cleanup failed"):
+        await disposables.dispose(None, None, None)
     assert disposables._loop is None
 
 
@@ -289,12 +289,12 @@ async def test_same_loop_cleanup():
     mock = MockDisposable()
     disposables = Disposables(mock)
 
-    await disposables.__aenter__()
+    await disposables.prepare()
     initial_loop = disposables._loop
     current_loop = asyncio.get_running_loop()
     assert initial_loop is current_loop
 
-    await disposables.__aexit__(None, None, None)
+    await disposables.dispose(None, None, None)
     assert mock.exit_called
 
 
@@ -306,21 +306,11 @@ async def test_with_real_async_context_managers():
         disposable_returning_multiple_states(),
     )
 
-    async with disposables as states:
-        state_values = tuple(
-            state.value
-            if isinstance(state, ExampleState)
-            else state.data
-            if isinstance(state, AnotherExampleState)
-            else state
-            for state in states
-        )
-        assert len(state_values) == 3
-
-        # Check the states returned
-        assert "single" in state_values
-        assert "first" in state_values
-        assert 100 in state_values
+    async with disposables:
+        # Check the states accessibility
+        assert "single" != ctx.state(ExampleState).value
+        assert "first" == ctx.state(ExampleState).value
+        assert 100 == ctx.state(AnotherExampleState).data
 
 
 @mark.asyncio
@@ -332,45 +322,41 @@ async def test_nested_disposables_usage():
     outer_disposables = Disposables(outer_mock)
     inner_disposables = Disposables(inner_mock)
 
-    async with outer_disposables as outer:
-        outer_states = tuple(outer)
-        assert len(outer_states) == 1
-        assert isinstance(outer_states[0], ExampleState) and outer_states[0].value == "outer"
+    async with outer_disposables:
+        assert "outer" in ctx.state(ExampleState).value
 
-        async with inner_disposables as inner:
-            inner_states = tuple(inner)
-            assert len(inner_states) == 1
-            assert isinstance(inner_states[0], ExampleState) and inner_states[0].value == "inner"
+        async with inner_disposables:
+            assert "inner" in ctx.state(ExampleState).value
 
     assert outer_mock.exit_called
     assert inner_mock.exit_called
 
 
 @mark.asyncio
-async def test_exception_during_enter_phase():
+async def test_exception_during_setup_phase():
     exc = RuntimeError("enter failed")
     mock = MockDisposable(enter_exception=exc)
     disposables = Disposables(mock)
 
     with raises(RuntimeError, match="enter failed"):
-        await disposables.__aenter__()
+        await disposables.prepare()
 
 
 @mark.asyncio
-async def test_assertion_on_double_enter():
+async def test_assertion_on_doubleprepare():
     disposables = Disposables()
-    await disposables.__aenter__()
+    await disposables.prepare()
 
     # Second enter should assert because loop is already set
     with raises(AssertionError):
-        await disposables.__aenter__()
+        await disposables.prepare()
 
 
 @mark.asyncio
-async def test_assertion_on_exit_without_enter():
+async def test_assertion_on_dispose_withoutprepare():
     """Test that exiting without entering raises AssertionError."""
     disposables = Disposables()
 
     # Exit without enter should assert because loop is None
     with raises(AssertionError):
-        await disposables.__aexit__(None, None, None)
+        await disposables.dispose(None, None, None)

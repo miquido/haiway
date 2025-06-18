@@ -169,8 +169,8 @@ class ScopeContext:
                 StateContext(
                     state=ScopeState(
                         (
-                            *await disposables.__aenter__(),
                             *self._state_context._state._state.values(),
+                            *await disposables.prepare(),
                         )
                     ),
                 ),
@@ -187,7 +187,7 @@ class ScopeContext:
         exc_tb: TracebackType | None,
     ) -> None:
         if disposables := self._disposables:
-            await disposables.__aexit__(
+            await disposables.dispose(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
@@ -383,6 +383,48 @@ class ctx:
         return StateContext.updated(element for element in state if element is not None)
 
     @staticmethod
+    def disposables(
+        *disposables: Disposable | None,
+    ) -> Disposables:
+        """
+        Create a container for managing multiple disposable resources.
+
+        Disposables are async context managers that can provide state objects and
+        require proper cleanup. This method creates a Disposables container that
+        manages multiple disposable resources as a single unit, handling their
+        lifecycle and state propagation.
+
+        Parameters
+        ----------
+        *disposables: Disposable | None
+            Variable number of disposable resources to be managed together.
+            None values are filtered out automatically.
+
+        Returns
+        -------
+        Disposables
+            A container that manages the lifecycle of all provided disposables
+            and propagates their state to the context when used with ctx.scope()
+
+        Examples
+        --------
+        Using disposables with database connections:
+
+        >>> from haiway import ctx
+        >>> async def main():
+        ...
+        ...     async with ctx.scope(
+        ...         "database_work",
+        ...         disposables=(database_connection(),)
+        ...     ):
+        ...         # ConnectionState is now available in context
+        ...         conn_state = ctx.state(ConnectionState)
+        ...         await conn_state.connection.execute("SELECT 1")
+        """
+
+        return Disposables(*(disposable for disposable in disposables if disposable is not None))
+
+    @staticmethod
     def spawn[Result, **Arguments](
         function: Callable[Arguments, Coroutine[Any, Any, Result]],
         /,
@@ -494,24 +536,89 @@ class ctx:
             raise RuntimeError("Attempting to cancel context out of asyncio task")
 
     @staticmethod
+    def check_state[StateType: State](
+        state: type[StateType],
+        /,
+    ) -> bool:
+        """
+        Check if state object is available in the current context.
+
+        Verifies if state object of the specified type is available the current context.
+        Instantiates requested state if needed and possible.
+
+        Parameters
+        ----------
+        state: type[StateType]
+            The type of state to check
+
+        Returns
+        -------
+        bool
+            True if state is available, otherwise False.
+        """
+        return StateContext.check_state(state)
+
+    @staticmethod
     def state[StateType: State](
         state: type[StateType],
         /,
         default: StateType | None = None,
     ) -> StateType:
         """
-        Access current scope context state by its type. If there is no matching state defined\
-         default value will be created if able, an exception will raise otherwise.
+        Access state from the current scope context by its type.
+
+        Retrieves state objects that have been propagated within the current execution context.
+        State objects are automatically made available through context scopes and disposables.
+        If no matching state is found, creates a default instance if possible.
 
         Parameters
         ----------
         state: type[StateType]
-            type of requested state
+            The State class type to retrieve from the current context
+        default: StateType | None, default=None
+            Optional default instance to return if state is not found in context.
+            If None and no state is found, a new instance will be created if possible.
 
         Returns
         -------
         StateType
-            resolved state instance
+            The state instance from the current context or a default/new instance
+
+        Raises
+        ------
+        RuntimeError
+            If called outside of any scope context
+        TypeError
+            If no state is found and no default can be created
+
+        Examples
+        --------
+        Accessing configuration state:
+
+        >>> from haiway import ctx, State
+        >>>
+        >>> class ApiConfig(State):
+        ...     base_url: str = "https://api.example.com"
+        ...     timeout: int = 30
+        >>>
+        >>> async def fetch_data():
+        ...     config = ctx.state(ApiConfig)
+        ...     # Use config.base_url and config.timeout
+        >>>
+        >>> async with ctx.scope("api", ApiConfig(base_url="https://custom.api.com")):
+        ...     await fetch_data()  # Uses custom config
+
+        Accessing state with default:
+
+        >>> cache_config = ctx.state(CacheConfig, default=CacheConfig(ttl=3600))
+
+        Within service classes:
+
+        >>> class UserService(State):
+        ...     @classmethod
+        ...     async def get_user(cls, user_id: str) -> User:
+        ...         config = ctx.state(DatabaseConfig)
+        ...         # Use config to connect to database
         """
         return StateContext.state(
             state,
