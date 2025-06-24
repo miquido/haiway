@@ -1,5 +1,5 @@
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar, Self, cast, final
 from uuid import UUID
 
@@ -26,12 +26,16 @@ from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExpo
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SpanExporter
-from opentelemetry.trace import Span, StatusCode, Tracer
-from opentelemetry.trace.span import SpanContext
+from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
+from opentelemetry.trace import Link, Span, SpanContext, StatusCode, TraceFlags, Tracer
 
-from haiway.context import Observability, ObservabilityLevel, ScopeIdentifier
-from haiway.context.observability import ObservabilityAttribute
-from haiway.state import State
+from haiway.context import (
+    Observability,
+    ObservabilityAttribute,
+    ObservabilityLevel,
+    ScopeIdentifier,
+    ctx,
+)
 from haiway.types import MISSING
 
 __all__ = ("OpenTelemetry",)
@@ -437,6 +441,8 @@ class OpenTelemetry:
     def observability(  # noqa: C901, PLR0915
         cls,
         level: ObservabilityLevel = ObservabilityLevel.INFO,
+        *,
+        external_trace_id: str | None = None,
     ) -> Observability:
         """
         Create an Observability implementation using OpenTelemetry.
@@ -449,6 +455,9 @@ class OpenTelemetry:
         ----------
         level : ObservabilityLevel, default=ObservabilityLevel.INFO
             The minimum observability level to record
+        external_trace_id : str | None, optional
+            External trace ID for distributed tracing context propagation.
+            If provided, the root span will be linked to this external trace.
 
         Returns
         -------
@@ -645,7 +654,7 @@ class OpenTelemetry:
 
             scopes[scope.scope_id].record_attributes(attributes)
 
-        def scope_entering[Metric: State](
+        def scope_entering(
             scope: ScopeIdentifier,
             /,
         ) -> None:
@@ -678,17 +687,44 @@ class OpenTelemetry:
             scope_store: ScopeStore
             if root_scope is None:
                 meter = metrics.get_meter(scope.label)
-                context: Context = Context(
-                    **get_current(),
-                    # trace_id=scope.trace_id,
-                    # span_id=scope.scope_id,
-                )
+                context: Context = get_current()
+
+                # Handle distributed tracing with external trace ID
+                links: Sequence[Link] | None = None
+                if external_trace_id is not None:
+                    # Convert external trace ID to OpenTelemetry trace ID format
+                    try:
+                        # Generate a proper span ID for the external trace link
+                        id_generator = RandomIdGenerator()
+
+                        # Create a link to the external trace
+                        links = (
+                            Link(
+                                SpanContext(
+                                    (  # Assume external_trace_id is a hex string, convert to int
+                                        int(external_trace_id, 16)
+                                        if isinstance(external_trace_id, str)
+                                        else int(external_trace_id)
+                                    ),
+                                    id_generator.generate_span_id(),  # Generate proper span ID
+                                    True,  # is_remote=True
+                                    TraceFlags.SAMPLED,  # pyright: ignore[reportArgumentType]
+                                )
+                            ),
+                        )
+
+                    except (ValueError, TypeError):
+                        ctx.log_warning(
+                            "Failed to convert external trace ID to OpenTelemetry format"
+                        )
+
                 scope_store = ScopeStore(
                     scope,
                     context=context,
                     span=tracer.start_span(
                         name=scope.label,
                         context=context,
+                        links=links,
                     ),
                     meter=meter,
                     logger=get_logger(scope.label),
@@ -711,7 +747,7 @@ class OpenTelemetry:
 
             scopes[scope.scope_id] = scope_store
 
-        def scope_exiting[Metric: State](
+        def scope_exiting(
             scope: ScopeIdentifier,
             /,
             *,
