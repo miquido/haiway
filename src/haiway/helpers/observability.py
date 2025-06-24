@@ -6,7 +6,6 @@ from uuid import UUID, uuid4
 
 from haiway.context import Observability, ObservabilityLevel, ScopeIdentifier
 from haiway.context.observability import ObservabilityAttribute
-from haiway.state import State
 from haiway.utils.formatting import format_str
 
 __all__ = ("LoggerObservability",)
@@ -232,7 +231,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
             f"[{trace_id_hex}] {scope.unique_name} {attributes_str}",
         )
 
-    def scope_entering[Metric: State](
+    def scope_entering(
         scope: ScopeIdentifier,
         /,
     ) -> None:
@@ -255,7 +254,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
             f"[{trace_id_hex}] {scope.unique_name} Entering scope: {scope.label}",
         )
 
-    def scope_exiting[Metric: State](
+    def scope_exiting(
         scope: ScopeIdentifier,
         /,
         *,

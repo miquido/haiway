@@ -403,7 +403,7 @@ def _logger_observability(
             f"[{trace_id_hex}] {scope.unique_name} Recorded attributes: {format_str(attributes)}",
         )
 
-    def scope_entering[Metric: State](
+    def scope_entering(
         scope: ScopeIdentifier,
         /,
     ) -> None:
@@ -412,7 +412,7 @@ def _logger_observability(
             f"[{trace_id_hex}] {scope.unique_name} Entering scope: {scope.label}",
         )
 
-    def scope_exiting[Metric: State](
+    def scope_exiting(
         scope: ScopeIdentifier,
         /,
         *,
