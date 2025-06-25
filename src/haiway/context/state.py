@@ -37,7 +37,6 @@ class ScopeState:
             "_state",
             {type(element): element for element in state},
         )
-        assert all(isinstance(value, State) for value in self._state.values())  # nosec: B101
         self._lock: Lock
         object.__setattr__(
             self,
