@@ -1,4 +1,4 @@
-## Functionalities
+# Functionalities
 
 Haiway is a framework designed to facilitate the development of applications using the functional programming paradigm combined with structured concurrency concepts. Unlike traditional object-oriented frameworks, Haiway emphasizes immutability, pure functions, and context-based state management, enabling developers to build scalable and maintainable applications. By leveraging context managers combined with context variables, Haiway ensures safe state propagation in concurrent environments and simplifies dependency injection through function implementation propagation.
 
@@ -241,3 +241,4 @@ async with ctx.scope("example", file_notes(), NotesDirectory(path="./examples/no
     # and access its methods contextually
     await Notes.create_note("This was an example of Haiway")
 ```
+
