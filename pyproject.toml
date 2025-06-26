@@ -40,6 +40,12 @@ dev = [
   "pytest-cov~=6.1",
   "ruff~=0.12",
 ]
+docs = [
+  "mkdocs~=1.6",
+  "mkdocs-material~=9.5",
+  "mkdocstrings[python]~=0.27",
+  "pymdown-extensions~=10.12",
+]
 
 [tool.ruff]
 target-version = "py312"
