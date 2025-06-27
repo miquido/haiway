@@ -1,6 +1,7 @@
 from haiway.utils.always import always, async_always
 from haiway.utils.collections import as_dict, as_list, as_set, as_tuple, without_missing
 from haiway.utils.env import (
+    getenv,
     getenv_base64,
     getenv_bool,
     getenv_float,
@@ -26,6 +27,7 @@ __all__ = (
     "async_always",
     "async_noop",
     "format_str",
+    "getenv",
     "getenv_base64",
     "getenv_bool",
     "getenv_float",
