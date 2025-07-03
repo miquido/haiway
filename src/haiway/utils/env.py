@@ -474,7 +474,7 @@ def load_env(
                 idx: int  # find where key ends
                 for element in enumerate(line):
                     if element[1] == "=":
-                        idx: int = element[0]
+                        idx = element[0]
                         break
                 else:  # ignore keys without assignment
                     continue
