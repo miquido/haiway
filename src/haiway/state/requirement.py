@@ -100,7 +100,7 @@ class AttributeRequirement[Root]:
         ), "Prepare attribute path by using Self._.path.to.property or explicitly"
 
         def check_text_match(root: Root) -> None:
-            checked: Any = cast(AttributePath[Root, str], path)(root)
+            checked: Any = path(root)
             if not isinstance(checked, str):
                 raise ValueError(
                     f"Attribute value must be a string for like operation, got {type(checked)}"

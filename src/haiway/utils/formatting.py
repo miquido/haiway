@@ -47,7 +47,7 @@ def format_str(  # noqa: PLR0911
 
     # check for bytes
     elif isinstance(value, bytes):
-        return f"b'{value}'"
+        return f"b'{value!r}'"
 
     # try unpack mapping
     elif isinstance(value, Mapping):

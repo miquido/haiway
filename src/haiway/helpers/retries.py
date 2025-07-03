@@ -207,7 +207,7 @@ def _wrap_sync[**Args, Result](
                         case float(strict):
                             sleep_sync(strict)
 
-                        case make_delay:  # type: Callable[[], float]
+                        case make_delay:
                             sleep_sync(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
 
                 else:
@@ -253,7 +253,7 @@ def _wrap_async[**Args, Result](
                         case float(strict):
                             await sleep(strict)
 
-                        case make_delay:  # type: Callable[[], float]
+                        case make_delay:
                             await sleep(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
 
                 else:
