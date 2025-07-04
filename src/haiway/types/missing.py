@@ -1,11 +1,12 @@
-from typing import Any, Final, TypeGuard, cast, final
+from collections.abc import Callable
+from typing import Any, Final, TypeGuard, cast, final, overload
 
 __all__ = (
     "MISSING",
     "Missing",
     "is_missing",
     "not_missing",
-    "when_missing",
+    "unwrap_missing",
 )
 
 
@@ -147,11 +148,12 @@ def not_missing[Value](
     return check is not MISSING
 
 
-def when_missing[Value](
+@overload
+def unwrap_missing[Value](
     check: Value | Missing,
     /,
     *,
-    value: Value,
+    default: Value,
 ) -> Value:
     """
     Substitute a default value when the input is MISSING.
@@ -162,10 +164,10 @@ def when_missing[Value](
 
     Parameters
     ----------
-    check : Value | Missing
-        The value to check
-    value : Value
-        The default value to use if check is MISSING
+    value : Value | Missing
+        The value to check.
+    default : Value
+        The default value to use if check is MISSING.
 
     Returns
     -------
@@ -175,13 +177,65 @@ def when_missing[Value](
     Examples
     --------
     ```python
-    result = when_missing(optional_value, value=default_value)
+    result = unwrap_missing(optional_value, default=default_value)
     # result will be default_value if optional_value is MISSING
     # otherwise it will be optional_value
     ```
     """
-    if check is MISSING:
-        return value
+
+
+@overload
+def unwrap_missing[Value, Mapped](
+    value: Value | Missing,
+    /,
+    *,
+    default: Mapped,
+    mapping: Callable[[Value], Mapped],
+) -> Value | Mapped:
+    """
+    Substitute a default value when the input is MISSING or map the original.
+
+    This function provides a convenient way to replace the MISSING
+    sentinel with a default value, similar to how the or operator
+    works with None but specifically for the MISSING sentinel.
+    Original value is mapped using provided function when not missing.
+
+    Parameters
+    ----------
+    value : Value | Missing
+        The value to check.
+    default : Mapped
+        The default value to use if check is MISSING.
+    mapping: Callable[[Value], Result] | None = None
+        Mapping to apply to the value.
+
+    Returns
+    -------
+    Mapped
+        The original value with mapping applied if not MISSING, otherwise the provided default.
+
+    Examples
+    --------
+    ```python
+    result = unwrap_missing(optional_value, default=default_value, mapping=value_map)
+    # result will be default_value if optional_value is MISSING
+    # otherwise it will be optional_value after mapping
+    ```
+    """
+
+
+def unwrap_missing[Value, Mapped](
+    value: Value | Missing,
+    /,
+    *,
+    default: Value | Mapped,
+    mapping: Callable[[Value], Mapped] | None = None,
+) -> Value | Mapped:
+    if value is MISSING:
+        return default
+
+    elif mapping is not None:
+        return mapping(cast(Value, value))
 
     else:
-        return cast(Value, check)
+        return cast(Value, value)

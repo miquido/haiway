@@ -7,6 +7,7 @@ __all__ = ("setup_logging",)
 
 def setup_logging(
     *loggers: str,
+    time: bool = True,
     debug: bool = getenv_bool("DEBUG_LOGGING", __debug__),
 ) -> None:
     """\
@@ -16,6 +17,10 @@ def setup_logging(
     ----------
     *loggers: str
         names of additional loggers to configure.
+    time: bool = True
+        include timestamps in logs.
+    debug: bool = __debug__
+        include debug logs.
 
     NOTE: this function should be run only once on application start
     """
@@ -28,6 +33,10 @@ def setup_logging(
                 "standard": {
                     "format": "%(asctime)s [%(levelname)-4s] [%(name)s] %(message)s",
                     "datefmt": "%d/%b/%Y:%H:%M:%S +0000",
+                }
+                if time
+                else {
+                    "format": "[%(levelname)-4s] [%(name)s] %(message)s",
                 },
             },
             "handlers": {

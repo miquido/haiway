@@ -25,7 +25,10 @@ class ScopeState:
     This class is immutable after initialization.
     """
 
-    __slots__ = ("_lock", "_state")
+    __slots__ = (
+        "_lock",
+        "_state",
+    )
 
     def __init__(
         self,
@@ -271,7 +274,10 @@ class StateContext:
             If state not found and default not provided or instantiation fails
         """
         try:
-            return cls._context.get().state(state, default=default)
+            return cls._context.get().state(
+                state,
+                default=default,
+            )
 
         except LookupError as exc:
             raise MissingContext("StateContext requested but not defined!") from exc
