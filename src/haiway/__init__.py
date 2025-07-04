@@ -32,7 +32,7 @@ from haiway.types import (
     Missing,
     is_missing,
     not_missing,
-    when_missing,
+    unwrap_missing,
 )
 from haiway.utils import (
     AsyncQueue,
@@ -106,6 +106,6 @@ __all__ = (
     "throttle",
     "timeout",
     "traced",
-    "when_missing",
+    "unwrap_missing",
     "without_missing",
 )

@@ -50,7 +50,7 @@ def as_list[T](
     if collection is None:
         return None
 
-    if isinstance(collection, list):
+    elif isinstance(collection, list):
         return collection
 
     else:
@@ -95,7 +95,7 @@ def as_tuple[T](
     if collection is None:
         return None
 
-    if isinstance(collection, tuple):
+    elif isinstance(collection, tuple):
         return collection
 
     else:
@@ -140,7 +140,7 @@ def as_set[T](
     if collection is None:
         return None
 
-    if isinstance(collection, set):
+    elif isinstance(collection, set):
         return collection
 
     else:
@@ -185,7 +185,7 @@ def as_dict[K, V](
     if collection is None:
         return None
 
-    if isinstance(collection, dict):
+    elif isinstance(collection, dict):
         return collection
 
     else:

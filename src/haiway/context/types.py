@@ -13,8 +13,6 @@ class MissingContext(Exception):
     identifiers when no context has been established.
     """
 
-    pass
-
 
 class MissingState(Exception):
     """
@@ -24,5 +22,3 @@ class MissingState(Exception):
     that is not present in the current context and cannot be automatically
     created (either because no default was provided or instantiation failed).
     """
-
-    pass

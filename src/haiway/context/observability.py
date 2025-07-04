@@ -11,7 +11,6 @@ from typing import Any, Protocol, Self, final, runtime_checkable
 from uuid import UUID, uuid4
 
 from haiway.context.identifier import ScopeIdentifier
-from haiway.state import State
 from haiway.types import Missing
 from haiway.utils.formatting import format_str
 
@@ -166,7 +165,7 @@ class ObservabilityScopeEntering(Protocol):
     Implementations should record when execution enters a new scope.
     """
 
-    def __call__[Metric: State](
+    def __call__(
         self,
         scope: ScopeIdentifier,
         /,
@@ -182,7 +181,7 @@ class ObservabilityScopeExiting(Protocol):
     including any exceptions that caused the exit.
     """
 
-    def __call__[Metric: State](
+    def __call__(
         self,
         scope: ScopeIdentifier,
         /,

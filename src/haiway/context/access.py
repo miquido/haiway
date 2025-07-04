@@ -3,7 +3,6 @@ from asyncio import (
     Task,
     TaskGroup,
     current_task,
-    iscoroutinefunction,
 )
 from collections.abc import (
     AsyncGenerator,
@@ -28,7 +27,6 @@ from haiway.context.observability import (
 from haiway.context.state import ScopeState, StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.state import State
-from haiway.utils import mimic_function
 from haiway.utils.stream import AsyncStream
 
 __all__ = ("ctx",)
@@ -217,44 +215,6 @@ class ScopeContext:
             exc_val=exc_val,
             exc_tb=exc_tb,
         )
-
-    @overload
-    def __call__[Result, **Arguments](
-        self,
-        function: Callable[Arguments, Coroutine[Any, Any, Result]],
-    ) -> Callable[Arguments, Coroutine[Any, Any, Result]]: ...
-
-    @overload
-    def __call__[Result, **Arguments](
-        self,
-        function: Callable[Arguments, Result],
-    ) -> Callable[Arguments, Result]: ...
-
-    def __call__[Result, **Arguments](
-        self,
-        function: Callable[Arguments, Coroutine[Any, Any, Result]] | Callable[Arguments, Result],
-    ) -> Callable[Arguments, Coroutine[Any, Any, Result]] | Callable[Arguments, Result]:
-        if iscoroutinefunction(function):
-
-            async def async_context(
-                *args: Arguments.args,
-                **kwargs: Arguments.kwargs,
-            ) -> Result:
-                async with self:
-                    return await function(*args, **kwargs)
-
-            return mimic_function(function, within=async_context)
-
-        else:
-
-            def sync_context(
-                *args: Arguments.args,
-                **kwargs: Arguments.kwargs,
-            ) -> Result:
-                with self:
-                    return function(*args, **kwargs)  # pyright: ignore[reportReturnType]
-
-            return mimic_function(function, within=sync_context)  # pyright: ignore[reportReturnType]
 
 
 @final
@@ -482,18 +442,19 @@ class ctx:
         """
 
         output_stream = AsyncStream[Element]()
+        stream_scope: ScopeContext = ctx.scope("stream")
 
-        @ctx.scope("stream")
         async def stream() -> None:
-            try:
-                async for result in source(*args, **kwargs):
-                    await output_stream.send(result)
+            async with stream_scope:
+                try:
+                    async for result in source(*args, **kwargs):
+                        await output_stream.send(result)
 
-            except BaseException as exc:
-                output_stream.finish(exception=exc)
+                except BaseException as exc:
+                    output_stream.finish(exception=exc)
 
-            else:
-                output_stream.finish()
+                else:
+                    output_stream.finish()
 
         TaskGroupContext.run(stream)
         return output_stream
