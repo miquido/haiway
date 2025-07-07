@@ -130,9 +130,9 @@ async def process_concurrently[Element](  # noqa: C901, PLR0912
 
 @overload
 async def execute_concurrently[Element, Result](
-    source: Collection[Element],
-    /,
     handler: Callable[[Element], Coroutine[Any, Any, Result]],
+    /,
+    elements: Collection[Element],
     *,
     concurrent_tasks: int = 2,
 ) -> Sequence[Result]: ...
@@ -140,9 +140,9 @@ async def execute_concurrently[Element, Result](
 
 @overload
 async def execute_concurrently[Element, Result](
-    source: Collection[Element],
-    /,
     handler: Callable[[Element], Coroutine[Any, Any, Result]],
+    /,
+    elements: Collection[Element],
     *,
     concurrent_tasks: int = 2,
     return_exceptions: Literal[True],
@@ -150,9 +150,9 @@ async def execute_concurrently[Element, Result](
 
 
 async def execute_concurrently[Element, Result](  # noqa: C901
-    source: Collection[Element],
-    /,
     handler: Callable[[Element], Coroutine[Any, Any, Result]],
+    /,
+    elements: Collection[Element],
     *,
     concurrent_tasks: int = 2,
     return_exceptions: bool = False,
@@ -173,11 +173,11 @@ async def execute_concurrently[Element, Result](  # noqa: C901
 
     Parameters
     ----------
-    source : Collection[Element]
-        A collection of elements to process. The collection size determines
-        the result sequence length.
     handler : Callable[[Element], Coroutine[Any, Any, Result]]
         A coroutine function that processes each element and returns a result.
+    elements : Collection[Element]
+        A collection of elements to process. The collection size determines
+        the result sequence length.
     concurrent_tasks : int, default=2
         Maximum number of concurrent tasks. Must be greater than 0. Higher
         values allow more parallelism but consume more resources.
@@ -206,16 +206,16 @@ async def execute_concurrently[Element, Result](  # noqa: C901
     ...
     >>> urls = ["http://api.example.com/1", "http://api.example.com/2"]
     >>> results = await execute_concurrently(
-    ...     urls,
     ...     fetch_data,
+    ...     urls,
     ...     concurrent_tasks=10
     ... )
     >>> # results[0] corresponds to urls[0], results[1] to urls[1], etc.
 
     >>> # With exception handling
     >>> results = await execute_concurrently(
-    ...     urls,
     ...     fetch_data,
+    ...     urls,
     ...     concurrent_tasks=10,
     ...     return_exceptions=True
     ... )
@@ -230,7 +230,7 @@ async def execute_concurrently[Element, Result](  # noqa: C901
     running: set[Task[Result]] = set()
     results: MutableSequence[Task[Result]] = []
     try:
-        for element in source:
+        for element in elements:
             task: Task[Result] = ctx.spawn(handler, element)
             results.append(task)
             running.add(task)

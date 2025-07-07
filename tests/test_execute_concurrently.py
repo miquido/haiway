@@ -20,7 +20,10 @@ async def test_processes_all_elements():
         return element * 2
 
     elements = list(range(10))
-    results = await execute_concurrently(elements, handler)
+    results = await execute_concurrently(
+        handler,
+        elements,
+    )
     assert list(results) == [i * 2 for i in range(10)]
 
 
@@ -32,7 +35,7 @@ async def test_preserves_order():
         return element * 2
 
     elements = list(range(10))
-    results = await execute_concurrently(elements, handler, concurrent_tasks=3)
+    results = await execute_concurrently(handler, elements, concurrent_tasks=3)
     # Results should be in the same order as inputs despite different processing times
     assert list(results) == [i * 2 for i in range(10)]
 
@@ -42,7 +45,10 @@ async def test_handles_empty_collection():
     async def handler(element: int) -> int:
         return element * 2
 
-    results = await execute_concurrently([], handler)
+    results = await execute_concurrently(
+        handler,
+        [],
+    )
     assert list(results) == []
 
 
@@ -55,7 +61,10 @@ async def test_propagates_handler_exceptions():
 
     elements = list(range(10))
     with raises(FakeException):
-        await execute_concurrently(elements, handler)
+        await execute_concurrently(
+            handler,
+            elements,
+        )
 
 
 @mark.asyncio
@@ -66,7 +75,7 @@ async def test_returns_exceptions_when_configured():
         return element * 2
 
     elements = list(range(6))
-    results = await execute_concurrently(elements, handler, return_exceptions=True)
+    results = await execute_concurrently(handler, elements, return_exceptions=True)
 
     # Check that we got all results
     assert len(results) == 6
@@ -98,8 +107,8 @@ async def test_cancels_running_tasks_on_cancellation():
     with raises(CancelledError):
         task = ctx.spawn(
             execute_concurrently,
-            list(range(10)),
             slow_handler,
+            list(range(10)),
         )
         # Give some time for tasks to start
         await sleep(0.1)
@@ -126,7 +135,7 @@ async def test_respects_concurrency_limit():
         return element * 2
 
     elements = list(range(10))
-    results = await execute_concurrently(elements, tracking_handler, concurrent_tasks=3)
+    results = await execute_concurrently(tracking_handler, elements, concurrent_tasks=3)
     assert max_concurrent <= 3
     assert list(results) == [i * 2 for i in range(10)]
     assert currently_running == set()
@@ -138,7 +147,10 @@ async def test_works_with_different_types():
         return len(element)
 
     words = ["hello", "world", "test", "async"]
-    results = await execute_concurrently(words, handler)
+    results = await execute_concurrently(
+        handler,
+        words,
+    )
     assert list(results) == [5, 5, 4, 5]
 
 
@@ -150,7 +162,7 @@ async def test_handles_mixed_success_and_failure():
         return f"Success: {element}"
 
     elements = list(range(10))
-    results = await execute_concurrently(elements, handler, return_exceptions=True)
+    results = await execute_concurrently(handler, elements, return_exceptions=True)
 
     for i, result in enumerate(results):
         if i % 3 == 0:
@@ -167,13 +179,19 @@ async def test_works_with_sets_and_tuples():
 
     # Test with set (unordered collection)
     elements_set = {1, 2, 3, 4, 5}
-    results_set = await execute_concurrently(elements_set, handler)
+    results_set = await execute_concurrently(
+        handler,
+        elements_set,
+    )
     # Convert to set for comparison since order isn't guaranteed with input sets
     assert set(results_set) == {1, 4, 9, 16, 25}
 
     # Test with tuple (ordered collection)
     elements_tuple = (1, 2, 3, 4, 5)
-    results_tuple = await execute_concurrently(elements_tuple, handler)
+    results_tuple = await execute_concurrently(
+        handler,
+        elements_tuple,
+    )
     assert list(results_tuple) == [1, 4, 9, 16, 25]
 
 
@@ -189,7 +207,7 @@ async def test_exception_details_preserved():
             raise CustomError(404, "Not found")
         return element
 
-    results = await execute_concurrently([1, 2, 3], handler, return_exceptions=True)
+    results = await execute_concurrently(handler, [1, 2, 3], return_exceptions=True)
 
     assert results[0] == 1
     assert isinstance(results[1], CustomError)
