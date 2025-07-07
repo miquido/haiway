@@ -13,8 +13,6 @@ class FakeException(Exception):
 
 
 class Source:
-    """A simple async iterator for testing."""
-
     def __init__(
         self,
         elements: Iterable[int] | None = None,
