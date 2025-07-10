@@ -686,7 +686,7 @@ class OpenTelemetry:
 
             scope_store: ScopeStore
             if root_scope is None:
-                meter = metrics.get_meter(scope.label)
+                meter = metrics.get_meter(scope.name)
                 context: Context = get_current()
 
                 # Handle distributed tracing with external trace ID
@@ -722,12 +722,12 @@ class OpenTelemetry:
                     scope,
                     context=context,
                     span=tracer.start_span(
-                        name=scope.label,
+                        name=scope.name,
                         context=context,
                         links=links,
                     ),
                     meter=meter,
-                    logger=get_logger(scope.label),
+                    logger=get_logger(scope.name),
                 )
                 root_scope = scope
 
@@ -737,11 +737,11 @@ class OpenTelemetry:
                     scope,
                     context=scopes[scope.parent_id].context,
                     span=tracer.start_span(
-                        name=scope.label,
+                        name=scope.name,
                         context=scopes[scope.parent_id].context,
                     ),
                     meter=meter,
-                    logger=get_logger(scope.label),
+                    logger=get_logger(scope.name),
                 )
                 scopes[scope.parent_id].nested.append(scope_store)
 

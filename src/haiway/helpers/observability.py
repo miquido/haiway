@@ -243,7 +243,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         nonlocal root_logger
         if root_scope is None:
             root_scope = scope
-            root_logger = logger or getLogger(scope.label)
+            root_logger = logger or getLogger(scope.name)
 
         else:
             scopes[scope.parent_id].nested.append(scope_store)
@@ -251,7 +251,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         assert root_logger is not None  # nosec: B101
         root_logger.log(
             ObservabilityLevel.INFO,
-            f"[{trace_id_hex}] {scope.unique_name} Entering scope: {scope.label}",
+            f"[{trace_id_hex}] {scope.unique_name} Entering scope: {scope.name}",
         )
 
     def scope_exiting(
@@ -274,7 +274,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
         root_logger.log(
             ObservabilityLevel.INFO,
-            f"[{trace_id_hex}] {scope.unique_name} Exiting scope: {scope.label}",
+            f"[{trace_id_hex}] {scope.unique_name} Exiting scope: {scope.name}",
         )
         metric_str: str = f"Metric - scope_time:{scopes[scope.scope_id].time:.3f}s"
         if debug_context:  # store only for summary
@@ -332,9 +332,7 @@ def _tree_summary(scope_store: ScopeStore) -> str:
     str
         A formatted string representation of the scope hierarchy with recorded events
     """
-    elements: list[str] = [
-        f"┍━ {scope_store.identifier.label} [{scope_store.identifier.scope_id}]:"
-    ]
+    elements: list[str] = [f"┍━ {scope_store.identifier.name} [{scope_store.identifier.scope_id}]:"]
     for element in scope_store.store:
         if not element:
             continue  # skip empty

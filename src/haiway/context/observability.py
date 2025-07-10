@@ -408,7 +408,7 @@ def _logger_observability(
     ) -> None:
         logger.log(
             ObservabilityLevel.DEBUG,
-            f"[{trace_id_hex}] {scope.unique_name} Entering scope: {scope.label}",
+            f"[{trace_id_hex}] {scope.unique_name} Entering scope: {scope.name}",
         )
 
     def scope_exiting(
@@ -419,7 +419,7 @@ def _logger_observability(
     ) -> None:
         logger.log(
             ObservabilityLevel.DEBUG,
-            f"{scope.unique_name} Exiting scope: {scope.label}",
+            f"{scope.unique_name} Exiting scope: {scope.name}",
             exc_info=exception,
         )
 
@@ -486,7 +486,7 @@ class ObservabilityContext:
                     resolved_observability = observability
 
                 case None:
-                    resolved_observability = _logger_observability(getLogger(scope.label))
+                    resolved_observability = _logger_observability(getLogger(scope.name))
 
                 case Logger() as logger:
                     resolved_observability = _logger_observability(logger)
@@ -534,7 +534,7 @@ class ObservabilityContext:
         Returns
         -------
         str
-            The hexadecimal representation of the trace ID
+            The string representation of the trace ID
 
         Raises
         ------
@@ -542,12 +542,10 @@ class ObservabilityContext:
             If called outside of any scope context
         """
         try:
-            return (
-                cls._context.get()
-                .observability.trace_identifying(
+            return str(
+                cls._context.get().observability.trace_identifying(
                     scope_identifier if scope_identifier is not None else ScopeIdentifier.current()
                 )
-                .hex
             )
 
         except LookupError as exc:

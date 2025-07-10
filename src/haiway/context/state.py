@@ -1,5 +1,5 @@
 from asyncio import iscoroutinefunction
-from collections.abc import Callable, Coroutine, Iterable, MutableMapping
+from collections.abc import Callable, Collection, Coroutine, Iterable, MutableMapping
 from contextvars import ContextVar, Token
 from threading import Lock
 from types import TracebackType
@@ -206,6 +206,25 @@ class StateContext:
     """
 
     _context = ContextVar[ScopeState]("StateContext")
+
+    @classmethod
+    def current_state(cls) -> Collection[State]:
+        """
+        Return an immutable snapshot of the current state.
+
+        Returns
+        -------
+        Collection[State]
+            State objects present in the current context,
+            or an empty tuple if no context is active.
+        """
+        try:
+            scope_state: ScopeState = cls._context.get()
+            with scope_state._lock:
+                return tuple(scope_state._state.values())
+
+        except LookupError:
+            return ()  # return empty as default
 
     @classmethod
     def check_state[StateType: State](

@@ -30,7 +30,7 @@ class ScopeIdentifier:
     @classmethod
     def scope(
         cls,
-        label: str,
+        name: str,
         /,
     ) -> Self:
         """
@@ -41,7 +41,7 @@ class ScopeIdentifier:
 
         Parameters
         ----------
-        label: str
+        name: str
             The name of the scope
 
         Returns
@@ -58,21 +58,21 @@ class ScopeIdentifier:
 
             scope_id: UUID = uuid4()
             return cls(
-                label=label,
+                name=name,
                 scope_id=scope_id,
                 parent_id=scope_id,  # own id is parent_id for root
             )
 
         # create nested scope otherwise
         return cls(
-            label=label,
+            name=name,
             scope_id=uuid4(),
             parent_id=current.scope_id,
         )
 
     __slots__ = (
         "_token",
-        "label",
+        "name",
         "parent_id",
         "scope_id",
         "unique_name",
@@ -82,7 +82,7 @@ class ScopeIdentifier:
         self,
         parent_id: UUID,
         scope_id: UUID,
-        label: str,
+        name: str,
     ) -> None:
         self.parent_id: UUID
         object.__setattr__(
@@ -96,17 +96,17 @@ class ScopeIdentifier:
             "scope_id",
             scope_id,
         )
-        self.label: str
+        self.name: str
         object.__setattr__(
             self,
-            "label",
-            label,
+            "name",
+            name,
         )
         self.unique_name: str
         object.__setattr__(
             self,
             "unique_name",
-            f"[{label}] [{scope_id.hex}]",
+            f"[{name}] [{scope_id}]",
         )
         self._token: Token[ScopeIdentifier] | None
         object.__setattr__(
