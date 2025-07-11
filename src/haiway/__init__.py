@@ -27,7 +27,7 @@ from haiway.helpers import (
     timeout,
     traced,
 )
-from haiway.state import AttributePath, AttributeRequirement, State
+from haiway.state import AttributePath, AttributeRequirement, Immutable, State
 from haiway.types import (
     MISSING,
     Default,
@@ -72,6 +72,7 @@ __all__ = (
     "Disposables",
     "File",
     "FileAccess",
+    "Immutable",
     "LoggerObservability",
     "Missing",
     "MissingContext",

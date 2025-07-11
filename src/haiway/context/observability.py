@@ -7,10 +7,11 @@ from logging import INFO as INFO_LOGGING
 from logging import WARNING as WARNING_LOGGING
 from logging import Logger, getLogger
 from types import TracebackType
-from typing import Any, Protocol, Self, final, runtime_checkable
+from typing import Any, ClassVar, Protocol, Self, runtime_checkable
 from uuid import UUID, uuid4
 
 from haiway.context.identifier import ScopeIdentifier
+from haiway.state import Immutable
 from haiway.types import Missing
 from haiway.utils.formatting import format_str
 
@@ -190,7 +191,7 @@ class ObservabilityScopeExiting(Protocol):
     ) -> None: ...
 
 
-class Observability:  # avoiding State inheritance to prevent propagation as scope state
+class Observability(Immutable):  # avoiding State inheritance to prevent propagation as scope state
     """
     Container for observability recording functions.
 
@@ -201,107 +202,13 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
     This class is immutable after initialization.
     """
 
-    __slots__ = (
-        "attributes_recording",
-        "event_recording",
-        "log_recording",
-        "metric_recording",
-        "scope_entering",
-        "scope_exiting",
-        "trace_identifying",
-    )
-
-    def __init__(
-        self,
-        trace_identifying: ObservabilityTraceIdentifying,
-        log_recording: ObservabilityLogRecording,
-        metric_recording: ObservabilityMetricRecording,
-        event_recording: ObservabilityEventRecording,
-        attributes_recording: ObservabilityAttributesRecording,
-        scope_entering: ObservabilityScopeEntering,
-        scope_exiting: ObservabilityScopeExiting,
-    ) -> None:
-        """
-        Initialize an Observability container with recording functions.
-
-        Parameters
-        ----------
-        trace_identifying: ObservabilityTraceIdentifying
-            Function for identifying traces
-        log_recording: ObservabilityLogRecording
-            Function for recording log messages
-        metric_recording: ObservabilityMetricRecording
-            Function for recording metrics
-        event_recording: ObservabilityEventRecording
-            Function for recording events
-        attributes_recording: ObservabilityAttributesRecording
-            Function for recording attributes
-        scope_entering: ObservabilityScopeEntering
-            Function called when a scope is entered
-        scope_exiting: ObservabilityScopeExiting
-            Function called when a scope is exited
-        """
-        self.trace_identifying: ObservabilityTraceIdentifying
-        object.__setattr__(
-            self,
-            "trace_identifying",
-            trace_identifying,
-        )
-        self.log_recording: ObservabilityLogRecording
-        object.__setattr__(
-            self,
-            "log_recording",
-            log_recording,
-        )
-        self.metric_recording: ObservabilityMetricRecording
-        object.__setattr__(
-            self,
-            "metric_recording",
-            metric_recording,
-        )
-        self.event_recording: ObservabilityEventRecording
-        object.__setattr__(
-            self,
-            "event_recording",
-            event_recording,
-        )
-        self.attributes_recording: ObservabilityAttributesRecording
-        object.__setattr__(
-            self,
-            "attributes_recording",
-            attributes_recording,
-        )
-        self.scope_entering: ObservabilityScopeEntering
-        object.__setattr__(
-            self,
-            "scope_entering",
-            scope_entering,
-        )
-        self.scope_exiting: ObservabilityScopeExiting
-        object.__setattr__(
-            self,
-            "scope_exiting",
-            scope_exiting,
-        )
-
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> Any:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> None:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be deleted"
-        )
+    trace_identifying: ObservabilityTraceIdentifying
+    log_recording: ObservabilityLogRecording
+    metric_recording: ObservabilityMetricRecording
+    event_recording: ObservabilityEventRecording
+    attributes_recording: ObservabilityAttributesRecording
+    scope_entering: ObservabilityScopeEntering
+    scope_exiting: ObservabilityScopeExiting
 
 
 def _logger_observability(
@@ -434,8 +341,7 @@ def _logger_observability(
     )
 
 
-@final
-class ObservabilityContext:
+class ObservabilityContext(Immutable):
     """
     Context manager for observability within a scope.
 
@@ -446,7 +352,7 @@ class ObservabilityContext:
     This class is immutable after initialization.
     """
 
-    _context = ContextVar[Self]("ObservabilityContext")
+    _context: ClassVar[ContextVar[Self]] = ContextVar[Self]("ObservabilityContext")
 
     @classmethod
     def scope(
@@ -726,53 +632,29 @@ class ObservabilityContext:
                 exception=exc,
             )
 
-    __slots__ = (
-        "_scope",
-        "_token",
-        "observability",
-    )
+    _scope: ScopeIdentifier
+    observability: Observability
+    _token: Token[Self] | None = None
 
     def __init__(
         self,
         scope: ScopeIdentifier,
         observability: Observability | None,
     ) -> None:
-        self._scope: ScopeIdentifier
         object.__setattr__(
             self,
             "_scope",
             scope,
         )
-        self.observability: Observability
         object.__setattr__(
             self,
             "observability",
             observability,
         )
-        self._token: Token[ObservabilityContext] | None
         object.__setattr__(
             self,
             "_token",
             None,
-        )
-
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> Any:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> None:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be deleted"
         )
 
     def __enter__(self) -> None:
@@ -820,7 +702,7 @@ class ObservabilityContext:
             If the context is not active
         """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
-        ObservabilityContext._context.reset(self._token)
+        ObservabilityContext._context.reset(self._token)  # pyright: ignore[reportArgumentType]
         object.__setattr__(
             self,
             "_token",

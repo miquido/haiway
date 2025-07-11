@@ -32,15 +32,13 @@ from haiway.context.presets import (
 )
 from haiway.context.state import ScopeState, StateContext
 from haiway.context.tasks import TaskGroupContext
-from haiway.state import State
-from haiway.utils.collections import as_list
+from haiway.state import Immutable, State
 from haiway.utils.stream import AsyncStream
 
 __all__ = ("ctx",)
 
 
-@final
-class ScopeContext:
+class ScopeContext(Immutable):
     """
     Context manager for executing code within a defined scope.
 
@@ -52,17 +50,15 @@ class ScopeContext:
     to create scope contexts.
     """
 
-    __slots__ = (
-        "_captured_state",
-        "_disposables",
-        "_identifier",
-        "_observability_context",
-        "_presets",
-        "_presets_disposables",
-        "_resolved_state_context",
-        "_state",
-        "_task_group_context",
-    )
+    _identifier: ScopeIdentifier
+    _state: Collection[State]
+    _captured_state: Collection[State]
+    _resolved_state_context: StateContext | None
+    _disposables: Disposables | None
+    _presets: ContextPresets | None
+    _presets_disposables: Disposables | None
+    _observability_context: ObservabilityContext
+    _task_group_context: TaskGroupContext | None
 
     def __init__(
         self,
@@ -72,52 +68,44 @@ class ScopeContext:
         disposables: Disposables | None,
         observability: Observability | Logger | None,
     ) -> None:
-        self._identifier: ScopeIdentifier
         object.__setattr__(
             self,
             "_identifier",
             ScopeIdentifier.scope(name),
         )
         # store explicit state separately for priority control
-        self._state: Collection[State]
         object.__setattr__(
             self,
             "_state",
             state,
         )
         # capture current contextual state (without new additions)
-        self._captured_state: Collection[State]
         object.__setattr__(
             self,
             "_captured_state",
             StateContext.current_state(),
         )
         # placeholder for temporary, resolved state context
-        self._resolved_state_context: StateContext | None
         object.__setattr__(
             self,
             "_resolved_state_context",
             None,
         )
-        self._disposables: Disposables | None
         object.__setattr__(
             self,
             "_disposables",
             disposables,
         )
-        self._presets: ContextPresets | None
         object.__setattr__(
             self,
             "_presets",
             ContextPresetsRegistryContext.select(name),
         )
-        self._presets_disposables: Disposables | None
         object.__setattr__(
             self,
             "_presets_disposables",
             None,
         )
-        self._observability_context: ObservabilityContext
         object.__setattr__(
             self,
             "_observability_context",
@@ -127,32 +115,12 @@ class ScopeContext:
                 observability=observability,
             ),
         )
-        self._task_group_context: TaskGroupContext | None
         object.__setattr__(
             self,
             "_task_group_context",
             TaskGroupContext(task_group=task_group)
             if task_group is not None or self._identifier.is_root
             else None,
-        )
-
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> Any:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> None:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be deleted"
         )
 
     def __enter__(self) -> str:
@@ -166,7 +134,7 @@ class ScopeContext:
         self._observability_context.__enter__()
         # For sync context, only use explicit state (no presets or disposables allowed)
         resolved_state_context: StateContext = StateContext(
-            state=ScopeState((*self._captured_state, *self._state))
+            _state=ScopeState((*self._captured_state, *self._state))
         )
         object.__setattr__(
             self,
@@ -215,8 +183,10 @@ class ScopeContext:
             await task_group.__aenter__()
 
         # Collect all state sources in priority order (lowest to highest priority)
+        collected_state: list[State] = []
+
         # 1. Add contextual state first (lowest priority)
-        collected_state: list[State] = as_list(self._captured_state)
+        collected_state.extend(self._captured_state)
 
         # 2. Add preset state (low priority, overrides contextual)
         if self._presets is not None:
@@ -236,7 +206,7 @@ class ScopeContext:
         collected_state.extend(self._state)
         # Create resolved state context with all collected state
         resolved_state_context: StateContext = StateContext(
-            state=ScopeState(tuple(collected_state))
+            _state=ScopeState(tuple(collected_state))
         )
 
         resolved_state_context.__enter__()
@@ -386,12 +356,12 @@ class ctx:
         >>> # Define presets
         >>> dev_preset = ContextPresets(
         ...     name="development",
-        ...     state=[ApiConfig(base_url="https://dev-api.example.com")]
+        ...     _state=[ApiConfig(base_url="https://dev-api.example.com")]
         ... )
         >>>
         >>> prod_preset = ContextPresets(
         ...     name="production",
-        ...     state=[ApiConfig(base_url="https://api.example.com", timeout=60)]
+        ...     _state=[ApiConfig(base_url="https://api.example.com", timeout=60)]
         ... )
         >>>
         >>> # Use presets
@@ -405,7 +375,7 @@ class ctx:
         >>> base_presets = [dev_preset, prod_preset]
         >>> override_preset = ContextPresets(
         ...     name="development",
-        ...     state=[ApiConfig(base_url="https://staging.example.com")]
+        ...     _state=[ApiConfig(base_url="https://staging.example.com")]
         ... )
         >>>
         >>> with ctx.presets(*base_presets):
@@ -440,12 +410,17 @@ class ctx:
         Prepare scope context with given parameters. When called within an existing context\
          it becomes nested with current context as its parent.
 
-        State Priority
-        --------------
-        1. Explicit state (passed to ctx.scope()) - **highest priority**
-        2. Explicit disposables (passed to ctx.scope()) - medium priority
-        3. Preset state (from presets) - low priority
-        4. Contextual state (from parent contexts) - **lowest priority**
+        State Priority System
+        ---------------------
+        State resolution follows a 4-layer priority system (highest to lowest):
+
+        1. **Explicit state** (passed to ctx.scope()) - HIGHEST priority
+        2. **Explicit disposables** (passed to ctx.scope()) - medium priority
+        3. **Preset state** (from presets) - low priority
+        4. **Contextual state** (from parent contexts) - LOWEST priority
+
+        When state types conflict, higher priority sources override lower priority ones.
+        State objects are resolved by type, with the highest priority instance winning.
 
         Parameters
         ----------
