@@ -2,13 +2,14 @@ from asyncio import Task, TaskGroup, get_event_loop
 from collections.abc import Callable, Coroutine
 from contextvars import ContextVar, Token, copy_context
 from types import TracebackType
-from typing import Any, final
+from typing import Any, ClassVar
+
+from haiway.state import Immutable
 
 __all__ = ("TaskGroupContext",)
 
 
-@final
-class TaskGroupContext:
+class TaskGroupContext(Immutable):
     """
     Context manager for managing task groups within a scope.
 
@@ -17,7 +18,7 @@ class TaskGroupContext:
     This class is immutable after initialization.
     """
 
-    _context = ContextVar[TaskGroup]("TaskGroupContext")
+    _context: ClassVar[ContextVar[TaskGroup]] = ContextVar[TaskGroup]("TaskGroupContext")
 
     @classmethod
     def run[Result, **Arguments](
@@ -59,10 +60,8 @@ class TaskGroupContext:
                 context=copy_context(),
             )
 
-    __slots__ = (
-        "_group",
-        "_token",
-    )
+    _group: TaskGroup
+    _token: Token[TaskGroup] | None = None
 
     def __init__(
         self,
@@ -76,13 +75,11 @@ class TaskGroupContext:
         task_group: TaskGroup | None
             The task group to use, or None to create a new one
         """
-        self._group: TaskGroup
         object.__setattr__(
             self,
             "_group",
             task_group if task_group is not None else TaskGroup(),
         )
-        self._token: Token[TaskGroup] | None
         object.__setattr__(
             self,
             "_token",

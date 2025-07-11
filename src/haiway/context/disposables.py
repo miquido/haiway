@@ -5,13 +5,12 @@ from asyncio import (
     run_coroutine_threadsafe,
     wrap_future,
 )
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from contextlib import AbstractAsyncContextManager
 from itertools import chain
 from types import TracebackType
-from typing import Any, final
 
-from haiway.state import State
+from haiway.state import Immutable, State
 
 __all__ = (
     "Disposable",
@@ -54,8 +53,7 @@ Creating a disposable database connection:
 """
 
 
-@final
-class Disposables:
+class Disposables(Immutable):
     """
     A container for multiple Disposable resources that manages their lifecycle.
 
@@ -109,10 +107,8 @@ class Disposables:
     ...     # All resources cleaned up automatically
     """
 
-    __slots__ = (
-        "_disposables",
-        "_loop",
-    )
+    _disposables: Collection[Disposable]
+    _loop: AbstractEventLoop | None
 
     def __init__(
         self,
@@ -126,36 +122,15 @@ class Disposables:
         *disposables: Disposable
             Variable number of disposable resources to be managed together.
         """
-        self._disposables: tuple[Disposable, ...]
         object.__setattr__(
             self,
             "_disposables",
             disposables,
         )
-        self._loop: AbstractEventLoop | None
         object.__setattr__(
             self,
             "_loop",
             None,
-        )
-
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> Any:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> None:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be deleted"
         )
 
     def __bool__(self) -> bool:

@@ -131,7 +131,7 @@ class StateAttribute[Value]:
 @dataclass_transform(
     kw_only_default=True,
     frozen_default=True,
-    field_specifiers=(DefaultValue,),
+    field_specifiers=(),
 )
 class StateMeta(type):
     """
@@ -150,7 +150,7 @@ class StateMeta(type):
     """
 
     def __new__(
-        cls,
+        mcs,
         /,
         name: str,
         bases: tuple[type, ...],
@@ -158,29 +158,8 @@ class StateMeta(type):
         type_parameters: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        """
-        Create a new State class with processed attributes and validation.
-
-        Parameters
-        ----------
-        name : str
-            The name of the new class
-        bases : tuple[type, ...]
-            The base classes
-        namespace : dict[str, Any]
-            The class namespace (attributes and methods)
-        type_parameters : dict[str, Any] | None
-            Type parameters for generic specialization
-        **kwargs : Any
-            Additional arguments for class creation
-
-        Returns
-        -------
-        Any
-            The new class object
-        """
-        state_type = type.__new__(
-            cls,
+        cls = type.__new__(
+            mcs,
             name,
             bases,
             namespace,
@@ -190,29 +169,27 @@ class StateMeta(type):
         attributes: dict[str, StateAttribute[Any]] = {}
 
         for key, annotation in attribute_annotations(
-            state_type,
+            cls,
             type_parameters=type_parameters or {},
         ).items():
-            default: Any = getattr(state_type, key, MISSING)
+            default: Any = getattr(cls, key, MISSING)
             attributes[key] = StateAttribute(
                 name=key,
                 annotation=annotation.update_required(default is MISSING),
                 default=_resolve_default(default),
                 validator=AttributeValidator.of(
                     annotation,
-                    recursion_guard={
-                        str(AttributeAnnotation(origin=state_type)): state_type.validator
-                    },
+                    recursion_guard={str(AttributeAnnotation(origin=cls)): cls.validator},
                 ),
             )
 
-        state_type.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportAttributeAccessIssue]
-        state_type.__ATTRIBUTES__ = attributes  # pyright: ignore[reportAttributeAccessIssue]
-        state_type.__slots__ = frozenset(attributes.keys())  # pyright: ignore[reportAttributeAccessIssue]
-        state_type.__match_args__ = state_type.__slots__  # pyright: ignore[reportAttributeAccessIssue]
-        state_type._ = AttributePath(state_type, attribute=state_type)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
+        cls.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportAttributeAccessIssue]
+        cls.__ATTRIBUTES__ = attributes  # pyright: ignore[reportAttributeAccessIssue]
+        cls.__slots__ = frozenset(attributes.keys())  # pyright: ignore[reportAttributeAccessIssue]
+        cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
+        cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
 
-        return state_type
+        return cls
 
     def validator(
         cls,

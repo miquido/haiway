@@ -1,10 +1,11 @@
 from collections.abc import Collection, Iterable, Mapping
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Any, Protocol, Self, cast, final
+from typing import ClassVar, Protocol, Self, cast
 
 from haiway.context.disposables import Disposable, Disposables
-from haiway.state import State
+from haiway.state import Immutable, State
+from haiway.types.default import Default
 
 __all__ = (
     "ContextPresets",
@@ -21,8 +22,7 @@ class ContextPresetsDisposablesPreparing(Protocol):
     async def __call__(self) -> Iterable[Disposable] | Disposable: ...
 
 
-@final
-class ContextPresets:
+class ContextPresets(Immutable):
     """
     A configuration preset for context scopes.
 
@@ -51,7 +51,7 @@ class ContextPresets:
     >>>
     >>> db_preset = ContextPresets(
     ...     name="database",
-    ...     state=[DatabaseConfig(connection_string="postgresql://localhost/app")]
+    ...     _state=[DatabaseConfig(connection_string="postgresql://localhost/app")]
     ... )
 
     Preset with dynamic state factory:
@@ -62,7 +62,7 @@ class ContextPresets:
     >>>
     >>> dynamic_preset = ContextPresets(
     ...     name="dynamic_db",
-    ...     state=[load_config]
+    ...     _state=[load_config]
     ... )
 
     Preset with disposables:
@@ -82,8 +82,8 @@ class ContextPresets:
     >>>
     >>> db_preset = ContextPresets(
     ...     name="database",
-    ...     state=[DatabaseConfig(connection_string="...")],
-    ...     disposables=[connection_factory]
+    ...     _state=[DatabaseConfig(connection_string="...")],
+    ...     _disposables=[connection_factory]
     ... )
 
     Using presets:
@@ -96,71 +96,9 @@ class ContextPresets:
     ...         # Use the preset configuration
     """
 
-    __slots__ = (
-        "_disposables",
-        "_state",
-        "name",
-    )
-
-    def __init__(
-        self,
-        *,
-        name: str,
-        state: Collection[ContextPresetsStatePreparing | State] | None = None,
-        disposables: Collection[ContextPresetsDisposablesPreparing] | None = None,
-    ) -> None:
-        """
-        Initialize a context preset.
-
-        Parameters
-        ----------
-        name : str
-            Unique name for this preset. Used to reference the preset when creating scopes.
-        state : Collection[ContextPresetsStatePreparing | State] | None, optional
-            State objects or state factory functions to include in this preset.
-            State factories are async functions that return State instances or collections of State.
-        disposables : Collection[ContextPresetsDisposablesPreparing] | None, optional
-            Disposable factory functions to include in this preset.
-            Disposable factories are async functions that return Disposable instances or
-            collections.
-
-        Examples
-        --------
-        Basic preset:
-
-        >>> preset = ContextPresets(
-        ...     name="api",
-        ...     state=[ApiConfig(base_url="https://api.example.com")]
-        ... )
-
-        Preset with factories:
-
-        >>> async def load_config():
-        ...     return ApiConfig(base_url=os.getenv("API_URL"))
-        >>>
-        >>> preset = ContextPresets(
-        ...     name="dynamic_api",
-        ...     state=[load_config]
-        ... )
-        """
-        self.name: str
-        object.__setattr__(
-            self,
-            "name",
-            name,
-        )
-        self._state: Collection[ContextPresetsStatePreparing | State]
-        object.__setattr__(
-            self,
-            "_state",
-            state if state is not None else (),
-        )
-        self._disposables: Collection[ContextPresetsDisposablesPreparing]
-        object.__setattr__(
-            self,
-            "_disposables",
-            disposables if disposables is not None else (),
-        )
+    name: str
+    _state: Collection[ContextPresetsStatePreparing | State] = Default(())
+    _disposables: Collection[ContextPresetsDisposablesPreparing] = Default(())
 
     def extended(
         self,
@@ -185,8 +123,8 @@ class ContextPresets:
         """
         return self.__class__(
             name=self.name,
-            state=(*self._state, *other._state),
-            disposables=(*self._disposables, *other._disposables),
+            _state=(*self._state, *other._state),
+            _disposables=(*self._disposables, *other._disposables),
         )
 
     def with_state(
@@ -215,8 +153,8 @@ class ContextPresets:
 
         return self.__class__(
             name=self.name,
-            state=(*self._state, *state),
-            disposables=self._disposables,
+            _state=(*self._state, *state),
+            _disposables=self._disposables,
         )
 
     def with_disposable(
@@ -245,8 +183,8 @@ class ContextPresets:
 
         return self.__class__(
             name=self.name,
-            state=self._state,
-            disposables=(*self._disposables, *disposable),
+            _state=self._state,
+            _disposables=(*self._disposables, *disposable),
         )
 
     async def prepare(self) -> Disposables:
@@ -287,7 +225,7 @@ class ContextPresets:
 
         collected_disposables: list[Disposable]
         if collected_states:
-            collected_disposables = [DisposableState(state=collected_states)]
+            collected_disposables = [DisposableState(_state=collected_states)]
 
         else:
             collected_disposables = []
@@ -305,20 +243,8 @@ class ContextPresets:
         return Disposables(*collected_disposables)
 
 
-@final
-class DisposableState:
-    __slots__ = ("_state",)
-
-    def __init__(
-        self,
-        state: Iterable[State],
-    ):
-        self._state: Iterable[State]
-        object.__setattr__(
-            self,
-            "_state",
-            state,
-        )
+class DisposableState(Immutable):
+    _state: Iterable[State]
 
     async def __aenter__(self) -> Iterable[State]:
         return self._state
@@ -331,35 +257,14 @@ class DisposableState:
     ) -> None:
         pass
 
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> Any:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be modified"
-        )
 
-    def __delattr__(
-        self,
-        name: str,
-    ) -> None:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be deleted"
-        )
-
-
-@final
-class ContextPresetsRegistry:
-    __slots__ = ("_presets",)
+class ContextPresetsRegistry(Immutable):
+    _presets: Mapping[str, ContextPresets]
 
     def __init__(
         self,
         presets: Collection[ContextPresets],
     ) -> None:
-        self._presets: Mapping[str, ContextPresets]
         object.__setattr__(
             self,
             "_presets",
@@ -373,29 +278,11 @@ class ContextPresetsRegistry:
     ) -> ContextPresets | None:
         return self._presets.get(name)
 
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> Any:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be modified"
-        )
 
-    def __delattr__(
-        self,
-        name: str,
-    ) -> None:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be deleted"
-        )
-
-
-@final
-class ContextPresetsRegistryContext:
-    _context = ContextVar[ContextPresetsRegistry]("ContextPresetsRegistryContext")
+class ContextPresetsRegistryContext(Immutable):
+    _context: ClassVar[ContextVar[ContextPresetsRegistry]] = ContextVar[ContextPresetsRegistry](
+        "ContextPresetsRegistryContext"
+    )
 
     @classmethod
     def select(
@@ -409,45 +296,22 @@ class ContextPresetsRegistryContext:
         except LookupError:
             return None  # no presets
 
-    __slots__ = (
-        "_registry",
-        "_token",
-    )
+    _registry: ContextPresetsRegistry
+    _token: Token[ContextPresetsRegistry] | None = None
 
     def __init__(
         self,
         registry: ContextPresetsRegistry,
     ) -> None:
-        self._registry: ContextPresetsRegistry
         object.__setattr__(
             self,
             "_registry",
             registry,
         )
-        self._token: Token[ContextPresetsRegistry] | None
         object.__setattr__(
             self,
             "_token",
             None,
-        )
-
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> Any:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> None:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be deleted"
         )
 
     def __enter__(self) -> None:

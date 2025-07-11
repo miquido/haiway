@@ -51,7 +51,7 @@ def test_preset_creation():
     """Test creating a preset with state."""
     preset = ContextPresets(
         name="test",
-        state=[ConfigState(api_url="https://api.test.com")],
+        _state=[ConfigState(api_url="https://api.test.com")],
     )
     assert preset.name == "test"
 
@@ -81,12 +81,12 @@ def test_preset_with_disposable():
 def test_preset_extended():
     base = ContextPresets(
         name="base",
-        state=[ConfigState(api_url="https://api.test.com")],
+        _state=[ConfigState(api_url="https://api.test.com")],
     )
 
     extension = ContextPresets(
         name="extended",
-        state=[DatabaseState(connection_string="sqlite:///:memory:")],
+        _state=[DatabaseState(connection_string="sqlite:///:memory:")],
     )
 
     combined = base.extended(extension)
@@ -99,7 +99,7 @@ def test_preset_extended():
 async def test_preset_prepare_with_static_state():
     preset = ContextPresets(
         name="test",
-        state=[
+        _state=[
             ConfigState(api_url="https://api.test.com"),
             DatabaseState(connection_string="sqlite:///:memory:"),
         ],
@@ -126,7 +126,7 @@ async def test_preset_prepare_with_state_factory():
 
     preset = ContextPresets(
         name="test",
-        state=[state_factory],
+        _state=[state_factory],
     )
 
     # First prepare
@@ -157,7 +157,7 @@ async def test_preset_prepare_with_multiple_states_factory():
 
     preset = ContextPresets(
         name="test",
-        state=[multi_state_factory],
+        _state=[multi_state_factory],
     )
 
     disposables = await preset.prepare()
@@ -175,7 +175,7 @@ async def test_preset_prepare_with_disposables():
 
     preset = ContextPresets(
         name="test",
-        disposables=[connection_factory],
+        _disposables=[connection_factory],
     )
 
     disposables = await preset.prepare()
@@ -205,7 +205,7 @@ async def test_preset_prepare_with_multiple_disposables():
 
     preset = ContextPresets(
         name="test",
-        disposables=[connection1_factory, connection2_factory, multi_disposable_factory],
+        _disposables=[connection1_factory, connection2_factory, multi_disposable_factory],
     )
 
     disposables = await preset.prepare()
@@ -226,8 +226,8 @@ async def test_preset_prepare_mixed_state_and_disposables():
 
     preset = ContextPresets(
         name="test",
-        state=[ConfigState(api_url="https://api.test.com")],
-        disposables=[connection_factory],
+        _state=[ConfigState(api_url="https://api.test.com")],
+        _disposables=[connection_factory],
     )
 
     disposables = await preset.prepare()
@@ -244,8 +244,8 @@ async def test_preset_prepare_mixed_state_and_disposables():
 
 
 def test_registry_creation():
-    preset1 = ContextPresets(name="db", state=[DatabaseState(connection_string="test")])
-    preset2 = ContextPresets(name="cache", state=[CacheState()])
+    preset1 = ContextPresets(name="db", _state=[DatabaseState(connection_string="test")])
+    preset2 = ContextPresets(name="cache", _state=[CacheState()])
 
     registry = ContextPresetsRegistry([preset1, preset2])
 
@@ -268,7 +268,7 @@ def test_registry_immutable():
 async def test_scope_with_preset():
     preset = ContextPresets(
         name="test",
-        state=[ConfigState(api_url="https://api.test.com")],
+        _state=[ConfigState(api_url="https://api.test.com")],
     )
 
     with ctx.presets(preset):
@@ -281,7 +281,7 @@ async def test_scope_with_preset():
 async def test_scope_preset_with_override():
     preset = ContextPresets(
         name="test",
-        state=[ConfigState(api_url="https://api.test.com", timeout=30)],
+        _state=[ConfigState(api_url="https://api.test.com", timeout=30)],
     )
 
     with ctx.presets(preset):
@@ -301,7 +301,7 @@ async def test_scope_preset_not_found():
 def test_sync_scope_with_preset_fails():
     preset = ContextPresets(
         name="test",
-        state=[ConfigState(api_url="https://api.test.com")],
+        _state=[ConfigState(api_url="https://api.test.com")],
     )
 
     with ctx.presets(preset):
@@ -323,7 +323,7 @@ async def test_preset_with_async_state_factory():
 
     preset = ContextPresets(
         name="dynamic",
-        state=[fetch_config],
+        _state=[fetch_config],
     )
 
     with ctx.presets(preset):
@@ -363,7 +363,7 @@ async def test_preset_with_disposable_lifecycle():
 
     preset = ContextPresets(
         name="connections",
-        disposables=[tracked_connection_factory],
+        _disposables=[tracked_connection_factory],
     )
 
     with ctx.presets(preset):
@@ -387,17 +387,17 @@ async def test_preset_with_disposable_lifecycle():
 async def test_nested_preset_registries():
     preset1 = ContextPresets(
         name="outer",
-        state=[ConfigState(api_url="https://outer.com")],
+        _state=[ConfigState(api_url="https://outer.com")],
     )
 
     preset2 = ContextPresets(
         name="inner",
-        state=[ConfigState(api_url="https://inner.com")],
+        _state=[ConfigState(api_url="https://inner.com")],
     )
 
     preset3 = ContextPresets(
         name="outer",  # Same name as preset1
-        state=[ConfigState(api_url="https://inner-override.com")],
+        _state=[ConfigState(api_url="https://inner-override.com")],
     )
 
     with ctx.presets(preset1):
@@ -439,12 +439,12 @@ async def test_preset_with_mixed_state_sources():
 
     preset = ContextPresets(
         name="mixed",
-        state=[
+        _state=[
             ConfigState(api_url="https://static.com"),  # Static
             dynamic_config,  # Async factory
             multi_state,  # Multi-state factory
         ],
-        disposables=[connection_factory],
+        _disposables=[connection_factory],
     )
 
     with ctx.presets(preset):

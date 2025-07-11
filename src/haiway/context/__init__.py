@@ -17,11 +17,13 @@ from haiway.context.observability import (
 from haiway.context.presets import ContextPresets
 from haiway.context.state import StateContext
 from haiway.context.types import MissingContext, MissingState
+from haiway.state import Immutable
 
 __all__ = (
     "ContextPresets",
     "Disposable",
     "Disposables",
+    "Immutable",
     "MissingContext",
     "MissingState",
     "Observability",
