@@ -2,19 +2,16 @@ from asyncio import (
     AbstractEventLoop,
     gather,
     get_running_loop,
-    iscoroutinefunction,
     run_coroutine_threadsafe,
     wrap_future,
 )
-from collections.abc import Callable, Coroutine, Iterable
+from collections.abc import Iterable
 from contextlib import AbstractAsyncContextManager
 from itertools import chain
 from types import TracebackType
 from typing import Any, final
 
-from haiway.context.state import StateContext
 from haiway.state import State
-from haiway.utils.mimic import mimic_function
 
 __all__ = (
     "Disposable",
@@ -115,7 +112,6 @@ class Disposables:
     __slots__ = (
         "_disposables",
         "_loop",
-        "_state_context",
     )
 
     def __init__(
@@ -135,12 +131,6 @@ class Disposables:
             self,
             "_disposables",
             disposables,
-        )
-        self._state_context: StateContext | None
-        object.__setattr__(
-            self,
-            "_state_context",
-            None,
         )
         self._loop: AbstractEventLoop | None
         object.__setattr__(
@@ -213,23 +203,6 @@ class Disposables:
                     *[self._setup(disposable) for disposable in self._disposables],
                 )
             )
-        )
-
-    async def __aenter__(self) -> None:
-        """
-        Enter all contained disposables asynchronously.
-
-        Enters all disposables in parallel and collects any State objects they return updating
-         current state context.
-        """
-
-        assert self._state_context is None, "Context reentrance is not allowed"  # nosec: B101
-        state_context = StateContext.updated(await self.prepare())
-        state_context.__enter__()
-        object.__setattr__(
-            self,
-            "_state_context",
-            state_context,
         )
 
     async def _cleanup(
@@ -320,65 +293,3 @@ class Disposables:
 
             case _:
                 raise BaseExceptionGroup("Disposables cleanup errors", exceptions)
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        """
-        Exit all contained disposables asynchronously.
-
-        Properly disposes of all resources by calling their __aexit__ methods in parallel.
-        If multiple disposables raise exceptions, they are collected into a BaseExceptionGroup.
-        Additionally, produced state context will be also exited resetting state to previous.
-
-        Parameters
-        ----------
-        exc_type: type[BaseException] | None
-            The type of exception that caused the context to be exited
-        exc_val: BaseException | None
-            The exception that caused the context to be exited
-        exc_tb: TracebackType | None
-            The traceback for the exception that caused the context to be exited
-
-        Raises
-        ------
-        BaseExceptionGroup
-            If multiple disposables raise exceptions during exit
-        """
-        assert self._state_context is not None, "Unbalanced context enter/exit"  # nosec: B101
-        try:
-            self._state_context.__exit__(
-                exc_type,
-                exc_val,
-                exc_tb,
-            )
-            object.__setattr__(
-                self,
-                "_state_context",
-                None,
-            )
-
-        finally:
-            await self.dispose(
-                exc_type,
-                exc_val,
-                exc_tb,
-            )
-
-    def __call__[Result, **Arguments](
-        self,
-        function: Callable[Arguments, Coroutine[Any, Any, Result]],
-    ) -> Callable[Arguments, Coroutine[Any, Any, Result]]:
-        assert iscoroutinefunction(function)  # nosec: B101
-
-        async def async_context(
-            *args: Arguments.args,
-            **kwargs: Arguments.kwargs,
-        ) -> Result:
-            async with self:
-                return await function(*args, **kwargs)
-
-        return mimic_function(function, within=async_context)

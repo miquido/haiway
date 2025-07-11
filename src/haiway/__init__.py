@@ -1,4 +1,5 @@
 from haiway.context import (
+    ContextPresets,
     Disposable,
     Disposables,
     MissingContext,
@@ -64,6 +65,7 @@ __all__ = (
     "AsyncStream",
     "AttributePath",
     "AttributeRequirement",
+    "ContextPresets",
     "Default",
     "DefaultValue",
     "Disposable",

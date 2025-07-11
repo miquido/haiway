@@ -7,7 +7,6 @@ from pytest import mark, raises
 
 from haiway import State
 from haiway.context import Disposables
-from haiway.context.access import ctx
 
 
 class ExampleState(State):
@@ -296,40 +295,6 @@ async def test_same_loop_cleanup():
 
     await disposables.dispose(None, None, None)
     assert mock.exit_called
-
-
-@mark.asyncio
-async def test_with_real_async_context_managers():
-    disposables = Disposables(
-        disposable_returning_none(),
-        disposable_returning_single_state(),
-        disposable_returning_multiple_states(),
-    )
-
-    async with disposables:
-        # Check the states accessibility
-        assert "single" != ctx.state(ExampleState).value
-        assert "first" == ctx.state(ExampleState).value
-        assert 100 == ctx.state(AnotherExampleState).data
-
-
-@mark.asyncio
-async def test_nested_disposables_usage():
-    """Test using Disposables in nested contexts."""
-    outer_mock = MockDisposable(enter_return=ExampleState(value="outer"))
-    inner_mock = MockDisposable(enter_return=ExampleState(value="inner"))
-
-    outer_disposables = Disposables(outer_mock)
-    inner_disposables = Disposables(inner_mock)
-
-    async with outer_disposables:
-        assert "outer" in ctx.state(ExampleState).value
-
-        async with inner_disposables:
-            assert "inner" in ctx.state(ExampleState).value
-
-    assert outer_mock.exit_called
-    assert inner_mock.exit_called
 
 
 @mark.asyncio

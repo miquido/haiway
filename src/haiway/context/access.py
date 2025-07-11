@@ -8,6 +8,7 @@ from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
     Callable,
+    Collection,
     Coroutine,
     Iterable,
     Mapping,
@@ -24,9 +25,15 @@ from haiway.context.observability import (
     ObservabilityContext,
     ObservabilityLevel,
 )
+from haiway.context.presets import (
+    ContextPresets,
+    ContextPresetsRegistry,
+    ContextPresetsRegistryContext,
+)
 from haiway.context.state import ScopeState, StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.state import State
+from haiway.utils.collections import as_list
 from haiway.utils.stream import AsyncStream
 
 __all__ = ("ctx",)
@@ -46,16 +53,20 @@ class ScopeContext:
     """
 
     __slots__ = (
+        "_captured_state",
         "_disposables",
         "_identifier",
         "_observability_context",
-        "_state_context",
+        "_presets",
+        "_presets_disposables",
+        "_resolved_state_context",
+        "_state",
         "_task_group_context",
     )
 
     def __init__(
         self,
-        label: str,
+        name: str,
         task_group: TaskGroup | None,
         state: tuple[State, ...],
         disposables: Disposables | None,
@@ -65,20 +76,46 @@ class ScopeContext:
         object.__setattr__(
             self,
             "_identifier",
-            ScopeIdentifier.scope(label),
+            ScopeIdentifier.scope(name),
         )
-        # prepare state context to capture current state
-        self._state_context: StateContext
+        # store explicit state separately for priority control
+        self._state: Collection[State]
         object.__setattr__(
             self,
-            "_state_context",
-            StateContext.updated(state),
+            "_state",
+            state,
+        )
+        # capture current contextual state (without new additions)
+        self._captured_state: Collection[State]
+        object.__setattr__(
+            self,
+            "_captured_state",
+            StateContext.current_state(),
+        )
+        # placeholder for temporary, resolved state context
+        self._resolved_state_context: StateContext | None
+        object.__setattr__(
+            self,
+            "_resolved_state_context",
+            None,
         )
         self._disposables: Disposables | None
         object.__setattr__(
             self,
             "_disposables",
             disposables,
+        )
+        self._presets: ContextPresets | None
+        object.__setattr__(
+            self,
+            "_presets",
+            ContextPresetsRegistryContext.select(name),
+        )
+        self._presets_disposables: Disposables | None
+        object.__setattr__(
+            self,
+            "_presets_disposables",
+            None,
         )
         self._observability_context: ObservabilityContext
         object.__setattr__(
@@ -123,11 +160,22 @@ class ScopeContext:
             self._task_group_context is None or self._identifier.is_root
         ), "Can't enter synchronous context with task group"
         assert self._disposables is None, "Can't enter synchronous context with disposables"  # nosec: B101
+        assert self._resolved_state_context is None  # nosec: B101
+        assert self._presets is None, "Can't enter synchronous context with presets"  # nosec: B101
         self._identifier.__enter__()
         self._observability_context.__enter__()
-        self._state_context.__enter__()
+        # For sync context, only use explicit state (no presets or disposables allowed)
+        resolved_state_context: StateContext = StateContext(
+            state=ScopeState((*self._captured_state, *self._state))
+        )
+        object.__setattr__(
+            self,
+            "_resolved_state_context",
+            resolved_state_context,
+        )
+        resolved_state_context.__enter__()
 
-        return self._observability_context.observability.trace_identifying(self._identifier).hex
+        return str(self._observability_context.observability.trace_identifying(self._identifier))
 
     def __exit__(
         self,
@@ -135,10 +183,16 @@ class ScopeContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        self._state_context.__exit__(
+        assert self._resolved_state_context is not None  # nosec: B101
+        self._resolved_state_context.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
+        )
+        object.__setattr__(
+            self,
+            "_resolved_state_context",
+            None,
         )
         self._observability_context.__exit__(
             exc_type=exc_type,
@@ -152,31 +206,47 @@ class ScopeContext:
         )
 
     async def __aenter__(self) -> str:
+        assert self._presets_disposables is None  # nosec: B101
+        assert self._resolved_state_context is None  # nosec: B101
         self._identifier.__enter__()
         self._observability_context.__enter__()
 
         if task_group := self._task_group_context:
             await task_group.__aenter__()
 
-        # lazily initialize state to include disposables results
-        if disposables := self._disposables:
-            assert self._state_context._token is None  # nosec: B101
+        # Collect all state sources in priority order (lowest to highest priority)
+        # 1. Add contextual state first (lowest priority)
+        collected_state: list[State] = as_list(self._captured_state)
+
+        # 2. Add preset state (low priority, overrides contextual)
+        if self._presets is not None:
+            presets_disposables: Disposables = await self._presets.prepare()
             object.__setattr__(
                 self,
-                "_state_context",
-                StateContext(
-                    state=ScopeState(
-                        (
-                            *self._state_context._state._state.values(),
-                            *await disposables.prepare(),
-                        )
-                    ),
-                ),
+                "_presets_disposables",
+                presets_disposables,
             )
+            collected_state.extend(await presets_disposables.prepare())
 
-        self._state_context.__enter__()
+        # 3. Add explicit disposables state (medium priority)
+        if self._disposables is not None:
+            collected_state.extend(await self._disposables.prepare())
 
-        return self._observability_context.observability.trace_identifying(self._identifier).hex
+        # 4. Add explicit state last (highest priority)
+        collected_state.extend(self._state)
+        # Create resolved state context with all collected state
+        resolved_state_context: StateContext = StateContext(
+            state=ScopeState(tuple(collected_state))
+        )
+
+        resolved_state_context.__enter__()
+        object.__setattr__(
+            self,
+            "_resolved_state_context",
+            resolved_state_context,
+        )
+
+        return str(self._observability_context.observability.trace_identifying(self._identifier))
 
     async def __aexit__(
         self,
@@ -184,11 +254,24 @@ class ScopeContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        if disposables := self._disposables:
-            await disposables.dispose(
+        assert self._resolved_state_context is not None  # nosec: B101
+        if self._disposables is not None:
+            await self._disposables.dispose(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
+            )
+
+        if self._presets_disposables is not None:
+            await self._presets_disposables.dispose(
+                exc_type=exc_type,
+                exc_val=exc_val,
+                exc_tb=exc_tb,
+            )
+            object.__setattr__(
+                self,
+                "_presets_disposables",
+                None,
             )
 
         if task_group := self._task_group_context:
@@ -198,10 +281,15 @@ class ScopeContext:
                 exc_tb=exc_tb,
             )
 
-        self._state_context.__exit__(
+        self._resolved_state_context.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
+        )
+        object.__setattr__(
+            self,
+            "_resolved_state_context",
+            None,
         )
 
         self._observability_context.__exit__(
@@ -259,8 +347,89 @@ class ctx:
         return ObservabilityContext.trace_id(scope_identifier)
 
     @staticmethod
+    def presets(
+        *presets: ContextPresets,
+    ) -> ContextPresetsRegistryContext:
+        """
+        Create a context manager for a preset registry.
+
+        This method creates a registry of context presets that can be used within
+        nested scopes. Presets allow you to define reusable combinations of state
+        and disposables that can be referenced by name when creating scopes.
+
+        When entering this context manager, the provided presets become available
+        for use with ctx.scope(). The presets are looked up by their name when
+        creating scopes.
+
+        Parameters
+        ----------
+        *presets: ContextPresets
+            Variable number of preset configurations to register. Each preset
+            must have a unique name within the registry.
+
+        Returns
+        -------
+        ContextPresetsRegistryContext
+            A context manager that makes the presets available in nested scopes
+
+        Examples
+        --------
+        Basic preset usage:
+
+        >>> from haiway import ctx, State
+        >>> from haiway.context import ContextPresets
+        >>>
+        >>> class ApiConfig(State):
+        ...     base_url: str
+        ...     timeout: int = 30
+        >>>
+        >>> # Define presets
+        >>> dev_preset = ContextPresets(
+        ...     name="development",
+        ...     state=[ApiConfig(base_url="https://dev-api.example.com")]
+        ... )
+        >>>
+        >>> prod_preset = ContextPresets(
+        ...     name="production",
+        ...     state=[ApiConfig(base_url="https://api.example.com", timeout=60)]
+        ... )
+        >>>
+        >>> # Use presets
+        >>> with ctx.presets(dev_preset, prod_preset):
+        ...     async with ctx.scope("development"):
+        ...         config = ctx.state(ApiConfig)
+        ...         assert config.base_url == "https://dev-api.example.com"
+
+        Nested preset registries:
+
+        >>> base_presets = [dev_preset, prod_preset]
+        >>> override_preset = ContextPresets(
+        ...     name="development",
+        ...     state=[ApiConfig(base_url="https://staging.example.com")]
+        ... )
+        >>>
+        >>> with ctx.presets(*base_presets):
+        ...     # Outer registry has dev and prod presets
+        ...     with ctx.presets(override_preset):
+        ...         # Inner registry overrides dev preset
+        ...         async with ctx.scope("development"):
+        ...             config = ctx.state(ApiConfig)
+        ...             assert config.base_url == "https://staging.example.com"
+
+        See Also
+        --------
+        ContextPresets : For creating individual preset configurations
+        ctx.scope : For creating scopes that can use presets
+        """
+        return ContextPresetsRegistryContext(
+            registry=ContextPresetsRegistry(
+                presets=presets,
+            ),
+        )
+
+    @staticmethod
     def scope(
-        label: str,
+        name: str,
         /,
         *state: State | None,
         disposables: Disposables | Iterable[Disposable] | None = None,
@@ -271,10 +440,17 @@ class ctx:
         Prepare scope context with given parameters. When called within an existing context\
          it becomes nested with current context as its parent.
 
+        State Priority
+        --------------
+        1. Explicit state (passed to ctx.scope()) - **highest priority**
+        2. Explicit disposables (passed to ctx.scope()) - medium priority
+        3. Preset state (from presets) - low priority
+        4. Contextual state (from parent contexts) - **lowest priority**
+
         Parameters
         ----------
-        label: str
-            name of the scope context
+        name: str
+            name of the scope context, can be associated with state presets
 
         *state: State | None
             state propagated within the scope context, will be merged with current state by\
@@ -313,7 +489,7 @@ class ctx:
                 resolved_disposables = Disposables(*iterable)
 
         return ScopeContext(
-            label=label,
+            name=name,
             task_group=task_group,
             state=tuple(element for element in state if element is not None),
             disposables=resolved_disposables,
