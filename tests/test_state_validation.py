@@ -45,8 +45,6 @@ class SimpleState(State):
 
 
 def test_validator_basic_types() -> None:
-    """Test validation of basic Python types."""
-
     class BasicTypes(State):
         string_val: str
         int_val: int
@@ -89,8 +87,6 @@ def test_validator_basic_types() -> None:
 
 
 def test_validator_none_type() -> None:
-    """Test validation of None type."""
-
     class NoneTest(State):
         none_val: None
 
@@ -104,8 +100,6 @@ def test_validator_none_type() -> None:
 
 
 def test_validator_missing_type() -> None:
-    """Test validation of Missing type."""
-
     class MissingTest(State):
         missing_val: Missing
 
@@ -119,8 +113,6 @@ def test_validator_missing_type() -> None:
 
 
 def test_validator_literal_type() -> None:
-    """Test validation of Literal types."""
-
     class LiteralTest(State):
         mode: Literal["read", "write", "append"]
         count: Literal[1, 2, 3]
@@ -139,8 +131,6 @@ def test_validator_literal_type() -> None:
 
 
 def test_validator_enum_type() -> None:
-    """Test validation of Enum types."""
-
     class EnumTest(State):
         color: Color
         status: Status
@@ -159,8 +149,6 @@ def test_validator_enum_type() -> None:
 
 
 def test_validator_sequence_type() -> None:
-    """Test validation of Sequence types."""
-
     class SequenceTest(State):
         items: Sequence[str]
         numbers: Sequence[int]
@@ -185,8 +173,6 @@ def test_validator_sequence_type() -> None:
 
 
 def test_validator_set_type() -> None:
-    """Test validation of Set types."""
-
     class SetTest(State):
         tags: Set[str]
         numbers: Set[int]
@@ -206,8 +192,6 @@ def test_validator_set_type() -> None:
 
 
 def test_validator_mapping_type() -> None:
-    """Test validation of Mapping types."""
-
     class MappingTest(State):
         data: Mapping[str, int]
 
@@ -229,8 +213,6 @@ def test_validator_mapping_type() -> None:
 
 
 def test_validator_tuple_type() -> None:
-    """Test validation of tuple types."""
-
     class TupleTest(State):
         fixed: tuple[str, int, bool]
         variable: tuple[str, ...]
@@ -254,8 +236,6 @@ def test_validator_tuple_type() -> None:
 
 
 def test_validator_union_type() -> None:
-    """Test validation of Union types."""
-
     class UnionTest(State):
         value: str | int
         optional: str | None
@@ -275,8 +255,6 @@ def test_validator_union_type() -> None:
 
 
 def test_validator_callable_type() -> None:
-    """Test validation of Callable types."""
-
     class CallableTest(State):
         func: Callable[[], None]
         processor: Processor
@@ -298,8 +276,6 @@ def test_validator_callable_type() -> None:
 
 
 def test_validator_typed_dict() -> None:
-    """Test validation of TypedDict types."""
-
     class TypedDictTest(State):
         user: UserDict
 
@@ -323,8 +299,6 @@ def test_validator_typed_dict() -> None:
 
 
 def test_validator_state_type() -> None:
-    """Test validation of State types."""
-
     class StateTest(State):
         nested: NestedState
         simple: SimpleState
@@ -344,8 +318,6 @@ def test_validator_state_type() -> None:
 
 
 def test_validator_complex_types() -> None:
-    """Test validation of complex type combinations."""
-
     class ComplexTest(State):
         uuid_val: UUID
         date_val: date
@@ -401,8 +373,6 @@ def test_validator_complex_types() -> None:
 
 
 def test_validator_recursive_state() -> None:
-    """Test validation of recursive State references."""
-
     class RecursiveState(State):
         name: str
         child: "RecursiveState | None"
@@ -422,8 +392,6 @@ def test_validator_recursive_state() -> None:
 
 
 def test_validator_generic_state() -> None:
-    """Test validation of generic State types."""
-
     class GenericState[T](State):
         value: T
 
@@ -445,8 +413,6 @@ def test_validator_generic_state() -> None:
 
 
 def test_validation_error_messages() -> None:
-    """Test that validation errors provide clear messages."""
-
     class ErrorTest(State):
         string_val: str
         literal_val: Literal["a", "b"]
@@ -469,8 +435,6 @@ def test_validation_error_messages() -> None:
 
 
 def test_validation_any_type() -> None:
-    """Test validation of Any type accepts anything."""
-
     class AnyTest(State):
         anything: Any
 
@@ -489,8 +453,6 @@ def test_validation_any_type() -> None:
 
 
 def test_validator_with_defaults() -> None:
-    """Test validation works correctly with default values."""
-
     class DefaultTest(State):
         required: str
         optional: str = "default"
@@ -514,8 +476,6 @@ def test_validator_with_defaults() -> None:
 
 
 def test_attribute_validator_direct_usage() -> None:
-    """Test AttributeValidator can be used directly."""
-
     # Create validator for str type
     str_annotation = AttributeAnnotation(origin=str, arguments=())
     validator = AttributeValidator.of(str_annotation, recursion_guard={})
@@ -530,13 +490,11 @@ def test_attribute_validator_direct_usage() -> None:
 
 
 def test_unsupported_type_annotation() -> None:
-    """Test that unsupported type annotations raise TypeError."""
-
-    # Create annotation for unsupported type
-    class UnsupportedType:
+    # Create annotation for arbitrary type
+    class ArbitraryType:
         pass
 
-    annotation = AttributeAnnotation(origin=UnsupportedType, arguments=())
+    annotation = AttributeAnnotation(origin=ArbitraryType, arguments=())
 
-    with pytest.raises(TypeError, match="Unsupported type annotation"):
-        AttributeValidator.of(annotation, recursion_guard={})
+    validator = AttributeValidator.of(annotation, recursion_guard={})
+    assert validator is not None

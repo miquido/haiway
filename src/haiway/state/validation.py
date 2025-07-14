@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, MutableMapping, Sequence, Set
+from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence, Set
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -126,6 +126,14 @@ class AttributeValidator[Type]:
             )
 
         elif issubclass(annotation.origin, Enum):
+            object.__setattr__(
+                validator,
+                "validation",
+                _prepare_validator_of_type(annotation, recursion_guard),
+            )
+
+        elif isinstance(annotation.origin, type):
+            # Handle arbitrary types as valid type annotations
             object.__setattr__(
                 validator,
                 "validation",
@@ -397,12 +405,11 @@ def _prepare_validator_of_type(
         value: Any,
         /,
     ) -> Any:
-        match value:
-            case value if isinstance(value, validated_type):
-                return value
+        if isinstance(value, validated_type):
+            return value
 
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
 
     return validator
 
@@ -440,8 +447,8 @@ def _prepare_validator_of_set(
         value: Any,
         /,
     ) -> Any:
-        if isinstance(value, set):
-            return frozenset(element_validator(element) for element in value)  # pyright: ignore[reportUnknownVariableType]
+        if isinstance(value, Set):
+            return frozenset(element_validator(element) for element in value)
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
@@ -482,12 +489,53 @@ def _prepare_validator_of_sequence(
         value: Any,
         /,
     ) -> Any:
-        match value:
-            case [*elements]:
-                return tuple(element_validator(element) for element in elements)
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+            return tuple(element_validator(element) for element in value)
 
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
+
+    return validator
+
+
+def _prepare_validator_of_collection(
+    annotation: AttributeAnnotation,
+    /,
+    recursion_guard: MutableMapping[str, AttributeValidation[Any]],
+) -> AttributeValidation[Any]:
+    """
+    Create a validator for collection types.
+
+    This validator checks if the value is a collection and validates each element
+    according to the collection's element type. Collections are converted to tuples.
+
+    Parameters
+    ----------
+    annotation : AttributeAnnotation
+        The collection type annotation
+    recursion_guard : MutableMapping[str, AttributeValidation[Any]]
+        Mapping to prevent infinite recursion for recursive types
+
+    Returns
+    -------
+    AttributeValidation[Any]
+        A validator that validates collections and their elements
+    """
+    element_validator: AttributeValidation[Any] = AttributeValidator.of(
+        annotation.arguments[0],
+        recursion_guard=recursion_guard,
+    )
+    formatted_type: str = str(annotation)
+
+    def validator(
+        value: Any,
+        /,
+    ) -> Any:
+        if isinstance(value, Collection) and not isinstance(value, str | bytes):
+            return tuple(element_validator(element) for element in value)
+
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
 
     return validator
 
@@ -529,16 +577,12 @@ def _prepare_validator_of_mapping(
         value: Any,
         /,
     ) -> Any:
-        match value:
-            case {**elements}:
-                # TODO: make sure dict is not mutable with MappingProxyType?
-                return {
-                    key_validator(key): value_validator(element)
-                    for key, element in elements.items()
-                }
+        if isinstance(value, Mapping):
+            # TODO: make sure dict is not mutable with MappingProxyType?
+            return {key_validator(key): value_validator(element) for key, element in value.items()}
 
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
 
     return validator
 
@@ -580,14 +624,11 @@ def _prepare_validator_of_tuple(
             value: Any,
             /,
         ) -> Any:
-            match value:
-                case [*elements]:
-                    return tuple(element_validator(element) for element in elements)
+            if isinstance(value, Collection) and not isinstance(value, str | bytes):
+                return tuple(element_validator(element) for element in value)
 
-                case _:
-                    raise TypeError(
-                        f"'{value}' is not matching expected type of '{formatted_type}'"
-                    )
+            else:
+                raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
 
         return validator
 
@@ -603,21 +644,16 @@ def _prepare_validator_of_tuple(
             value: Any,
             /,
         ) -> Any:
-            match value:
-                case [*elements]:
-                    if len(elements) != elements_count:
-                        raise ValueError(
-                            f"'{value}' is not matching expected type of '{formatted_type}'"
-                        )
-
-                    return tuple(
-                        element_validators[idx](element) for idx, element in enumerate(elements)
-                    )
-
-                case _:
-                    raise TypeError(
+            if isinstance(value, Sequence):
+                if len(value) != elements_count:
+                    raise ValueError(
                         f"'{value}' is not matching expected type of '{formatted_type}'"
                     )
+
+                return tuple(element_validators[idx](element) for idx, element in enumerate(value))
+
+            else:
+                raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
 
         return validator
 
@@ -738,12 +774,11 @@ def _prepare_validator_of_typed_dict(
         value: Any,
         /,
     ) -> Any:
-        match value:
-            case value if isinstance(value, str):
-                return value
+        if isinstance(value, str):
+            return value
 
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of 'str'")
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of 'str'")
 
     formatted_type: str = str(annotation)
     values_validators: dict[str, AttributeValidation[Any]] = {
@@ -756,21 +791,20 @@ def _prepare_validator_of_typed_dict(
         value: Any,
         /,
     ) -> Any:
-        match value:
-            case {**elements}:
-                validated: MutableMapping[str, Any] = {}
-                for key, validator in values_validators.items():
-                    element: Any = elements.get(key, MISSING)
-                    if element is MISSING and key not in required_values:
-                        continue  # skip missing and not required
+        if isinstance(value, Mapping):
+            validated: MutableMapping[str, Any] = {}
+            for key, validator in values_validators.items():
+                element: Any = value.get(key, MISSING)
+                if element is MISSING and key not in required_values:
+                    continue  # skip missing and not required
 
-                    validated[key_validator(key)] = validator(element)
+                validated[key_validator(key)] = validator(element)
 
-                # TODO: make sure dict is not mutable with MappingProxyType?
-                return validated
+            # TODO: make sure dict is not mutable with MappingProxyType?
+            return validated
 
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of '{formatted_type}'")
 
     return validator
 
@@ -799,6 +833,7 @@ VALIDATORS: Mapping[
     frozenset: _prepare_validator_of_set,
     Set: _prepare_validator_of_set,
     Sequence: _prepare_validator_of_sequence,
+    Collection: _prepare_validator_of_collection,
     Mapping: _prepare_validator_of_mapping,
     Literal: _prepare_validator_of_literal,
     range: _prepare_validator_of_type,

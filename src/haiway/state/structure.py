@@ -1,4 +1,3 @@
-import typing
 from collections.abc import Mapping
 from types import EllipsisType, GenericAlias
 from typing import (
@@ -218,24 +217,8 @@ class StateMeta(type):
         self,
         instance: Any,
     ) -> bool:
-        """
-        Check if an instance is an instance of this class.
-
-        Implements isinstance() behavior for State classes, with special handling
-        for generic type parameters and validation.
-
-        Parameters
-        ----------
-        instance : Any
-            The instance to check
-
-        Returns
-        -------
-        bool
-            True if the instance is an instance of this class, False otherwise
-        """
         # check for type match
-        if self.__subclasscheck__(type(instance)):  # pyright: ignore[reportUnknownArgumentType]
+        if self.__subclasscheck__(type(instance)):
             return True
 
         # otherwise check if we are dealing with unparametrized base
@@ -253,85 +236,69 @@ class StateMeta(type):
         else:
             return True
 
-    def __subclasscheck__(  # noqa: C901, PLR0911, PLR0912
+    def __subclasscheck__(
         self,
         subclass: type[Any],
     ) -> bool:
-        """
-        Check if a class is a subclass of this class.
-
-        Implements issubclass() behavior for State classes, with special handling
-        for generic type parameters.
-
-        Parameters
-        ----------
-        subclass : type[Any]
-            The class to check
-
-        Returns
-        -------
-        bool
-            True if the class is a subclass of this class, False otherwise
-
-        Raises
-        ------
-        RuntimeError
-            If there is an issue with type parametrization
-        """
-        # check if we are the same class for early exit
-        if self == subclass:
+        if self is subclass:
             return True
 
-        # then check if we are parametrized
-        checked_parameters: Mapping[str, Any] | None = getattr(
-            self,
-            "__TYPE_PARAMETERS__",
-            None,
-        )
-        if checked_parameters is None:
-            # if we are not parametrized allow any subclass
-            return self in subclass.__bases__
+        self_origin: type[Any] = getattr(self, "__origin__", self)
+        subclass_origin: type[Any] = getattr(subclass, "__origin__", subclass)
 
-        # verify if we have common base next - our generic subtypes have the same base
-        if self.__bases__ == subclass.__bases__:
-            # if we have the same bases we have different generic subtypes
-            # we can verify all of the attributes to check if we have common base
-            available_parameters: Mapping[str, Any] | None = getattr(
-                subclass,
-                "__TYPE_PARAMETERS__",
-                None,
-            )
+        # Handle case where we're checking a parameterized type against unparameterized
+        if self_origin is self:
+            return type.__subclasscheck__(self, subclass)
 
-            if available_parameters is None:
-                # if we have no parameters at this stage this is a serious bug
-                raise RuntimeError("Invalid type parametrization for %s", subclass)
+        # Both must be based on the same generic class
+        if not issubclass(subclass_origin, self_origin):
+            return False
 
-            for key, param in checked_parameters.items():
-                match available_parameters.get(key):
-                    case None:  # if any parameter is missing we should not be there already
-                        return False
+        return self._check_type_parameters(subclass)
 
-                    case typing.Any:
-                        continue  # Any ignores type checks
+    def _check_type_parameters(
+        self,
+        subclass: type[Any],
+    ) -> bool:
+        self_params: Mapping[str, Any] | None = getattr(self, "__TYPE_PARAMETERS__", None)
+        subclass_params: Mapping[str, Any] | None = getattr(subclass, "__TYPE_PARAMETERS__", None)
 
-                    case checked:
-                        if param is Any:
-                            continue  # Any ignores type checks
+        if self_params is None:
+            return True
 
-                        elif issubclass(checked, param):
-                            continue  # if we have matching type we are fine
+        # If subclass doesn't have type parameters, look in the MRO for a parametrized base
+        if subclass_params is None:
+            subclass_params = self._find_parametrized_base(subclass)
+            if subclass_params is None:
+                return False
 
-                        else:
-                            return False  # types are not matching
+        # Check if the type parameters are compatible (covariant)
+        for key, self_param in self_params.items():
+            subclass_param: type[Any] = subclass_params.get(key, Any)
+            if self_param is Any:
+                continue
 
-            return True  # when all parameters were matching we have matching subclass
+            # For covariance: GenericState[Child] should be subclass of GenericState[Parent]
+            # This means subclass_param should be a subclass of self_param
+            if not issubclass(subclass_param, self_param):
+                return False
 
-        elif subclass in self.__bases__:  # our generic subtypes have base of unparametrized type
-            # if subclass parameters were not provided then we can be valid ony if all were Any
-            return all(param is Any for param in checked_parameters.values())
+        return True
 
-        else:
-            return False  # we have different base / comparing to not parametrized
+    def _find_parametrized_base(
+        self,
+        subclass: type[Any],
+    ) -> Mapping[str, Any] | None:
+        self_origin: type[Any] = getattr(self, "__origin__", self)
+        for base in getattr(subclass, "__mro__", ()):
+            if getattr(base, "__origin__", None) is not self_origin:
+                continue
+
+            subclass_params: Mapping[str, Any] | None = getattr(base, "__TYPE_PARAMETERS__", None)
+            if subclass_params is not None:
+                return subclass_params
+
+        return None
 
 
 def _resolve_default[Value](
@@ -491,6 +458,8 @@ class State(metaclass=StateMeta):
             namespace={"__module__": cls.__module__},
             type_parameters=type_parameters,
         )
+        # Set origin for subclass checks
+        parametrized_type.__origin__ = cls  # pyright: ignore[reportAttributeAccessIssue]
         _types_cache[(cls, type_arguments)] = parametrized_type
         return parametrized_type
 
