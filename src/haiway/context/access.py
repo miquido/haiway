@@ -275,6 +275,94 @@ class ScopeContext(Immutable):
         )
 
 
+class DisposablesContext(Immutable):
+    """
+    Immutable async context manager for managing collections of disposables.
+
+    DisposablesContext captures the current contextual state upon initialization
+    and provides an async context manager interface for managing disposable resources.
+    When entered, it prepares the disposables to collect their state, merges it with
+    the captured state, and creates a resolved StateContext. Upon exit, it properly
+    disposes of the disposables and cleans up internal references.
+
+    This class should not be instantiated directly; use the ctx.disposables() factory
+    method to create disposables contexts.
+    """
+
+    _disposables: Disposables
+    _captured_state: Collection[State]
+    _resolved_state_context: StateContext | None
+
+    def __init__(
+        self,
+        disposables: Disposables,
+    ) -> None:
+        # capture current contextual state (without new additions)
+        object.__setattr__(
+            self,
+            "_captured_state",
+            StateContext.current_state(),
+        )
+        # placeholder for temporary, resolved state context
+        object.__setattr__(
+            self,
+            "_resolved_state_context",
+            None,
+        )
+        object.__setattr__(
+            self,
+            "_disposables",
+            disposables,
+        )
+
+    async def __aenter__(self) -> None:
+        assert self._resolved_state_context is None  # nosec: B101
+
+        # Collect all state sources in priority order (lowest to highest priority)
+        collected_state: list[State] = []
+
+        collected_state.extend(self._captured_state)
+
+        collected_state.extend(await self._disposables.prepare())
+
+        # Create resolved state context with all collected state
+        resolved_state_context: StateContext = StateContext(
+            _state=ScopeState(tuple(collected_state))
+        )
+
+        resolved_state_context.__enter__()
+        object.__setattr__(
+            self,
+            "_resolved_state_context",
+            resolved_state_context,
+        )
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        assert self._resolved_state_context is not None  # nosec: B101
+
+        await self._disposables.dispose(
+            exc_type=exc_type,
+            exc_val=exc_val,
+            exc_tb=exc_tb,
+        )
+
+        self._resolved_state_context.__exit__(
+            exc_type=exc_type,
+            exc_val=exc_val,
+            exc_tb=exc_tb,
+        )
+        object.__setattr__(
+            self,
+            "_resolved_state_context",
+            None,
+        )
+
+
 @final
 class ctx:
     """
@@ -496,7 +584,7 @@ class ctx:
     @staticmethod
     def disposables(
         *disposables: Disposable | None,
-    ) -> Disposables:
+    ) -> DisposablesContext:
         """
         Create a container for managing multiple disposable resources.
 
@@ -513,9 +601,9 @@ class ctx:
 
         Returns
         -------
-        Disposables
+        DisposableContext
             A container that manages the lifecycle of all provided disposables
-            and propagates their state to the context when used with ctx.scope()
+            and propagates their state to the context as when used with ctx.scope()
 
         Examples
         --------
@@ -524,16 +612,19 @@ class ctx:
         >>> from haiway import ctx
         >>> async def main():
         ...
-        ...     async with ctx.scope(
-        ...         "database_work",
-        ...         disposables=(database_connection(),)
+        ...     async with ctx.disposables(
+        ...         database_connection(),
         ...     ):
         ...         # ConnectionState is now available in context
         ...         conn_state = ctx.state(ConnectionState)
         ...         await conn_state.connection.execute("SELECT 1")
         """
 
-        return Disposables(*(disposable for disposable in disposables if disposable is not None))
+        return DisposablesContext(
+            disposables=Disposables(
+                *(disposable for disposable in disposables if disposable is not None)
+            )
+        )
 
     @staticmethod
     def spawn[Result, **Arguments](
