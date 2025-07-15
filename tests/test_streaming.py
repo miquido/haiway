@@ -74,7 +74,7 @@ async def test_streaming_context_variables_access_is_preserved():
 
     async def generator(value: int) -> AsyncGenerator[TestState, None]:
         yield ctx.state(TestState)
-        with ctx.scope("nested", ctx.state(TestState).updated(value=value)):
+        async with ctx.scope("nested", ctx.state(TestState).updated(value=value)):
             yield ctx.state(TestState)
 
     async with ctx.scope("test", TestState(value=42)):
@@ -97,12 +97,12 @@ async def test_nested_streaming_streams_correctly():
 
     async def inner(value: int) -> AsyncGenerator[TestState, None]:
         yield ctx.state(TestState)
-        with ctx.scope("inner", ctx.state(TestState).updated(value=value, other="inner")):
+        async with ctx.scope("inner", ctx.state(TestState).updated(value=value, other="inner")):
             yield ctx.state(TestState)
 
     async def outer(value: int) -> AsyncGenerator[TestState, None]:
         yield ctx.state(TestState)
-        with ctx.scope("outer", ctx.state(TestState).updated(other="outer")):
+        async with ctx.scope("outer", ctx.state(TestState).updated(other="outer")):
             async for item in ctx.stream(inner, value):
                 yield item
 

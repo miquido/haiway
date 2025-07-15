@@ -1,32 +1,32 @@
+from asyncio import gather
 from collections.abc import Collection, Iterable, Mapping
 from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import ClassVar, Protocol, Self, cast
 
 from haiway.context.disposables import Disposable, Disposables
+from haiway.context.state import StateContext
 from haiway.state import Immutable, State
-from haiway.types.default import Default
 
 __all__ = (
-    "ContextPresets",
-    "ContextPresetsRegistry",
-    "ContextPresetsRegistryContext",
+    "ContextPreset",
+    "ContextPresetRegistryContext",
 )
 
 
-class ContextPresetsStatePreparing(Protocol):
+class ContextPresetStatePreparing(Protocol):
     async def __call__(self) -> Iterable[State] | State: ...
 
 
-class ContextPresetsDisposablesPreparing(Protocol):
+class ContextPresetDisposablesPreparing(Protocol):
     async def __call__(self) -> Iterable[Disposable] | Disposable: ...
 
 
-class ContextPresets(Immutable):
+class ContextPreset(Immutable):
     """
     A configuration preset for context scopes.
 
-    ContextPresets allow you to define reusable combinations of state and disposables
+    ContextPreset allows you to define reusable combinations of state and disposables
     that can be applied to scopes by name. This provides a convenient way to manage
     complex application configurations and resource setups.
 
@@ -43,15 +43,15 @@ class ContextPresets(Immutable):
     Basic preset with static state:
 
     >>> from haiway import State
-    >>> from haiway.context import ContextPresets
+    >>> from haiway.context import ContextPreset
     >>>
     >>> class DatabaseConfig(State):
     ...     connection_string: str
     ...     pool_size: int = 10
     >>>
-    >>> db_preset = ContextPresets(
+    >>> db_preset = ContextPreset(
     ...     name="database",
-    ...     _state=[DatabaseConfig(connection_string="postgresql://localhost/app")]
+    ...     state=[DatabaseConfig(connection_string="postgresql://localhost/app")]
     ... )
 
     Preset with dynamic state factory:
@@ -60,9 +60,9 @@ class ContextPresets(Immutable):
     ...     # Load configuration from environment or config file
     ...     return DatabaseConfig(connection_string=os.getenv("DB_URL"))
     >>>
-    >>> dynamic_preset = ContextPresets(
+    >>> dynamic_preset = ContextPreset(
     ...     name="dynamic_db",
-    ...     _state=[load_config]
+    ...     state=[load_config]
     ... )
 
     Preset with disposables:
@@ -80,10 +80,10 @@ class ContextPresets(Immutable):
     >>> async def connection_factory():
     ...     return database_connection()
     >>>
-    >>> db_preset = ContextPresets(
+    >>> db_preset = ContextPreset(
     ...     name="database",
-    ...     _state=[DatabaseConfig(connection_string="...")],
-    ...     _disposables=[connection_factory]
+    ...     state=[DatabaseConfig(connection_string="...")],
+    ...     disposables=[connection_factory]
     ... )
 
     Using presets:
@@ -97,8 +97,31 @@ class ContextPresets(Immutable):
     """
 
     name: str
-    _state: Collection[ContextPresetsStatePreparing | State] = Default(())
-    _disposables: Collection[ContextPresetsDisposablesPreparing] = Default(())
+    _state: Collection[ContextPresetStatePreparing | State]
+    _disposables: Collection[ContextPresetDisposablesPreparing]
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        state: Collection[ContextPresetStatePreparing | State] = (),
+        disposables: Collection[ContextPresetDisposablesPreparing] = (),
+    ) -> None:
+        object.__setattr__(
+            self,
+            "name",
+            name,
+        )
+        object.__setattr__(
+            self,
+            "_state",
+            state,
+        )
+        object.__setattr__(
+            self,
+            "_disposables",
+            disposables,
+        )
 
     def extended(
         self,
@@ -114,38 +137,38 @@ class ContextPresets(Immutable):
         Parameters
         ----------
         other : Self
-            Another ContextPresets instance to merge with this one.
+            Another ContextPreset instance to merge with this one.
 
         Returns
         -------
         Self
-            A new ContextPresets instance with combined state and disposables.
+            A new ContextPreset instance with combined state and disposables.
         """
         return self.__class__(
             name=self.name,
-            _state=(*self._state, *other._state),
-            _disposables=(*self._disposables, *other._disposables),
+            state=(*self._state, *other._state),
+            disposables=(*self._disposables, *other._disposables),
         )
 
     def with_state(
         self,
-        *state: ContextPresetsStatePreparing | State,
+        *state: ContextPresetStatePreparing | State,
     ) -> Self:
         """
         Create a new preset with additional state.
 
-        Returns a new ContextPresets instance with the provided state objects
+        Returns a new ContextPreset instance with the provided state objects
         or state factories added to the existing state collection.
 
         Parameters
         ----------
-        *state : ContextPresetsStatePreparing | State
+        *state : ContextPresetStatePreparing | State
             Additional state objects or state factory functions to include.
 
         Returns
         -------
         Self
-            A new ContextPresets instance with the additional state, or the
+            A new ContextPreset instance with the additional state, or the
             same instance if no state was provided.
         """
         if not state:
@@ -153,29 +176,29 @@ class ContextPresets(Immutable):
 
         return self.__class__(
             name=self.name,
-            _state=(*self._state, *state),
-            _disposables=self._disposables,
+            state=(*self._state, *state),
+            disposables=self._disposables,
         )
 
     def with_disposable(
         self,
-        *disposable: ContextPresetsDisposablesPreparing,
+        *disposable: ContextPresetDisposablesPreparing,
     ) -> Self:
         """
         Create a new preset with additional disposables.
 
-        Returns a new ContextPresets instance with the provided disposable
+        Returns a new ContextPreset instance with the provided disposable
         factory functions added to the existing disposables collection.
 
         Parameters
         ----------
-        *disposable : ContextPresetsDisposablesPreparing
+        *disposable : ContextPresetDisposablesPreparing
             Additional disposable factory functions to include.
 
         Returns
         -------
         Self
-            A new ContextPresets instance with the additional disposables, or the
+            A new ContextPreset instance with the additional disposables, or the
             same instance if no disposables were provided.
         """
         if not disposable:
@@ -183,8 +206,8 @@ class ContextPresets(Immutable):
 
         return self.__class__(
             name=self.name,
-            _state=self._state,
-            _disposables=(*self._disposables, *disposable),
+            state=self._state,
+            disposables=(*self._disposables, *disposable),
         )
 
     async def prepare(self) -> Disposables:
@@ -210,37 +233,48 @@ class ContextPresets(Immutable):
         This method is called automatically when using presets with ctx.scope(),
         so you typically don't need to call it directly.
         """
-        # Collect states directly
-        collected_states: list[State] = []
+        collected_state: Collection[State] = await self._collect_state()
+
+        collected_disposables: Collection[Disposable]
+        if collected_state:
+            # use available state immediately when preparing disposables
+            with StateContext.updated(collected_state):
+                collected_disposables = (
+                    DisposableState(_state=collected_state),
+                    *await self._collect_disposables(),
+                )
+
+        else:
+            collected_disposables = await self._collect_disposables()
+
+        return Disposables(*collected_disposables)
+
+    async def _collect_state(self) -> Collection[State]:
+        collected_state: list[State] = []
         for state in self._state:
             if isinstance(state, State):
-                collected_states.append(state)
+                collected_state.append(state)
+
             else:
                 resolved_state: Iterable[State] | State = await state()
                 if isinstance(resolved_state, State):
-                    collected_states.append(resolved_state)
+                    collected_state.append(resolved_state)
 
                 else:
-                    collected_states.extend(resolved_state)
+                    collected_state.extend(resolved_state)
 
-        collected_disposables: list[Disposable]
-        if collected_states:
-            collected_disposables = [DisposableState(_state=collected_states)]
+        return collected_state
 
-        else:
-            collected_disposables = []
-
-        for disposable in self._disposables:
-            resolved_disposable: Iterable[Disposable] | Disposable = await disposable()
-            if hasattr(resolved_disposable, "__aenter__") and hasattr(
-                resolved_disposable, "__aexit__"
-            ):
-                collected_disposables.append(cast(Disposable, resolved_disposable))
+    async def _collect_disposables(self) -> Collection[Disposable]:
+        collected_disposables: list[Disposable] = []
+        for disposable in await gather(*(factory() for factory in self._disposables)):
+            if hasattr(disposable, "__aenter__") and hasattr(disposable, "__aexit__"):
+                collected_disposables.append(cast(Disposable, disposable))
 
             else:
-                collected_disposables.extend(cast(Iterable[Disposable], resolved_disposable))
+                collected_disposables.extend(cast(Iterable[Disposable], disposable))
 
-        return Disposables(*collected_disposables)
+        return collected_disposables
 
 
 class DisposableState(Immutable):
@@ -258,55 +292,32 @@ class DisposableState(Immutable):
         pass
 
 
-class ContextPresetsRegistry(Immutable):
-    _presets: Mapping[str, ContextPresets]
-
-    def __init__(
-        self,
-        presets: Collection[ContextPresets],
-    ) -> None:
-        object.__setattr__(
-            self,
-            "_presets",
-            {preset.name: preset for preset in presets},
-        )
-
-    def select(
-        self,
-        name: str,
-        /,
-    ) -> ContextPresets | None:
-        return self._presets.get(name)
-
-
-class ContextPresetsRegistryContext(Immutable):
-    _context: ClassVar[ContextVar[ContextPresetsRegistry]] = ContextVar[ContextPresetsRegistry](
-        "ContextPresetsRegistryContext"
-    )
+class ContextPresetRegistryContext(Immutable):
+    _context: ClassVar[ContextVar[Self]] = ContextVar[Self]("ContextPresetRegistryContext")
 
     @classmethod
     def select(
         cls,
         name: str,
         /,
-    ) -> ContextPresets | None:
+    ) -> ContextPreset | None:
         try:
-            return cls._context.get().select(name)
+            return cls._context.get().preset(name)
 
         except LookupError:
             return None  # no presets
 
-    _registry: ContextPresetsRegistry
-    _token: Token[ContextPresetsRegistry] | None = None
+    _registry: Mapping[str, ContextPreset]
+    _token: Token[Self] | None = None
 
     def __init__(
         self,
-        registry: ContextPresetsRegistry,
+        presets: Iterable[ContextPreset],
     ) -> None:
         object.__setattr__(
             self,
             "_registry",
-            registry,
+            {preset.name: preset for preset in presets},
         )
         object.__setattr__(
             self,
@@ -314,12 +325,19 @@ class ContextPresetsRegistryContext(Immutable):
             None,
         )
 
+    def preset(
+        self,
+        name: str,
+        /,
+    ) -> ContextPreset | None:
+        return self._registry.get(name)
+
     def __enter__(self) -> None:
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         object.__setattr__(
             self,
             "_token",
-            ContextPresetsRegistryContext._context.set(self._registry),
+            ContextPresetRegistryContext._context.set(self),
         )
 
     def __exit__(
@@ -329,7 +347,7 @@ class ContextPresetsRegistryContext(Immutable):
         exc_tb: TracebackType | None,
     ) -> None:
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
-        ContextPresetsRegistryContext._context.reset(self._token)
+        ContextPresetRegistryContext._context.reset(self._token)  # pyright: ignore[reportArgumentType]
         object.__setattr__(
             self,
             "_token",

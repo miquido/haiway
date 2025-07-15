@@ -13,6 +13,7 @@ from collections.abc import (
     Iterable,
     Mapping,
 )
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from logging import Logger
 from types import TracebackType
 from typing import Any, final, overload
@@ -25,38 +26,28 @@ from haiway.context.observability import (
     ObservabilityContext,
     ObservabilityLevel,
 )
+
+# Import after other imports to avoid circular dependencies
 from haiway.context.presets import (
-    ContextPresets,
-    ContextPresetsRegistry,
-    ContextPresetsRegistryContext,
+    ContextPreset,
+    ContextPresetRegistryContext,
 )
 from haiway.context.state import ScopeState, StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.state import Immutable, State
+from haiway.utils.collections import as_list
 from haiway.utils.stream import AsyncStream
 
 __all__ = ("ctx",)
 
 
 class ScopeContext(Immutable):
-    """
-    Context manager for executing code within a defined scope.
-
-    ScopeContext manages scope-related data and behavior including identity, state,
-    observability, and task coordination. It enforces immutability and provides both
-    synchronous and asynchronous context management interfaces.
-
-    This class should not be instantiated directly; use the ctx.scope() factory method
-    to create scope contexts.
-    """
-
     _identifier: ScopeIdentifier
     _state: Collection[State]
-    _captured_state: Collection[State]
-    _resolved_state_context: StateContext | None
+    _state_context: StateContext | None
     _disposables: Disposables | None
-    _presets: ContextPresets | None
-    _presets_disposables: Disposables | None
+    _preset: ContextPreset | None
+    _preset_disposables: Disposables | None
     _observability_context: ObservabilityContext
     _task_group_context: TaskGroupContext | None
 
@@ -65,6 +56,7 @@ class ScopeContext(Immutable):
         name: str,
         task_group: TaskGroup | None,
         state: tuple[State, ...],
+        preset: ContextPreset | None,
         disposables: Disposables | None,
         observability: Observability | Logger | None,
     ) -> None:
@@ -79,16 +71,10 @@ class ScopeContext(Immutable):
             "_state",
             state,
         )
-        # capture current contextual state (without new additions)
-        object.__setattr__(
-            self,
-            "_captured_state",
-            StateContext.current_state(),
-        )
         # placeholder for temporary, resolved state context
         object.__setattr__(
             self,
-            "_resolved_state_context",
+            "_state_context",
             None,
         )
         object.__setattr__(
@@ -98,12 +84,12 @@ class ScopeContext(Immutable):
         )
         object.__setattr__(
             self,
-            "_presets",
-            ContextPresetsRegistryContext.select(name),
+            "_preset",
+            preset if preset is not None else ContextPresetRegistryContext.select(name),
         )
         object.__setattr__(
             self,
-            "_presets_disposables",
+            "_preset_disposables",
             None,
         )
         object.__setattr__(
@@ -123,80 +109,28 @@ class ScopeContext(Immutable):
             else None,
         )
 
-    def __enter__(self) -> str:
-        assert (  # nosec: B101
-            self._task_group_context is None or self._identifier.is_root
-        ), "Can't enter synchronous context with task group"
-        assert self._disposables is None, "Can't enter synchronous context with disposables"  # nosec: B101
-        assert self._resolved_state_context is None  # nosec: B101
-        assert self._presets is None, "Can't enter synchronous context with presets"  # nosec: B101
-        self._identifier.__enter__()
-        self._observability_context.__enter__()
-        # For sync context, only use explicit state (no presets or disposables allowed)
-        resolved_state_context: StateContext = StateContext(
-            _state=ScopeState((*self._captured_state, *self._state))
-        )
-        object.__setattr__(
-            self,
-            "_resolved_state_context",
-            resolved_state_context,
-        )
-        resolved_state_context.__enter__()
-
-        return str(self._observability_context.observability.trace_identifying(self._identifier))
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        assert self._resolved_state_context is not None  # nosec: B101
-        self._resolved_state_context.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-        object.__setattr__(
-            self,
-            "_resolved_state_context",
-            None,
-        )
-        self._observability_context.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-        self._identifier.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-
     async def __aenter__(self) -> str:
-        assert self._presets_disposables is None  # nosec: B101
-        assert self._resolved_state_context is None  # nosec: B101
+        assert self._preset_disposables is None  # nosec: B101
+        assert self._state_context is None  # nosec: B101
         self._identifier.__enter__()
         self._observability_context.__enter__()
 
-        if task_group := self._task_group_context:
-            await task_group.__aenter__()
+        if self._task_group_context is not None:
+            await self._task_group_context.__aenter__()
 
         # Collect all state sources in priority order (lowest to highest priority)
-        collected_state: list[State] = []
-
         # 1. Add contextual state first (lowest priority)
-        collected_state.extend(self._captured_state)
+        collected_state: list[State] = as_list(StateContext.current_state())
 
         # 2. Add preset state (low priority, overrides contextual)
-        if self._presets is not None:
-            presets_disposables: Disposables = await self._presets.prepare()
+        if self._preset is not None:
+            preset_disposables: Disposables = await self._preset.prepare()
             object.__setattr__(
                 self,
-                "_presets_disposables",
-                presets_disposables,
+                "_preset_disposables",
+                preset_disposables,
             )
-            collected_state.extend(await presets_disposables.prepare())
+            collected_state.extend(await preset_disposables.prepare())
 
         # 3. Add explicit disposables state (medium priority)
         if self._disposables is not None:
@@ -212,7 +146,7 @@ class ScopeContext(Immutable):
         resolved_state_context.__enter__()
         object.__setattr__(
             self,
-            "_resolved_state_context",
+            "_state_context",
             resolved_state_context,
         )
 
@@ -224,7 +158,7 @@ class ScopeContext(Immutable):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert self._resolved_state_context is not None  # nosec: B101
+        assert self._state_context is not None  # nosec: B101
         if self._disposables is not None:
             await self._disposables.dispose(
                 exc_type=exc_type,
@@ -232,42 +166,40 @@ class ScopeContext(Immutable):
                 exc_tb=exc_tb,
             )
 
-        if self._presets_disposables is not None:
-            await self._presets_disposables.dispose(
+        if self._preset_disposables is not None:
+            await self._preset_disposables.dispose(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
             )
             object.__setattr__(
                 self,
-                "_presets_disposables",
+                "_preset_disposables",
                 None,
             )
 
-        if task_group := self._task_group_context:
-            await task_group.__aexit__(
+        if self._task_group_context is not None:
+            await self._task_group_context.__aexit__(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
             )
 
-        self._resolved_state_context.__exit__(
+        self._state_context.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
         )
         object.__setattr__(
             self,
-            "_resolved_state_context",
+            "_state_context",
             None,
         )
-
         self._observability_context.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
         )
-
         self._identifier.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
@@ -276,65 +208,32 @@ class ScopeContext(Immutable):
 
 
 class DisposablesContext(Immutable):
-    """
-    Immutable async context manager for managing collections of disposables.
-
-    DisposablesContext captures the current contextual state upon initialization
-    and provides an async context manager interface for managing disposable resources.
-    When entered, it prepares the disposables to collect their state, merges it with
-    the captured state, and creates a resolved StateContext. Upon exit, it properly
-    disposes of the disposables and cleans up internal references.
-
-    This class should not be instantiated directly; use the ctx.disposables() factory
-    method to create disposables contexts.
-    """
-
     _disposables: Disposables
-    _captured_state: Collection[State]
-    _resolved_state_context: StateContext | None
+    _state_context: StateContext | None
 
     def __init__(
         self,
         disposables: Disposables,
     ) -> None:
-        # capture current contextual state (without new additions)
-        object.__setattr__(
-            self,
-            "_captured_state",
-            StateContext.current_state(),
-        )
-        # placeholder for temporary, resolved state context
-        object.__setattr__(
-            self,
-            "_resolved_state_context",
-            None,
-        )
         object.__setattr__(
             self,
             "_disposables",
             disposables,
         )
-
-    async def __aenter__(self) -> None:
-        assert self._resolved_state_context is None  # nosec: B101
-
-        # Collect all state sources in priority order (lowest to highest priority)
-        collected_state: list[State] = []
-
-        collected_state.extend(self._captured_state)
-
-        collected_state.extend(await self._disposables.prepare())
-
-        # Create resolved state context with all collected state
-        resolved_state_context: StateContext = StateContext(
-            _state=ScopeState(tuple(collected_state))
-        )
-
-        resolved_state_context.__enter__()
         object.__setattr__(
             self,
-            "_resolved_state_context",
-            resolved_state_context,
+            "_state_context",
+            None,
+        )
+
+    async def __aenter__(self) -> None:
+        assert self._state_context is None  # nosec: B101
+        state_context: StateContext = StateContext.updated(await self._disposables.prepare())
+        state_context.__enter__()
+        object.__setattr__(
+            self,
+            "_state_context",
+            state_context,
         )
 
     async def __aexit__(
@@ -343,22 +242,20 @@ class DisposablesContext(Immutable):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert self._resolved_state_context is not None  # nosec: B101
-
+        assert self._state_context is not None  # nosec: B101
         await self._disposables.dispose(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
         )
-
-        self._resolved_state_context.__exit__(
+        self._state_context.__exit__(
             exc_type=exc_type,
             exc_val=exc_val,
             exc_tb=exc_tb,
         )
         object.__setattr__(
             self,
-            "_resolved_state_context",
+            "_state_context",
             None,
         )
 
@@ -406,8 +303,8 @@ class ctx:
 
     @staticmethod
     def presets(
-        *presets: ContextPresets,
-    ) -> ContextPresetsRegistryContext:
+        *presets: ContextPreset,
+    ) -> AbstractContextManager[None]:
         """
         Create a context manager for a preset registry.
 
@@ -419,15 +316,19 @@ class ctx:
         for use with ctx.scope(). The presets are looked up by their name when
         creating scopes.
 
+        Note: For single preset usage, consider passing the preset directly to
+        ctx.scope() using the preset parameter instead of using this registry.
+        Presets only work with async contexts.
+
         Parameters
         ----------
-        *presets: ContextPresets
+        *presets: ContextPreset
             Variable number of preset configurations to register. Each preset
             must have a unique name within the registry.
 
         Returns
         -------
-        ContextPresetsRegistryContext
+        AbstractContextManager[None]
             A context manager that makes the presets available in nested scopes
 
         Examples
@@ -435,19 +336,19 @@ class ctx:
         Basic preset usage:
 
         >>> from haiway import ctx, State
-        >>> from haiway.context import ContextPresets
+        >>> from haiway.context import ContextPreset
         >>>
         >>> class ApiConfig(State):
         ...     base_url: str
         ...     timeout: int = 30
         >>>
         >>> # Define presets
-        >>> dev_preset = ContextPresets(
+        >>> dev_preset = ContextPreset(
         ...     name="development",
         ...     _state=[ApiConfig(base_url="https://dev-api.example.com")]
         ... )
         >>>
-        >>> prod_preset = ContextPresets(
+        >>> prod_preset = ContextPreset(
         ...     name="production",
         ...     _state=[ApiConfig(base_url="https://api.example.com", timeout=60)]
         ... )
@@ -461,7 +362,7 @@ class ctx:
         Nested preset registries:
 
         >>> base_presets = [dev_preset, prod_preset]
-        >>> override_preset = ContextPresets(
+        >>> override_preset = ContextPreset(
         ...     name="development",
         ...     _state=[ApiConfig(base_url="https://staging.example.com")]
         ... )
@@ -476,27 +377,29 @@ class ctx:
 
         See Also
         --------
-        ContextPresets : For creating individual preset configurations
+        ContextPreset : For creating individual preset configurations
         ctx.scope : For creating scopes that can use presets
         """
-        return ContextPresetsRegistryContext(
-            registry=ContextPresetsRegistry(
-                presets=presets,
-            ),
-        )
+        return ContextPresetRegistryContext(presets=presets)
 
     @staticmethod
     def scope(
         name: str,
         /,
         *state: State | None,
+        preset: ContextPreset | None = None,
         disposables: Disposables | Iterable[Disposable] | None = None,
         task_group: TaskGroup | None = None,
         observability: Observability | Logger | None = None,
-    ) -> ScopeContext:
+    ) -> AbstractAsyncContextManager[str]:
         """
-        Prepare scope context with given parameters. When called within an existing context\
-         it becomes nested with current context as its parent.
+        Prepare scope context with given parameters.
+
+        When called within an existing context, it becomes nested with current context
+        as its parent.
+
+        Note: Presets can only be used with async contexts. Synchronous contexts
+        do not support preset functionality.
 
         State Priority System
         ---------------------
@@ -516,28 +419,71 @@ class ctx:
             name of the scope context, can be associated with state presets
 
         *state: State | None
-            state propagated within the scope context, will be merged with current state by\
-             replacing current with provided on conflict.
+            state propagated within the scope context, will be merged with current state by
+            replacing current with provided on conflict.
+
+        preset: ContextPreset | None = None
+            context preset to be used within the scope context. The preset's state and
+            disposables will be applied to the scope with lower priority than explicit state.
+            Only works with async contexts.
 
         disposables: Disposables | Iterable[Disposable] | None
-            disposables consumed within the context when entered. Produced state will automatically\
-             be added to the scope state. Using asynchronous context is required if any disposables\
-             were provided.
+            disposables consumed within the context when entered. Produced state will automatically
+            be added to the scope state. Using asynchronous context is required if any disposables
+            were provided.
 
         task_group: TaskGroup | None
             task group used for spawning and joining tasks within the context. Root scope will
-             always have task group created even when not set.
+            always have task group created even when not set.
 
         observability: Observability | Logger | None = None
-            observability solution responsible for recording and storing metrics, logs and events.\
-             Assigning observability within existing context will result in an error.
+            observability solution responsible for recording and storing metrics, logs and events.
+            Assigning observability within existing context will result in an error.
             When not provided, logger with the scope name will be requested and used.
 
         Returns
         -------
-        ScopeContext
-            context object intended to enter context manager with.\
-             context manager will provide trace_id of current context.
+        AbstractAsyncContextManager[str]
+            context manager object intended to enter the scope with.
+            context manager will provide trace_id of current scope.
+
+        Examples
+        --------
+        Using a preset directly:
+
+        >>> from haiway import ctx, State
+        >>> from haiway.context import ContextPreset
+        >>>
+        >>> class ApiConfig(State):
+        ...     base_url: str
+        ...     timeout: int = 30
+        >>>
+        >>> api_preset = ContextPreset(
+        ...     name="api",
+        ...     state=[ApiConfig(base_url="https://api.example.com")]
+        ... )
+        >>>
+        >>> # Direct preset usage
+        >>> async with ctx.scope("main", preset=api_preset):
+        ...     config = ctx.state(ApiConfig)
+        ...     # Uses preset configuration
+        >>>
+        >>> # Override preset state with explicit state
+        >>> async with ctx.scope("main", ApiConfig(timeout=60), preset=api_preset):
+        ...     config = ctx.state(ApiConfig)
+        ...     # base_url from preset, timeout overridden to 60
+
+        Using preset registry (original approach):
+
+        >>> # Multiple presets registered
+        >>> with ctx.presets(dev_preset, prod_preset):
+        ...     async with ctx.scope("development"):  # Matches dev_preset by name
+        ...         config = ctx.state(ApiConfig)
+
+        See Also
+        --------
+        ctx.presets : For registering multiple presets by name
+        ContextPreset : For creating preset configurations
         """
 
         resolved_disposables: Disposables | None
@@ -555,6 +501,7 @@ class ctx:
             name=name,
             task_group=task_group,
             state=tuple(element for element in state if element is not None),
+            preset=preset,
             disposables=resolved_disposables,
             observability=observability,
         )
@@ -562,21 +509,23 @@ class ctx:
     @staticmethod
     def updated(
         *state: State | None,
-    ) -> StateContext:
+    ) -> AbstractContextManager[None]:
         """
-        Update scope context with given state. When called within an existing context\
-         it becomes nested with current context as its predecessor.
+        Update scope context with given state.
+
+        When called within an existing context, it becomes nested with current
+        context as its predecessor.
 
         Parameters
         ----------
         *state: State | None
-            state propagated within the updated scope context, will be merged with current if any\
-             by replacing current with provided on conflict
+            state propagated within the updated scope context, will be merged with current if any
+            by replacing current with provided on conflict
 
         Returns
         -------
-        StateContext
-            state part of context object intended to enter context manager with it
+        AbstractContextManager[None]
+            context manager object intended to enter updated state context with it
         """
 
         return StateContext.updated(element for element in state if element is not None)
@@ -584,7 +533,7 @@ class ctx:
     @staticmethod
     def disposables(
         *disposables: Disposable | None,
-    ) -> DisposablesContext:
+    ) -> AbstractAsyncContextManager[None]:
         """
         Create a container for managing multiple disposable resources.
 
@@ -601,9 +550,9 @@ class ctx:
 
         Returns
         -------
-        DisposableContext
-            A container that manages the lifecycle of all provided disposables
-            and propagates their state to the context as when used with ctx.scope()
+        AbstractAsyncContextManager[None]
+            A context manager that manages the lifecycle of all provided disposables
+            and propagates their state to the context, similar to ctx.scope()
 
         Examples
         --------
@@ -634,8 +583,9 @@ class ctx:
         **kwargs: Arguments.kwargs,
     ) -> Task[Result]:
         """
-        Spawn an async task within current scope context task group. When called outside of context\
-         it will spawn detached task instead.
+        Spawn an async task within current scope context task group.
+
+        When called outside of context, it will spawn detached task instead.
 
         Parameters
         ----------
@@ -684,7 +634,7 @@ class ctx:
         """
 
         output_stream = AsyncStream[Element]()
-        stream_scope: ScopeContext = ctx.scope("stream")
+        stream_scope: AbstractAsyncContextManager[str] = ctx.scope("stream")
 
         async def stream() -> None:
             async with stream_scope:
@@ -845,8 +795,9 @@ class ctx:
         **extra: Any,
     ) -> None:
         """
-        Log using ERROR level within current scope context. When there is no current scope\
-         root logger will be used without additional details.
+        Log using ERROR level within current scope context.
+
+        When there is no current scope, root logger will be used without additional details.
 
         Parameters
         ----------
@@ -881,8 +832,9 @@ class ctx:
         **extra: Any,
     ) -> None:
         """
-        Log using WARNING level within current scope context. When there is no current scope\
-         root logger will be used without additional details.
+        Log using WARNING level within current scope context.
+
+        When there is no current scope, root logger will be used without additional details.
 
         Parameters
         ----------
@@ -916,8 +868,9 @@ class ctx:
         **extra: Any,
     ) -> None:
         """
-        Log using INFO level within current scope context. When there is no current scope\
-         root logger will be used without additional details.
+        Log using INFO level within current scope context.
+
+        When there is no current scope, root logger will be used without additional details.
 
         Parameters
         ----------
@@ -949,8 +902,9 @@ class ctx:
         **extra: Any,
     ) -> None:
         """
-        Log using DEBUG level within current scope context. When there is no current scope\
-         root logger will be used without additional details.
+        Log using DEBUG level within current scope context.
+
+        When there is no current scope, root logger will be used without additional details.
 
         Parameters
         ----------

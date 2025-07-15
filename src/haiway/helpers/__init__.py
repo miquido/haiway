@@ -10,7 +10,6 @@ from haiway.helpers.observability import LoggerObservability
 from haiway.helpers.retries import retry
 from haiway.helpers.throttling import throttle
 from haiway.helpers.timeouting import timeout
-from haiway.helpers.tracing import traced
 
 __all__ = (
     "CacheMakeKey",
@@ -27,5 +26,4 @@ __all__ = (
     "stream_concurrently",
     "throttle",
     "timeout",
-    "traced",
 )
