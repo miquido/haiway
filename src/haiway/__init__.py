@@ -1,5 +1,5 @@
 from haiway.context import (
-    ContextPresets,
+    ContextPreset,
     Disposable,
     Disposables,
     MissingContext,
@@ -25,7 +25,6 @@ from haiway.helpers import (
     stream_concurrently,
     throttle,
     timeout,
-    traced,
 )
 from haiway.state import AttributePath, AttributeRequirement, Immutable, State
 from haiway.types import (
@@ -65,7 +64,7 @@ __all__ = (
     "AsyncStream",
     "AttributePath",
     "AttributeRequirement",
-    "ContextPresets",
+    "ContextPreset",
     "Default",
     "DefaultValue",
     "Disposable",
@@ -112,7 +111,6 @@ __all__ = (
     "stream_concurrently",
     "throttle",
     "timeout",
-    "traced",
     "unwrap_missing",
     "without_missing",
 )
