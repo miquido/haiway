@@ -188,7 +188,7 @@ class FileAccessing(Protocol):
     locking, and resource management.
     """
 
-    async def __call__(
+    def __call__(
         self,
         path: Path | str,
         create: bool,
@@ -275,7 +275,7 @@ def _close_file_handle(
     os.close(file_handle)
 
 
-async def _file_access_context(
+def _file_access_context(
     path: Path | str,
     create: bool,
     exclusive: bool,
@@ -375,7 +375,7 @@ class FileAccess(State):
     """
 
     @classmethod
-    async def open(
+    def open(
         cls,
         path: Path | str,
         create: bool = False,
@@ -412,7 +412,7 @@ class FileAccess(State):
             If the file cannot be opened with the specified parameters, or if
             a file is already open in the current context scope
         """
-        return await ctx.state(cls).accessing(
+        return ctx.state(cls).accessing(
             path,
             create=create,
             exclusive=exclusive,
