@@ -3,8 +3,8 @@ from collections.abc import (
     AsyncIterable,
     AsyncIterator,
     Callable,
-    Collection,
     Coroutine,
+    Iterable,
     MutableSequence,
     Sequence,
 )
@@ -20,7 +20,7 @@ __all__ = (
 
 
 async def process_concurrently[Element](  # noqa: C901, PLR0912
-    source: AsyncIterator[Element],
+    source: AsyncIterable[Element],
     /,
     handler: Callable[[Element], Coroutine[Any, Any, None]],
     *,
@@ -80,8 +80,7 @@ async def process_concurrently[Element](  # noqa: C901, PLR0912
     assert concurrent_tasks > 0  # nosec: B101
     running: set[Task[None]] = set()
     try:
-        while True:
-            element: Element = await anext(source)
+        async for element in source:
             running.add(ctx.spawn(handler, element))
             if len(running) < concurrent_tasks:
                 continue  # keep spawning tasks
@@ -132,7 +131,7 @@ async def process_concurrently[Element](  # noqa: C901, PLR0912
 async def execute_concurrently[Element, Result](
     handler: Callable[[Element], Coroutine[Any, Any, Result]],
     /,
-    elements: Collection[Element],
+    elements: Iterable[Element],
     *,
     concurrent_tasks: int = 2,
 ) -> Sequence[Result]: ...
@@ -142,7 +141,7 @@ async def execute_concurrently[Element, Result](
 async def execute_concurrently[Element, Result](
     handler: Callable[[Element], Coroutine[Any, Any, Result]],
     /,
-    elements: Collection[Element],
+    elements: Iterable[Element],
     *,
     concurrent_tasks: int = 2,
     return_exceptions: Literal[True],
@@ -152,7 +151,7 @@ async def execute_concurrently[Element, Result](
 async def execute_concurrently[Element, Result](  # noqa: C901
     handler: Callable[[Element], Coroutine[Any, Any, Result]],
     /,
-    elements: Collection[Element],
+    elements: Iterable[Element],
     *,
     concurrent_tasks: int = 2,
     return_exceptions: bool = False,
@@ -175,8 +174,8 @@ async def execute_concurrently[Element, Result](  # noqa: C901
     ----------
     handler : Callable[[Element], Coroutine[Any, Any, Result]]
         A coroutine function that processes each element and returns a result.
-    elements : Collection[Element]
-        A collection of elements to process. The collection size determines
+    elements : Iterable[Element]
+        A source of elements to process. The source size determines
         the result sequence length.
     concurrent_tasks : int, default=2
         Maximum number of concurrent tasks. Must be greater than 0. Higher
