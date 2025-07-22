@@ -7,7 +7,7 @@ from logging import INFO as INFO_LOGGING
 from logging import WARNING as WARNING_LOGGING
 from logging import Logger, getLogger
 from types import TracebackType
-from typing import Any, ClassVar, Protocol, Self, runtime_checkable
+from typing import Any, ClassVar, Literal, Protocol, Self, runtime_checkable
 from uuid import UUID, uuid4
 
 from haiway.context.identifier import ScopeIdentifier
@@ -23,6 +23,7 @@ __all__ = (
     "ObservabilityEventRecording",
     "ObservabilityLevel",
     "ObservabilityLogRecording",
+    "ObservabilityMetricKind",
     "ObservabilityMetricRecording",
     "ObservabilityScopeEntering",
     "ObservabilityScopeExiting",
@@ -118,6 +119,9 @@ class ObservabilityEventRecording(Protocol):
     ) -> None: ...
 
 
+type ObservabilityMetricKind = Literal["counter", "histogram", "gauge"]
+
+
 @runtime_checkable
 class ObservabilityMetricRecording(Protocol):
     """
@@ -136,6 +140,7 @@ class ObservabilityMetricRecording(Protocol):
         metric: str,
         value: float | int,
         unit: str | None,
+        kind: ObservabilityMetricKind,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None: ...
 
@@ -278,6 +283,7 @@ def _logger_observability(
         metric: str,
         value: float | int,
         unit: str | None,
+        kind: ObservabilityMetricKind,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         if attributes:
@@ -553,6 +559,7 @@ class ObservabilityContext(Immutable):
         *,
         value: float | int,
         unit: str | None,
+        kind: ObservabilityMetricKind,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         """
@@ -571,6 +578,8 @@ class ObservabilityContext(Immutable):
             The numeric value of the metric
         unit: str | None
             Optional unit for the metric (e.g., "ms", "bytes")
+        kind: ObservabilityMetricKind
+            The metric kind defining its value handling.
         attributes: Mapping[str, ObservabilityAttribute]
             Key-value attributes associated with the metric
         """
@@ -584,6 +593,7 @@ class ObservabilityContext(Immutable):
                     metric=metric,
                     value=value,
                     unit=unit,
+                    kind=kind,
                     attributes=attributes,
                 )
 
