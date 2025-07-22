@@ -7,7 +7,6 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
-  custom_dir: docs/overrides
   palette:
     # Palette toggle for dark mode
     - media: "(prefers-color-scheme: dark)"
@@ -124,22 +123,9 @@ nav:
     - First Steps: getting-started/first-steps.md
   - Guides:
     - guides/index.md
-    - Architecture: guides/architecture.md
-    - State Management: guides/state-management.md
-    - Context System: guides/context-system.md
-    - Async Patterns: guides/async-patterns.md
-    - Testing: guides/testing.md
+    - Functionalities: guides/functionalities.md
+    - Observability: guides/observability.md
+    - Packages: guides/packages.md
+    - State: guides/state.md
   - API Reference:
     - api/index.md
-    - Core: api/core.md
-    - Context: api/context.md
-    - State: api/state.md
-    - Helpers: api/helpers.md
-    - Types: api/types.md
-  - Examples:
-    - examples/index.md
-    - FastAPI Integration: examples/fastapi-integration.md
-  - Advanced:
-    - advanced/index.md
-    - Performance: advanced/performance.md
-    - Troubleshooting: advanced/troubleshooting.md
