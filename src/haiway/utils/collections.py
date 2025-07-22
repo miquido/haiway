@@ -14,20 +14,20 @@ __all__ = (
 
 @overload
 def as_list[T](
-    collection: Iterable[T],
+    iterable: Iterable[T],
     /,
 ) -> list[T]: ...
 
 
 @overload
 def as_list[T](
-    collection: Iterable[T] | None,
+    iterable: Iterable[T] | None,
     /,
 ) -> list[T] | None: ...
 
 
 def as_list[T](
-    collection: Iterable[T] | None,
+    iterable: Iterable[T] | None,
     /,
 ) -> list[T] | None:
     """
@@ -35,44 +35,44 @@ def as_list[T](
 
     Parameters
     ----------
-    collection : Iterable[T] | None
-        The input collection to be converted to a list.
+    iterable : Iterable[T] | None
+        The input iterable to be converted to a list.
         If None is provided, None is returned.
 
     Returns
     -------
     list[T] | None
-        A new list containing all elements of the input collection,
+        A new list containing all elements of the input iterable,
         or the original list if it was already one.
         Returns None if None was provided.
     """
 
-    if collection is None:
+    if iterable is None:
         return None
 
-    elif isinstance(collection, list):
-        return collection
+    elif isinstance(iterable, list):
+        return iterable
 
     else:
-        return list(collection)
+        return list(iterable)
 
 
 @overload
 def as_tuple[T](
-    collection: Iterable[T],
+    iterable: Iterable[T],
     /,
 ) -> tuple[T, ...]: ...
 
 
 @overload
 def as_tuple[T](
-    collection: Iterable[T] | None,
+    iterable: Iterable[T] | None,
     /,
 ) -> tuple[T, ...] | None: ...
 
 
 def as_tuple[T](
-    collection: Iterable[T] | None,
+    iterable: Iterable[T] | None,
     /,
 ) -> tuple[T, ...] | None:
     """
@@ -80,26 +80,26 @@ def as_tuple[T](
 
     Parameters
     ----------
-    collection : Iterable[T] | None
-        The input collection to be converted to a tuple.
+    iterable : Iterable[T] | None
+        The input iterable to be converted to a tuple.
         If None is provided, None is returned.
 
     Returns
     -------
     tuple[T, ...] | None
-        A new tuple containing all elements of the input collection,
+        A new tuple containing all elements of the input iterable,
         or the original tuple if it was already one.
         Returns None if None was provided.
     """
 
-    if collection is None:
+    if iterable is None:
         return None
 
-    elif isinstance(collection, tuple):
-        return collection
+    elif isinstance(iterable, tuple):
+        return iterable
 
     else:
-        return tuple(collection)
+        return tuple(iterable)
 
 
 @overload
@@ -149,20 +149,20 @@ def as_set[T](
 
 @overload
 def as_dict[K, V](
-    collection: Mapping[K, V],
+    mapping: Mapping[K, V],
     /,
 ) -> dict[K, V]: ...
 
 
 @overload
 def as_dict[K, V](
-    collection: Mapping[K, V] | None,
+    mapping: Mapping[K, V] | None,
     /,
 ) -> dict[K, V] | None: ...
 
 
 def as_dict[K, V](
-    collection: Mapping[K, V] | None,
+    mapping: Mapping[K, V] | None,
     /,
 ) -> dict[K, V] | None:
     """
@@ -170,30 +170,30 @@ def as_dict[K, V](
 
     Parameters
     ----------
-    collection : Mapping[K, V] | None
-        The input collection to be converted to a dict.
+    mapping : Mapping[K, V] | None
+        The input mapping to be converted to a dict.
         If None is provided, None is returned.
 
     Returns
     -------
     dict[K, V] | None
-        A new dict containing all elements of the input collection,
+        A new dict containing all elements of the input mapping,
         or the original dict if it was already one.
         Returns None if None was provided.
     """
 
-    if collection is None:
+    if mapping is None:
         return None
 
-    elif isinstance(collection, dict):
-        return collection
+    elif isinstance(mapping, dict):
+        return mapping
 
     else:
-        return dict(collection)
+        return dict(mapping)
 
 
 @overload
-def without_missing[T: Mapping[str, Any]](
+def without_missing(
     mapping: Mapping[str, Any],
     /,
 ) -> Mapping[str, Any]: ...
