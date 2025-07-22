@@ -979,6 +979,7 @@ class ctx:
         metric: str,
         value: float | int,
         unit: str | None = None,
+        kind: ObservabilityMetricKind,
         attributes: Mapping[str, ObservabilityAttribute] | None = None,
     ) -> None: ...
 
