@@ -25,6 +25,7 @@ from haiway.context.observability import (
     ObservabilityAttribute,
     ObservabilityContext,
     ObservabilityLevel,
+    ObservabilityMetricKind,
 )
 
 # Import after other imports to avoid circular dependencies
@@ -990,6 +991,7 @@ class ctx:
         metric: str | None = None,
         value: float | int | None = None,
         unit: str | None = None,
+        kind: ObservabilityMetricKind | None = None,
         attributes: Mapping[str, ObservabilityAttribute] | None = None,
     ) -> None:
         if event is not None:
@@ -1003,11 +1005,13 @@ class ctx:
         elif metric is not None:
             assert event is None  # nosec: B101
             assert value is not None  # nosec: B101
+            assert kind is not None  # nosec: B101
             ObservabilityContext.record_metric(
                 level,
                 metric,
                 value=value,
                 unit=unit,
+                kind=kind,
                 attributes=attributes or {},
             )
 

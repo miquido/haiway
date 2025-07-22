@@ -12,7 +12,7 @@ from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.metrics._internal import Meter
-from opentelemetry.metrics._internal.instrument import Counter
+from opentelemetry.metrics._internal.instrument import Counter, Gauge, Histogram
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal import LogRecord
 from opentelemetry.sdk._logs._internal.export import (
@@ -33,6 +33,7 @@ from haiway.context import (
     Observability,
     ObservabilityAttribute,
     ObservabilityLevel,
+    ObservabilityMetricKind,
     ScopeIdentifier,
     ctx,
 )
@@ -54,6 +55,8 @@ class ScopeStore:
         "_completed",
         "_counters",
         "_exited",
+        "_gauges",
+        "_histograms",
         "_token",
         "context",
         "identifier",
@@ -91,6 +94,8 @@ class ScopeStore:
         self.identifier: ScopeIdentifier = identifier
         self.nested: list[ScopeStore] = []
         self._counters: dict[str, Counter] = {}
+        self._histograms: dict[str, Histogram] = {}
+        self._gauges: dict[str, Gauge] = {}
         self._exited: bool = False
         self._completed: bool = False
         self.span: Span = span
@@ -251,6 +256,7 @@ class ScopeStore:
         *,
         value: float | int,
         unit: str | None,
+        kind: ObservabilityMetricKind,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         """
@@ -267,23 +273,59 @@ class ScopeStore:
             The value to add to the metric
         unit : str | None
             The unit of the metric (if any)
+        kind: ObservabilityMetricKind
+            The metric kind defining its value handling.
         attributes : Mapping[str, ObservabilityAttribute]
             Attributes to attach to the metric
         """
-        if name not in self._counters:
-            self._counters[name] = self.meter.create_counter(
-                name=name,
-                unit=unit or "",
-            )
+        match kind:
+            case "counter":
+                if name not in self._counters:
+                    self._counters[name] = self.meter.create_counter(
+                        name=name,
+                        unit=unit or "",
+                    )
 
-        self._counters[name].add(
-            value,
-            attributes={
-                key: cast(Any, value)
-                for key, value in attributes.items()
-                if value is not None and value is not MISSING
-            },
-        )
+                self._counters[name].add(
+                    value,
+                    attributes={
+                        key: cast(Any, value)
+                        for key, value in attributes.items()
+                        if value is not None and value is not MISSING
+                    },
+                )
+
+            case "histogram":
+                if name not in self._histograms:
+                    self._histograms[name] = self.meter.create_histogram(
+                        name=name,
+                        unit=unit or "",
+                    )
+
+                self._histograms[name].record(
+                    value,
+                    attributes={
+                        key: cast(Any, value)
+                        for key, value in attributes.items()
+                        if value is not None and value is not MISSING
+                    },
+                )
+
+            case "gauge":
+                if name not in self._gauges:
+                    self._gauges[name] = self.meter.create_gauge(
+                        name=name,
+                        unit=unit or "",
+                    )
+
+                self._gauges[name].set(
+                    value,
+                    attributes={
+                        key: cast(Any, value)
+                        for key, value in attributes.items()
+                        if value is not None and value is not MISSING
+                    },
+                )
 
     def record_attributes(
         self,
@@ -589,6 +631,7 @@ class OpenTelemetry:
             metric: str,
             value: float | int,
             unit: str | None,
+            kind: ObservabilityMetricKind,
             attributes: Mapping[str, ObservabilityAttribute],
         ) -> None:
             """
@@ -609,6 +652,8 @@ class OpenTelemetry:
                 The numeric value of the metric
             unit: str | None
                 Optional unit for the metric (e.g., "ms", "bytes")
+            kind: ObservabilityMetricKind
+                The metric kind defining its value handling.
             attributes: Mapping[str, ObservabilityAttribute]
                 Key-value attributes associated with the metric
             """
@@ -622,6 +667,7 @@ class OpenTelemetry:
                 metric,
                 value=value,
                 unit=unit,
+                kind=kind,
                 attributes=attributes,
             )
 

@@ -4,8 +4,13 @@ from time import monotonic
 from typing import Any
 from uuid import UUID, uuid4
 
-from haiway.context import Observability, ObservabilityLevel, ScopeIdentifier
-from haiway.context.observability import ObservabilityAttribute
+from haiway.context import (
+    Observability,
+    ObservabilityAttribute,
+    ObservabilityLevel,
+    ObservabilityMetricKind,
+    ScopeIdentifier,
+)
 from haiway.utils.formatting import format_str
 
 __all__ = ("LoggerObservability",)
@@ -189,6 +194,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         metric: str,
         value: float | int,
         unit: str | None,
+        kind: ObservabilityMetricKind,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
         assert root_scope is not None  # nosec: B101
