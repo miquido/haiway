@@ -45,6 +45,7 @@ docs = [
   "mkdocs-material~=9.5",
   "mkdocstrings[python]~=0.27",
   "pymdown-extensions~=10.12",
+  "pydoc-markdown~=4.8"
 ]
 
 [tool.ruff]

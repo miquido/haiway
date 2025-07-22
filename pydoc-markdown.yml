@@ -1,0 +1,12 @@
+loaders:
+  - type: python
+    search_path: [src]
+
+modules:
+  - haiway
+
+renderer:
+  type: markdown
+  render_toc: false
+  signature_headers: true   # (optional, see below)
+  insert_header_anchors: false

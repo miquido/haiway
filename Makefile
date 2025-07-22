@@ -96,6 +96,11 @@ docs-build:
 # Shortcut for docs-serve
 docs: docs-serve
 
+api-reference-docs-build:
+	@echo '# Building API reference...'
+	@pydoc-markdown > docs/api/index.md
+	@echo '...API reference built!'
+
 release: lint test
 	@echo '# Preparing release...'
 	@uv build
