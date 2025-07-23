@@ -32,15 +32,12 @@ Optional OpenTelemetry integration for distributed tracing and monitoring.
 3. [First Steps](getting-started/first-steps.md) - Learn the core concepts
 
 ## Architecture
-
 Learn about Haiway's core components:
 
-- [Architecture Overview](guides/architecture.md)
-- [State Management](guides/state-management.md)
-- [Context System](guides/context-system.md)
-- [Functionality Patterns](guides/functionality-patterns.md)
-- [Package Organization](guides/package-organization.md)
-- [Async Patterns](guides/async-patterns.md)
+- [Functionalities](guides/functionalities.md)
+- [Observability](guides/observability.md)
+- [Packages](guides/packages.md)
+- [State](guides/state.md)
 
 ---
 

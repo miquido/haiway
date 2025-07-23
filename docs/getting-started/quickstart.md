@@ -133,6 +133,7 @@ This pattern allows you to easily **swap implementations** (in-memory, database,
 
 ## What's Next?
 
-- Learn more about [First Steps](first-steps.md) to understand the concepts in depth
-- Explore the [Architecture Guide](../guides/architecture.md) for advanced patterns
-- Check out [Examples](../examples/index.md) for real-world integrations
+1. Explore the [Functionlities](../guides/functionalities.md)
+2. Learn about [State](../guides/state.md)
+3. Implement [Observability](../guides/observability.md)
+4. See how to strcture [Packages](../guides/packages.md)

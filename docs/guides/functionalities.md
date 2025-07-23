@@ -241,3 +241,4 @@ async with ctx.scope("example", file_notes(), NotesDirectory(path="./examples/no
     # and access its methods contextually
     await Notes.create_note("This was an example of Haiway")
 ```
+
