@@ -13,7 +13,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.7.6
 endif
 
-.PHONY: uv_check venv sync update format lint test docs docs-serve docs-build release
+.PHONY: uv_check venv sync update format lint test docs docs-serve docs-build release api-reference-docs-build
 
 # Check installed UV version and install if needed
 uv_check:

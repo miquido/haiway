@@ -31,7 +31,9 @@ jobs:
             pydoc-markdown~=4.8
 
       - name: Build API reference
-        run: make api-reference-docs-build
+        run: |
+          mkdir -p docs/api
+          make api-reference-docs-build
 
       - name: Build MkDocs site
         run: mkdocs build --strict
