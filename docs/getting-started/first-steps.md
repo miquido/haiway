@@ -200,7 +200,8 @@ async def test_notification_service():
 
 Now that you understand the basics:
 
-1. Explore the [Functionlities](../guides/functionalities.md)
+1. Explore the [Functionalities](../guides/functionalities.md)
 2. Learn about [State](../guides/state.md)
 3. Implement [Observability](../guides/observability.md)
-4. See how to strcture [Packages](../guides/packages.md)
+4. See how to structure [Packages](../guides/packages.md)
+
