@@ -2,7 +2,7 @@ import json
 from collections.abc import Collection, Iterator, Mapping
 from datetime import datetime
 from types import EllipsisType
-from typing import Any, ClassVar, Final, Self, cast, final
+from typing import Any, ClassVar, Final, Self, TypeGuard, cast, final, overload
 from uuid import UUID
 
 __all__ = (
@@ -127,12 +127,14 @@ class Meta(Mapping[str, MetaValue]):
 
     @property
     def kind(self) -> str | None:
-        match self._values.get("kind"):
-            case str() as kind:
-                return kind
+        value: MetaValue = self._values.get("kind")
+        if value is None:
+            return value
 
-            case _:
-                return None
+        if not isinstance(value, str):
+            raise TypeError(f"Unexpected value '{type(value).__name__}' for kind, expected 'str'")
+
+        return value
 
     def with_kind(
         self,
@@ -151,14 +153,14 @@ class Meta(Mapping[str, MetaValue]):
         key: str,
         /,
     ) -> UUID | None:
-        match self._values.get(key):
-            case str() as identifier:
-                try:
-                    return UUID(identifier)
-                except ValueError:
-                    return None
-            case _:
-                return None
+        value: MetaValue = self._values.get(key)
+        if value is None:
+            return value
+
+        if not isinstance(value, str):
+            raise TypeError(f"Unexpected value '{type(value).__name__}' for {key}, expected 'str'")
+
+        return UUID(value)
 
     def _with_uuid(
         self,
@@ -173,6 +175,124 @@ class Meta(Mapping[str, MetaValue]):
                 key: str(value),
             }
         )
+
+    @overload
+    def get_str(
+        self,
+        key: str,
+    ) -> str | None: ...
+
+    @overload
+    def get_str(
+        self,
+        key: str,
+        *,
+        default: str,
+    ) -> str: ...
+
+    def get_str(
+        self,
+        key: str,
+        *,
+        default: str | None = None,
+    ) -> str | None:
+        value: MetaValue = self._values.get(key)
+        if value is None:
+            return default
+
+        if not isinstance(value, str):
+            raise TypeError(f"Unexpected value '{type(value).__name__}' for {key}, expected 'str'")
+
+        return value
+
+    @overload
+    def get_int(
+        self,
+        key: str,
+    ) -> int | None: ...
+
+    @overload
+    def get_int(
+        self,
+        key: str,
+        *,
+        default: int,
+    ) -> int: ...
+
+    def get_int(
+        self,
+        key: str,
+        *,
+        default: int | None = None,
+    ) -> int | None:
+        value: MetaValue = self._values.get(key)
+        if value is None:
+            return default
+
+        if not isinstance(value, int):
+            raise TypeError(f"Unexpected value '{type(value).__name__}' for {key}, expected 'int'")
+
+        return value
+
+    @overload
+    def get_float(
+        self,
+        key: str,
+    ) -> float | None: ...
+
+    @overload
+    def get_float(
+        self,
+        key: str,
+        *,
+        default: float,
+    ) -> float: ...
+
+    def get_float(
+        self,
+        key: str,
+        *,
+        default: float | None = None,
+    ) -> float | None:
+        value: MetaValue = self._values.get(key)
+        if value is None:
+            return default
+
+        if not isinstance(value, float):
+            raise TypeError(
+                f"Unexpected value '{type(value).__name__}' for {key}, expected 'float'"
+            )
+
+        return value
+
+    @overload
+    def get_bool(
+        self,
+        key: str,
+    ) -> bool | None: ...
+
+    @overload
+    def get_bool(
+        self,
+        key: str,
+        *,
+        default: bool,
+    ) -> bool: ...
+
+    def get_bool(
+        self,
+        key: str,
+        *,
+        default: bool | None = None,
+    ) -> bool | None:
+        value: MetaValue = self._values.get(key)
+        if value is None:
+            return default
+
+        if not isinstance(value, bool):
+            raise TypeError(f"Unexpected value '{type(value).__name__}' for {key}, expected 'bool'")
+
+        return value
 
     @property
     def identifier(self) -> UUID | None:
@@ -189,55 +309,15 @@ class Meta(Mapping[str, MetaValue]):
         )
 
     @property
-    def origin_identifier(self) -> UUID | None:
-        return self._get_uuid("origin_identifier")
-
-    def with_origin_identifier(
-        self,
-        identifier: UUID,
-        /,
-    ) -> Self:
-        return self._with_uuid(
-            "origin_identifier",
-            value=identifier,
-        )
-
-    @property
-    def predecessor_identifier(self) -> UUID | None:
-        return self._get_uuid("predecessor_identifier")
-
-    def with_predecessor_identifier(
-        self,
-        identifier: UUID,
-        /,
-    ) -> Self:
-        return self._with_uuid(
-            "predecessor_identifier",
-            value=identifier,
-        )
-
-    @property
-    def successor_identifier(self) -> UUID | None:
-        return self._get_uuid("successor_identifier")
-
-    def with_successor_identifier(
-        self,
-        identifier: UUID,
-        /,
-    ) -> Self:
-        return self._with_uuid(
-            "successor_identifier",
-            value=identifier,
-        )
-
-    @property
     def name(self) -> str | None:
-        match self._values.get("name"):
-            case str() as name:
-                return name
+        value: MetaValue = self._values.get("name")
+        if value is None:
+            return value
 
-            case _:
-                return None
+        if not isinstance(value, str):
+            raise TypeError(f"Unexpected value '{type(value).__name__}' for name, expected 'str'")
+
+        return value
 
     def with_name(
         self,
@@ -253,12 +333,16 @@ class Meta(Mapping[str, MetaValue]):
 
     @property
     def description(self) -> str | None:
-        match self._values.get("description"):
-            case str() as description:
-                return description
+        value: MetaValue = self._values.get("description")
+        if value is None:
+            return value
 
-            case _:
-                return None
+        if not isinstance(value, str):
+            raise TypeError(
+                f"Unexpected value '{type(value).__name__}' for description, expected 'str'"
+            )
+
+        return value
 
     def with_description(
         self,
@@ -276,7 +360,7 @@ class Meta(Mapping[str, MetaValue]):
     def tags(self) -> MetaTags:
         match self._values.get("tags"):
             case [*tags]:
-                return tuple(tag for tag in tags if isinstance(tag, str))
+                return tuple(tag for tag in tags if _validate_tag(tag))
 
             case _:
                 return ()
@@ -319,16 +403,16 @@ class Meta(Mapping[str, MetaValue]):
 
     @property
     def creation(self) -> datetime | None:
-        match self._values.get("creation"):
-            case str() as iso_value:
-                try:
-                    return datetime.fromisoformat(iso_value)
+        value: MetaValue = self._values.get("creation")
+        if value is None:
+            return value
 
-                except ValueError:
-                    return None
+        if not isinstance(value, str):
+            raise TypeError(
+                f"Unexpected value '{type(value).__name__}' for creation, expected 'str'"
+            )
 
-            case _:
-                return None
+        return datetime.fromisoformat(value)
 
     def with_creation(
         self,
@@ -474,7 +558,14 @@ def _validated_meta_value(value: Any) -> MetaValue:  # noqa: PLR0911
             return {key: _validated_meta_value(value) for key, value in values.items()}
 
         case other:
-            raise TypeError(f"Invalid Meta value: {type(other)}")
+            raise TypeError(f"Invalid Meta value: '{type(other).__name__}'")
+
+
+def _validate_tag(tag: Any) -> TypeGuard[str]:
+    if not isinstance(tag, str):
+        raise TypeError(f"Unexpected value '{type(tag).__name__}' for tag, expected 'str'")
+
+    return True
 
 
 META_EMPTY: Final[Meta] = Meta({})
