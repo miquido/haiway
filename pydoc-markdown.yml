@@ -8,5 +8,5 @@ modules:
 renderer:
   type: markdown
   render_toc: false
-  signature_headers: true   # (optional, see below)
+  signature_headers: true
   insert_header_anchors: false

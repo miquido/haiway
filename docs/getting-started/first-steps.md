@@ -26,6 +26,7 @@ print(f"Original: {prefs.theme}, Updated: {dark_prefs.theme}")
 ```
 
 **What's happening here:**
+
 - **Automatic Immutability**: `State` base class prevents modification after creation using `__setattr__` blocking
 - **Type Conversion**: Abstract collection types are automatically converted to immutable equivalents during validation
 - **Memory Sharing**: The `.updated()` method creates structural sharing - unchanged fields reference the same objects
@@ -41,6 +42,7 @@ Always use **abstract collection types** to ensure immutability:
 - `Set[T]` instead of `set[T]` (becomes frozenset)
 
 **Why this matters:**
+
 - **Automatic Conversion**: Haiway converts mutable collections (`list`, `set`) to immutable equivalents (`tuple`, `frozenset`) during validation
 - **Interface Flexibility**: Abstract types allow callers to pass any compatible collection type
 - **Memory Efficiency**: Immutable collections can be safely shared between state instances
@@ -69,6 +71,7 @@ asyncio.run(main())
 ```
 
 **What's happening here:**
+
 - **Context Stack**: Each `ctx.scope()` creates a new context that inherits from its parent
 - **Automatic Cleanup**: When a scope exits, all resources and tasks are automatically cleaned up
 - **State Isolation**: Each context can contain its own state objects, accessed by type
@@ -119,6 +122,7 @@ asyncio.run(main())
 ```
 
 **What's happening here:**
+
 - **Protocol Contract**: `EmailSending` defines the interface with a single `__call__` method for maximum flexibility
 - **Service State**: `NotificationService` contains the function implementation and provides a clean API
 - **Implementation Function**: `smtp_email_sending` is the concrete function that performs the actual email sending
@@ -156,6 +160,7 @@ asyncio.run(main())
 ```
 
 **What's happening here:**
+
 - **Disposable Pattern**: `disposables=()` parameter accepts async context managers that need cleanup
 - **Resource Lifecycle**: Resources are opened when entering the scope and closed when exiting
 - **State Injection**: The yielded state object becomes available through `ctx.state()`
