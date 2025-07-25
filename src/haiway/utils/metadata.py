@@ -148,24 +148,38 @@ class Meta(Mapping[str, MetaValue]):
             }
         )
 
-    def _get_uuid(
+    @overload
+    def get_uuid(
         self,
         key: str,
-        /,
+    ) -> UUID | None: ...
+
+    @overload
+    def get_uuid(
+        self,
+        key: str,
+        *,
+        default: UUID,
+    ) -> UUID: ...
+
+    def get_uuid(
+        self,
+        key: str,
+        *,
+        default: UUID | None = None,
     ) -> UUID | None:
         value: MetaValue = self._values.get(key)
         if value is None:
-            return value
+            return default
 
         if not isinstance(value, str):
             raise TypeError(f"Unexpected value '{type(value).__name__}' for {key}, expected 'str'")
 
         return UUID(value)
 
-    def _with_uuid(
+    def with_uuid(
         self,
         key: str,
-        /,
         *,
         value: UUID,
     ) -> Self:
@@ -296,14 +310,14 @@ class Meta(Mapping[str, MetaValue]):
 
     @property
     def identifier(self) -> UUID | None:
-        return self._get_uuid("identifier")
+        return self.get_uuid("identifier")
 
     def with_identifier(
         self,
         identifier: UUID,
         /,
     ) -> Self:
-        return self._with_uuid(
+        return self.with_uuid(
             "identifier",
             value=identifier,
         )

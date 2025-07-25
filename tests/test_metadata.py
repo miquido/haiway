@@ -327,3 +327,99 @@ def test__validated_meta_value_invalid():
 
     with raises(TypeError, match="Invalid Meta value"):
         _validated_meta_value(object())
+
+
+def test_meta_get_str_without_default():
+    meta = Meta({"name": "test", "description": "example"})
+    assert meta.get_str("name") == "test"
+    assert meta.get_str("description") == "example"
+    assert meta.get_str("missing") is None
+
+
+def test_meta_get_str_with_default():
+    meta = Meta({"name": "test"})
+    assert meta.get_str("name", default="fallback") == "test"
+    assert meta.get_str("missing", default="fallback") == "fallback"
+
+
+def test_meta_get_str_with_wrong_type():
+    meta = Meta({"count": 42, "active": True})
+    with raises(TypeError, match="Unexpected value 'int' for count, expected 'str'"):
+        meta.get_str("count")
+    with raises(TypeError, match="Unexpected value 'bool' for active, expected 'str'"):
+        meta.get_str("active")
+
+
+def test_meta_get_int_without_default():
+    meta = Meta({"count": 42, "index": 0})
+    assert meta.get_int("count") == 42
+    assert meta.get_int("index") == 0
+    assert meta.get_int("missing") is None
+
+
+def test_meta_get_int_with_default():
+    meta = Meta({"count": 42})
+    assert meta.get_int("count", default=100) == 42
+    assert meta.get_int("missing", default=100) == 100
+
+
+def test_meta_get_int_with_wrong_type():
+    meta = Meta({"name": "test", "ratio": 3.14})
+    with raises(TypeError, match="Unexpected value 'str' for name, expected 'int'"):
+        meta.get_int("name")
+    with raises(TypeError, match="Unexpected value 'float' for ratio, expected 'int'"):
+        meta.get_int("ratio")
+    # Note: bool is a subclass of int in Python, so True/False are valid int values
+
+
+def test_meta_get_int_with_bool_values():
+    # Test that boolean values work with get_int since bool is a subclass of int
+    meta = Meta({"active": True, "disabled": False})
+    assert meta.get_int("active") == 1  # True converts to 1
+    assert meta.get_int("disabled") == 0  # False converts to 0
+
+
+def test_meta_get_float_without_default():
+    meta = Meta({"ratio": 3.14, "percentage": 0.5})
+    assert meta.get_float("ratio") == 3.14
+    assert meta.get_float("percentage") == 0.5
+    assert meta.get_float("missing") is None
+
+
+def test_meta_get_float_with_default():
+    meta = Meta({"ratio": 3.14})
+    assert meta.get_float("ratio", default=2.0) == 3.14
+    assert meta.get_float("missing", default=2.0) == 2.0
+
+
+def test_meta_get_float_with_wrong_type():
+    meta = Meta({"name": "test", "count": 42, "active": True})
+    with raises(TypeError, match="Unexpected value 'str' for name, expected 'float'"):
+        meta.get_float("name")
+    with raises(TypeError, match="Unexpected value 'int' for count, expected 'float'"):
+        meta.get_float("count")
+    with raises(TypeError, match="Unexpected value 'bool' for active, expected 'float'"):
+        meta.get_float("active")
+
+
+def test_meta_get_bool_without_default():
+    meta = Meta({"active": True, "enabled": False})
+    assert meta.get_bool("active") is True
+    assert meta.get_bool("enabled") is False
+    assert meta.get_bool("missing") is None
+
+
+def test_meta_get_bool_with_default():
+    meta = Meta({"active": True})
+    assert meta.get_bool("active", default=False) is True
+    assert meta.get_bool("missing", default=False) is False
+
+
+def test_meta_get_bool_with_wrong_type():
+    meta = Meta({"name": "test", "count": 42, "ratio": 3.14})
+    with raises(TypeError, match="Unexpected value 'str' for name, expected 'bool'"):
+        meta.get_bool("name")
+    with raises(TypeError, match="Unexpected value 'int' for count, expected 'bool'"):
+        meta.get_bool("count")
+    with raises(TypeError, match="Unexpected value 'float' for ratio, expected 'bool'"):
+        meta.get_bool("ratio")
