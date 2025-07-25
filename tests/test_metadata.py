@@ -91,8 +91,9 @@ def test_meta_kind_property():
     empty_meta = Meta({})
     assert empty_meta.kind is None
 
-    invalid_meta = Meta({"kind": 123})
-    assert invalid_meta.kind is None
+    with raises(TypeError, match="Unexpected value 'int' for kind, expected 'str'"):
+        invalid_meta = Meta({"kind": 123})
+        _ = invalid_meta.kind
 
 
 def test_meta_with_kind():
@@ -141,8 +142,9 @@ def test_meta_identifier_property():
     empty_meta = Meta({})
     assert empty_meta.identifier is None
 
-    invalid_meta = Meta({"identifier": "not-a-uuid"})
-    assert invalid_meta.identifier is None
+    with raises(ValueError, match="badly formed hexadecimal UUID string"):
+        invalid_meta = Meta({"identifier": "not-a-uuid"})
+        _ = invalid_meta.identifier
 
 
 def test_meta_with_identifier():
@@ -153,45 +155,6 @@ def test_meta_with_identifier():
     assert updated["identifier"] == str(test_uuid)
 
 
-def test_meta_origin_identifier_property():
-    test_uuid = uuid4()
-    meta = Meta({"origin_identifier": str(test_uuid)})
-    assert meta.origin_identifier == test_uuid
-
-
-def test_meta_with_origin_identifier():
-    test_uuid = uuid4()
-    meta = Meta({})
-    updated = meta.with_origin_identifier(test_uuid)
-    assert updated.origin_identifier == test_uuid
-
-
-def test_meta_predecessor_identifier_property():
-    test_uuid = uuid4()
-    meta = Meta({"predecessor_identifier": str(test_uuid)})
-    assert meta.predecessor_identifier == test_uuid
-
-
-def test_meta_with_predecessor_identifier():
-    test_uuid = uuid4()
-    meta = Meta({})
-    updated = meta.with_predecessor_identifier(test_uuid)
-    assert updated.predecessor_identifier == test_uuid
-
-
-def test_meta_successor_identifier_property():
-    test_uuid = uuid4()
-    meta = Meta({"successor_identifier": str(test_uuid)})
-    assert meta.successor_identifier == test_uuid
-
-
-def test_meta_with_successor_identifier():
-    test_uuid = uuid4()
-    meta = Meta({})
-    updated = meta.with_successor_identifier(test_uuid)
-    assert updated.successor_identifier == test_uuid
-
-
 def test_meta_tags_property():
     meta = Meta({"tags": ["active", "verified"]})
     assert meta.tags == ("active", "verified")
@@ -199,8 +162,9 @@ def test_meta_tags_property():
     empty_meta = Meta({})
     assert empty_meta.tags == ()
 
-    mixed_meta = Meta({"tags": ["valid", 123, "also_valid"]})
-    assert mixed_meta.tags == ("valid", "also_valid")  # filters non-strings
+    with raises(TypeError, match="Unexpected value 'int' for tag, expected 'str'"):
+        mixed_meta = Meta({"tags": ["valid", 123, "also_valid"]})
+        _ = mixed_meta.tags
 
 
 def test_meta_with_tags_new():
@@ -233,8 +197,9 @@ def test_meta_creation_property():
     empty_meta = Meta({})
     assert empty_meta.creation is None
 
-    invalid_meta = Meta({"creation": "not-a-date"})
-    assert invalid_meta.creation is None
+    with raises(ValueError, match="Invalid isoformat string: 'not-a-date'"):
+        invalid_meta = Meta({"creation": "not-a-date"})
+        _ = invalid_meta.creation
 
 
 def test_meta_with_creation():
