@@ -60,7 +60,7 @@ class TaskGroupContext(Immutable):
                 context=copy_context(),
             )
 
-    _group: TaskGroup
+    _group: TaskGroup | None
     _token: Token[TaskGroup] | None = None
 
     def __init__(
@@ -78,7 +78,7 @@ class TaskGroupContext(Immutable):
         object.__setattr__(
             self,
             "_group",
-            task_group if task_group is not None else TaskGroup(),
+            task_group,
         )
         object.__setattr__(
             self,
@@ -117,6 +117,14 @@ class TaskGroupContext(Immutable):
             If attempting to re-enter an already active context
         """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
+        if self._group is None:
+            object.__setattr__(
+                self,
+                "_group",
+                TaskGroup(),
+            )
+
+        assert self._group is not None  # nosec: B101
         await self._group.__aenter__()
         object.__setattr__(
             self,
@@ -151,6 +159,8 @@ class TaskGroupContext(Immutable):
             If the context is not active
         """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
+        assert self._group is not None  # nosec: B101
+
         TaskGroupContext._context.reset(self._token)
         object.__setattr__(
             self,

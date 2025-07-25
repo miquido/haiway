@@ -113,6 +113,7 @@ class ScopeContext(Immutable):
     async def __aenter__(self) -> str:
         assert self._preset_disposables is None  # nosec: B101
         assert self._state_context is None  # nosec: B101
+
         self._identifier.__enter__()
         self._observability_context.__enter__()
 
@@ -160,6 +161,7 @@ class ScopeContext(Immutable):
         exc_tb: TracebackType | None,
     ) -> None:
         assert self._state_context is not None  # nosec: B101
+
         if self._disposables is not None:
             await self._disposables.dispose(
                 exc_type=exc_type,
