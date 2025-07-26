@@ -191,6 +191,48 @@ class Meta(Mapping[str, MetaValue]):
         )
 
     @overload
+    def get_datetime(
+        self,
+        key: str,
+    ) -> datetime | None: ...
+
+    @overload
+    def get_datetime(
+        self,
+        key: str,
+        *,
+        default: datetime,
+    ) -> datetime: ...
+
+    def get_datetime(
+        self,
+        key: str,
+        *,
+        default: datetime | None = None,
+    ) -> datetime | None:
+        value: MetaValue = self._values.get(key)
+        if value is None:
+            return default
+
+        if not isinstance(value, str):
+            raise TypeError(f"Unexpected value '{type(value).__name__}' for {key}, expected 'str'")
+
+        return datetime.fromisoformat(value)
+
+    def with_datetime(
+        self,
+        key: str,
+        *,
+        value: datetime,
+    ) -> Self:
+        return self.__class__(
+            {
+                **self._values,
+                key: value.isoformat(),
+            }
+        )
+
+    @overload
     def get_str(
         self,
         key: str,
@@ -416,27 +458,52 @@ class Meta(Mapping[str, MetaValue]):
                 return False
 
     @property
-    def creation(self) -> datetime | None:
-        value: MetaValue = self._values.get("creation")
+    def created(self) -> datetime | None:
+        value: MetaValue = self._values.get("created")
         if value is None:
             return value
 
         if not isinstance(value, str):
             raise TypeError(
-                f"Unexpected value '{type(value).__name__}' for creation, expected 'str'"
+                f"Unexpected value '{type(value).__name__}' for created, expected 'str'"
             )
 
         return datetime.fromisoformat(value)
 
-    def with_creation(
+    def with_created(
         self,
-        creation: datetime,
+        created: datetime,
         /,
     ) -> Self:
         return self.__class__(
             {
                 **self._values,
-                "creation": creation.isoformat(),
+                "created": created.isoformat(),
+            }
+        )
+
+    @property
+    def last_updated(self) -> datetime | None:
+        value: MetaValue = self._values.get("last_updated")
+        if value is None:
+            return value
+
+        if not isinstance(value, str):
+            raise TypeError(
+                f"Unexpected value '{type(value).__name__}' for last_updated, expected 'str'"
+            )
+
+        return datetime.fromisoformat(value)
+
+    def with_last_updated(
+        self,
+        last_updated: datetime,
+        /,
+    ) -> Self:
+        return self.__class__(
+            {
+                **self._values,
+                "last_updated": last_updated.isoformat(),
             }
         )
 

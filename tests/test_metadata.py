@@ -188,26 +188,26 @@ def test_meta_has_tags():
     assert meta.has_tags(["active", "nonexistent"]) is False
 
 
-def test_meta_creation_property():
+def test_meta_created_property():
     now = datetime.now()
-    meta = Meta({"creation": now.isoformat()})
+    meta = Meta({"created": now.isoformat()})
     # Compare by converting both back to isoformat to handle precision
-    assert meta.creation.isoformat() == now.isoformat()
+    assert meta.created.isoformat() == now.isoformat()
 
     empty_meta = Meta({})
-    assert empty_meta.creation is None
+    assert empty_meta.created is None
 
     with raises(ValueError, match="Invalid isoformat string: 'not-a-date'"):
-        invalid_meta = Meta({"creation": "not-a-date"})
-        _ = invalid_meta.creation
+        invalid_meta = Meta({"created": "not-a-date"})
+        _ = invalid_meta.created
 
 
-def test_meta_with_creation():
+def test_meta_with_created():
     now = datetime.now()
     meta = Meta({})
-    updated = meta.with_creation(now)
-    assert updated.creation is not None
-    assert updated["creation"] == now.isoformat()
+    updated = meta.with_created(now)
+    assert updated.created is not None
+    assert updated["created"] == now.isoformat()
 
 
 def test_meta_merged_with():
