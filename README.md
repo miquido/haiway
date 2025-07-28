@@ -3,6 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/haiway)](https://pypi.org/project/haiway/)
 ![Python Version](https://img.shields.io/badge/Python-3.12+-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
+[![Docs](https://img.shields.io/badge/Documentation-yellow)](https://miquido.github.io/haiway/)
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/miquido/haiway?utm_source=oss&utm_medium=github&utm_campaign=miquido%2Fhaiway&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
 **Modern Python framework for functional programming with structured concurrency**
