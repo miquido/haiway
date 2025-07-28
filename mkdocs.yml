@@ -6,6 +6,7 @@ repo_name: miquido/haiway
 
 theme:
   name: material
+  logo: logo.png
   palette:
     # Palette toggle for dark mode
     - media: "(prefers-color-scheme: dark)"
