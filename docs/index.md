@@ -1,9 +1,9 @@
-# 🚗 haiway 🚕 🚚 🚙
+# Haiway
 
 [![PyPI](https://img.shields.io/pypi/v/haiway)](https://pypi.org/project/haiway/)
 ![Python Version](https://img.shields.io/badge/Python-3.12+-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
-![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/miquido/haiway?utm_source=oss&utm_medium=github&utm_campaign=miquido%2Fhaiway&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
+[![License](https://img.shields.io/github/license/miquido/haiway)](https://github.com/miquido/haiway/blob/main/LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/miquido/haiway?style=social)](https://github.com/miquido/haiway)
 
 **Modern Python framework for functional programming with structured concurrency**
 
@@ -39,40 +39,54 @@ Dependencies are visible in type signatures. No hidden global state or surprisin
 ### 🎭 **Async-Native**
 Built for Python's async/await from the ground up. Includes utilities for retries, timeouts, and concurrent operations.
 
-## 🖥️ Install
+## Getting Started
 
-With pip:
-
+### 📥 [Installation](getting-started/installation.md)
 ```bash
 pip install haiway
 ```
+Set up your environment in minutes
 
-## 👷 Contributing
+### 🚀 [Quick Start](getting-started/quickstart.md)
+Build your first Haiway application with our hands-on tutorial
 
-As an open-source project in a rapidly evolving field, we welcome all contributions. Whether you can add a new feature, enhance our infrastructure, or improve our documentation, your input is valuable to us.
+### 📚 [First Steps](getting-started/first-steps.md)
+Deep dive into core concepts with practical examples
 
-We welcome any feedback and suggestions! Feel free to open an issue or pull request.
+## Learn Haiway
 
-## ⚖️ License
+### Essential Concepts
 
-MIT License
+- **[State Management](guides/state.md)** - Immutable data structures with validation and type safety
+- **[Functionalities](guides/functionalities.md)** - Organizing business logic with protocols and implementations
+- **[Packages](guides/packages.md)** - Structuring larger applications with modular components
 
-Copyright (c) 2024-2025 Miquido
+### Advanced Topics
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+For advanced usage patterns and implementation details, see the complete [Guides](guides/index.md) section.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+## When to Use Haiway
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+✅ **Great for:**
+- Async web services and APIs
+- Data processing pipelines
+- Applications requiring strong typing and validation
+- Systems with complex dependency graphs
+- Projects emphasizing testability and maintainability
+
+⚠️ **Consider alternatives for:**
+- Simple scripts or one-off tools
+- CPU-bound numerical computing
+- Projects requiring mutable shared state
+
+## Resources
+
+
+### 💻 [GitHub](https://github.com/miquido/haiway)
+Source code, issues, and contributions
+
+### 💬 [Discussions](https://github.com/miquido/haiway/discussions)
+Community support and feature requests
+
+**Built by [Miquido](https://miquido.com)**
+Powering innovation in AI and software development

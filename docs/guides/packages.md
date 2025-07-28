@@ -1,4 +1,4 @@
-## Organizing Packages
+# Organizing Packages
 
 Haiway is a framework designed to help developers organize their code, manage state propagation, and handle dependencies effectively. While the framework does not strictly enforce its proposed package structure, adhering to these guidelines can significantly enhance the maintainability and scalability of your projects.
 

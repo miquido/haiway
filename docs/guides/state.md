@@ -1,4 +1,4 @@
-## State Management
+# State Management
 
 Haiway's state management system is built around the `State` class, which provides immutable, type-safe data structures with validation. Unlike traditional mutable objects, State instances cannot be modified after creation, ensuring predictable behavior, especially in concurrent environments. This guide explains how to effectively use the State class to manage your application's data.
 
