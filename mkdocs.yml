@@ -92,3 +92,5 @@ nav:
       - State: guides/state.md
       - Functionalities: guides/functionalities.md
       - Packages: guides/packages.md
+  - Features:
+      - OpenTelemetry: features/opentelemetry.md
