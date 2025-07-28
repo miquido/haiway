@@ -1,8 +1,6 @@
 name: Docs
 
 on:
-  push:
-    branches: [main]
   release:
     types: [released]
   workflow_dispatch:
