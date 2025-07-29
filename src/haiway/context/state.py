@@ -234,7 +234,7 @@ class StateContext(Immutable):
     @classmethod
     def state[StateType: State](
         cls,
-        state: type[StateType] | StateType,
+        state: type[StateType],
         /,
         default: StateType | None = None,
     ) -> StateType:
@@ -246,8 +246,8 @@ class StateContext(Immutable):
 
         Parameters
         ----------
-        state: type[StateType] | StateType
-            The type of state to retrieve, or an instance to use as a type hint
+        state: type[StateType]
+            The type of state to retrieve
         default: StateType | None
             Optional default value to use if state not found
 
@@ -263,8 +263,6 @@ class StateContext(Immutable):
         MissingState
             If state not found and default not provided or instantiation fails
         """
-        if not isinstance(state, type):
-            return state  # if we got an instance instead of type return it
 
         try:
             return cls._context.get().state(
