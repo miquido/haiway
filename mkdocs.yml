@@ -94,3 +94,4 @@ nav:
       - Packages: guides/packages.md
   - Features:
       - OpenTelemetry: features/opentelemetry.md
+      - HTTPClient: features/http-client.md
