@@ -6,6 +6,15 @@ from haiway.helpers.concurrent import (
     stream_concurrently,
 )
 from haiway.helpers.files import File, FileAccess
+from haiway.helpers.http_client import (
+    HTTPClient,
+    HTTPClientError,
+    HTTPHeaders,
+    HTTPQueryParams,
+    HTTPRequesting,
+    HTTPResponse,
+    HTTPStatusCode,
+)
 from haiway.helpers.observability import LoggerObservability
 from haiway.helpers.retries import retry
 from haiway.helpers.throttling import throttle
@@ -17,6 +26,13 @@ __all__ = (
     "CacheWrite",
     "File",
     "FileAccess",
+    "HTTPClient",
+    "HTTPClientError",
+    "HTTPHeaders",
+    "HTTPQueryParams",
+    "HTTPRequesting",
+    "HTTPResponse",
+    "HTTPStatusCode",
     "LoggerObservability",
     "asynchronous",
     "cache",
