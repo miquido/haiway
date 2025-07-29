@@ -19,6 +19,7 @@ from types import TracebackType
 from typing import Any, final, overload
 
 from haiway.context.disposables import Disposable, Disposables
+from haiway.context.events import EventsContext, EventSubscription
 from haiway.context.identifier import ScopeIdentifier
 from haiway.context.observability import (
     Observability,
@@ -51,6 +52,7 @@ class ScopeContext(Immutable):
     _preset_disposables: Disposables | None
     _observability_context: ObservabilityContext
     _task_group_context: TaskGroupContext | None
+    _events_context: EventsContext | None
 
     def __init__(
         self,
@@ -109,6 +111,11 @@ class ScopeContext(Immutable):
             if task_group is not None or self._identifier.is_root
             else None,
         )
+        object.__setattr__(
+            self,
+            "_events_context",
+            EventsContext() if self._identifier.is_root else None,
+        )
 
     async def __aenter__(self) -> str:
         assert self._preset_disposables is None  # nosec: B101
@@ -119,6 +126,9 @@ class ScopeContext(Immutable):
 
         if self._task_group_context is not None:
             await self._task_group_context.__aenter__()
+
+        if self._events_context is not None:
+            await self._events_context.__aenter__()
 
         # Collect all state sources in priority order (lowest to highest priority)
         # 1. Add contextual state first (lowest priority)
@@ -183,6 +193,13 @@ class ScopeContext(Immutable):
 
         if self._task_group_context is not None:
             await self._task_group_context.__aexit__(
+                exc_type=exc_type,
+                exc_val=exc_val,
+                exc_tb=exc_tb,
+            )
+
+        if self._events_context is not None:
+            await self._events_context.__aexit__(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
@@ -792,6 +809,103 @@ class ctx:
             state,
             default=default,
         )
+
+    @staticmethod
+    def send(
+        payload: State,
+    ) -> None:
+        """
+        Send an event to all active subscribers within the current context.
+
+        Events are dispatched based on their exact type - subscribers must
+        subscribe to the specific State type to receive events.
+
+        Parameters
+        ----------
+        payload : State
+            The event payload to send. Must be a State instance.
+
+        Raises
+        ------
+        MissingContext
+            If called outside of an EventsContext
+
+        Examples
+        --------
+        Basic event sending:
+
+        >>> from haiway import ctx, State
+        >>>
+        >>> class OrderCreated(State):
+        ...     order_id: str
+        ...     amount: float
+        >>>
+        >>> async def process_order():
+        ...     # Send event after order creation
+        ...     ctx.send(OrderCreated(order_id="12345", amount=99.99))
+
+        See Also
+        --------
+        ctx.subscribe : For subscribing to events
+        """
+        EventsContext.send(payload)
+
+    @staticmethod
+    def subscribe[Payload: State](
+        payload_type: type[Payload],
+    ) -> EventSubscription[Payload]:
+        """
+        Subscribe to events of a specific type within the current context.
+
+        Creates a subscription that receives all events of the specified type
+        sent after the subscription is created.
+
+        Parameters
+        ----------
+        payload_type : type[Payload]
+            The State type to subscribe to. Must be a State class.
+
+        Returns
+        -------
+        EventSubscription[Payload]
+            An async iterator that yields events of the specified type
+
+        Raises
+        ------
+        MissingContext
+            If called outside of an EventsContext
+
+        Examples
+        --------
+        Basic subscription:
+
+        >>> from haiway import ctx, State
+        >>>
+        >>> class UserActivity(State):
+        ...     user_id: str
+        ...     action: str
+        ...     timestamp: float
+        >>>
+        >>> async def monitor_activity():
+        ...     async for activity in ctx.subscribe(UserActivity):
+        ...         print(f"{activity.user_id} performed {activity.action}")
+
+        With error handling:
+
+        >>> async def process_events():
+        ...     try:
+        ...         async for event in ctx.subscribe(PaymentEvent):
+        ...             await handle_payment(event)
+        ...     except asyncio.CancelledError:
+        ...         ctx.log_info("Payment processing stopped")
+        ...         raise
+
+        See Also
+        --------
+        ctx.send : For sending events
+        EventSubscription : The subscription iterator
+        """
+        return EventsContext.subscribe(payload_type)
 
     @staticmethod
     def log_error(
