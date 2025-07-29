@@ -262,7 +262,7 @@ wheels = [
 
 [[package]]
 name = "haiway"
-version = "0.28.0"
+version = "0.28.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -278,7 +278,6 @@ docs = [
     { name = "mkdocs" },
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
-    { name = "pymdown-extensions" },
 ]
 httpx = [
     { name = "httpx" },
@@ -299,7 +298,6 @@ requires-dist = [
     { name = "opentelemetry-api", marker = "extra == 'opentelemetry'", specifier = "~=1.33" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", marker = "extra == 'opentelemetry'", specifier = "~=1.33" },
     { name = "opentelemetry-sdk", marker = "extra == 'opentelemetry'", specifier = "~=1.33" },
-    { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = "~=10.12" },
     { name = "pyright", marker = "extra == 'dev'", specifier = "~=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "~=8.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = "~=0.26" },

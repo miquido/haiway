@@ -95,3 +95,4 @@ nav:
   - Features:
       - OpenTelemetry: features/opentelemetry.md
       - HTTPClient: features/http-client.md
+      - File Access: features/file-access.md
