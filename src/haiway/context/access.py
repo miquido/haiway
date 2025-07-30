@@ -1,7 +1,6 @@
 from asyncio import (
     CancelledError,
     Task,
-    TaskGroup,
     current_task,
 )
 from collections.abc import (
@@ -10,7 +9,6 @@ from collections.abc import (
     Callable,
     Collection,
     Coroutine,
-    Iterable,
     Mapping,
 )
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
@@ -36,6 +34,7 @@ from haiway.context.presets import (
 )
 from haiway.context.state import ScopeState, StateContext
 from haiway.context.tasks import TaskGroupContext
+from haiway.context.variables import VariablesContext
 from haiway.state import Immutable, State
 from haiway.utils.collections import as_list
 from haiway.utils.stream import AsyncStream
@@ -53,15 +52,16 @@ class ScopeContext(Immutable):
     _observability_context: ObservabilityContext
     _task_group_context: TaskGroupContext | None
     _events_context: EventsContext | None
+    _variables_context: VariablesContext
 
     def __init__(
         self,
         name: str,
-        task_group: TaskGroup | None,
         state: tuple[State, ...],
         preset: ContextPreset | None,
         disposables: Disposables | None,
         observability: Observability | Logger | None,
+        isolated: bool,
     ) -> None:
         object.__setattr__(
             self,
@@ -107,14 +107,17 @@ class ScopeContext(Immutable):
         object.__setattr__(
             self,
             "_task_group_context",
-            TaskGroupContext(task_group=task_group)
-            if task_group is not None or self._identifier.is_root
-            else None,
+            TaskGroupContext() if self._identifier.is_root or isolated else None,
         )
         object.__setattr__(
             self,
             "_events_context",
             EventsContext() if self._identifier.is_root else None,
+        )
+        object.__setattr__(
+            self,
+            "_variables_context",
+            VariablesContext(isolated=self._identifier.is_root or isolated),
         )
 
     async def __aenter__(self) -> str:
@@ -129,6 +132,8 @@ class ScopeContext(Immutable):
 
         if self._events_context is not None:
             await self._events_context.__aenter__()
+
+        self._variables_context.__enter__()
 
         # Collect all state sources in priority order (lowest to highest priority)
         # 1. Add contextual state first (lowest priority)
@@ -204,6 +209,12 @@ class ScopeContext(Immutable):
                 exc_val=exc_val,
                 exc_tb=exc_tb,
             )
+
+        self._variables_context.__exit__(
+            exc_type=exc_type,
+            exc_val=exc_val,
+            exc_tb=exc_tb,
+        )
 
         self._state_context.__exit__(
             exc_type=exc_type,
@@ -408,9 +419,9 @@ class ctx:
         /,
         *state: State | None,
         preset: ContextPreset | None = None,
-        disposables: Disposables | Iterable[Disposable] | None = None,
-        task_group: TaskGroup | None = None,
+        disposables: Disposables | Collection[Disposable] | None = None,
         observability: Observability | Logger | None = None,
+        isolated: bool = False,
     ) -> AbstractAsyncContextManager[str]:
         """
         Prepare scope context with given parameters.
@@ -447,19 +458,21 @@ class ctx:
             disposables will be applied to the scope with lower priority than explicit state.
             Only works with async contexts.
 
-        disposables: Disposables | Iterable[Disposable] | None
+        disposables: Disposables | Collection[Disposable] | None
             disposables consumed within the context when entered. Produced state will automatically
             be added to the scope state. Using asynchronous context is required if any disposables
             were provided.
-
-        task_group: TaskGroup | None
-            task group used for spawning and joining tasks within the context. Root scope will
-            always have task group created even when not set.
 
         observability: Observability | Logger | None = None
             observability solution responsible for recording and storing metrics, logs and events.
             Assigning observability within existing context will result in an error.
             When not provided, logger with the scope name will be requested and used.
+
+        isolated: bool = False
+            control if scope variables and task groupd will be isolated from parent.
+            When set to True, context will use separate TaskGroup and not propagate its variables
+            to the parent scope. Isolation do not affect events propagation within the context.
+            Root scope is always isolated.
 
         Returns
         -------
@@ -514,16 +527,16 @@ class ctx:
             case Disposables() as disposables:
                 resolved_disposables = disposables
 
-            case iterable:
-                resolved_disposables = Disposables(*iterable)
+            case collection:
+                resolved_disposables = Disposables(collection)
 
         return ScopeContext(
             name=name,
-            task_group=task_group,
             state=tuple(element for element in state if element is not None),
             preset=preset,
             disposables=resolved_disposables,
             observability=observability,
+            isolated=isolated,
         )
 
     @staticmethod
@@ -591,7 +604,7 @@ class ctx:
 
         return DisposablesContext(
             disposables=Disposables(
-                *(disposable for disposable in disposables if disposable is not None)
+                tuple(disposable for disposable in disposables if disposable is not None)
             )
         )
 
@@ -906,6 +919,143 @@ class ctx:
         EventSubscription : The subscription iterator
         """
         return EventsContext.subscribe(payload_type)
+
+    @overload
+    @staticmethod
+    def variable(
+        variable: State,
+        /,
+    ) -> None: ...
+
+    @overload
+    @staticmethod
+    def variable[Variable: State](
+        variable: type[Variable],
+        /,
+    ) -> Variable | None: ...
+
+    @overload
+    @staticmethod
+    def variable[Variable: State](
+        variable: type[Variable],
+        /,
+        *,
+        default: Variable,
+    ) -> Variable: ...
+
+    @staticmethod
+    def variable[Variable: State](
+        variable: type[Variable] | State,
+        /,
+        *,
+        default: Variable | None = None,
+    ) -> Variable | None:
+        """
+        Get or set a mutable context-local variable in the current scope.
+
+        Context variables provide a way to store and retrieve mutable state that is
+        strictly local to the current execution context. Unlike regular state (accessed
+        via ctx.state()), context variables are mutable within their scope and propagate
+        changes to parent scopes when the current scope exits.
+
+        This method has two modes:
+        - **Set mode**: Pass a State instance to set/update a variable
+        - **Get mode**: Pass a State type to retrieve a variable
+
+        Important: Variables are NOT inherited from parent scopes. Each scope starts
+        with no variables unless explicitly set. This prevents issues with stale data
+        and ensures predictable behavior.
+
+        Parameters
+        ----------
+        variable : type[Variable] | State
+            Either a State type to retrieve a variable, or a State instance to set
+        default : Variable | None, optional
+            Default value to return if the variable is not set in the current scope.
+            Only used in get mode. If None (default), returns None when variable is not found.
+
+        Returns
+        -------
+        Variable | None
+            In get mode: The current value of the context variable or default/None if not set
+            In set mode: None (returns nothing)
+
+        Raises
+        ------
+        MissingContext
+            If called outside of any scope context
+
+        Examples
+        --------
+        Basic usage:
+
+        >>> from haiway import ctx, State
+        >>>
+        >>> class Counter(State):
+        ...     value: int = 0
+        >>>
+        >>> async def track_operations():
+        ...     # Set a variable (pass instance)
+        ...     ctx.variable(Counter(value=0))
+        ...
+        ...     # Get the variable (pass type)
+        ...     counter = ctx.variable(Counter)
+        ...     print(f"Current: {counter.value}")  # Current: 0
+        ...
+        ...     # Update the variable
+        ...     ctx.variable(counter.updated(value=counter.value + 1))
+
+        Using defaults:
+
+        >>> async def increment():
+        ...     # Get with default if not set
+        ...     counter = ctx.variable(Counter, default=Counter())
+        ...
+        ...     # Increment and update
+        ...     ctx.variable(counter.updated(value=counter.value + 1))
+
+        Scope isolation and propagation:
+
+        >>> async def outer():
+        ...     ctx.variable(Counter(value=10))  # Set in parent
+        ...
+        ...     async with ctx.scope("inner"):
+        ...         # Inner scope does NOT inherit parent's variable
+        ...         counter = ctx.variable(Counter)  # None - not set in inner
+        ...
+        ...         # Set variable in inner scope
+        ...         ctx.variable(Counter(value=20))
+        ...
+        ...     # After inner scope exits, inner's variables propagate to parent
+        ...     counter = ctx.variable(Counter)  # value = 20 (overwritten by inner)
+
+        Task isolation:
+
+        >>> async def worker():
+        ...     # Spawned tasks have isolated variable contexts
+        ...     counter = ctx.variable(Counter)  # Always None in spawned tasks
+        ...     ctx.variable(Counter(value=100))  # Won't affect parent
+        >>>
+        >>> async def main():
+        ...     ctx.variable(Counter(value=0))  # Set in main
+        ...     await ctx.spawn(worker)  # Task runs with isolated variables
+        ...     counter = ctx.variable(Counter)  # Still 0, unaffected by task
+
+        See Also
+        --------
+        ctx.state : For immutable state that doesn't propagate changes
+        """
+        if isinstance(variable, type):
+            current: Variable | None = VariablesContext.get(variable)
+            if current is None:
+                return default
+
+            else:
+                return current
+
+        else:
+            assert default is None  # nosec: B101
+            VariablesContext.set(variable)
 
     @staticmethod
     def log_error(

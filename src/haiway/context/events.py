@@ -1,12 +1,12 @@
 from asyncio import AbstractEventLoop, Future, get_running_loop
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, MutableMapping
 from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import Any, ClassVar, Self, final
-from weakref import WeakValueDictionary
 
 from haiway.context.types import MissingContext
 from haiway.state import Immutable, State
+from haiway.types import Default
 
 __all__ = (
     "EventSubscription",
@@ -14,13 +14,12 @@ __all__ = (
 )
 
 
-@final
 class Event[Payload: State](Immutable):
     payload: Payload
     next: Future[Self]
 
 
-@final
+@final  # it can't be Immutable due to MetaClass conflicts
 class EventSubscription[Payload: State](AsyncIterator[Payload]):
     """
     Async iterator for consuming events of a specific type.
@@ -88,10 +87,9 @@ class EventSubscription[Payload: State](AsyncIterator[Payload]):
         )
 
 
-@final
 class Events(Immutable):
     _loop: AbstractEventLoop
-    _heads: WeakValueDictionary[type[State], Future[Event[Any]]]
+    _heads: MutableMapping[type[State], Future[Event[Any]]] = Default(factory=dict)
 
     def send(
         self,
@@ -101,7 +99,7 @@ class Events(Immutable):
         payload_type: type[State] = type(payload)
         current: Future[Event[State]] | None = self._heads.get(payload_type)
         if current is None:
-            return  # if no one watches no need to send anywhere
+            return  # if no one watches, no need to send anywhere
 
         assert not current.done()  # nosec: B101
         event: Event[State] = Event(
@@ -132,7 +130,6 @@ class Events(Immutable):
             future.cancel()
 
 
-@final
 class EventsContext(Immutable):
     """
     Context manager for scoped event bus functionality.
@@ -150,32 +147,7 @@ class EventsContext(Immutable):
 
     Examples
     --------
-    Basic event bus usage:
-
-    >>> from haiway import State
-    >>> from haiway.context import EventsContext
-    >>>
-    >>> class UserLogin(State):
-    ...     user_id: str
-    ...     timestamp: float
-    >>>
-    >>> async def monitor_logins():
-    ...     async for event in EventsContext.subscribe(UserLogin):
-    ...         print(f"User {event.user_id} logged in at {event.timestamp}")
-    >>>
-    >>> async def main():
-    ...     async with EventsContext():
-    ...         # Start monitoring in background
-    ...         monitor_task = asyncio.create_task(monitor_logins())
-    ...
-    ...         # Send events
-    ...         EventsContext.send(UserLogin(user_id="alice", timestamp=time.time()))
-    ...         EventsContext.send(UserLogin(user_id="bob", timestamp=time.time()))
-    ...
-    ...         # Cancel monitoring
-    ...         monitor_task.cancel()
-
-    Integration with ctx.scope:
+    Basic event bus usage with ctx.scope:
 
     >>> from haiway import ctx
     >>>
@@ -184,13 +156,11 @@ class EventsContext(Immutable):
     ...         await handle_order(event)
     >>>
     >>> async with ctx.scope("orders"):
-    ...     async with EventsContext():
-    ...         task = ctx.spawn(process_events)
-    ...         ctx.send(OrderCreated(order_id="12345", amount=99.99))
+    ...     task = ctx.spawn(process_events)
+    ...     ctx.send(OrderCreated(order_id="12345", amount=99.99))
 
     Notes
     -----
-    - EventsContext must be used as an async context manager
     - Events are scoped to the context - they don't leak between contexts
     - Memory efficient: events without subscribers are immediately discarded
     - Thread-safe within the same event loop
@@ -286,10 +256,7 @@ class EventsContext(Immutable):
         object.__setattr__(
             self,
             "_events",
-            Events(
-                _loop=get_running_loop(),
-                _heads=WeakValueDictionary(),
-            ),
+            Events(_loop=get_running_loop()),
         )
 
         assert self._events is not None  # nosec: B101

@@ -2,12 +2,9 @@ from asyncio import (
     AbstractEventLoop,
     gather,
     get_running_loop,
-    run_coroutine_threadsafe,
-    wrap_future,
 )
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Generator, Iterable
 from contextlib import AbstractAsyncContextManager
-from itertools import chain
 from types import TracebackType
 
 from haiway.state import Immutable, State
@@ -66,7 +63,6 @@ class Disposables(Immutable):
     ------------
     - Parallel setup and cleanup of all contained disposables
     - Automatic state collection and context propagation
-    - Thread-safe cross-event-loop disposal
     - Exception handling with BaseExceptionGroup for multiple failures
     - Immutable after initialization
 
@@ -112,15 +108,15 @@ class Disposables(Immutable):
 
     def __init__(
         self,
-        *disposables: Disposable,
+        disposables: Collection[Disposable],
     ) -> None:
         """
         Initialize a collection of disposable resources.
 
         Parameters
         ----------
-        *disposables: Disposable
-            Variable number of disposable resources to be managed together.
+        disposables: Collection[Disposable]
+            Collection of disposable resources to be managed together.
         """
         object.__setattr__(
             self,
@@ -144,20 +140,24 @@ class Disposables(Immutable):
         """
         return len(self._disposables) > 0
 
-    async def _setup(
-        self,
-        disposable: Disposable,
-        /,
-    ) -> Iterable[State]:
-        match await disposable.__aenter__():
-            case None:
-                return ()
+    async def _prepare(self) -> Iterable[State]:
+        collected_state: Iterable[Iterable[State] | State | None] = await gather(
+            *(disposable.__aenter__() for disposable in self._disposables),
+            return_exceptions=False,
+        )
 
-            case State() as single:
-                return (single,)
+        def generator() -> Generator[State]:
+            for part in collected_state:
+                if part is None:
+                    continue
 
-            case multiple:
-                return multiple
+                elif isinstance(part, State):
+                    yield part
+
+                else:
+                    yield from part
+
+        return generator()
 
     async def prepare(self) -> Iterable[State]:
         """
@@ -165,37 +165,31 @@ class Disposables(Immutable):
 
         Enters all disposables in parallel and collects any State objects they return.
         """
-        assert self._loop is None  # nosec: B101
+        assert self._loop is None, "Reentrance is not allowed"  # nosec: B101
         object.__setattr__(
             self,
             "_loop",
             get_running_loop(),
         )
 
-        return tuple(
-            chain.from_iterable(
-                await gather(
-                    *[self._setup(disposable) for disposable in self._disposables],
-                )
-            )
-        )
+        return tuple(await self._prepare())
 
-    async def _cleanup(
+    async def _dispose(
         self,
         /,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> list[bool | BaseException | None]:
+    ) -> Iterable[bool | BaseException | None]:
         return await gather(
-            *[
+            *(
                 disposable.__aexit__(
                     exc_type,
                     exc_val,
                     exc_tb,
                 )
                 for disposable in self._disposables
-            ],
+            ),
             return_exceptions=True,
         )
 
@@ -226,45 +220,26 @@ class Disposables(Immutable):
         BaseExceptionGroup
             If multiple disposables raise exceptions during exit
         """
-        assert self._loop is not None  # nosec: B101
-        results: list[bool | BaseException | None]
+        assert self._loop is not None, "Unbalanced context prepare/dispose"  # nosec: B101
+        assert self._loop == get_running_loop()  # nosec: B101
+        object.__setattr__(
+            self,
+            "_loop",
+            None,
+        )
 
-        try:
-            current_loop: AbstractEventLoop = get_running_loop()
-            if self._loop != current_loop:
-                results = await wrap_future(
-                    run_coroutine_threadsafe(
-                        self._cleanup(
-                            exc_type,
-                            exc_val,
-                            exc_tb,
-                        ),
-                        loop=self._loop,
-                    )
-                )
+        results: Iterable[bool | BaseException | None] = await self._dispose(
+            exc_type,
+            exc_val,
+            exc_tb,
+        )
 
-            else:
-                results = await self._cleanup(
-                    exc_type,
-                    exc_val,
-                    exc_tb,
-                )
+        match [exc for exc in results if isinstance(exc, BaseException)]:
+            case []:
+                return None
 
-        finally:
-            object.__setattr__(
-                self,
-                "_loop",
-                None,
-            )
+            case [exception]:
+                raise exception
 
-        exceptions: list[BaseException] = [exc for exc in results if isinstance(exc, BaseException)]
-
-        match len(exceptions):
-            case 0:
-                return
-
-            case 1:
-                raise exceptions[0]
-
-            case _:
+            case [*exceptions]:
                 raise BaseExceptionGroup("Disposables cleanup errors", exceptions)

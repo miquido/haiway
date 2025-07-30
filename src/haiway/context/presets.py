@@ -247,7 +247,7 @@ class ContextPreset(Immutable):
         else:
             collected_disposables = await self._collect_disposables()
 
-        return Disposables(*collected_disposables)
+        return Disposables(collected_disposables)
 
     async def _collect_state(self) -> Collection[State]:
         collected_state: list[State] = []
