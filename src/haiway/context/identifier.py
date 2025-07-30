@@ -50,9 +50,14 @@ class ScopeIdentifier(Immutable):
         Self
             A newly created scope identifier
         """
-        current: Self
+
         try:  # check for current scope
-            current = cls._context.get()
+            return cls(
+                name=name,
+                scope_id=uuid4(),
+                # create nested scope
+                parent_id=cls._context.get().scope_id,
+            )
 
         except LookupError:
             # create root scope when missing
@@ -63,13 +68,6 @@ class ScopeIdentifier(Immutable):
                 scope_id=scope_id,
                 parent_id=scope_id,  # own id is parent_id for root
             )
-
-        # create nested scope otherwise
-        return cls(
-            name=name,
-            scope_id=uuid4(),
-            parent_id=current.scope_id,
-        )
 
     parent_id: UUID
     scope_id: UUID

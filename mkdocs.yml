@@ -97,3 +97,4 @@ nav:
       - HTTPClient: features/http-client.md
       - File Access: features/file-access.md
       - Event Bus: features/event-bus.md
+      - Context Variables: features/context-variables.md

@@ -393,15 +393,14 @@ class ObservabilityContext(Immutable):
 
         except LookupError:
             resolved_observability: Observability
-            match observability:
-                case Observability() as observability:
-                    resolved_observability = observability
+            if observability is None:
+                resolved_observability = _logger_observability(getLogger(scope.name))
 
-                case None:
-                    resolved_observability = _logger_observability(getLogger(scope.name))
+            elif isinstance(observability, Logger):
+                resolved_observability = _logger_observability(observability)
 
-                case Logger() as logger:
-                    resolved_observability = _logger_observability(logger)
+            else:
+                resolved_observability = observability
 
             # create root scope when missing
             return cls(
@@ -411,15 +410,14 @@ class ObservabilityContext(Immutable):
 
         # create nested scope otherwise
         resolved_observability: Observability
-        match observability:
-            case None:
-                resolved_observability = current.observability
+        if observability is None:
+            resolved_observability = current.observability
 
-            case Logger() as logger:
-                resolved_observability = _logger_observability(logger)
+        elif isinstance(observability, Logger):
+            resolved_observability = _logger_observability(observability)
 
-            case observability:
-                resolved_observability = observability
+        else:
+            resolved_observability = observability
 
         return cls(
             scope=scope,

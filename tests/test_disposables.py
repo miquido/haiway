@@ -70,7 +70,7 @@ async def disposable_returning_multiple_states():
 
 
 def test_empty_initialization():
-    disposables = Disposables()
+    disposables = Disposables(())
     assert not disposables
     assert disposables._disposables == ()
     assert disposables._loop is None
@@ -78,24 +78,24 @@ def test_empty_initialization():
 
 def test_single_disposable_initialization():
     mock = MockDisposable()
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
     assert bool(disposables)
     assert len(disposables._disposables) == 1
-    assert disposables._disposables[0] is mock
+    assert mock in disposables._disposables
 
 
 def test_multiple_disposables_initialization():
     mock1 = MockDisposable()
     mock2 = MockDisposable()
     mock3 = MockDisposable()
-    disposables = Disposables(mock1, mock2, mock3)
+    disposables = Disposables((mock1, mock2, mock3))
     assert bool(disposables)
     assert len(disposables._disposables) == 3
     assert disposables._disposables == (mock1, mock2, mock3)
 
 
 def test_cannot_set_attributes():
-    disposables = Disposables()
+    disposables = Disposables(())
     with raises(AttributeError, match="Can't modify immutable"):
         disposables.new_attr = "value"
     with raises(AttributeError, match="Can't modify immutable"):
@@ -103,7 +103,7 @@ def test_cannot_set_attributes():
 
 
 def test_cannot_delete_attributes():
-    disposables = Disposables()
+    disposables = Disposables(())
     with raises(AttributeError, match="Can't modify immutable"):
         del disposables._disposables
     with raises(AttributeError, match="Can't modify immutable"):
@@ -111,21 +111,21 @@ def test_cannot_delete_attributes():
 
 
 def test_empty_disposables_is_falsy():
-    disposables = Disposables()
+    disposables = Disposables(())
     assert not disposables
     assert bool(disposables) is False
 
 
 def test_non_empty_disposables_is_truthy():
     mock = MockDisposable()
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
     assert disposables
     assert bool(disposables) is True
 
 
 @mark.asyncio
 async def test_setup_with_no_disposables():
-    disposables = Disposables()
+    disposables = Disposables(())
     result = await disposables.prepare()
     assert result == ()
     assert disposables._loop is not None
@@ -134,7 +134,7 @@ async def test_setup_with_no_disposables():
 @mark.asyncio
 async def test_setup_with_disposable_returning_none():
     mock = MockDisposable(enter_return=None)
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
     result = await disposables.prepare()
     assert result == ()
     assert mock.enter_called
@@ -145,7 +145,7 @@ async def test_setup_with_disposable_returning_none():
 async def test_setup_with_disposable_returning_single_state():
     test_state = ExampleState(value="test")
     mock = MockDisposable(enter_return=test_state)
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
     result = tuple(await disposables.prepare())
     assert len(result) == 1
     assert result[0] is test_state
@@ -158,7 +158,7 @@ async def test_setup_with_disposable_returning_multiple_states():
     state2 = AnotherExampleState(data=42)
     states = [state1, state2]
     mock = MockDisposable(enter_return=states)
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
     result = tuple(await disposables.prepare())
     assert len(result) == 2
     assert state1 in result
@@ -176,7 +176,7 @@ async def test_setup_with_multiple_disposables_mixed_returns():
     mock2 = MockDisposable(enter_return=state1)
     mock3 = MockDisposable(enter_return=[state2, state3])
 
-    disposables = Disposables(mock1, mock2, mock3)
+    disposables = Disposables((mock1, mock2, mock3))
     result = tuple(await disposables.prepare())
 
     assert len(result) == 3
@@ -188,7 +188,7 @@ async def test_setup_with_multiple_disposables_mixed_returns():
 
 @mark.asyncio
 async def test_setup_sets_loop_correctly():
-    disposables = Disposables()
+    disposables = Disposables(())
     current_loop = asyncio.get_running_loop()
     await disposables.prepare()
     assert disposables._loop is current_loop
@@ -196,7 +196,7 @@ async def test_setup_sets_loop_correctly():
 
 @mark.asyncio
 async def test_dispose_with_no_disposables():
-    disposables = Disposables()
+    disposables = Disposables(())
     await disposables.prepare()
     await disposables.dispose(None, None, None)
     assert disposables._loop is None
@@ -206,7 +206,7 @@ async def test_dispose_with_no_disposables():
 async def test_dispose_with_successful_cleanup():
     mock1 = MockDisposable()
     mock2 = MockDisposable()
-    disposables = Disposables(mock1, mock2)
+    disposables = Disposables((mock1, mock2))
 
     await disposables.prepare()
     await disposables.dispose(None, None, None)
@@ -221,7 +221,7 @@ async def test_dispose_with_successful_cleanup():
 @mark.asyncio
 async def test_dispose_with_exception_context():
     mock = MockDisposable()
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
 
     await disposables.prepare()
 
@@ -240,7 +240,7 @@ async def test_dispose_with_multiple_exceptions_creates_group():
     exc2 = ValueError("error 2")
     mock1 = MockDisposable(exit_exception=exc1)
     mock2 = MockDisposable(exit_exception=exc2)
-    disposables = Disposables(mock1, mock2)
+    disposables = Disposables((mock1, mock2))
 
     await disposables.prepare()
 
@@ -259,7 +259,7 @@ async def test_dispose_with_multiple_exceptions_creates_group():
 async def test_dispose_with_single_exception_is_risen():
     exc = RuntimeError("cleanup failed")
     mock = MockDisposable(exit_exception=exc)
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
 
     await disposables.prepare()
 
@@ -273,7 +273,7 @@ async def test_dispose_with_single_exception_is_risen():
 async def test_dispose_resets_loop_even_on_exception():
     exc = RuntimeError("cleanup failed")
     mock = MockDisposable(exit_exception=exc)
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
 
     await disposables.prepare()
     assert disposables._loop is not None
@@ -286,7 +286,7 @@ async def test_dispose_resets_loop_even_on_exception():
 @mark.asyncio
 async def test_same_loop_cleanup():
     mock = MockDisposable()
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
 
     await disposables.prepare()
     initial_loop = disposables._loop
@@ -301,7 +301,7 @@ async def test_same_loop_cleanup():
 async def test_exception_during_setup_phase():
     exc = RuntimeError("enter failed")
     mock = MockDisposable(enter_exception=exc)
-    disposables = Disposables(mock)
+    disposables = Disposables((mock,))
 
     with raises(RuntimeError, match="enter failed"):
         await disposables.prepare()
@@ -309,7 +309,7 @@ async def test_exception_during_setup_phase():
 
 @mark.asyncio
 async def test_assertion_on_doubleprepare():
-    disposables = Disposables()
+    disposables = Disposables(())
     await disposables.prepare()
 
     # Second enter should assert because loop is already set
@@ -320,7 +320,7 @@ async def test_assertion_on_doubleprepare():
 @mark.asyncio
 async def test_assertion_on_dispose_withoutprepare():
     """Test that exiting without entering raises AssertionError."""
-    disposables = Disposables()
+    disposables = Disposables(())
 
     # Exit without enter should assert because loop is None
     with raises(AssertionError):
