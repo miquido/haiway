@@ -103,13 +103,13 @@ class HTTPXClient(Immutable):
         )
         object.__setattr__(
             self,
-            "_client",
-            self._prepare_client(),
+            "_extra",
+            extra,
         )
         object.__setattr__(
             self,
-            "_extra",
-            extra,
+            "_client",
+            self._prepare_client(),
         )
 
     def _prepare_client(self) -> AsyncClient:
