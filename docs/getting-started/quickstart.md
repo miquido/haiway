@@ -131,8 +131,50 @@ This pattern allows you to easily **swap implementations** (in-memory, database,
 3. **Context Management**: Scoped execution with state propagation
 4. **Dependency Injection**: Clean separation of concerns using function based state interfaces
 
+## Advanced Context Usage
+
+### Using Context Presets
+
+For more advanced scenarios, you can use context presets to package state and disposables together:
+
+```python
+from haiway.context import ContextPreset
+
+# Create a preset with predefined state
+api_preset = ContextPreset(
+    name="api_client",
+    state=[
+        UsersService(fetching=production_users_fetching),
+        ApiConfig(base_url="https://api.example.com", timeout=60)
+    ]
+)
+
+async def main():
+    # Use preset directly - no need for preset registry
+    async with ctx.scope(api_preset):
+        users = await UsersService.fetch_users()
+        config = ctx.state(ApiConfig)
+        print(f"Using {config.base_url} with {len(users)} users")
+    
+    # Override preset state with explicit values
+    async with ctx.scope(api_preset, ApiConfig(timeout=30)):
+        config = ctx.state(ApiConfig)
+        print(f"Timeout overridden to {config.timeout}")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
+```
+
+**What's happening here:**
+
+- **Preset Definition**: `ContextPreset` packages multiple state objects together
+- **Direct Usage**: Pass the preset directly to `ctx.scope()` instead of a string name
+- **State Override**: Explicit state parameters override preset state by type
+- **Priority System**: Explicit state (highest) > disposables > preset state > contextual state (lowest)
+
 ## What's Next?
 
-1. Explore the [Functionlities](../guides/functionalities.md)
+1. Explore the [Functionalities](../guides/functionalities.md)
 2. Learn about [State](../guides/state.md)
-3. See how to strcture [Packages](../guides/packages.md)
+3. See how to structure [Packages](../guides/packages.md)

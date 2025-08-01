@@ -415,10 +415,9 @@ class ctx:
 
     @staticmethod
     def scope(
-        name: str,
+        scope: ContextPreset | str,
         /,
         *state: State | None,
-        preset: ContextPreset | None = None,
         disposables: Disposables | Collection[Disposable] | None = None,
         observability: Observability | Logger | None = None,
         isolated: bool = False,
@@ -446,17 +445,15 @@ class ctx:
 
         Parameters
         ----------
-        name: str
-            name of the scope context, can be associated with state presets
+        scope: ContextPreset | str
+            Either a name of the scope context (can be associated with state presets with
+            matching name from preset registry), or a context preset to be used directly
+            within the scope context. When a preset is provided directly, its state and
+            disposables will be applied to the scope with lower priority than explicit state.
 
         *state: State | None
             state propagated within the scope context, will be merged with current state by
             replacing current with provided on conflict.
-
-        preset: ContextPreset | None = None
-            context preset to be used within the scope context. The preset's state and
-            disposables will be applied to the scope with lower priority than explicit state.
-            Only works with async contexts.
 
         disposables: Disposables | Collection[Disposable] | None
             disposables consumed within the context when entered. Produced state will automatically
@@ -482,7 +479,7 @@ class ctx:
 
         Examples
         --------
-        Using a preset directly:
+        Using a preset directly (new approach):
 
         >>> from haiway import ctx, State
         >>> from haiway.context import ContextPreset
@@ -496,17 +493,17 @@ class ctx:
         ...     state=[ApiConfig(base_url="https://api.example.com")]
         ... )
         >>>
-        >>> # Direct preset usage
-        >>> async with ctx.scope("main", preset=api_preset):
+        >>> # Direct preset usage - pass preset instead of name
+        >>> async with ctx.scope(api_preset):
         ...     config = ctx.state(ApiConfig)
         ...     # Uses preset configuration
         >>>
         >>> # Override preset state with explicit state
-        >>> async with ctx.scope("main", ApiConfig(timeout=60), preset=api_preset):
+        >>> async with ctx.scope(api_preset, ApiConfig(timeout=60)):
         ...     config = ctx.state(ApiConfig)
         ...     # base_url from preset, timeout overridden to 60
 
-        Using preset registry (original approach):
+        Using preset registry with name lookup:
 
         >>> # Multiple presets registered
         >>> with ctx.presets(dev_preset, prod_preset):
@@ -519,16 +516,25 @@ class ctx:
         ContextPreset : For creating preset configurations
         """
 
+        name: str
+        preset: ContextPreset | None
+        if isinstance(scope, ContextPreset):
+            name = scope.name
+            preset = scope
+
+        else:
+            name = scope
+            preset = None
+
         resolved_disposables: Disposables | None
-        match disposables:
-            case None:
-                resolved_disposables = None
+        if disposables is None:
+            resolved_disposables = None
 
-            case Disposables() as disposables:
-                resolved_disposables = disposables
+        elif isinstance(disposables, Disposables):
+            resolved_disposables = disposables
 
-            case collection:
-                resolved_disposables = Disposables(collection)
+        else:
+            resolved_disposables = Disposables(disposables)
 
         return ScopeContext(
             name=name,

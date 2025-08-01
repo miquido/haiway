@@ -240,10 +240,10 @@ async def main():
 ```python
 # Context resolution follows priority order (highest to lowest):
 async with ctx.scope(
-    "example",
+    context_preset,                      # Use preset as first parameter
     ExplicitState(value="explicit"),     # 1. Explicit state (highest)
     disposables=[resource_factory()],    # 2. Disposable resources  
-    preset=context_preset,               # 3. Context presets
+    # 3. Context presets (from preset parameter)
     # 4. Parent context state (lowest)
 ):
     # ExplicitState overrides any lower priority sources

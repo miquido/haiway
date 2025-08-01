@@ -458,7 +458,7 @@ async def test_direct_preset_parameter():
     )
 
     # Direct preset usage
-    async with ctx.scope("main", preset=preset):
+    async with ctx.scope(preset):
         config = ctx.state(ConfigState)
         assert config.api_url == "https://direct.com"
         assert config.timeout == 45
@@ -476,9 +476,8 @@ async def test_direct_preset_with_explicit_state_override():
 
     # Explicit state should override preset state
     async with ctx.scope(
-        "main",
+        preset,
         ConfigState(api_url="https://override.com", timeout=60),
-        preset=preset,
     ):
         config = ctx.state(ConfigState)
         assert config.api_url == "https://override.com"
@@ -504,7 +503,7 @@ async def test_direct_preset_with_disposables():
         disposables=[create_disposable],
     )
 
-    async with ctx.scope("main", preset=preset):
+    async with ctx.scope(preset):
         config = ctx.state(ConfigState)
         assert config.api_url == "https://preset.com"
 
@@ -531,7 +530,7 @@ async def test_direct_preset_vs_registry():
     # Registry preset would normally be selected by name
     with ctx.presets(registry_preset):
         # But direct preset should take precedence
-        async with ctx.scope("main", preset=direct_preset):
+        async with ctx.scope(direct_preset):
             config = ctx.state(ConfigState)
             assert config.api_url == "https://direct.com"
 
@@ -550,6 +549,6 @@ async def test_direct_preset_none_falls_back_to_registry():
             assert config.api_url == "https://registry.com"
 
         # Explicit preset=None should also use registry
-        async with ctx.scope("fallback", preset=None):
+        async with ctx.scope("fallback"):
             config = ctx.state(ConfigState)
             assert config.api_url == "https://registry.com"
