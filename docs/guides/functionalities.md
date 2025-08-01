@@ -242,3 +242,30 @@ async with ctx.scope("example", file_notes(), NotesDirectory(path="./examples/no
     await Notes.create_note("This was an example of Haiway")
 ```
 
+### Using Context Presets
+
+You can also package the implementation and state together using context presets:
+
+```python
+from haiway.context import ContextPreset
+
+# Create a preset that combines implementation and configuration
+notes_preset = ContextPreset(
+    name="file_notes",
+    state=[
+        file_notes(),
+        NotesDirectory(path="./examples/")
+    ]
+)
+
+# Use the preset directly
+async with ctx.scope(notes_preset):
+    await Notes.create_note("This was created using a preset")
+
+# Override specific state from the preset
+async with ctx.scope(notes_preset, NotesDirectory(path="./custom/")):
+    await Notes.create_note("This uses custom path")
+```
+
+This approach is useful when you have standard configurations that you want to reuse across different parts of your application.
+
