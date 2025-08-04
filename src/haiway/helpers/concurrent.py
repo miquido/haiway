@@ -1,4 +1,4 @@
-from asyncio import ALL_COMPLETED, FIRST_COMPLETED, CancelledError, Task, wait
+from asyncio import ALL_COMPLETED, FIRST_COMPLETED, Task, wait
 from collections.abc import (
     AsyncIterable,
     AsyncIterator,
@@ -304,10 +304,11 @@ async def execute_concurrently[Element, Result](  # noqa: C901
     return [result.exception() or result.result() for result in results]
 
 
-async def stream_concurrently[ElementA, ElementB](  # noqa: C901
+async def stream_concurrently[ElementA, ElementB](  # noqa: C901, PLR0912
     source_a: AsyncIterable[ElementA],
     source_b: AsyncIterable[ElementB],
     /,
+    exhaustive: bool = False,
 ) -> AsyncIterable[ElementA | ElementB]:
     """Merge streams from two async iterators processed concurrently.
 
@@ -326,6 +327,9 @@ async def stream_concurrently[ElementA, ElementB](  # noqa: C901
         First async iterator to consume from.
     source_b : AsyncIterator[ElementB]
         Second async iterator to consume from.
+    exhaustive: bool = False
+        If False (default, recommended), streaming continues until either source becomes exhausted.
+        If True, streaming ends when both sources bocome completed.
 
     Yields
     ------
@@ -374,51 +378,53 @@ async def stream_concurrently[ElementA, ElementB](  # noqa: C901
     async def next_b() -> ElementB:
         return await anext(iter_b)
 
-    task_a: Task[ElementA] = ctx.spawn(next_a)
-    task_b: Task[ElementB] = ctx.spawn(next_b)
+    task_a: Task[ElementA] | None = ctx.spawn(next_a)
+    task_b: Task[ElementB] | None = ctx.spawn(next_b)
 
     try:
-        while not (  # Continue until both iterators are exhausted
-            task_a.done()
-            and task_b.done()
-            and isinstance(task_a.exception(), StopAsyncIteration)
-            and isinstance(task_b.exception(), StopAsyncIteration)
-        ):
-            # Wait for at least one task to complete
-            done, _ = await wait(
-                {task_a, task_b},
+        pending: set[Task] = {task_a, task_b}
+        while pending:
+            done, pending = await wait(
+                pending,
                 return_when=FIRST_COMPLETED,
             )
 
-            # Process completed tasks
-            for task in done:
-                if task is task_a:
-                    exc: BaseException | None = task.exception()
-                    if exc is None:
-                        yield task.result()
-                        task_a = ctx.spawn(next_a)
+            if task_a in done:
+                exc: BaseException | None = task_a.exception()
+                if exc is None:
+                    yield task_a.result()
+                    task_a = ctx.spawn(next_a)
+                    pending.add(task_a)
 
-                    elif not isinstance(exc, StopAsyncIteration):
-                        raise exc
-                    # If StopAsyncIteration, don't respawn task_a
+                elif isinstance(exc, StopAsyncIteration):
+                    # StopAsyncIteration - don't respawn task_a
+                    task_a = None
+                    if not exhaustive:
+                        break  # finish when either finished
 
-                elif task is task_b:
-                    exc: BaseException | None = task.exception()
-                    if exc is None:
-                        yield task.result()
-                        task_b = ctx.spawn(next_b)
+                else:
+                    raise exc
 
-                    elif not isinstance(exc, StopAsyncIteration):
-                        raise exc
-                    # If StopAsyncIteration, don't respawn task_b
+            if task_b in done:
+                exc: BaseException | None = task_b.exception()
+                if exc is None:
+                    yield task_b.result()
+                    task_b = ctx.spawn(next_b)
+                    pending.add(task_b)
 
-    except CancelledError as exc:
-        # Cancel all running tasks
-        task_a.cancel()
-        task_b.cancel()
-        raise exc
+                elif isinstance(exc, StopAsyncIteration):
+                    # StopAsyncIteration - don't respawn task_b
+                    task_b = None
+                    if not exhaustive:
+                        break  # finish when either finished
+
+                else:
+                    raise exc
 
     finally:
         # Ensure cleanup of any remaining tasks
-        for task in (task_a, task_b):
-            task.cancel()
+        if task_a is not None:
+            task_a.cancel()
+
+        if task_b is not None:
+            task_b.cancel()
