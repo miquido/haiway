@@ -82,11 +82,23 @@ async def test_handles_empty_iterators():
     items = []
     async for item in stream_concurrently(async_range(0, 3), empty_iter()):
         items.append(item)
+    assert items == [0]
+
+    # exhaustive
+    items = []
+    async for item in stream_concurrently(async_range(0, 3), empty_iter(), exhaustive=True):
+        items.append(item)
     assert items == [0, 1, 2]
 
     # Other way around
     items = []
     async for item in stream_concurrently(empty_iter(), async_range(0, 3)):
+        items.append(item)
+    assert items == []
+
+    # exhaustive
+    items = []
+    async for item in stream_concurrently(empty_iter(), async_range(0, 3), exhaustive=True):
         items.append(item)
     assert items == [0, 1, 2]
 
@@ -96,6 +108,18 @@ async def test_handles_different_lengths():
     items: list[int | str] = []
 
     async for item in stream_concurrently(async_range(0, 10), async_letters("ab")):
+        items.append(item)
+
+    # Should have all items from both sources
+    assert len(items) == 5
+    numbers = [i for i in items if isinstance(i, int)]
+    letters = [i for i in items if isinstance(i, str)]
+    assert numbers == list(range(3))
+    assert letters == ["a", "b"]
+
+    # exhaustive
+    items = []
+    async for item in stream_concurrently(async_range(0, 10), async_letters("ab"), exhaustive=True):
         items.append(item)
 
     # Should have all items from both sources
@@ -202,6 +226,16 @@ async def test_works_with_different_types():
 
     numbers = [i for i in items if isinstance(i, int)]
     strings = [i for i in items if isinstance(i, str)]
+    assert numbers == [0, 1, 1, 2]
+    assert strings == ["hello", "world", "test"]
+
+    # exhaustive
+    items = []
+    async for item in stream_concurrently(fibonacci(), words(), exhaustive=True):
+        items.append(item)
+
+    numbers = [i for i in items if isinstance(i, int)]
+    strings = [i for i in items if isinstance(i, str)]
     assert numbers == [0, 1, 1, 2, 3]
     assert strings == ["hello", "world", "test"]
 
@@ -221,7 +255,7 @@ async def test_immediate_yield():
             yield c
 
     items: list[int | str] = []
-    async for item in stream_concurrently(slow_numbers(), fast_letters()):
+    async for item in stream_concurrently(slow_numbers(), fast_letters(), exhaustive=True):
         items.append(item)
 
     # Check that we got all items
@@ -266,7 +300,7 @@ async def test_concurrent_execution():
         yield "b2"
 
     items: list[str] = []
-    async for item in stream_concurrently(iter_a(), iter_b()):
+    async for item in stream_concurrently(iter_a(), iter_b(), exhaustive=True):
         items.append(item)
 
     # Both should start immediately (concurrently)
