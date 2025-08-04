@@ -91,6 +91,7 @@ nav:
       - guides/index.md
       - State: guides/state.md
       - Functionalities: guides/functionalities.md
+      - Concurrent Processing: guides/concurrent.md
       - Packages: guides/packages.md
   - Features:
       - OpenTelemetry: features/opentelemetry.md
