@@ -27,8 +27,17 @@ Structure larger applications effectively:
 - Composing functionalities
 - Managing dependencies between packages
 
+### [Concurrent Processing](concurrent.md)
+Master concurrent and parallel processing patterns:
+- Structured concurrency with task spawning
+- Context preservation across tasks
+- Concurrent processing helpers
+- Streaming multiple sources
+- Performance optimization strategies
+
 ## Learning Path
 
 1. **Start with State** - Understanding immutable state is fundamental to using Haiway effectively
 2. **Learn Functionalities** - See how to organize business logic using functional patterns
-3. **Scale with Packages** - Apply these concepts to structure larger applications
+3. **Master Concurrency** - Build high-performance applications with concurrent processing
+4. **Scale with Packages** - Apply these concepts to structure larger applications
