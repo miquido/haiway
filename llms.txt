@@ -671,6 +671,32 @@ async for result in ctx.stream(async_generator_func, args):
     process_result(result)  # Each result maintains context
 ```
 
+### Concurrent Processing Helpers
+```python
+from haiway.helpers.concurrent import process_concurrently, execute_concurrently
+
+# Process items without collecting results
+await process_concurrently(
+    items,
+    process_function,
+    concurrent_tasks=10,
+    ignore_exceptions=True
+)
+
+# Execute with results collection (maintains order)
+results = await execute_concurrently(
+    fetch_function,
+    items,
+    concurrent_tasks=5,
+    return_exceptions=True  # Include exceptions as results
+)
+
+# Multiple concurrent tasks with gather
+task1 = ctx.spawn(process_item, "item-1")
+task2 = ctx.spawn(process_item, "item-2")
+results = await asyncio.gather(task1, task2)
+```
+
 ### Event System (Root Scopes Only)
 ```python
 # Send and subscribe to typed events
@@ -831,6 +857,7 @@ updated_user = user_data.updated(
     tags=user_data.tags | {"gold"}             # Frozenset union
 )
 ```
+
 
 ## Key Rules for AI Models
 
