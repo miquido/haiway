@@ -6,6 +6,7 @@ from asyncio import (
 from collections.abc import Collection, Generator, Iterable
 from contextlib import AbstractAsyncContextManager
 from types import TracebackType
+from typing import Self
 
 from haiway.state import Immutable, State
 
@@ -102,6 +103,21 @@ class Disposables(Immutable):
     ...
     ...     # All resources cleaned up automatically
     """
+
+    @classmethod
+    def of(
+        cls,
+        *disposables: Disposable,
+    ) -> Self:
+        """
+        Initialize a collection of disposable resources.
+
+        Parameters
+        ----------
+        *disposables: Disposable
+            Disposable resources to be managed together.
+        """
+        return cls(disposables)
 
     _disposables: Collection[Disposable]
     _loop: AbstractEventLoop | None
