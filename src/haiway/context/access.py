@@ -614,9 +614,25 @@ class ctx:
             )
         )
 
+    @overload
+    @staticmethod
+    def spawn[Result](
+        coro: Coroutine[Any, Any, Result],
+        /,
+    ) -> Task[Result]: ...
+
+    @overload
     @staticmethod
     def spawn[Result, **Arguments](
-        function: Callable[Arguments, Coroutine[Any, Any, Result]],
+        coro: Callable[Arguments, Coroutine[Any, Any, Result]],
+        /,
+        *args: Arguments.args,
+        **kwargs: Arguments.kwargs,
+    ) -> Task[Result]: ...
+
+    @staticmethod
+    def spawn[Result, **Arguments](
+        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
@@ -624,12 +640,12 @@ class ctx:
         """
         Spawn an async task within current scope context task group.
 
-        When called outside of context, it will spawn detached task instead.
+        When called outside of context, it will spawn a background task instead.
 
         Parameters
         ----------
-        function: Callable[Arguments, Coroutine[Any, Any, Result]]
-            function to be called within the task group
+        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result]
+            function or coroutine to be called within the task group
 
         *args: Arguments.args
             positional arguments passed to function call
@@ -643,7 +659,52 @@ class ctx:
             task for tracking function execution and result
         """
 
-        return TaskGroupContext.run(function, *args, **kwargs)
+        return TaskGroupContext.run(coro, *args, **kwargs)
+
+    @overload
+    @staticmethod
+    def spawn_background[Result](
+        coro: Coroutine[Any, Any, Result],
+        /,
+    ) -> Task[Result]: ...
+
+    @overload
+    @staticmethod
+    def spawn_background[Result, **Arguments](
+        coro: Callable[Arguments, Coroutine[Any, Any, Result]],
+        /,
+        *args: Arguments.args,
+        **kwargs: Arguments.kwargs,
+    ) -> Task[Result]: ...
+
+    @staticmethod
+    def spawn_background[Result, **Arguments](
+        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result],
+        /,
+        *args: Arguments.args,
+        **kwargs: Arguments.kwargs,
+    ) -> Task[Result]:
+        """
+        Spawn an async task within background task group.
+
+        Parameters
+        ----------
+        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result]
+            function or coroutine to be called within the task group
+
+        *args: Arguments.args
+            positional arguments passed to function call
+
+        **kwargs: Arguments.kwargs
+            keyword arguments passed to function call
+
+        Returns
+        -------
+        Task[Result]
+            task for tracking function execution and result
+        """
+
+        return TaskGroupContext.background_run(coro, *args, **kwargs)
 
     @staticmethod
     def stream[Element, **Arguments](

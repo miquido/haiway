@@ -1,4 +1,4 @@
-from asyncio import Task, TaskGroup, get_event_loop
+from asyncio import Task, TaskGroup, get_running_loop
 from collections.abc import Callable, Coroutine
 from contextvars import ContextVar, Token, copy_context
 from types import TracebackType
@@ -24,7 +24,7 @@ class TaskGroupContext(Immutable):
     @classmethod
     def run[Result, **Arguments](
         cls,
-        function: Callable[Arguments, Coroutine[Any, Any, Result]],
+        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
@@ -33,7 +33,7 @@ class TaskGroupContext(Immutable):
         Run a coroutine function as a task within the current task group.
 
         If called within a TaskGroupContext, creates a task in that group.
-        If called outside any TaskGroupContext, creates a detached task.
+        If called outside any TaskGroupContext, creates a background task.
 
         Parameters
         ----------
@@ -52,13 +52,48 @@ class TaskGroupContext(Immutable):
         try:
             with VariablesContext(isolated=True):  # isolate variables
                 return cls._context.get().create_task(
-                    function(*args, **kwargs),
+                    coro if isinstance(coro, Coroutine) else coro(*args, **kwargs),
                     context=copy_context(),
                 )
 
-        except LookupError:  # spawn task out of group as a fallback
-            return get_event_loop().create_task(
-                function(*args, **kwargs),
+        except LookupError:  # spawn task in the background as a fallback
+            return cls.background_run(
+                coro,
+                *args,
+                **kwargs,
+            )
+
+    @classmethod
+    def background_run[Result, **Arguments](
+        cls,
+        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result],
+        /,
+        *args: Arguments.args,
+        **kwargs: Arguments.kwargs,
+    ) -> Task[Result]:
+        """
+        Run a coroutine function as a background detached task.
+
+        Parameters
+        ----------
+        function: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result]
+            The coroutine function to run
+        *args: Arguments.args
+            Positional arguments to pass to the function
+        **kwargs: Arguments.kwargs
+            Keyword arguments to pass to the function
+
+        Returns
+        -------
+        Task[Result]
+            The created task
+        """
+
+        with VariablesContext(isolated=True):  # isolate variables
+            # TODO: isolate further with detached state and observability scope?
+            # TODO: manage custom background task group?
+            return get_running_loop().create_task(
+                coro if isinstance(coro, Coroutine) else coro(*args, **kwargs),
                 context=copy_context(),
             )
 
