@@ -58,10 +58,28 @@ class Meta(Mapping[str, MetaValue]):
             values,
         )
 
+    @overload
     @classmethod
     def of(
         cls,
         meta: Self | MetaValues | None,
+        /,
+    ) -> Self: ...
+
+    @overload
+    @classmethod
+    def of(
+        cls,
+        /,
+        **values: MetaValue,
+    ) -> Self: ...
+
+    @classmethod
+    def of(
+        cls,
+        meta: Self | MetaValues | None = None,
+        /,
+        **values: MetaValue,
     ) -> Self:
         """
         Create a Meta instance from various input types.
@@ -76,18 +94,27 @@ class Meta(Mapping[str, MetaValue]):
             an existing Meta instance (returns as-is), or a mapping
             of values to validate and wrap.
 
+        **values: MetaValue
+            Key-value pairs to be added to the result metadata.
+
         Returns
         -------
         Self
             A Meta instance containing the provided metadata.
         """
         if meta is None:
-            return cast(Self, META_EMPTY)
+            if values:
+                return cls({key: _validated_meta_value(value) for key, value in values.items()})
+
+            else:
+                return cast(Self, META_EMPTY)
 
         elif isinstance(meta, Meta):
+            assert not values  # nosec: B101
             return cast(Self, meta)
 
         else:
+            assert not values  # nosec: B101
             assert isinstance(meta, Mapping)  # nosec: B101
             return cls({key: _validated_meta_value(value) for key, value in meta.items()})
 
