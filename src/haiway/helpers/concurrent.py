@@ -315,6 +315,28 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
         return [result.result() for result in results]
 
 
+@overload
+async def concurrently[Result](
+    coroutines: AsyncIterable[Coroutine[None, None, Result]]
+    | Iterable[Coroutine[None, None, Result]],
+    /,
+    *,
+    concurrent_tasks: int = 2,
+    return_exceptions: Literal[False] = False,
+) -> Sequence[Result]: ...
+
+
+@overload
+async def concurrently[Result](
+    coroutines: AsyncIterable[Coroutine[None, None, Result]]
+    | Iterable[Coroutine[None, None, Result]],
+    /,
+    *,
+    concurrent_tasks: int = 2,
+    return_exceptions: Literal[True],
+) -> Sequence[Result | BaseException]: ...
+
+
 async def concurrently[Result](  # noqa: C901, PLR0912
     coroutines: AsyncIterable[Coroutine[None, None, Result]]
     | Iterable[Coroutine[None, None, Result]],
