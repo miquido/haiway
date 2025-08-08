@@ -111,13 +111,13 @@ async def main():
             ctx.log_info(f"Received: {item}")
 ```
 
-## Concurrent Processing Patterns
+## Concurrent Processing Helpers
 
-For common concurrent processing patterns, Haiway provides specialized helpers:
+The `haiway.helpers.concurrent` module provides four specialized functions for common concurrent processing patterns. All functions integrate with Haiway's context system and provide controlled parallelism.
 
-### Processing Items Concurrently
+### process_concurrently
 
-Use `process_concurrently` when you need to process items without collecting results:
+Process elements from an iterable without collecting results. Ideal for side-effect operations like notifications, logging, or data transformations.
 
 ```python
 from haiway.helpers.concurrent import process_concurrently
@@ -138,9 +138,21 @@ async def notify_users():
     )
 ```
 
-### Executing with Results
+**Parameters:**
+- `source: AsyncIterable[Element] | Iterable[Element]` - Elements to process
+- `handler: Callable[[Element], Coroutine[Any, Any, None]]` - Processing function
+- `concurrent_tasks: int = 2` - Maximum concurrent tasks
+- `ignore_exceptions: bool = False` - If True, log exceptions but continue processing
 
-Use `execute_concurrently` when you need to collect results:
+**Key Features:**
+- Processes elements as they become available
+- Maintains the specified concurrency limit
+- Automatic task cancellation on errors or cancellation
+- Optional exception tolerance for resilient processing
+
+### execute_concurrently
+
+Execute handler for each element and collect results in order. Perfect when you need to process collections and gather the outcomes.
 
 ```python
 from haiway.helpers.concurrent import execute_concurrently
@@ -164,12 +176,104 @@ async def fetch_all_users():
         ctx.log_info(f"User {user_id}: {data}")
 ```
 
-### Error Handling in Batch Operations
+**Parameters:**
+- `handler: Callable[[Element], Coroutine[Any, Any, Result]]` - Processing function that returns results
+- `elements: AsyncIterable[Element] | Iterable[Element]` - Elements to process
+- `concurrent_tasks: int = 2` - Maximum concurrent tasks
+- `return_exceptions: bool = False` - Include exceptions in results instead of raising
+
+**Key Features:**
+- Results returned in same order as input elements
+- Configurable exception handling via `return_exceptions`
+- Works with both sync and async iterables
+- Preserves result ordering for predictable processing
+
+### concurrently  
+
+Execute pre-created coroutine objects with controlled parallelism. More flexible than `execute_concurrently` when coroutines need different parameters or come from different sources.
+
+```python
+from haiway.helpers.concurrent import concurrently
+
+async def fetch_with_timeout(url: str, timeout: float) -> dict:
+    return await asyncio.wait_for(http_client.get(url), timeout)
+
+async def fetch_different_endpoints():
+    # Create coroutines with different parameters
+    coroutines = [
+        fetch_with_timeout("https://api.example.com/fast", 3.0),
+        fetch_with_timeout("https://api.example.com/slow", 10.0), 
+        fetch_with_timeout("https://api.example.com/medium", 5.0),
+    ]
+    
+    results = await concurrently(
+        coroutines,
+        concurrent_tasks=2
+    )
+    
+    # Results maintain order: results[0] from first coroutine, etc.
+    return results
+```
+
+**Parameters:**
+- `coroutines: AsyncIterable[Coroutine] | Iterable[Coroutine]` - Coroutine objects to execute
+- `concurrent_tasks: int = 2` - Maximum concurrent tasks
+- `return_exceptions: bool = False` - Include exceptions in results instead of raising
+
+**Key Features:**
+- Works directly with coroutine objects rather than applying a handler function
+- Allows for different parameters per coroutine
+- Maintains result ordering matching input coroutine order
+- Flexible source of coroutines from different functions or generators
+
+### stream_concurrently
+
+Merge two async iterators into a single stream, yielding elements as they become available from either source.
+
+```python
+from haiway.helpers.concurrent import stream_concurrently
+
+async def sensor_readings() -> AsyncIterator[float]:
+    while True:
+        await asyncio.sleep(0.1)
+        yield random.uniform(20.0, 25.0)
+
+async def status_updates() -> AsyncIterator[str]:  
+    while True:
+        await asyncio.sleep(0.5)
+        yield "System OK"
+
+async def process_events():
+    # Merge streams - yields events as they arrive from either source
+    async for item in stream_concurrently(
+        sensor_readings(), 
+        status_updates()
+    ):
+        if isinstance(item, float):
+            ctx.log_info(f"Temperature: {item}°C")
+        else:
+            ctx.log_info(f"Status: {item}")
+```
+
+**Parameters:**
+- `source_a: AsyncIterable[ElementA]` - First async iterable to consume
+- `source_b: AsyncIterable[ElementB]` - Second async iterable to consume  
+- `exhaustive: bool = False` - If True, continue until both sources complete; if False (default), stop when either exhausts
+
+**Key Features:**
+- Elements yielded based on availability, not source order
+- Maintains exactly one pending task per iterator for efficiency
+- Default behavior stops when either source is exhausted
+- Exhaustive mode continues until both sources complete
+
+## Error Handling Patterns
+
+### Exception Tolerance in Processing
 
 Handle exceptions gracefully in batch operations:
 
 ```python
-async def process_with_errors():
+async def resilient_batch_processing():
     urls = ["http://api1.com", "http://invalid", "http://api2.com"]
     
     # Collect exceptions as results
@@ -185,34 +289,18 @@ async def process_with_errors():
             ctx.log_error(f"Failed to fetch {url}", exception=result)
         else:
             ctx.log_info(f"Success: {url}")
-```
 
-### Streaming Multiple Sources
-
-Merge multiple async streams concurrently:
-
-```python
-from haiway.helpers.concurrent import stream_concurrently
-
-async def events_stream() -> AsyncIterator[Event]:
-    async for event in event_source:
-        yield Event(type="external", data=event)
-
-async def internal_stream() -> AsyncIterator[Event]:
-    while True:
-        await asyncio.sleep(5)
-        yield Event(type="heartbeat", data={"timestamp": time.time()})
-
-async def process_events():
-    # Merge streams - yields events as they arrive from either source
-    async for event in stream_concurrently(
-        events_stream(),
-        internal_stream()
-    ):
-        if event.type == "external":
-            await handle_external_event(event)
-        else:
-            await handle_internal_event(event)
+# Similar pattern for concurrently()
+async def handle_mixed_coroutines():
+    results = await concurrently(
+        [risky_operation(), safe_operation(), another_risky_operation()],
+        concurrent_tasks=3,
+        return_exceptions=True
+    )
+    
+    successes = [r for r in results if not isinstance(r, BaseException)]
+    failures = [r for r in results if isinstance(r, BaseException)]
+    ctx.log_info(f"Processed: {len(successes)} successes, {len(failures)} failures")
 ```
 
 ## Advanced Patterns
@@ -272,9 +360,10 @@ async def adaptive_processing():
 ### 1. Choose the Right Tool
 
 - **`ctx.spawn()`**: For fire-and-forget tasks or when you need task handles
-- **`process_concurrently()`**: For processing without results
-- **`execute_concurrently()`**: When you need results
-- **`stream_concurrently()`**: For merging async streams
+- **`process_concurrently()`**: For side-effect operations without collecting results
+- **`execute_concurrently()`**: For applying a handler function to elements and collecting results
+- **`concurrently()`**: For executing pre-created coroutine objects with different parameters
+- **`stream_concurrently()`**: For merging two async iterators into a single stream
 
 ### 2. Resource Management
 
