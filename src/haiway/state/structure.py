@@ -14,7 +14,7 @@ from weakref import WeakValueDictionary
 
 from haiway.state.attributes import AttributeAnnotation, attribute_annotations
 from haiway.state.path import AttributePath
-from haiway.state.validation import AttributeValidation, AttributeValidator
+from haiway.state.validation import AttributeValidator, ValidationContext, Validator
 from haiway.types import MISSING, DefaultValue, Missing, not_missing
 
 __all__ = ("State",)
@@ -43,7 +43,7 @@ class StateAttribute[Value]:
         name: str,
         annotation: AttributeAnnotation,
         default: DefaultValue[Value],
-        validator: AttributeValidation[Value],
+        validator: Validator[Value],
     ) -> None:
         """
         Initialize a new StateAttribute.
@@ -77,7 +77,7 @@ class StateAttribute[Value]:
             "default",
             default,
         )
-        self.validator: AttributeValidation[Value]
+        self.validator: Validator[Value]
         object.__setattr__(
             self,
             "validator",
@@ -178,7 +178,7 @@ class StateMeta(type):
                 default=_resolve_default(default),
                 validator=AttributeValidator.of(
                     annotation,
-                    recursion_guard={str(AttributeAnnotation(origin=cls)): cls.validator},
+                    recursion_guard={str(AttributeAnnotation(origin=cls)): cls.instance_validator},  # pyright: ignore[reportAttributeAccessIssue]
                 ),
             )
 
@@ -322,6 +322,7 @@ def _resolve_default[Value](
 
     return DefaultValue[Value](
         value,
+        env=MISSING,
         factory=MISSING,
     )
 
@@ -369,12 +370,6 @@ class State(metaclass=StateMeta):
 
     ```python
     updated_user = user.updated(age=31)
-    ```
-
-    Path-based updates are also supported:
-
-    ```python
-    updated_user = user.updating(User._.age, 31)
     ```
     """
 
@@ -464,7 +459,7 @@ class State(metaclass=StateMeta):
         return parametrized_type
 
     @classmethod
-    def validator(
+    def instance_validator(
         cls,
         value: Any,
         /,
@@ -495,7 +490,7 @@ class State(metaclass=StateMeta):
                 return cls(**values)
 
             case _:
-                raise TypeError(f"Expected '{cls.__name__}', received '{type(value).__name__}'")
+                raise TypeError(f"'{value}' is not matching expected type of '{cls}'")
 
     @classmethod
     def from_mapping(
@@ -527,48 +522,17 @@ class State(metaclass=StateMeta):
             If validation fails for any attribute
         """
         for name, attribute in self.__ATTRIBUTES__.items():
-            object.__setattr__(
-                self,  # pyright: ignore[reportUnknownArgumentType]
-                name,
-                attribute.validated(
-                    kwargs.get(
-                        name,
-                        MISSING,
+            with ValidationContext.scope(f".{name}"):
+                object.__setattr__(
+                    self,  # pyright: ignore[reportUnknownArgumentType]
+                    name,
+                    attribute.validated(
+                        kwargs.get(
+                            name,
+                            MISSING,
+                        ),
                     ),
-                ),
-            )
-
-    def updating[Value](
-        self,
-        path: AttributePath[Self, Value] | Value,
-        /,
-        value: Value,
-    ) -> Self:
-        """
-        Create a new instance with an updated value at the specified path.
-
-        Parameters
-        ----------
-        path : AttributePath[Self, Value] | Value
-            An attribute path created with Class._.attribute syntax
-        value : Value
-            The new value for the specified attribute
-
-        Returns
-        -------
-        Self
-            A new instance with the updated value
-
-        Raises
-        ------
-        AssertionError
-            If path is not an AttributePath
-        """
-        assert isinstance(  # nosec: B101
-            path, AttributePath
-        ), "Prepare parameter path by using Self._.path.to.property or explicitly"
-
-        return cast(AttributePath[Self, Value], path)(self, updated=value)
+                )
 
     def updated(
         self,

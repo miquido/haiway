@@ -91,6 +91,7 @@ nav:
       - guides/index.md
       - State: guides/state.md
       - Functionalities: guides/functionalities.md
+      - Configuration: guides/configuration.md
       - Concurrent Processing: guides/concurrent.md
       - Packages: guides/packages.md
   - Features:

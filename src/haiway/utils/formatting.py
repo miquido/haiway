@@ -34,7 +34,7 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
     Notes
     -----
     - Strings are quoted, with multi-line strings using triple quotes
-    - Bytes are prefixed with 'b' and quoted
+    - Bytes are noted with its size
     - Mappings (like dictionaries) are formatted with keys and values
     - Sequences (like lists) are formatted with indices and values
     - Objects are formatted with their attribute names and values
@@ -87,7 +87,7 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
         return value.isoformat()
 
     elif isinstance(value, bytes):
-        return repr(value)
+        return f"<<<{len(value)} bytes>>>"
 
     else:  # fallback to object
         return _object_str(

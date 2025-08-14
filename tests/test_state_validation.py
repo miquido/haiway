@@ -10,7 +10,7 @@ import pytest
 
 from haiway import MISSING, Missing, State
 from haiway.state.attributes import AttributeAnnotation
-from haiway.state.validation import AttributeValidator
+from haiway.state.validation import AttributeValidator, ValidationError
 
 
 class Color(Enum):
@@ -66,8 +66,8 @@ def test_validator_basic_types() -> None:
     assert instance.bool_val is True
     assert instance.bytes_val == b"data"
 
-    # Invalid types should raise TypeError
-    with pytest.raises(TypeError, match="is not matching expected type"):
+    # Invalid types should raise ValidationError
+    with pytest.raises(ValidationError):
         BasicTypes(
             string_val=42,
             int_val=42,
@@ -76,7 +76,7 @@ def test_validator_basic_types() -> None:
             bytes_val=b"data",
         )
 
-    with pytest.raises(TypeError, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         BasicTypes(
             string_val="test",
             int_val="not_int",
@@ -95,7 +95,7 @@ def test_validator_none_type() -> None:
     assert instance.none_val is None
 
     # Invalid non-None
-    with pytest.raises(TypeError, match="is not matching expected type of 'None'"):
+    with pytest.raises(ValidationError):
         NoneTest(none_val="not_none")
 
 
@@ -108,7 +108,7 @@ def test_validator_missing_type() -> None:
     assert instance.missing_val is MISSING
 
     # Invalid non-Missing
-    with pytest.raises(TypeError, match="is not matching expected type of 'Missing'"):
+    with pytest.raises(ValidationError):
         MissingTest(missing_val="not_missing")
 
 
@@ -123,10 +123,10 @@ def test_validator_literal_type() -> None:
     assert instance.count == 2
 
     # Invalid literals
-    with pytest.raises(ValueError, match="is not matching expected values"):
+    with pytest.raises(ValidationError):
         LiteralTest(mode="invalid", count=2)
 
-    with pytest.raises(ValueError, match="is not matching expected values"):
+    with pytest.raises(ValidationError):
         LiteralTest(mode="read", count=5)
 
 
@@ -141,10 +141,10 @@ def test_validator_enum_type() -> None:
     assert instance.status == Status.ACTIVE
 
     # Invalid enum values
-    with pytest.raises(TypeError, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         EnumTest(color="red", status=Status.ACTIVE)
 
-    with pytest.raises(TypeError, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         EnumTest(color=Color.RED, status="active")
 
 
@@ -164,11 +164,13 @@ def test_validator_sequence_type() -> None:
     assert instance_empty.numbers == ()
 
     # Invalid element types
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError) as exc_info:
         SequenceTest(items=[1, 2, 3], numbers=[1, 2, 3])
+    # Should fail on first element of items sequence
+    assert exc_info.value.path == (".items", "[0]")
 
     # Invalid non-sequence type
-    with pytest.raises(TypeError, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         SequenceTest(items="not_a_sequence", numbers=[1, 2, 3])
 
 
@@ -183,11 +185,11 @@ def test_validator_set_type() -> None:
     assert instance.numbers == frozenset({1, 2, 3})
 
     # Invalid element types
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         SetTest(tags={1, 2, 3}, numbers={1, 2, 3})
 
     # Invalid non-set type
-    with pytest.raises(TypeError, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         SetTest(tags="not_a_set", numbers={1, 2, 3})
 
 
@@ -200,15 +202,17 @@ def test_validator_mapping_type() -> None:
     assert instance.data == {"a": 1, "b": 2}
 
     # Invalid key types
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError) as exc_info:
         MappingTest(data={1: 1, 2: 2})
+    # Should fail on first key validation
+    assert exc_info.value.path == (".data", "[1]")
 
     # Invalid value types
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         MappingTest(data={"a": "not_int", "b": "also_not_int"})
 
     # Invalid non-mapping type
-    with pytest.raises(TypeError, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         MappingTest(data="not_a_mapping")
 
 
@@ -223,15 +227,15 @@ def test_validator_tuple_type() -> None:
     assert instance.variable == ("a", "b", "c")
 
     # Invalid fixed tuple length
-    with pytest.raises(ValueError, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         TupleTest(fixed=["hello", 42], variable=["a", "b"])
 
     # Invalid fixed tuple types
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         TupleTest(fixed=["hello", "not_int", True], variable=["a", "b"])
 
     # Invalid variable tuple element types
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         TupleTest(fixed=["hello", 42, True], variable=["a", 1, "c"])
 
 
@@ -250,7 +254,7 @@ def test_validator_union_type() -> None:
     assert instance2.optional is None
 
     # Invalid union type
-    with pytest.raises(ExceptionGroup, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         UnionTest(value=[], optional="text")
 
 
@@ -271,7 +275,7 @@ def test_validator_callable_type() -> None:
     assert isinstance(instance.processor, Processor)
 
     # Invalid non-callable
-    with pytest.raises(TypeError, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         CallableTest(func="not_callable", processor=test_processor)
 
 
@@ -294,7 +298,7 @@ def test_validator_typed_dict() -> None:
     assert "email" not in instance2.user
 
     # Invalid missing Required field
-    with pytest.raises((TypeError, ValueError)):  # Should fail validation due to missing 'active'
+    with pytest.raises(ValidationError):  # Should fail validation due to missing 'active'
         TypedDictTest(user={"name": "Bob", "age": 35, "email": "bob@example.com"})
 
 
@@ -309,11 +313,11 @@ def test_validator_state_type() -> None:
     assert instance.simple.name == "example"
 
     # Invalid State type - dict conversion not supported for State types in validation
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         StateTest(nested="not_a_state", simple=SimpleState(name="valid"))
 
     # Another invalid type test
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         StateTest(nested=NestedState(value="valid"), simple="not_a_state")
 
 
@@ -359,7 +363,7 @@ def test_validator_complex_types() -> None:
     assert instance.pattern_val == pattern_val
 
     # Invalid types
-    with pytest.raises(TypeError, match="is not matching expected type"):
+    with pytest.raises(ValidationError):
         ComplexTest(
             uuid_val="not_uuid",
             date_val=date_val,
@@ -408,7 +412,7 @@ def test_validator_generic_state() -> None:
     assert instance.int_generic.value == 42
 
     # Invalid type for generic state
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         ContainerState(string_generic="not_a_state", int_generic=GenericState[int](value=42))
 
 
@@ -419,19 +423,22 @@ def test_validation_error_messages() -> None:
         none_val: None
 
     # String type error
-    with pytest.raises(TypeError) as exc_info:
+    with pytest.raises(ValidationError) as exc_info:
         ErrorTest(string_val=42, literal_val="a", none_val=None)
-    assert "is not matching expected type" in str(exc_info.value)
+    assert "is not matching expected type" in str(exc_info.value.cause)
+    assert exc_info.value.path == (".string_val",)
 
     # Literal value error
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValidationError) as exc_info:
         ErrorTest(string_val="test", literal_val="invalid", none_val=None)
-    assert "is not matching expected values" in str(exc_info.value)
+    assert "is not matching expected values" in str(exc_info.value.cause)
+    assert exc_info.value.path == (".literal_val",)
 
     # None type error
-    with pytest.raises(TypeError) as exc_info:
+    with pytest.raises(ValidationError) as exc_info:
         ErrorTest(string_val="test", literal_val="a", none_val="not_none")
-    assert "is not matching expected type of 'None'" in str(exc_info.value)
+    assert "is not matching expected type of 'None'" in str(exc_info.value.cause)
+    assert exc_info.value.path == (".none_val",)
 
 
 def test_validation_any_type() -> None:
@@ -471,7 +478,7 @@ def test_validator_with_defaults() -> None:
     assert instance2.optional_union == "not_none"
 
     # Invalid override of default
-    with pytest.raises(TypeError):
+    with pytest.raises(ValidationError):
         DefaultTest(required="test", optional=42)
 
 
@@ -487,6 +494,47 @@ def test_attribute_validator_direct_usage() -> None:
     # Invalid type
     with pytest.raises(TypeError):
         validator(42)
+
+
+def test_validation_error_paths() -> None:
+    """Test that ValidationError contains correct path information."""
+
+    class NestedTest(State):
+        items: Sequence[str]
+        mapping: Mapping[str, int]
+        nested: SimpleState
+
+    # Test sequence element path
+    with pytest.raises(ValidationError) as exc_info:
+        NestedTest(
+            items=["valid", 123, "also_valid"], mapping={"key": 1}, nested=SimpleState(name="test")
+        )
+    assert exc_info.value.path == (".items", "[1]")
+
+    # Test mapping key path
+    with pytest.raises(ValidationError) as exc_info:
+        NestedTest(items=["valid"], mapping={123: 1}, nested=SimpleState(name="test"))
+    assert exc_info.value.path == (".mapping", "[123]")
+
+    # Test mapping value path
+    with pytest.raises(ValidationError) as exc_info:
+        NestedTest(items=["valid"], mapping={"key": "not_int"}, nested=SimpleState(name="test"))
+    assert exc_info.value.path == (".mapping", "[key]")
+
+    # Test nested state path
+    with pytest.raises(ValidationError) as exc_info:
+        NestedTest(items=["valid"], mapping={"key": 1}, nested={"name": 123})
+    assert exc_info.value.path == (".nested", ".name")
+
+    # Test deeply nested state path
+    class DeeplyNestedTest(State):
+        level1: NestedTest
+
+    with pytest.raises(ValidationError) as exc_info:
+        DeeplyNestedTest(
+            level1={"items": ["valid"], "mapping": {"key": 1}, "nested": {"name": 456}}
+        )
+    assert exc_info.value.path == (".level1", ".nested", ".name")
 
 
 def test_unsupported_type_annotation() -> None:

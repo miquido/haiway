@@ -100,8 +100,8 @@ class CustomProtocol(Protocol):
 
 class CustomHelper(State):
     implementation: CustomProtocol
-    
-    @classmethod 
+
+    @classmethod
     async def method(cls, param: str) -> Result:
         return await ctx.state(cls).implementation(param)
 ```
@@ -193,7 +193,7 @@ class UserFetching(Protocol):
 
 class UserService(State):
     fetching: UserFetching           # REQUIRED: protocol type annotation
-    
+
     @classmethod
     async def get_user(cls, id: str) -> UserData:  # REQUIRED: full method typing
         return await ctx.state(cls).fetching(id)
@@ -201,7 +201,6 @@ class UserService(State):
 # State updates and path-based modifications
 user = UserData(id="1", name="Alice")
 updated = user.updated(name="Alice Smith")
-nested_update = user.updating(UserData._.metadata, {"role": "admin"})
 ```
 
 ### Context and Resource Management
@@ -221,7 +220,7 @@ async def database_connection():
 # Context usage with state priority
 async def main():
     service_impl = UserService(fetching=mock_fetcher)
-    
+
     async with ctx.scope(
         "app",
         service_impl,                    # Explicit state (highest priority)
@@ -230,7 +229,7 @@ async def main():
         # Parent context state (lowest priority)
     ):
         user = await UserService.get_user("123")
-        
+
         # Nested context with variable tracking
         ctx.variable(Counter(value=0))
         async with ctx.scope("operation"):
@@ -251,7 +250,7 @@ ctx.variable(Counter(value=0))                     # Set variable
 counter = ctx.variable(Counter)                    # Get variable (may be None)
 counter = ctx.variable(Counter, default=Counter()) # Get with default
 
-# Task management and concurrency  
+# Task management and concurrency
 task = ctx.spawn(async_function, arg1, arg2)       # Spawn task in current scope's task group
 ctx.check_cancellation()                          # Check if current task is cancelled
 ctx.cancel()                                       # Cancel current task
@@ -295,33 +294,33 @@ class CompleteStateExample(State):
     flag: bool = True
     decimal: float = 0.0
     data: bytes = b""
-    
+
     # Optional and union types - USE | SYNTAX ONLY, NEVER Optional[T]
     optional_text: str | None = None
     number_or_text: int | str = 0
-    
+
     # Collections (CRITICAL: ONLY abstract types, NEVER list/dict/set)
     items: Sequence[str] = ()           # NEVER list[str] → becomes tuple (immutable)
     mapping: Mapping[str, int] = {}     # NEVER dict[str, int] → stays dict (validated)
     unique_items: Set[str] = frozenset() # NEVER set[str] → becomes frozenset (immutable)
-    
+
     # Nested state and generics
     nested: UserData | None = None
     container: Container[UserData] | None = None
-    
+
     # Special types
     identifier: UUID = uuid4()
     timestamp: datetime = datetime.now()
     path: Path = Path(".")
     pattern: re.Pattern[str] = re.compile(r".*")
-    
+
     # Enums and literals
     status: Literal["active", "inactive"] = "active"
     priority: Priority = Priority.NORMAL  # Enum type
-    
+
     # Callable protocols
     processor: DataProcessing | None = None
-    
+
     # Any type (no validation)
     raw_data: Any = None
 
@@ -345,24 +344,24 @@ from haiway.helpers import HTTPRequesting, HTTPResponse
 class CustomHTTPClient(State):
     endpoint: str
     api_key: str
-    
+
     @classmethod
     async def request(cls, path: str) -> HTTPResponse:
         client_state = ctx.state(cls)
         ctx.log_info(f"Making request to {client_state.endpoint}{path}")
         # Implementation using client_state.endpoint, client_state.api_key
-        
+
 # Testing with mocks
 @pytest.mark.asyncio
 async def test_user_service():
     async def mock_fetcher(id: str) -> UserData:
         return UserData(id=id, name="Test User")
-    
+
     mock_service = UserService(fetching=mock_fetcher)
     async with ctx.scope("test", mock_service):
         user = await UserService.get_user("123")
         assert user.name == "Test User"
-        
+
         # Test context state access
         assert ctx.check_state(UserService)
         service = ctx.state(UserService)
