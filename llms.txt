@@ -35,7 +35,7 @@ Haiway is a functional programming framework for Python 3.12+ designed to facili
 **Haiway REQUIRES complete, strict type annotations throughout all code. This is NOT optional:**
 
 - **Every State attribute** MUST have a type annotation
-- **Every function parameter and return type** MUST be typed  
+- **Every function parameter and return type** MUST be typed
 - **Every Protocol method** MUST have complete signatures
 - **Abstract collection types ONLY** - never `list`, `dict`, `set`
 - **Union syntax ONLY** - use `str | None`, never `Optional[str]`
@@ -67,7 +67,7 @@ class User(State):
     email: str | None = None
     active: bool = True
     created_at: datetime
-    
+
     # CRITICAL: Use abstract collection types for immutability
     roles: Sequence[str] = ()        # Becomes tuple (not list)
     metadata: Mapping[str, Any] = {} # Stays dict but validated
@@ -107,12 +107,6 @@ user = User(id=uuid4(), name="Alice", created_at=datetime.now())
 
 # Simple updates
 updated_user = user.updated(name="Alice Smith", active=False)
-
-# Path-based updates for nested structures
-nested_update = user.updating(User._.metadata, {"role": "admin"})
-
-# Chained updates
-final_user = user.updated(name="Bob").updating(User._.tags, {"vip", "premium"})
 ```
 
 **Why immutable updates work:**
@@ -157,16 +151,16 @@ class UserService(State):
     fetching: UserFetching
     creating: UserCreating
     updating: UserUpdating
-    
+
     # Clean API through class methods
     @classmethod
     async def get_user(cls, id: UUID) -> User:
         return await ctx.state(cls).fetching(id)
-    
+
     @classmethod
     async def create_user(cls, name: str, email: str) -> User:
         return await ctx.state(cls).creating(name, email)
-        
+
     @classmethod
     async def update_user(cls, user: User, **changes: Any) -> User:
         return await ctx.state(cls).updating(user, **changes)
@@ -188,7 +182,7 @@ async def database_user_fetching(id: UUID) -> User:
     return User(id=id, name="Database User", created_at=datetime.now())
 
 async def api_user_creating(name: str, email: str) -> User:
-    api_config = ctx.state(APIConfig) 
+    api_config = ctx.state(APIConfig)
     # API call using api_config...
     return User(
         id=uuid4(),
@@ -221,7 +215,7 @@ async def main():
     # Create service and config
     user_service = DatabaseUserService()
     db_config = DatabaseConfig(host="localhost", port=5432)
-    
+
     # Establish context with state
     async with ctx.scope("app", user_service, db_config):
         # All code in this scope has access to state
@@ -242,7 +236,7 @@ async def main():
 async with ctx.scope(
     context_preset,                      # Use preset as first parameter
     ExplicitState(value="explicit"),     # 1. Explicit state (highest)
-    disposables=[resource_factory()],    # 2. Disposable resources  
+    disposables=[resource_factory()],    # 2. Disposable resources
     # 3. Context presets (from preset parameter)
     # 4. Parent context state (lowest)
 ):
@@ -262,12 +256,12 @@ async with ctx.scope(
 async def process_users():
     # Parent context
     async with ctx.scope("main", main_config):
-        
+
         # Child context with additional/override state
         async with ctx.scope("processing", processing_config):
             # Has access to both main_config and processing_config
             # processing_config takes priority if same type
-            
+
             user = await UserService.get_user(user_id)
 ```
 
@@ -280,11 +274,11 @@ class Counter(State):
 async def track_operations():
     # Set mutable context variable
     ctx.variable(Counter(value=0))
-    
+
     # Read and update
     counter = ctx.variable(Counter, default=Counter())
     ctx.variable(counter.updated(value=counter.value + 1))
-    
+
     # Variables don't inherit - each scope starts fresh
     async with ctx.scope("nested"):
         # No counter here unless explicitly set
@@ -309,7 +303,7 @@ async def database_connection():
         # Cleanup happens automatically
         await conn.close()
 
-@asynccontextmanager  
+@asynccontextmanager
 async def http_client():
     client = HTTPClient()
     try:
@@ -351,14 +345,14 @@ async def api_operations():
             url="/users",
             query={"page": 1, "limit": 10}
         )
-        
-        # POST request  
+
+        # POST request
         new_user_response = await HTTPClient.post(
             url="/users",
             body=json.dumps({"name": "Alice"}),
             headers={"Content-Type": "application/json"}
         )
-        
+
         # Handle response
         if response.status_code == 200:
             users_data = json.loads(response.body)
@@ -379,15 +373,15 @@ class UserDeleted(State):
 
 async def event_processing():
     async with ctx.scope("events"):  # Root scope has event bus
-        
+
         # Subscribe to events (returns async iterator)
         async def handle_user_events():
             async for event in ctx.subscribe(UserCreated):
                 print(f"User created: {event.user_id}")
-        
+
         # Start event handler
         ctx.spawn(handle_user_events)
-        
+
         # Send events
         ctx.send(UserCreated(user_id=user.id, timestamp=datetime.now()))
         ctx.send(UserDeleted(user_id=old_user.id, timestamp=datetime.now()))
@@ -398,30 +392,40 @@ async def event_processing():
 ### Configuration Management
 
 ```python
-class DatabaseConfig(State):
+from haiway.helpers import Configuration, ConfigurationRepository
+
+class DatabaseConfig(Configuration):
     host: str = "localhost"
     port: int = 5432
     database: str = "app"
     username: str = "user"
     password: str = "password"
 
-class APIConfig(State):
+class APIConfig(Configuration):
     base_url: str = "https://api.example.com"
     timeout: int = 30
     api_key: str = ""
 
-# Environment-specific configs
-def development_config() -> tuple[DatabaseConfig, APIConfig]:
-    return (
-        DatabaseConfig(host="localhost", database="app_dev"),
-        APIConfig(base_url="https://dev-api.example.com")
+# Loading configurations
+async def setup_app():
+    # Optional loading
+    config = await DatabaseConfig.load()
+
+    # Required loading - uses class defaults if not found in repository
+    config = await DatabaseConfig.load(required=True)
+
+    # With explicit default
+    config = await DatabaseConfig.load(default=DatabaseConfig(database="fallback"))
+
+    # Volatile repository for testing
+    repo = ConfigurationRepository.volatile(
+        DatabaseConfig(database="test_db", username="test"),
+        APIConfig(api_key="test-key")
     )
 
-def production_config() -> tuple[DatabaseConfig, APIConfig]:
-    return (
-        DatabaseConfig(host="db.prod.com", port=5432),
-        APIConfig(base_url="https://api.prod.com", timeout=60)
-    )
+    async with ctx.scope("app", repo):
+        db_config = await DatabaseConfig.load(required=True)
+        api_config = await APIConfig.load(required=True)
 ```
 
 ### Testing Patterns
@@ -451,7 +455,7 @@ async def test_user_operations():
         user = await UserService.create_user("Alice", "alice@test.com")
         assert user.name == "Alice"
         assert user.email == "alice@test.com"
-        
+
         # Test user fetching
         fetched_user = await UserService.get_user(user.id)
         assert fetched_user.name == "Test User"
@@ -480,10 +484,10 @@ async def safe_user_fetching(id: UUID) -> User:
             raise UserNotFoundError(id)
         elif response.status_code != 200:
             raise HTTPClientError(f"HTTP {response.status_code}")
-            
+
         user_data = json.loads(response.body)
         return User(**user_data)
-        
+
     except HTTPClientError as e:
         ctx.log_error("HTTP request failed", exception=e)
         raise
@@ -529,23 +533,23 @@ class BlogConfig(State):
     storage_path: str = "./articles"
     max_content_length: int = 10000
 
-# Service Container  
+# Service Container
 class BlogService(State):
     finding: ArticleFinding
     creating: ArticleCreating
     listing: ArticleListing
-    
+
     @classmethod
     async def find_article(cls, id: UUID) -> Article | None:
         return await ctx.state(cls).finding(id)
-        
+
     @classmethod
     async def create_article(cls, title: str, content: str, author_id: UUID) -> Article:
         config = ctx.state(BlogConfig)
         if len(content) > config.max_content_length:
             raise ValueError(f"Content too long: {len(content)} > {config.max_content_length}")
         return await ctx.state(cls).creating(title, content, author_id)
-        
+
     @classmethod
     async def list_articles(cls, author_id: UUID | None = None) -> Sequence[Article]:
         return await ctx.state(cls).listing(author_id)
@@ -586,7 +590,7 @@ async def file_article_listing(author_id: UUID | None = None) -> Sequence[Articl
     return (
         Article(
             id=uuid4(),
-            title="First Article", 
+            title="First Article",
             content="Content 1",
             author_id=author_id or uuid4(),
             created_at=datetime.now(),
@@ -605,7 +609,7 @@ def FileBlogService() -> BlogService:
 async def run_blog_app():
     blog_service = FileBlogService()
     blog_config = BlogConfig(storage_path="./my_blog", max_content_length=5000)
-    
+
     async with ctx.scope("blog-app", blog_service, blog_config):
         # Create article
         author_id = uuid4()
@@ -615,11 +619,11 @@ async def run_blog_app():
             author_id
         )
         ctx.log_info(f"Created article with ID: {article.id}")
-        
+
         # List articles
         articles = await BlogService.list_articles(author_id)
         ctx.log_info(f"Found {len(articles)} articles")
-        
+
         # Find specific article
         found_article = await BlogService.find_article(article.id)
         if found_article:
@@ -722,8 +726,8 @@ ctx.log_debug("Debug details", query_params=params)
 ctx.record(attributes={"user_id": "123", "action": "login"})
 ctx.record(event="user_login", attributes={"method": "oauth"})
 ctx.record(
-    metric="response_time", 
-    value=0.5, 
+    metric="response_time",
+    value=0.5,
     kind=ObservabilityMetricKind.GAUGE,
     unit="seconds"
 )
@@ -775,27 +779,27 @@ class CompleteStateExample(State):
     decimal: float = 0.0
     raw_bytes: bytes = b""
     nothing: None = None
-    
+
     # Union and optional types - USE | SYNTAX, NEVER Optional[T]
     optional_text: str | None = None
     number_or_text: int | str = 0
     multi_union: str | int | float | None = None
-    
+
     # Collections (CRITICAL: ONLY abstract types, NEVER concrete types)
     items: Sequence[str] = ()              # NEVER list[str] → becomes tuple (immutable)
     key_values: Mapping[str, int] = {}     # NEVER dict[str, int] → validated dict
     unique_items: Set[str] = frozenset()   # NEVER set[str] → becomes frozenset (immutable)
     coordinates: tuple[float, float] = (0.0, 0.0)  # Fixed tuple - exact length required
     variable_tuple: tuple[str, ...] = ()   # Variable length tuple - ... required
-    
+
     # Nested State classes
     user: UserData | None = None
     users: Sequence[UserData] = ()
-    
+
     # Generic State classes
     container: Container[UserData] | None = None
     containers: Sequence[Container[str]] = ()
-    
+
     # Special Python types
     identifier: UUID = uuid4()
     created_at: datetime = datetime.now()
@@ -805,19 +809,19 @@ class CompleteStateExample(State):
     timezone_info: timezone = timezone.utc
     file_path: Path = Path(".")
     regex_pattern: re.Pattern[str] = re.compile(r".*")
-    
+
     # Enums and literals
     priority: Priority = Priority.NORMAL
     status: Status = Status.ACTIVE
     mode: Literal["read", "write", "append"] = "read"
-    
+
     # Callable types and protocols
     processor: DataProcessing | None = None
     callback: Callable[[str], int] | None = None
-    
+
     # TypedDict structures
     metadata: UserMetadata = {}  # TypedDict with Required/NotRequired
-    
+
     # Any type (bypasses validation)
     raw_data: Any = None
 
@@ -825,7 +829,7 @@ class CompleteStateExample(State):
 class TypedContainer[T](State):
     items: Sequence[T]
     metadata: Mapping[str, Any] = {}
-    
+
     @classmethod
     def validator(cls, value: Any) -> Self:
         # Custom validation logic for specialized types
@@ -881,7 +885,7 @@ updated_user = user_data.updated(
 - **Type parameters must be explicit**: Generic protocols must specify their type parameters clearly
 
 ### 3. Service Pattern
-- Create service container classes inheriting from `State` 
+- Create service container classes inheriting from `State`
 - Hold protocol implementations as attributes
 - Provide clean API through `@classmethod` methods
 - Access implementations via `ctx.state(ServiceClass).protocol_attribute()`

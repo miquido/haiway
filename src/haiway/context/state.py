@@ -79,7 +79,7 @@ class ScopeState(Immutable):
                     self._state[state] = initialized
                     return True
 
-                except BaseException:
+                except Exception:
                     return False  # unavailable, we don't care the exception
 
         else:

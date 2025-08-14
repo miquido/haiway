@@ -58,35 +58,6 @@ updated_user = user.updated(name="Bob Smith")
 
 This creates a new instance with the updated value, leaving the original instance unchanged. The `updated` method accepts keyword arguments for any attributes you want to change.
 
-### Path-Based Updates
-
-For nested updates, you can use the path-based `updating` method:
-
-```python
-class Address(State):
-    street: str
-    city: str
-    postal_code: str
-
-class Contact(State):
-    name: str
-    address: Address
-
-# Create an instance
-contact = Contact(
-    name="Alice",
-    address=Address(
-        street="123 Main St",
-        city="Springfield",
-        postal_code="12345"
-    )
-)
-
-# Update a nested value using path syntax
-updated_contact = contact.updating(Contact._.address.city, "New City")
-```
-
-The `Class._.attribute` syntax creates an `AttributePath` that can be used to update nested attributes.
 
 ### Generic State Classes
 
@@ -130,7 +101,7 @@ This is useful for serialization or when you need to work with plain dictionarie
 State classes perform thorough type validation for all supported Python types:
 
 - **Basic Types**: int, str, bool, float, bytes
-- **Container Types**: 
+- **Container Types**:
   - **Sequence[T]**: Use `Sequence[T]` instead of `list[T]` - converted to immutable tuples
   - **Mapping[K, V]**: Use `Mapping[K, V]` instead of `dict[K, V]` - remains as dict
   - **Set[T]**: Use `Set[T]` instead of `set[T]` - converted to immutable frozensets
@@ -154,7 +125,7 @@ from collections.abc import Sequence, Mapping, Set
 
 class Config(State):
     items: Sequence[str]        # Not list[str]
-    data: Mapping[str, int]     # Not dict[str, int] 
+    data: Mapping[str, int]     # Not dict[str, int]
     tags: Set[str]              # Not set[str]
 
 # ✅ Lists are converted to tuples (immutable)
@@ -229,9 +200,6 @@ user = User(
 # Update a simple attribute
 user1 = user.updated(name="Alice Johnson")
 
-# Update a nested attribute
-user2 = user.updating(User._.address.city, "New City")
-
 # Update multiple attributes
 user3 = user.updated(
     active=False,
@@ -241,9 +209,6 @@ user3 = user.updated(
 # Update a nested attribute directly
 new_address = user.address.updated(street="456 Oak Ave")
 user4 = user.updated(address=new_address)
-
-# Chain updates
-user5 = user.updated(name="Bob").updating(User._.contact.phone, "555-1234")
 ```
 
 ### Performance Considerations
@@ -271,7 +236,7 @@ async def main():
     async with ctx.scope("main", AppConfig(debug=True)):
         # Access state from context
         config = ctx.state(AppConfig)
-        
+
         # Create updated state in nested context
         async with ctx.scope("debug", config.updated(log_level="DEBUG")):
             # Use updated state

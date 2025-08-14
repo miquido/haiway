@@ -651,9 +651,6 @@ class AttributePath[Root, Attribute]:
     ```python
     # Get value
     name = User._.name(user)
-
-    # Update value
-    updated_user = user.updating(User._.name, "New Name")
     ```
     """
 

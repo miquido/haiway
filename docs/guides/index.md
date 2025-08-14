@@ -27,6 +27,12 @@ Structure larger applications effectively:
 - Composing functionalities
 - Managing dependencies between packages
 
+### [Configuration Management](configuration.md)
+Simple type-safe configuration with automatic defaults:
+- Define configuration classes with State
+- Load configurations from various backends
+- Automatic fallback to class defaults
+
 ### [Concurrent Processing](concurrent.md)
 Master concurrent and parallel processing patterns:
 - Structured concurrency with task spawning
@@ -39,5 +45,6 @@ Master concurrent and parallel processing patterns:
 
 1. **Start with State** - Understanding immutable state is fundamental to using Haiway effectively
 2. **Learn Functionalities** - See how to organize business logic using functional patterns
-3. **Master Concurrency** - Build high-performance applications with concurrent processing
-4. **Scale with Packages** - Apply these concepts to structure larger applications
+3. **Manage Configuration** - Handle application configuration with type safety and automatic defaults
+4. **Master Concurrency** - Build high-performance applications with concurrent processing
+5. **Scale with Packages** - Apply these concepts to structure larger applications

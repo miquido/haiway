@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from os import getenv as os_getenv
 from typing import Any, cast, final, overload
 
 from haiway.types.missing import MISSING, Missing, not_missing
@@ -36,6 +37,14 @@ class DefaultValue[Value]:
         self,
         /,
         *,
+        env: str | Missing = MISSING,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        /,
+        *,
         factory: Callable[[], Value],
     ) -> None: ...
 
@@ -45,6 +54,7 @@ class DefaultValue[Value]:
         value: Value | Missing,
         /,
         *,
+        env: str | Missing,
         factory: Callable[[], Value] | Missing,
     ) -> None: ...
 
@@ -53,6 +63,7 @@ class DefaultValue[Value]:
         value: Value | Missing = MISSING,
         /,
         *,
+        env: str | Missing = MISSING,
         factory: Callable[[], Value] | Missing = MISSING,
     ) -> None:
         """
@@ -61,15 +72,12 @@ class DefaultValue[Value]:
         Parameters
         ----------
         value : Value | Missing
-            The default value to store, or MISSING if using a factory
+            The default value to be used.
         factory : Callable[[], Value] | Missing
-            A function that returns the default value when called, or MISSING if using a direct value
-
-        Raises
-        ------
-        AssertionError
-            If both value and factory are provided
-        """  # noqa: E501
+            A function that returns the default value when called.
+        env: str | Missing
+            Name of environment variable to use as default, resolved when requesting a default.
+        """
         assert (  # nosec: B101
             value is MISSING or factory is MISSING
         ), "Can't specify both default value and factory"
@@ -80,6 +88,13 @@ class DefaultValue[Value]:
                 self,
                 "_value",
                 factory,
+            )
+
+        elif not_missing(env):
+            object.__setattr__(
+                self,
+                "_value",
+                lambda: os_getenv(key=env, default=MISSING),
             )
 
         else:
@@ -128,11 +143,19 @@ def Default[Value](
 ) -> Value: ...
 
 
+@overload
+def Default(
+    *,
+    env: str,
+) -> str: ...
+
+
 def Default[Value](
     value: Value | Missing = MISSING,
     /,
     *,
     factory: Callable[[], Value] | Missing = MISSING,
+    env: str | Missing = MISSING,
 ) -> Value:  # it is actually a DefaultValue, but type checker has to be fooled most some cases
     """
     Create a default value container that appears as the actual value type.
@@ -144,9 +167,11 @@ def Default[Value](
     Parameters
     ----------
     value : Value | Missing
-        The default value to store, or MISSING if using a factory
+        The default value to be used.
     factory : Callable[[], Value] | Missing
-        A function that returns the default value when called, or MISSING if using a direct value
+        A function that returns the default value when called.
+    env: str | Missing
+        Name of environment variable to use as default, resolved when requesting a default.
 
     Returns
     -------
@@ -155,12 +180,13 @@ def Default[Value](
 
     Notes
     -----
-    Only one of value or factory should be provided. If both are provided, an exception will be raised.
+    Only one of value or factory or env should be provided. If more than one is provided, an exception will be raised.
     """  # noqa: E501
     return cast(
         Value,
         DefaultValue(
             value,
+            env=env,
             factory=factory,
         ),
     )

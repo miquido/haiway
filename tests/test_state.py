@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from pytest import raises
 
 from haiway import MISSING, Default, Missing, State
+from haiway.state.validation import ValidationError
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -216,13 +217,13 @@ def test_generic_subtypes_validation() -> None:
     assert isinstance(Generic[str](nested=NestedGeneric(value="ok")), Generic[str])
     assert isinstance(Generic(nested=NestedGeneric(value="ok")), Generic[str])
 
-    with raises(TypeError):
+    with raises(ValidationError):
         _ = Generic[int](nested=NestedGeneric[str](value="ok"))
 
-    with raises(TypeError):
+    with raises(ValidationError):
         _ = Container(generic=Generic(nested=NestedGeneric(value=42)))
 
-    with raises(TypeError):
+    with raises(ValidationError):
         _ = Container(generic=Generic[int](nested=NestedGeneric[str](value="ok")))
 
     # not raises
