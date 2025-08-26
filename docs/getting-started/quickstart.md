@@ -8,7 +8,6 @@ Haiway applications are built around **immutable state objects** that serve as d
 
 ```python
 from haiway import State
-from typing import Sequence
 
 class User(State):
     id: str
@@ -29,6 +28,8 @@ Haiway uses **context scopes** to manage state and enable dependency injection:
 
 ```python
 from haiway import ctx
+import asyncio
+
 
 async def main():
     # Create immutable user object
@@ -52,7 +53,6 @@ async def main():
         print(f"Current user: {current_alice.name}")
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
 ```
 
@@ -64,12 +64,12 @@ if __name__ == "__main__":
 - The `.updated()` method creates a copy of object with modified fields, leaving the original unchanged
 - Context automatically manages the lifecycle - when the scope exits, resources are cleaned up
 
-## Adding Functionality
+## Dependency injection
 
 Haiway implements **dependency injection** through function protocols and state containers:
 
 ```python
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, Sequence
 
 # Function interface - single __call__ method only
 @runtime_checkable
