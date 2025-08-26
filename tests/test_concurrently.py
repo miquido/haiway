@@ -100,6 +100,25 @@ async def test_returns_exceptions_when_configured():
 
 
 @mark.asyncio
+async def test_return_exceptions_inside_scope_task_group():
+    async def good(value: int) -> int:
+        return value * 10
+
+    async def bad() -> int:
+        raise FakeException("boom")
+
+    coroutines = [good(1), bad(), good(2), bad()]
+    async with ctx.scope("tg_concurrently"):
+        results = await concurrently(coroutines, return_exceptions=True)
+
+    assert len(results) == 4
+    assert results[0] == 10
+    assert isinstance(results[1], FakeException) and str(results[1]) == "boom"
+    assert results[2] == 20
+    assert isinstance(results[3], FakeException) and str(results[3]) == "boom"
+
+
+@mark.asyncio
 async def test_cancels_running_tasks_on_cancellation():
     started: list[int] = []
     completed: list[int] = []

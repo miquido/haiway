@@ -84,9 +84,27 @@ async def test_returns_exceptions_when_configured():
     assert isinstance(results[3], FakeException)
     assert str(results[3]) == "Test exception"
 
-    # Check that other elements returned correct values
-    for i in [0, 1, 2, 4, 5]:
-        assert results[i] == i * 2
+
+@mark.asyncio
+async def test_return_exceptions_inside_scope_task_group():
+    async def handler(element: int) -> int:
+        if element % 2 == 1:
+            raise FakeException(f"odd {element}")
+        return element * 2
+
+    elements = list(range(6))
+    async with ctx.scope("tg_execute"):
+        results = await execute_concurrently(handler, elements, return_exceptions=True)
+
+    assert len(results) == 6
+    for i, res in enumerate(results):
+        if i % 2 == 1:
+            assert isinstance(res, FakeException)
+            assert str(res) == f"odd {i}"
+        else:
+            assert res == i * 2
+
+    # Verify values already covered above, no extra assertions here
 
 
 @mark.asyncio

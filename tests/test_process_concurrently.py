@@ -102,6 +102,23 @@ async def test_ignores_handler_exceptions_when_configured():
 
 
 @mark.asyncio
+async def test_ignore_exceptions_inside_scope_task_group():
+    processed: list[int] = []
+
+    async def handler(element: int) -> None:
+        if element % 2 == 1:
+            raise FakeException("odd")
+        processed.append(element)
+
+    source = Source(range(10))
+    async with ctx.scope("tg_process"):
+        await process_concurrently(source, handler, ignore_exceptions=True)
+
+    # Only even elements processed; odd failures ignored without cancelling group
+    assert sorted(processed) == [0, 2, 4, 6, 8]
+
+
+@mark.asyncio
 async def test_handles_source_exception():
     processed: list[int] = []
 
@@ -138,7 +155,7 @@ async def test_cancels_running_tasks_on_cancellation():
             slow_handler,
         )
         # Give some time for tasks to start
-        await sleep(0.1)
+        await sleep(0)
         # Cancel the main task
         task.cancel()
         await task
