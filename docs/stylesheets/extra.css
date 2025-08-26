@@ -89,7 +89,7 @@
 }
 
 .language-python .nn { /* module names */
-  color: #CBCCC6 !important;
+  color: #707266 !important;
 }
 
 .language-python .o { /* operators */
@@ -97,11 +97,11 @@
 }
 
 .language-python .p { /* punctuation */
-  color: #CBCCC6 !important;
+  color: #707266 !important;
 }
 
 .language-python .n { /* names/variables */
-  color: #CBCCC6 !important;
+  color: #707266 !important;
 }
 
 /* Light theme - keep similar but adjusted */
