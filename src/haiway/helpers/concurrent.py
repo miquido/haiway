@@ -3,8 +3,10 @@ from collections.abc import (
     AsyncIterable,
     AsyncIterator,
     Callable,
+    Collection,
     Coroutine,
     Iterable,
+    Iterator,
     MutableSequence,
     MutableSet,
     Sequence,
@@ -21,10 +23,10 @@ __all__ = (
 )
 
 
-async def process_concurrently[Element](  # noqa: C901
+async def process_concurrently[Element](  # noqa: C901, PLR0912
     source: AsyncIterable[Element] | Iterable[Element],
     /,
-    handler: Callable[[Element], Coroutine[Any, Any, None]],
+    handler: Callable[[Element], Coroutine[None, None, None]],
     *,
     concurrent_tasks: int = 2,
     ignore_exceptions: bool = False,
@@ -45,7 +47,7 @@ async def process_concurrently[Element](  # noqa: C901
     source : AsyncIterable[Element] | Iterable[Element]
         An iterable providing elements to process. Elements are consumed
         one at a time as processing slots become available.
-    handler : Callable[[Element], Coroutine[Any, Any, None]]
+    handler : Callable[[Element], Coroutine[None, None, None]]
         A coroutine function that processes each element. The handler should
         not return a value (returns None).
     concurrent_tasks : int, default=2
@@ -80,41 +82,53 @@ async def process_concurrently[Element](  # noqa: C901
 
     """
     assert concurrent_tasks > 0  # nosec: B101
-    tasks: MutableSet[Task[None]] = set()
+    tasks: MutableSet[Task[Exception | None]] = set()
 
     async def process(
         element: Element,
         /,
-    ) -> None:
-        nonlocal tasks
-        tasks.add(ctx.spawn(handler, element))
-        if len(tasks) < concurrent_tasks:
-            return  # keep spawning tasks
+    ) -> Exception | None:
+        try:
+            await handler(element)
 
-        completed, tasks = await wait(
-            tasks,
-            return_when=FIRST_COMPLETED,
-        )
+        except Exception as exc:
+            if not ignore_exceptions:
+                return exc
 
-        for task in completed:
-            if exc := task.exception():
-                if not ignore_exceptions:
-                    raise exc
-
-                ctx.log_error(
-                    f"Concurrent processing error - {type(exc)}: {exc}",
-                    exception=exc,
-                )
+            ctx.log_error(
+                f"Concurrent processing error - {type(exc)}: {exc}",
+                exception=exc,
+            )
 
     try:
         if isinstance(source, AsyncIterable):
             async for element in source:
-                await process(element)
+                tasks.add(ctx.spawn(process, element))
+                if len(tasks) < concurrent_tasks:
+                    continue  # keep spawning tasks
+
+                completed, tasks = await wait(
+                    tasks,
+                    return_when=FIRST_COMPLETED,
+                )
+                for task in completed:
+                    if exc := task.result():
+                        raise exc
 
         else:
             assert isinstance(source, Iterable)  # nosec: B101
             for element in source:
-                await process(element)
+                tasks.add(ctx.spawn(process, element))
+                if len(tasks) < concurrent_tasks:
+                    continue  # keep spawning tasks
+
+                completed, tasks = await wait(
+                    tasks,
+                    return_when=FIRST_COMPLETED,
+                )
+                for task in completed:
+                    if exc := task.result():
+                        raise exc
 
     except BaseException as exc:
         # Cancel all running tasks
@@ -123,27 +137,20 @@ async def process_concurrently[Element](  # noqa: C901
 
         raise exc
 
-    if not tasks:
-        return
-
-    completed, _ = await wait(
-        tasks,
-        return_when=ALL_COMPLETED,
-    )
-    for task in completed:
-        if exc := task.exception():
-            if not ignore_exceptions:
-                raise exc
-
-            ctx.log_error(
-                f"Concurrent processing error - {type(exc)}: {exc}",
-                exception=exc,
+    else:
+        if tasks:
+            completed, _ = await wait(
+                tasks,
+                return_when=ALL_COMPLETED,
             )
+            for task in completed:
+                if exc := task.result():
+                    raise exc
 
 
 @overload
 async def execute_concurrently[Element, Result](
-    handler: Callable[[Element], Coroutine[Any, Any, Result]],
+    handler: Callable[[Element], Coroutine[None, None, Result]],
     /,
     elements: AsyncIterable[Element] | Iterable[Element],
     *,
@@ -153,23 +160,23 @@ async def execute_concurrently[Element, Result](
 
 @overload
 async def execute_concurrently[Element, Result](
-    handler: Callable[[Element], Coroutine[Any, Any, Result]],
+    handler: Callable[[Element], Coroutine[None, None, Result]],
     /,
     elements: AsyncIterable[Element] | Iterable[Element],
     *,
     concurrent_tasks: int = 2,
     return_exceptions: Literal[True],
-) -> Sequence[Result | BaseException]: ...
+) -> Sequence[Result | Exception]: ...
 
 
 async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
-    handler: Callable[[Element], Coroutine[Any, Any, Result]],
+    handler: Callable[[Element], Coroutine[None, None, Result]],
     /,
     elements: AsyncIterable[Element] | Iterable[Element],
     *,
     concurrent_tasks: int = 2,
     return_exceptions: bool = False,
-) -> Sequence[Result | BaseException] | Sequence[Result]:
+) -> Sequence[Result | Exception] | Sequence[Result]:
     """Execute handler for each element from a collection concurrently.
 
     Processes all elements from a collection using the provided handler function,
@@ -186,7 +193,7 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
 
     Parameters
     ----------
-    handler : Callable[[Element], Coroutine[Any, Any, Result]]
+    handler : Callable[[Element], Coroutine[None, None, Result]]
         A coroutine function that processes each element and returns a result.
     elements : AsyncIterable[Element] | Iterable[Element]
         A source of elements to process. The source size determines
@@ -196,14 +203,14 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
         values allow more parallelism but consume more resources.
     return_exceptions : bool, default=False
         If True, exceptions from handler tasks are included in the results
-        as BaseException instances. If False, the first exception stops
+        as Exception instances. If False, the first exception stops
         processing and is raised.
 
     Returns
     -------
-    Sequence[Result] or Sequence[Result | BaseException]
+    Sequence[Result] or Sequence[Result | Exception]
         Results from each handler invocation, in the same order as input elements.
-        If return_exceptions is True, failed tasks return BaseException instances.
+        If return_exceptions is True, failed tasks return Exception instances.
 
     Raises
     ------
@@ -233,52 +240,63 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
     ...     return_exceptions=True
     ... )
     >>> for url, result in zip(urls, results):
-    ...     if isinstance(result, BaseException):
+    ...     if isinstance(result, Exception):
     ...         print(f"Failed to fetch {url}: {result}")
     ...     else:
     ...         print(f"Got data from {url}")
 
     """
     assert concurrent_tasks > 0  # nosec: B101
-    tasks: MutableSet[Task[Result]] = set()
-    results: MutableSequence[Task[Result]] = []
+    tasks: MutableSet[Task[Any]] = set()
+    results: MutableSequence[Task[Any]] = []
 
     async def process(
         element: Element,
         /,
-    ) -> None:
-        nonlocal tasks
-        nonlocal results
-        task: Task[Result] = ctx.spawn(handler, element)
-        results.append(task)
-        tasks.add(task)
-        if len(tasks) < concurrent_tasks:
-            return  # keep spawning tasks
+    ) -> Result | Exception:
+        try:
+            return await handler(element)
 
-        completed, tasks = await wait(
-            tasks,
-            return_when=FIRST_COMPLETED,
-        )
+        except Exception as exc:
+            if return_exceptions:
+                return exc
 
-        for task in completed:
-            if exc := task.exception():
-                if not return_exceptions:
-                    raise exc
-
-                ctx.log_error(
-                    f"Concurrent execution error - {type(exc)}: {exc}",
-                    exception=exc,
-                )
+            else:
+                raise exc
 
     try:
         if isinstance(elements, AsyncIterable):
             async for element in elements:
-                await process(element)
+                task: Task[Any] = ctx.spawn(process, element)
+                results.append(task)
+                tasks.add(task)
+                if len(tasks) < concurrent_tasks:
+                    continue  # keep spawning tasks
+
+                completed, tasks = await wait(
+                    tasks,
+                    return_when=FIRST_COMPLETED,
+                )
+                for task in completed:
+                    if exc := task.exception():
+                        raise exc
 
         else:
             assert isinstance(elements, Iterable)  # nosec: B101
             for element in elements:
-                await process(element)
+                task: Task[Any] = ctx.spawn(process, element)
+                results.append(task)
+                tasks.add(task)
+                if len(tasks) < concurrent_tasks:
+                    continue  # keep spawning tasks
+
+                completed, tasks = await wait(
+                    tasks,
+                    return_when=FIRST_COMPLETED,
+                )
+                for task in completed:
+                    if exc := task.exception():
+                        raise exc
 
     except BaseException as exc:
         # Cancel all running tasks
@@ -287,32 +305,17 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
 
         raise exc
 
-    if not tasks:
-        if return_exceptions:
-            return [result.exception() or result.result() for result in results]
-
-        else:
-            return [result.result() for result in results]
-
-    completed, _ = await wait(
-        tasks,
-        return_when=ALL_COMPLETED,
-    )
-    for task in completed:
-        if exc := task.exception():
-            if not return_exceptions:
-                raise exc
-
-            ctx.log_error(
-                f"Concurrent execution error - {type(exc)}: {exc}",
-                exception=exc,
-            )
-
-    if return_exceptions:
-        return [result.exception() or result.result() for result in results]
-
     else:
-        return [result.result() for result in results]
+        if tasks:
+            completed, _ = await wait(
+                tasks,
+                return_when=ALL_COMPLETED,
+            )
+            for task in completed:
+                if exc := task.exception():
+                    raise exc
+
+    return [result.result() for result in results]
 
 
 @overload
@@ -334,7 +337,7 @@ async def concurrently[Result](
     *,
     concurrent_tasks: int = 2,
     return_exceptions: Literal[True],
-) -> Sequence[Result | BaseException]: ...
+) -> Sequence[Result | Exception]: ...
 
 
 async def concurrently[Result](  # noqa: C901, PLR0912
@@ -344,7 +347,7 @@ async def concurrently[Result](  # noqa: C901, PLR0912
     *,
     concurrent_tasks: int = 2,
     return_exceptions: bool = False,
-) -> Sequence[Result | BaseException] | Sequence[Result]:
+) -> Sequence[Result | Exception] | Sequence[Result]:
     """Execute multiple coroutines concurrently with controlled parallelism.
 
     Executes a collection of coroutines concurrently, limiting the number of
@@ -370,14 +373,14 @@ async def concurrently[Result](  # noqa: C901, PLR0912
         values allow more parallelism but consume more resources.
     return_exceptions : bool, default=False
         If True, exceptions from coroutines are included in the results
-        as BaseException instances. If False, the first exception stops
+        as Exception instances. If False, the first exception stops
         processing and is raised.
 
     Returns
     -------
-    Sequence[Result] or Sequence[Result | BaseException]
+    Sequence[Result] or Sequence[Result | Exception]
         Results from each coroutine execution, in the same order as input.
-        If return_exceptions is True, failed tasks return BaseException instances.
+        If return_exceptions is True, failed tasks return Exception instances.
 
     Raises
     ------
@@ -410,52 +413,71 @@ async def concurrently[Result](  # noqa: C901, PLR0912
     ...     return_exceptions=True
     ... )
     >>> for i, result in enumerate(results):
-    ...     if isinstance(result, BaseException):
+    ...     if isinstance(result, Exception):
     ...         print(f"Coroutine {i} failed: {result}")
     ...     else:
     ...         print(f"Coroutine {i} succeeded")
 
     """
     assert concurrent_tasks > 0  # nosec: B101
-    tasks: MutableSet[Task[Result]] = set()
-    results: MutableSequence[Task[Result]] = []
+    tasks: MutableSet[Task[Any]] = set()
+    results: MutableSequence[Task[Any]] = []
 
     async def process(
-        element: Coroutine[None, None, Result],
+        coroutine: Coroutine[None, None, Result],
         /,
-    ) -> None:
-        nonlocal tasks
-        nonlocal results
-        task: Task[Result] = ctx.spawn(element)
-        results.append(task)
-        tasks.add(task)
-        if len(tasks) < concurrent_tasks:
-            return  # keep spawning tasks
+    ) -> Result | Exception:
+        try:
+            return await coroutine
 
-        completed, tasks = await wait(
-            tasks,
-            return_when=FIRST_COMPLETED,
-        )
+        except Exception as exc:
+            if return_exceptions:
+                return exc
 
-        for task in completed:
-            if exc := task.exception():
-                if not return_exceptions:
-                    raise exc
-
-                ctx.log_error(
-                    f"Concurrent execution error - {type(exc)}: {exc}",
-                    exception=exc,
-                )
+            else:
+                raise exc
 
     try:
         if isinstance(coroutines, AsyncIterable):
             async for element in coroutines:
-                await process(element)
+                task: Task[Any] = ctx.spawn(process, element)
+                results.append(task)
+                tasks.add(task)
+                if len(tasks) < concurrent_tasks:
+                    continue  # keep spawning tasks
+
+                completed, tasks = await wait(
+                    tasks,
+                    return_when=FIRST_COMPLETED,
+                )
+                for task in completed:
+                    if exc := task.exception():
+                        raise exc
 
         else:
             assert isinstance(coroutines, Iterable)  # nosec: B101
-            for element in coroutines:
-                await process(element)
+            iterator: Iterator[Coroutine[None, None, Result]] = iter(coroutines)
+            try:
+                for element in iterator:
+                    task: Task[Any] = ctx.spawn(process, element)
+                    results.append(task)
+                    tasks.add(task)
+                    if len(tasks) < concurrent_tasks:
+                        continue  # keep spawning tasks
+
+                    completed, tasks = await wait(
+                        tasks,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    for task in completed:
+                        if exc := task.exception():
+                            raise exc
+
+            finally:
+                # cleanup already created coros
+                if isinstance(coroutines, Collection):
+                    for coro in iterator:
+                        coro.close()
 
     except BaseException as exc:
         # Cancel all running tasks
@@ -464,35 +486,20 @@ async def concurrently[Result](  # noqa: C901, PLR0912
 
         raise exc
 
-    if not tasks:
-        if return_exceptions:
-            return [result.exception() or result.result() for result in results]
-
-        else:
-            return [result.result() for result in results]
-
-    completed, _ = await wait(
-        tasks,
-        return_when=ALL_COMPLETED,
-    )
-    for task in completed:
-        if exc := task.exception():
-            if not return_exceptions:
-                raise exc
-
-            ctx.log_error(
-                f"Concurrent execution error - {type(exc)}: {exc}",
-                exception=exc,
-            )
-
-    if return_exceptions:
-        return [result.exception() or result.result() for result in results]
-
     else:
-        return [result.result() for result in results]
+        if tasks:
+            completed, _ = await wait(
+                tasks,
+                return_when=ALL_COMPLETED,
+            )
+            for task in completed:
+                if exc := task.exception():
+                    raise exc
+
+    return [result.result() for result in results]
 
 
-async def stream_concurrently[ElementA, ElementB](  # noqa: C901, PLR0912
+async def stream_concurrently[ElementA, ElementB](  # noqa: C901
     source_a: AsyncIterable[ElementA],
     source_b: AsyncIterable[ElementB],
     /,
@@ -557,62 +564,62 @@ async def stream_concurrently[ElementA, ElementB](  # noqa: C901, PLR0912
     """
 
     iter_a: AsyncIterator[ElementA] = aiter(source_a)
-
-    async def next_a() -> ElementA:
-        return await anext(iter_a)
-
     iter_b: AsyncIterator[ElementB] = aiter(source_b)
 
-    async def next_b() -> ElementB:
-        return await anext(iter_b)
+    async def next_a() -> ElementA | StopAsyncIteration:
+        try:
+            return await anext(iter_a)
 
-    task_a: Task[ElementA] | None = ctx.spawn(next_a)
-    task_b: Task[ElementB] | None = ctx.spawn(next_b)
+        except StopAsyncIteration as exc:
+            return exc
 
+    async def next_b() -> ElementB | StopAsyncIteration:
+        try:
+            return await anext(iter_b)
+
+        except StopAsyncIteration as exc:
+            return exc
+
+    task_a: Task[ElementA | StopAsyncIteration] | None = ctx.spawn(next_a)
+    task_b: Task[ElementB | StopAsyncIteration] | None = ctx.spawn(next_b)
+
+    pending: set[Task] = {task_a, task_b}
     try:
-        pending: set[Task] = {task_a, task_b}
         while pending:
             done, pending = await wait(
                 pending,
                 return_when=FIRST_COMPLETED,
             )
 
-            if task_a in done:
-                exc: BaseException | None = task_a.exception()
-                if exc is None:
-                    yield task_a.result()
-                    task_a = ctx.spawn(next_a)
-                    pending.add(task_a)
-
-                elif isinstance(exc, StopAsyncIteration):
-                    # StopAsyncIteration - don't respawn task_a
-                    task_a = None
+            for task in done:
+                result = task.result()
+                if isinstance(result, StopAsyncIteration):
                     if not exhaustive:
-                        break  # finish when either finished
+                        task_a = None
+                        task_b = None
+
+                    elif task is task_a:
+                        task_a = None
+
+                    elif task is task_b:
+                        task_b = None
 
                 else:
-                    raise exc
+                    assert not isinstance(result, BaseException)  # nosec: B101
+                    yield result
+
+            # schedule continuation
+            if task_a in done:
+                task_a = ctx.spawn(next_a)
+                pending.add(task_a)
 
             if task_b in done:
-                exc: BaseException | None = task_b.exception()
-                if exc is None:
-                    yield task_b.result()
-                    task_b = ctx.spawn(next_b)
-                    pending.add(task_b)
+                task_b = ctx.spawn(next_b)
+                pending.add(task_b)
 
-                elif isinstance(exc, StopAsyncIteration):
-                    # StopAsyncIteration - don't respawn task_b
-                    task_b = None
-                    if not exhaustive:
-                        break  # finish when either finished
+    except BaseException as exc:
+        # Cancel all running tasks
+        for task in pending:
+            task.cancel()
 
-                else:
-                    raise exc
-
-    finally:
-        # Ensure cleanup of any remaining tasks
-        if task_a is not None:
-            task_a.cancel()
-
-        if task_b is not None:
-            task_b.cancel()
+        raise exc
