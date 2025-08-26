@@ -4,11 +4,14 @@ from asyncio import (
     Future,
     get_running_loop,
 )
+from collections import deque
 from collections.abc import AsyncIterator
+from typing import final
 
 __all__ = ("AsyncStream",)
 
 
+@final
 class AsyncStream[Element](AsyncIterator[Element]):
     """
     An asynchronous stream implementation supporting push-based async iteration.
@@ -24,6 +27,13 @@ class AsyncStream[Element](AsyncIterator[Element]):
     requires coordination between producer and consumer.
     """
 
+    __slots__ = (
+        "_finish_reason",
+        "_loop",
+        "_pending",
+        "_waiting",
+    )
+
     def __init__(
         self,
         loop: AbstractEventLoop | None = None,
@@ -37,7 +47,7 @@ class AsyncStream[Element](AsyncIterator[Element]):
             Event loop to use for async operations. If None, the running loop is used.
         """
         self._loop: AbstractEventLoop = loop or get_running_loop()
-        self._ready: Future[None] = self._loop.create_future()
+        self._pending: deque[tuple[Element, Future[None]]] = deque()
         self._waiting: Future[Element] | None = None
         self._finish_reason: BaseException | None = None
 
@@ -70,20 +80,19 @@ class AsyncStream[Element](AsyncIterator[Element]):
         element : Element
             The element to send to the stream
         """
+        assert get_running_loop() is self._loop  # nosec: B101
+
         if self._finish_reason is not None:
             return  # already finished
 
-        # wait for readiness
-        await self._ready
-        # we could finish while waiting
-        if self._finish_reason is not None:
-            return  # already finished
+        # fulfill waiting first
+        if self._waiting is not None and not self._waiting.done():
+            self._waiting.set_result(element)
 
-        assert self._waiting is not None and not self._waiting.done()  # nosec: B101
-        # send the element
-        self._waiting.set_result(element)
-        # and create new readiness future afterwards
-        self._ready = self._loop.create_future()
+        else:  # otherwise wait pending
+            consumed: Future[None] = self._loop.create_future()
+            self._pending.append((element, consumed))
+            await consumed
 
     def finish(
         self,
@@ -107,17 +116,18 @@ class AsyncStream[Element](AsyncIterator[Element]):
         if self.finished:
             return  # already finished, ignore
 
-        self._finish_reason = exception or StopAsyncIteration()
+        self._finish_reason = exception if exception is not None else StopAsyncIteration()
 
-        if not self._ready.done():
+        while self._pending:
+            _, pending = self._pending.popleft()
             if get_running_loop() is not self._loop:
                 self._loop.call_soon_threadsafe(
-                    self._ready.set_result,
+                    pending.set_result,
                     None,
                 )
 
             else:
-                self._ready.set_result(None)
+                pending.set_result(None)
 
         if self._waiting is not None and not self._waiting.done():
             if get_running_loop() is not self._loop:
@@ -165,13 +175,19 @@ class AsyncStream[Element](AsyncIterator[Element]):
             raise self._finish_reason
 
         try:
-            assert not self._ready.done()  # nosec: B101
-            # create new waiting future
-            self._waiting = self._loop.create_future()
-            # and notify readiness
-            self._ready.set_result(None)
-            # and wait for the result
-            return await self._waiting
+            if self._pending:  # consume pending values
+                element, future = self._pending.popleft()
+                future.set_result(None)  # notify consumed
+                return element
+
+            else:  # create new waiting future
+                self._waiting = self._loop.create_future()
+                # and wait for the result
+                return await self._waiting
+
+        except CancelledError as exc:
+            self.cancel()  # when consumer is cancelled, signal producers to stop waiting
+            raise exc
 
         finally:
             # cleanup waiting future

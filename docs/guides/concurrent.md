@@ -266,6 +266,44 @@ async def process_events():
 - Default behavior stops when either source is exhausted
 - Exhaustive mode continues until both sources complete
 
+### AsyncStream
+
+Push-based async stream with back-pressure, suitable for coordinating producers and a single consumer.
+
+```python
+from haiway import AsyncStream, ctx
+
+async def example_stream_usage() -> list[int]:
+    stream: AsyncStream[int] = AsyncStream()
+    results: list[int] = []
+
+    async def producer() -> None:
+        for i in range(5):
+            await stream.send(i)  # waits until consumer is ready
+        stream.finish()  # signal completion (or use stream.cancel())
+
+    # Start producer in the current context
+    ctx.spawn(producer)
+
+    # Single consumer iterates values as they arrive
+    async for value in stream:
+        results.append(value)
+
+    return results  # [0, 1, 2, 3, 4]
+```
+
+**Behavior:**
+- Single-consumer: one active iteration is allowed; reuse raises an assertion.
+- Back-pressure: `send()` suspends until the consumer accepts the element.
+- Completion: `finish()` ends the stream; `finish(exc)` raises `exc` on the consumer.
+- Cancellation: `cancel()` is equivalent to `finish(CancelledError())`.
+- Post-finish sends: `send()` to a finished/failed stream is ignored.
+
+**When to use:**
+- Coordinating multiple producers that should not outpace the consumer.
+- Bridging event callbacks into an async-iterable interface.
+- As a building block for higher-level streaming utilities like `stream_concurrently()`.
+
 ## Error Handling Patterns
 
 ### Exception Tolerance in Processing

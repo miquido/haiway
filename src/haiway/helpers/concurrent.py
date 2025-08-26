@@ -1,7 +1,6 @@
 from asyncio import ALL_COMPLETED, FIRST_COMPLETED, Task, wait
 from collections.abc import (
     AsyncIterable,
-    AsyncIterator,
     Callable,
     Collection,
     Coroutine,
@@ -14,6 +13,7 @@ from collections.abc import (
 from typing import Any, Literal, overload
 
 from haiway.context import ctx
+from haiway.utils.stream import AsyncStream
 
 __all__ = (
     "concurrently",
@@ -509,8 +509,9 @@ async def stream_concurrently[ElementA, ElementB](  # noqa: C901
 
     Concurrently consumes elements from two async iterators and yields them
     as they become available. Elements from both sources are interleaved based
-    on which iterator produces them first. The function continues until both
-    iterators are exhausted.
+    on which iterator produces them first. By default, streaming stops when
+    either iterator is exhausted; when `exhaustive=True`, it continues until
+    both iterators are exhausted.
 
     This is useful for combining multiple async data sources into a single
     stream while maintaining concurrency. Each iterator is polled independently,
@@ -563,63 +564,56 @@ async def stream_concurrently[ElementA, ElementB](  # noqa: C901
 
     """
 
-    iter_a: AsyncIterator[ElementA] = aiter(source_a)
-    iter_b: AsyncIterator[ElementB] = aiter(source_b)
+    task_a: Task[None]
+    task_b: Task[None]
+    merged_stream: AsyncStream[ElementA | ElementB] = AsyncStream()
 
-    async def next_a() -> ElementA | StopAsyncIteration:
+    async def producer_a() -> None:
         try:
-            return await anext(iter_a)
+            async for item in source_a:
+                if merged_stream.finished:
+                    break  # finish when output becomes finished
 
-        except StopAsyncIteration as exc:
-            return exc
+                await merged_stream.send(item)
 
-    async def next_b() -> ElementB | StopAsyncIteration:
+            if not exhaustive:
+                merged_stream.finish()
+                task_b.cancel()
+
+            elif task_b.done():
+                merged_stream.finish()
+
+        except BaseException as exc:
+            merged_stream.finish(exception=exc)
+
+    async def producer_b() -> None:
         try:
-            return await anext(iter_b)
+            async for item in source_b:
+                if merged_stream.finished:
+                    break  # finish when output becomes finished
 
-        except StopAsyncIteration as exc:
-            return exc
+                await merged_stream.send(item)
 
-    task_a: Task[ElementA | StopAsyncIteration] | None = ctx.spawn(next_a)
-    task_b: Task[ElementB | StopAsyncIteration] | None = ctx.spawn(next_b)
+            if not exhaustive:
+                merged_stream.finish()
+                task_a.cancel()
 
-    pending: set[Task] = {task_a, task_b}
+            elif task_a.done():
+                merged_stream.finish()
+
+        except BaseException as exc:
+            merged_stream.finish(exception=exc)
+
+    task_a = ctx.spawn(producer_a)
+    task_b = ctx.spawn(producer_b)
+
     try:
-        while pending:
-            done, pending = await wait(
-                pending,
-                return_when=FIRST_COMPLETED,
-            )
+        async for element in merged_stream:
+            yield element
 
-            for task in done:
-                result = task.result()
-                if isinstance(result, StopAsyncIteration):
-                    if not exhaustive:
-                        task_a = None
-                        task_b = None
+    finally:
+        if not task_a.done():
+            task_a.cancel()
 
-                    elif task is task_a:
-                        task_a = None
-
-                    elif task is task_b:
-                        task_b = None
-
-                else:
-                    assert not isinstance(result, BaseException)  # nosec: B101
-                    yield result
-
-            # schedule continuation
-            if task_a in done:
-                task_a = ctx.spawn(next_a)
-                pending.add(task_a)
-
-            if task_b in done:
-                task_b = ctx.spawn(next_b)
-                pending.add(task_b)
-
-    except BaseException as exc:
-        # Cancel all running tasks
-        for task in pending:
-            task.cancel()
-
-        raise exc
+        if not task_b.done():
+            task_b.cancel()
