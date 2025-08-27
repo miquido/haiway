@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.8.0,<0.9.0"]
+build-backend = "uv_build"
 
 [project]
 name = "haiway"
@@ -73,3 +73,34 @@ useLibraryCodeForTypes = true
 [tool.pyright.analysis]
 diagnosticMode = "workspace"
 typeCheckingMode = "strict"
+
+# uv-build configuration to produce clean wheels and sdists
+# - Limit wheel packaging to our "src/haiway" package
+# - Exclude common junk and local artifacts from both sdist and wheel
+[tool.uv-build]
+packages = [{ include = "haiway", from = "src" }]
+
+[tool.uv-build.sdist]
+exclude = [
+  "site",
+  "docs",
+  "tests",
+  ".github",
+  "stubs",
+  "config",
+  "llms.txt",
+  ".vscode",
+  ".claude",
+  "**/.DS_Store",
+  "**/__pycache__",
+  ".ruff_cache",
+  ".pytest_cache",
+  ".mypy_cache",
+]
+
+[tool.uv-build.wheel]
+exclude = [
+  "**/.DS_Store",
+  "**/__pycache__",
+  "**/*.pyc",
+]
