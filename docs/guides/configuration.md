@@ -1,6 +1,7 @@
 # Configuration Management
 
-Haiway provides a simple configuration system built on top of the State class. Configuration classes are immutable, type-safe, and can be loaded from various storage backends.
+Haiway provides a simple configuration system built on top of the State class. Configuration classes
+are immutable, type-safe, and can be loaded from various storage backends.
 
 ## Basic Usage
 
@@ -42,7 +43,8 @@ config = await DatabaseConfig.load(identifier="production_db")
 
 ### Automatic Default Fallback
 
-When using `required=True`, the system will automatically try to create a configuration instance using class defaults if no data is found in the repository:
+When using `required=True`, the system will automatically try to create a configuration instance
+using class defaults if no data is found in the repository:
 
 ```python
 class ServerConfig(Configuration):
@@ -140,4 +142,5 @@ async with ctx.scope("app", repo):
     available = await ConfigurationRepository.available_configurations()
 ```
 
-That's it! The configuration system is designed to be simple and integrate seamlessly with Haiway's context and state management.
+That's it! The configuration system is designed to be simple and integrate seamlessly with Haiway's
+context and state management.

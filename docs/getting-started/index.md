@@ -1,6 +1,7 @@
 # Getting Started
 
-Welcome to Haiway! This section will guide you through installing and using Haiway for the first time.
+Welcome to Haiway! This section will guide you through installing and using Haiway for the first
+time.
 
 ## What You'll Learn
 
@@ -18,7 +19,7 @@ Welcome to Haiway! This section will guide you through installing and using Haiw
 ## Learning Path
 
 1. **[Installation](installation.md)** - Get Haiway installed and ready to use
-2. **[Quick Start](quickstart.md)** - Build your first application in minutes
-3. **[First Steps](first-steps.md)** - Understand the core concepts and patterns
+1. **[Quick Start](quickstart.md)** - Build your first application in minutes
+1. **[First Steps](first-steps.md)** - Understand the core concepts and patterns
 
 Let's get started!

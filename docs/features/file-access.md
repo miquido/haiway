@@ -1,6 +1,8 @@
 # File Access
 
-Haiway provides a functional, context-aware file access interface that integrates seamlessly with the framework's state management and structured concurrency features. The file access system supports asynchronous operations with proper resource management and optional exclusive locking.
+Haiway provides a functional, context-aware file access interface that integrates seamlessly with
+the framework's state management and structured concurrency features. The file access system
+supports asynchronous operations with proper resource management and optional exclusive locking.
 
 ## Overview
 
@@ -9,7 +11,8 @@ The file access system in Haiway follows the framework's core principles:
 - **Functional Interface**: All operations are performed through class methods on the `File` state
 - **Context Integration**: File access is scoped to the context, ensuring proper resource cleanup
 - **Resource Safety**: Automatic file handle cleanup even when exceptions occur
-- **Cross-Platform**: Works on Unix/Linux/macOS with exclusive locking, degrades gracefully on Windows
+- **Cross-Platform**: Works on Unix/Linux/macOS with exclusive locking, degrades gracefully on
+  Windows
 
 ## Quick Start
 
@@ -257,19 +260,21 @@ async def test_file_processing():
 ## Best Practices
 
 1. **Always use as disposable**: Ensures file handles are properly closed
-2. **Handle exceptions**: Wrap file operations in try/except blocks
-3. **Use exclusive locking**: For critical updates that must be atomic
-4. **Create parent directories**: Use `create=True` when writing to new locations
-5. **One file per context**: The design enforces single file access per context scope
+1. **Handle exceptions**: Wrap file operations in try/except blocks
+1. **Use exclusive locking**: For critical updates that must be atomic
+1. **Create parent directories**: Use `create=True` when writing to new locations
+1. **One file per context**: The design enforces single file access per context scope
 
 ## Platform Considerations
 
 ### Unix/Linux/macOS
+
 - Full support for exclusive file locking via fcntl
 - Atomic operations with proper fsync
 - File permissions respected
 
 ### Windows
+
 - No exclusive locking (fcntl not available)
 - Still provides atomic writes with fsync
 - File handles properly managed
@@ -277,6 +282,7 @@ async def test_file_processing():
 ## Implementation Details
 
 The file access system uses:
+
 - **OS-level file operations**: Direct use of os.open, os.read, os.write for efficiency
 - **Exclusive locking**: fcntl.flock on supported platforms
 - **Atomic writes**: Truncate and fsync ensure durability
@@ -314,4 +320,5 @@ async with ctx.scope(
         content = await File.read()
 ```
 
-This allows integration with cloud storage, databases, or any custom file storage backend while maintaining the same interface.
+This allows integration with cloud storage, databases, or any custom file storage backend while
+maintaining the same interface.

@@ -1,6 +1,9 @@
 # Context Presets
 
-Context presets provide a powerful way to package and reuse combinations of state objects and disposable resources in Haiway applications. They enable you to create reusable configurations that can be applied consistently across different parts of your application, promoting modularity and reducing code duplication.
+Context presets provide a powerful way to package and reuse combinations of state objects and
+disposable resources in Haiway applications. They enable you to create reusable configurations that
+can be applied consistently across different parts of your application, promoting modularity and
+reducing code duplication.
 
 ## Overview
 
@@ -232,14 +235,16 @@ async def run_dynamic_environment():
 ## State Priority System
 
 **Priority order (highest to lowest):**
+
 1. **Explicit state** - passed directly to `ctx.scope()`
-2. **Explicit disposables** - from `disposables=` parameter
-3. **Preset state** - from preset's state and disposables
-4. **Contextual state** - inherited from parent contexts
+1. **Explicit disposables** - from `disposables=` parameter
+1. **Preset state** - from preset's state and disposables
+1. **Contextual state** - inherited from parent contexts
 
 ## Preset Registry
 
-Instead of directly providing presets you can use the preset registry approach allowing to resolve presets using scope names:
+Instead of directly providing presets you can use the preset registry approach allowing to resolve
+presets using scope names:
 
 ```python
 # Register multiple presets by name
@@ -350,7 +355,11 @@ async def test_user_service():
 
 ## Performance Considerations
 
-- **Preset Creation**: Create presets once and reuse them - avoid creating new preset instances in hot paths
-- **State Objects**: Preset state objects are shared (immutable), so there's no memory overhead for reuse
-- **Disposables**: Each preset usage creates new disposable instances, so consider the cost of resource creation
-- **Nested Contexts**: Deeply nested contexts with many presets may have slight overhead - profile if performance is critical
+- **Preset Creation**: Create presets once and reuse them - avoid creating new preset instances in
+  hot paths
+- **State Objects**: Preset state objects are shared (immutable), so there's no memory overhead for
+  reuse
+- **Disposables**: Each preset usage creates new disposable instances, so consider the cost of
+  resource creation
+- **Nested Contexts**: Deeply nested contexts with many presets may have slight overhead - profile
+  if performance is critical

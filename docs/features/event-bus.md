@@ -1,6 +1,8 @@
 # Event Bus
 
-The event bus in Haiway provides a type-safe, scoped publish-subscribe system for asynchronous event handling. It enables decoupled communication between different parts of your application while maintaining type safety and memory efficiency.
+The event bus in Haiway provides a type-safe, scoped publish-subscribe system for asynchronous event
+handling. It enables decoupled communication between different parts of your application while
+maintaining type safety and memory efficiency.
 
 ## Overview
 
@@ -155,8 +157,8 @@ async def make_request(query: str) -> Any:
 ### Event Design
 
 1. **Keep events focused**: Each event type should represent a single logical occurrence
-2. **Use immutable data**: Events use Haiway's State objects which are immutable by design
-3. **Include context**: Add relevant context like timestamps, user IDs, and correlation IDs
+1. **Use immutable data**: Events use Haiway's State objects which are immutable by design
+1. **Include context**: Add relevant context like timestamps, user IDs, and correlation IDs
 
 ### Memory Management
 
@@ -251,8 +253,10 @@ async def monitored_processor():
 ## Limitations and Considerations
 
 1. **Type-based routing**: Events are routed by exact type match - inheritance is not considered
-2. **No persistence**: Events are in-memory only and don't survive process restarts
-3. **No ordering guarantees**: While events are generally delivered in order, this isn't guaranteed across multiple publishers
-4. **Same event loop**: All operations must occur within the same asyncio event loop
+1. **No persistence**: Events are in-memory only and don't survive process restarts
+1. **No ordering guarantees**: While events are generally delivered in order, this isn't guaranteed
+   across multiple publishers
+1. **Same event loop**: All operations must occur within the same asyncio event loop
 
-For distributed event systems or persistent event stores, consider integrating with external message brokers while using Haiway's event bus for local, in-process events.
+For distributed event systems or persistent event stores, consider integrating with external message
+brokers while using Haiway's event bus for local, in-process events.
