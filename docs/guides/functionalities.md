@@ -97,7 +97,7 @@ the specified contracts.
 # implementation.py
 from my_functionality.types import FunctionArgument
 from my_functionality.state import FunctionalityState, Functionality
-from haiway import ctx
+from haiway import ctx, statemethod
 
 # Concrete implementation of the FunctionInterface
 async def function_implementation(argument: FunctionArgument) -> None:
@@ -120,23 +120,23 @@ Alternatively, instead of providing a factory method, some implementations may a
 default values within state. This approach is also valid to implement and allows skipping explicit
 definitions of state by leveraging automatically created defaults.
 
-### Classmethod Calls
+### State Methods
 
 Calls act as intermediaries that invoke the function implementations within the appropriate context.
-This abstraction simplifies access to functionalities by hiding non-essential details and access to
-various required components. When possible, the preferred way of defining calls is to put them
-within the functionality state type as class methods. This approach allows easier access to desired
-functions and improves ergonomics over the free functions access.
+This abstraction simplifies access while keeping instance resolution consistent. When possible, the
+preferred way of defining calls is to put them within the functionality state type as state methods
+using `@statemethod`. This allows calls from the class (resolved via context) and from instances
+(using the instance directly).
 
 ```python
 # state.py - revisited
 ...
 class Functionality(State):
-    # define function call as a class method
-    @classmethod
-    async def function_call(cls, argument: FunctionArgument) -> None:
-        # Invoke the function implementation from the contextual state
-        await ctx.state(cls).function(argument=argument)
+    # define function call as a state method
+    @statemethod
+    async def function_call(self, argument: FunctionArgument) -> None:
+        # Invoke the function implementation through the instance
+        await self.function(argument=argument)
 
     function: FunctionSignature
 ```
@@ -217,16 +217,16 @@ class NotesDirectory(State):
 # State encapsulating the functionality with its interface
 class Notes(State):
     # Call of note creation function
-    @classmethod
-    async def create_note(cls, content: str, **extra: Any) -> Note:
-        # Invoke the function implementation from the contextual state
-        return await ctx.state(cls).creating(content=content, **extra)
+    @statemethod
+    async def create_note(self, content: str, **extra: Any) -> Note:
+        # Invoke the function implementation through the instance
+        return await self.creating(content=content, **extra)
 
     # Call of note update function
-    @classmethod
-    async def update_note(cls, note: Note, **extra: Any) -> None:
-        # Invoke the function implementation from the contextual state
-        await ctx.state(cls).updating(note=note, **extra)
+    @statemethod
+    async def update_note(self, note: Note, **extra: Any) -> None:
+        # Invoke the function implementation through the instance
+        await self.updating(note=note, **extra)
 
     # instance variables holding function implementations
     creating: NoteCreating

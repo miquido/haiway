@@ -91,6 +91,7 @@ Haiway uses **protocol-based dependency injection** to enable flexible, testable
 
 ```python
 from typing import Protocol, runtime_checkable
+from haiway import State, ctx, statemethod
 
 @runtime_checkable
 class EmailSending(Protocol):
@@ -98,14 +99,13 @@ class EmailSending(Protocol):
 
 class NotificationService(State):
     email_sending: EmailSending
-    
-    @classmethod
-    async def notify_user(cls, user_id: str, message: str) -> bool:
-        service = ctx.state(cls)
-        return await service.email_sending(
+
+    @statemethod
+    async def notify_user(self, user_id: str, message: str) -> bool:
+        return await self.email_sending(
             to=f"user-{user_id}@example.com",
             subject="Notification",
-            body=message
+            body=message,
         )
 
 # Implementation function
@@ -138,8 +138,9 @@ asyncio.run(main())
   actual email sending
 - **Factory Pattern**: `SMTPNotificationService()` creates a pre-configured service with the
   implementation wired up
-- **Context Retrieval**: `ctx.state(cls)` retrieves the service instance from the current context
-- **Transparent Calling**: The class method calls the implementation function seamlessly
+- **State Method**: `@statemethod` ensures the helper always receives an instance — class calls
+  resolve from context while instance calls use that instance
+- **Transparent Calling**: The method calls the implementation function seamlessly
 - **Type Safety**: `@runtime_checkable` ensures implementations conform to the protocol at runtime
 
 ## Resource Management

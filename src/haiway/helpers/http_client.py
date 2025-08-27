@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
-from typing import Protocol, final, runtime_checkable
+from typing import Protocol, final, overload, runtime_checkable
 
-from haiway.context import ctx
+from haiway.helpers.statemethods import statemethod
 from haiway.state import State
 
 __all__ = (
@@ -140,9 +140,32 @@ class HTTPClient(State):
     ... )
     """
 
+    @overload
     @classmethod
     async def get(
         cls,
+        *,
+        url: str,
+        query: HTTPQueryParams | None = None,
+        headers: HTTPHeaders | None = None,
+        timeout: float | None = None,
+        follow_redirects: bool | None = None,
+    ) -> HTTPResponse: ...
+
+    @overload
+    async def get(
+        self,
+        *,
+        url: str,
+        query: HTTPQueryParams | None = None,
+        headers: HTTPHeaders | None = None,
+        timeout: float | None = None,
+        follow_redirects: bool | None = None,
+    ) -> HTTPResponse: ...
+
+    @statemethod
+    async def get(
+        self,
         *,
         url: str,
         query: HTTPQueryParams | None = None,
@@ -175,18 +198,53 @@ class HTTPClient(State):
         HTTPClientError
             If the request fails.
         """
-        return await cls.request(
-            "GET",
-            url=url,
-            query=query,
-            headers=headers,
-            timeout=timeout,
-            follow_redirects=follow_redirects,
-        )
+        try:
+            return await self.requesting(
+                "GET",
+                url=url,
+                query=query,
+                headers=headers,
+                body=None,
+                timeout=timeout,
+                follow_redirects=follow_redirects,
+            )
 
+        except HTTPClientError as exc:
+            raise exc
+
+        except Exception as exc:
+            raise HTTPClientError(
+                f"HTTP request failed due to an error: {exc or type(exc).__name__}"
+            ) from exc
+
+    @overload
     @classmethod
     async def put(
         cls,
+        *,
+        url: str,
+        query: HTTPQueryParams | None = None,
+        headers: HTTPHeaders | None = None,
+        body: str | bytes | None = None,
+        timeout: float | None = None,
+        follow_redirects: bool | None = None,
+    ) -> HTTPResponse: ...
+
+    @overload
+    async def put(
+        self,
+        *,
+        url: str,
+        query: HTTPQueryParams | None = None,
+        headers: HTTPHeaders | None = None,
+        body: str | bytes | None = None,
+        timeout: float | None = None,
+        follow_redirects: bool | None = None,
+    ) -> HTTPResponse: ...
+
+    @statemethod
+    async def put(
+        self,
         *,
         url: str,
         query: HTTPQueryParams | None = None,
@@ -222,19 +280,53 @@ class HTTPClient(State):
         HTTPClientError
             If the request fails.
         """
-        return await cls.request(
-            "PUT",
-            url=url,
-            query=query,
-            headers=headers,
-            body=body,
-            timeout=timeout,
-            follow_redirects=follow_redirects,
-        )
+        try:
+            return await self.requesting(
+                "PUT",
+                url=url,
+                query=query,
+                headers=headers,
+                body=body,
+                timeout=timeout,
+                follow_redirects=follow_redirects,
+            )
 
+        except HTTPClientError as exc:
+            raise exc
+
+        except Exception as exc:
+            raise HTTPClientError(
+                f"HTTP request failed due to an error: {exc or type(exc).__name__}"
+            ) from exc
+
+    @overload
     @classmethod
     async def post(
         cls,
+        *,
+        url: str,
+        query: HTTPQueryParams | None = None,
+        headers: HTTPHeaders | None = None,
+        body: str | bytes | None = None,
+        timeout: float | None = None,
+        follow_redirects: bool | None = None,
+    ) -> HTTPResponse: ...
+
+    @overload
+    async def post(
+        self,
+        *,
+        url: str,
+        query: HTTPQueryParams | None = None,
+        headers: HTTPHeaders | None = None,
+        body: str | bytes | None = None,
+        timeout: float | None = None,
+        follow_redirects: bool | None = None,
+    ) -> HTTPResponse: ...
+
+    @statemethod
+    async def post(
+        self,
         *,
         url: str,
         query: HTTPQueryParams | None = None,
@@ -270,19 +362,57 @@ class HTTPClient(State):
         HTTPClientError
             If the request fails.
         """
-        return await cls.request(
-            "POST",
-            url=url,
-            query=query,
-            headers=headers,
-            body=body,
-            timeout=timeout,
-            follow_redirects=follow_redirects,
-        )
+        try:
+            return await self.requesting(
+                "POST",
+                url=url,
+                query=query,
+                headers=headers,
+                body=body,
+                timeout=timeout,
+                follow_redirects=follow_redirects,
+            )
 
+        except HTTPClientError as exc:
+            raise exc
+
+        except Exception as exc:
+            raise HTTPClientError(
+                f"HTTP request failed due to an error: {exc or type(exc).__name__}"
+            ) from exc
+
+    @overload
     @classmethod
     async def request(
         cls,
+        method: str,
+        /,
+        *,
+        url: str,
+        query: HTTPQueryParams | None = None,
+        headers: HTTPHeaders | None = None,
+        body: str | bytes | None = None,
+        timeout: float | None = None,
+        follow_redirects: bool | None = None,
+    ) -> HTTPResponse: ...
+
+    @overload
+    async def request(
+        self,
+        method: str,
+        /,
+        *,
+        url: str,
+        query: HTTPQueryParams | None = None,
+        headers: HTTPHeaders | None = None,
+        body: str | bytes | None = None,
+        timeout: float | None = None,
+        follow_redirects: bool | None = None,
+    ) -> HTTPResponse: ...
+
+    @statemethod
+    async def request(
+        self,
         method: str,
         /,
         *,
@@ -336,7 +466,7 @@ class HTTPClient(State):
         ... )
         """
         try:
-            return await ctx.state(cls).requesting(
+            return await self.requesting(
                 method,
                 url=url,
                 query=query,

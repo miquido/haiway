@@ -8,10 +8,10 @@ import os
 from asyncio import Lock
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol, runtime_checkable
+from typing import Protocol, overload, runtime_checkable
 
-from haiway.context import ctx
 from haiway.helpers.asynchrony import asynchronous
+from haiway.helpers.statemethods import statemethod
 from haiway.state import State
 
 __all__ = (
@@ -78,9 +78,20 @@ class File(State):
     implementations, which are injected when the file is opened.
     """
 
+    @overload
     @classmethod
     async def read(
         cls,
+    ) -> bytes: ...
+
+    @overload
+    async def read(
+        self,
+    ) -> bytes: ...
+
+    @statemethod
+    async def read(
+        self,
     ) -> bytes:
         """
         Read the complete contents of the file.
@@ -95,11 +106,26 @@ class File(State):
         FileException
             If no file is currently open in the context
         """
-        return await ctx.state(cls).reading()
+        return await self.reading()
 
+    @overload
     @classmethod
     async def write(
         cls,
+        content: bytes,
+        /,
+    ) -> None: ...
+
+    @overload
+    async def write(
+        self,
+        content: bytes,
+        /,
+    ) -> None: ...
+
+    @statemethod
+    async def write(
+        self,
         content: bytes,
         /,
     ) -> None:
@@ -116,7 +142,7 @@ class File(State):
         FileException
             If no file is currently open in the context
         """
-        await ctx.state(cls).writing(content)
+        await self.writing(content)
 
     reading: FileReading
     writing: FileWriting
@@ -374,9 +400,10 @@ class FileAccess(State):
     ...     await File.write(processed)
     """
 
-    @classmethod
+    @statemethod
     def open(
-        cls,
+        self,
+        /,
         path: Path | str,
         create: bool = False,
         exclusive: bool = False,
@@ -412,7 +439,7 @@ class FileAccess(State):
             If the file cannot be opened with the specified parameters, or if
             a file is already open in the current context scope
         """
-        return ctx.state(cls).accessing(
+        return self.accessing(
             path,
             create=create,
             exclusive=exclusive,

@@ -10,6 +10,7 @@
 - Pillars: Context (scoped execution, events, variables), State (immutable, validated), Helpers (async utilities, HTTPX, observability).
 - Key APIs: `src/haiway/context/access.py` exposes `ctx`; state core in `src/haiway/state/{structure,validation,path}.py`.
 - State priority: explicit > disposables > presets > parent context.
+ - State access: `ctx.state(T)` resolves by type only; for hybrid class/instance helpers use `@statemethod` (from `haiway.helpers`), which always passes an instance (class calls resolve from context, instance calls use the instance).
 
 ## Build, Test, and Development Commands
 - `make venv`: Install `uv`, create `.venv`, install extras, set hooks.
@@ -26,6 +27,7 @@
 - Unions: use `T | None` style; avoid `Optional[T]`. Keep generics explicit; avoid `Any`.
 - Imports: prefer absolute `haiway...`; export via package `__init__.py` where appropriate.
 - Naming: modules `snake_case`; classes `PascalCase`; funcs/vars `snake_case`; constants `UPPER_CASE`.
+ - State helpers: avoid `@classmethod` for accessing contextual state; prefer `@statemethod` so methods work from class or instance while always operating on an instance.
 
 ## Testing Guidelines
 - Frameworks: `pytest`, `pytest-asyncio`, `pytest-cov`.
