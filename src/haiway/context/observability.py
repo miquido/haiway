@@ -332,7 +332,7 @@ def _logger_observability(
     ) -> None:
         logger.log(
             ObservabilityLevel.DEBUG,
-            f"{scope.unique_name} Exiting scope: {scope.name}",
+            f"[{trace_id_hex}] {scope.unique_name} Exiting scope: {scope.name}",
             exc_info=exception,
         )
 

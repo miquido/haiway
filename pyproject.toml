@@ -77,9 +77,6 @@ useLibraryCodeForTypes = true
 diagnosticMode = "workspace"
 typeCheckingMode = "strict"
 
-# uv-build configuration to produce clean wheels and sdists
-# - Limit wheel packaging to our "src/haiway" package
-# - Exclude common junk and local artifacts from both sdist and wheel
 [tool.uv-build]
 packages = [{ include = "haiway", from = "src" }]
 
@@ -94,6 +91,9 @@ exclude = [
   "llms.txt",
   ".vscode",
   ".claude",
+  ".codex",
+  ".zed",
+  ".venv",
   "**/.DS_Store",
   "**/__pycache__",
   ".ruff_cache",
@@ -102,8 +102,4 @@ exclude = [
 ]
 
 [tool.uv-build.wheel]
-exclude = [
-  "**/.DS_Store",
-  "**/__pycache__",
-  "**/*.pyc",
-]
+exclude = ["**/.DS_Store", "**/__pycache__", "**/*.pyc"]
