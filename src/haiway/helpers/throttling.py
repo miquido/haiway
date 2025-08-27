@@ -130,7 +130,7 @@ def throttle[**Args, Result](
         # mimic function attributes if able
         return mimic_function(function, within=throttle)
 
-    if function := function:
+    if function is not None:
         return _wrap(function)
 
     else:

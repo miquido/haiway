@@ -231,7 +231,7 @@ def cache[**Args, Result, Key](
                 ),
             )
 
-    if function := function:
+    if function is not None:
         return _wrap(function)
 
     else:

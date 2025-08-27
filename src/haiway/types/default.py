@@ -120,13 +120,13 @@ class DefaultValue[Value]:
         __name: str,
         __value: Any,
     ) -> None:
-        raise AttributeError("Missing can't be modified")
+        raise AttributeError("DefaultValue can't be modified")
 
     def __delattr__(
         self,
         __name: str,
     ) -> None:
-        raise AttributeError("Missing can't be modified")
+        raise AttributeError("DefaultValue can't be modified")
 
 
 @overload

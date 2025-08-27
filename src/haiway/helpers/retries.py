@@ -164,7 +164,7 @@ def retry[**Args, Result](
                 catching=catching if isinstance(catching, set | tuple) else {catching},
             )
 
-    if function := function:
+    if function is not None:
         return _wrap(function)
     else:
         return _wrap

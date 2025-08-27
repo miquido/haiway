@@ -118,7 +118,7 @@ def asynchronous[**Args, Result](
 
         return _mimic_async(wrapped, within=asynchronous)
 
-    if function := function:
+    if function is not None:
         return wrap(wrapped=function)
 
     else:
