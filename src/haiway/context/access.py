@@ -821,7 +821,7 @@ class ctx:
 
     @staticmethod
     def state[StateType: State](
-        state: type[StateType] | StateType,
+        state: type[StateType],
         /,
         default: StateType | None = None,
     ) -> StateType:
@@ -834,9 +834,8 @@ class ctx:
 
         Parameters
         ----------
-        state: type[StateType] | StateType
-            The State class type to retrieve from the current context, or an
-            instance to return directly
+        state: type[StateType]
+            The State class type to retrieve from the current context
         default: StateType | None, default=None
             Optional default instance to return if state is not found in context.
             If None and no state is found, a new instance will be created if possible.
@@ -882,9 +881,6 @@ class ctx:
         ...         config = ctx.state(DatabaseConfig)
         ...         # Use config to connect to database
         """
-        if not isinstance(state, type):
-            return state  # if we got an instance instead of type return it
-
         return StateContext.state(
             state,
             default=default,

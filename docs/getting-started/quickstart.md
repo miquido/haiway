@@ -75,6 +75,7 @@ Haiway implements **dependency injection** through function protocols and state 
 
 ```python
 from typing import Protocol, runtime_checkable
+from haiway import statemethod
 
 # Function interface - single __call__ method only
 @runtime_checkable
@@ -84,9 +85,9 @@ class UsersFetching(Protocol):
 class UsersService(State):
     fetching: UsersFetching
 
-    @classmethod
-    async def fetch_users(cls) -> Sequence[User]:
-        return await ctx.state(cls).fetching()
+    @statemethod
+    async def fetch_users(self) -> Sequence[User]:
+        return await self.fetching()
 
 # Factory function for service implementation
 def InMemoryUsersService() -> UsersService:

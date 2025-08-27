@@ -24,6 +24,7 @@ from haiway.helpers.http_client import (
 )
 from haiway.helpers.observability import LoggerObservability
 from haiway.helpers.retries import retry
+from haiway.helpers.statemethods import statemethod
 from haiway.helpers.throttling import throttle
 from haiway.helpers.timeouting import timeout
 
@@ -51,6 +52,7 @@ __all__ = (
     "execute_concurrently",
     "process_concurrently",
     "retry",
+    "statemethod",
     "stream_concurrently",
     "throttle",
     "timeout",

@@ -32,7 +32,10 @@ Haiway is a functional programming framework for Python 3.12+ emphasizing immuta
 - `VariablesContext` - Mutable scope-local variables with propagation
 - `ObservabilityContext` - Integrated logging, metrics, and tracing
 
-**Key File**: `src/haiway/context/access.py` - Contains the main `ctx` API
+**Key Notes**:
+- `src/haiway/context/access.py` - Contains the main `ctx` API
+- `ctx.state(T)` accepts a type and resolves by type only (no instance fallback)
+- Use `@statemethod` (from `haiway.helpers`) for helpers that should work when called on the class or an instance while always operating on an instance
 
 ### 2. State System (`haiway/state/`)
 
@@ -90,9 +93,10 @@ async with ctx.scope(
 ):
 ```
 
-**Protocol-Based Extensions:**
+**Protocol-Based Extensions (use state methods):**
 ```python
 from typing import Protocol, runtime_checkable
+from haiway import State, ctx, statemethod
 
 @runtime_checkable
 class CustomProtocol(Protocol):
@@ -101,9 +105,9 @@ class CustomProtocol(Protocol):
 class CustomHelper(State):
     implementation: CustomProtocol
 
-    @classmethod
-    async def method(cls, param: str) -> Result:
-        return await ctx.state(cls).implementation(param)
+    @statemethod
+    async def method(self, param: str) -> Result:
+        return await self.implementation(param)
 ```
 
 **Disposable Resource Pattern:**
@@ -171,7 +175,7 @@ async def custom_resource():
 
 ```python
 from typing import Sequence, Mapping, Set, Protocol, runtime_checkable
-from haiway import State, ctx
+from haiway import State, ctx, statemethod
 
 # Immutable collections (MANDATORY: ONLY abstract types, COMPLETE type annotations)
 class UserData(State):
@@ -194,9 +198,9 @@ class UserFetching(Protocol):
 class UserService(State):
     fetching: UserFetching           # REQUIRED: protocol type annotation
 
-    @classmethod
-    async def get_user(cls, id: str) -> UserData:  # REQUIRED: full method typing
-        return await ctx.state(cls).fetching(id)
+    @statemethod
+    async def get_user(self, id: str) -> UserData:  # REQUIRED: full method typing
+        return await self.fetching(id)
 
 # State updates and path-based modifications
 user = UserData(id="1", name="Alice")
@@ -228,7 +232,7 @@ async def main():
         preset=dev_preset,               # Preset state
         # Parent context state (lowest priority)
     ):
-        user = await UserService.get_user("123")
+        user = await UserService.get_user("123")  # class call resolves instance via @statemethod
 
         # Nested context with variable tracking
         ctx.variable(Counter(value=0))
