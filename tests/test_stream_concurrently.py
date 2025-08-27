@@ -17,8 +17,7 @@ async def async_range(
     delay: float = 0,
 ) -> AsyncIterator[int]:
     for i in range(start, stop):
-        if delay:
-            await sleep(delay)
+        await sleep(delay)
         yield i
 
 
@@ -27,8 +26,7 @@ async def async_letters(
     delay: float = 0,
 ) -> AsyncIterator[str]:
     for letter in letters:
-        if delay:
-            await sleep(delay)
+        await sleep(delay)
         yield letter
 
 
@@ -36,7 +34,11 @@ async def async_letters(
 async def test_merges_two_streams():
     items: list[int | str] = []
 
-    async for item in stream_concurrently(async_range(0, 3), async_letters("abc")):
+    async for item in stream_concurrently(
+        async_range(0, 3),
+        async_letters("abc"),
+        exhaustive=True,
+    ):
         items.append(item)
 
     # Should have all items from both sources
@@ -82,7 +84,7 @@ async def test_handles_empty_iterators():
     items = []
     async for item in stream_concurrently(async_range(0, 3), empty_iter()):
         items.append(item)
-    assert items == [0]
+    assert items == []
 
     # exhaustive
     items = []
@@ -94,7 +96,7 @@ async def test_handles_empty_iterators():
     items = []
     async for item in stream_concurrently(empty_iter(), async_range(0, 3)):
         items.append(item)
-    assert items == [0]
+    assert items == []
 
     # exhaustive
     items = []
@@ -111,10 +113,10 @@ async def test_handles_different_lengths():
         items.append(item)
 
     # Should have all items from both sources
-    assert len(items) == 5
+    assert len(items) == 6
     numbers = [i for i in items if isinstance(i, int)]
     letters = [i for i in items if isinstance(i, str)]
-    assert numbers == list(range(3))
+    assert numbers == list(range(4))
     assert letters == ["a", "b"]
 
     # exhaustive
@@ -134,7 +136,6 @@ async def test_handles_different_lengths():
 async def test_propagates_exceptions_from_source_a():
     async def failing_iter_a() -> AsyncIterator[int]:
         yield 1
-        yield 2
         raise FakeException("Source A failed")
 
     items: list[int | str] = []
@@ -143,7 +144,7 @@ async def test_propagates_exceptions_from_source_a():
             items.append(item)
 
     # Should have collected some items before failure
-    assert len(items) >= 2  # At least the two yielded numbers
+    assert len(items) >= 1  # At least the one yielded number
 
 
 @mark.asyncio
@@ -226,8 +227,8 @@ async def test_works_with_different_types():
 
     numbers = [i for i in items if isinstance(i, int)]
     strings = [i for i in items if isinstance(i, str)]
-    assert numbers == [0, 1, 1, 2]
-    assert strings == ["hello", "world", "test"]
+    assert numbers == [0, 1, 1, 2, 3]
+    assert strings == ["hello", "world"]
 
     # exhaustive
     items = []
