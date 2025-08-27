@@ -1,12 +1,16 @@
 # Concurrent Processing
 
-Haiway provides powerful tools for concurrent and parallel processing within its functional programming paradigm. Built on Python's `asyncio`, the framework offers structured concurrency through the context system (`ctx.spawn`) and advanced patterns through helper utilities. This guide explains how to effectively use these tools to build high-performance concurrent applications.
+Haiway provides powerful tools for concurrent and parallel processing within its functional
+programming paradigm. Built on Python's `asyncio`, the framework offers structured concurrency
+through the context system (`ctx.spawn`) and advanced patterns through helper utilities. This guide
+explains how to effectively use these tools to build high-performance concurrent applications.
 
 ## Core Concepts
 
 ### Structured Concurrency
 
-Haiway follows the structured concurrency paradigm where all spawned tasks are tied to their parent scope:
+Haiway follows the structured concurrency paradigm where all spawned tasks are tied to their parent
+scope:
 
 - Tasks spawned within a scope are automatically cancelled when the scope exits
 - Exceptions in child tasks can propagate to parent scopes
@@ -24,7 +28,8 @@ When spawning tasks, Haiway preserves the execution context:
 
 ## Basic Task Spawning
 
-The fundamental building block for concurrency in Haiway is `ctx.spawn()`, which creates tasks within the current scope's task group:
+The fundamental building block for concurrency in Haiway is `ctx.spawn()`, which creates tasks
+within the current scope's task group:
 
 ```python
 from haiway import ctx
@@ -113,11 +118,14 @@ async def main():
 
 ## Concurrent Processing Helpers
 
-The `haiway.helpers.concurrent` module provides four specialized functions for common concurrent processing patterns. All functions integrate with Haiway's context system and provide controlled parallelism.
+The `haiway.helpers.concurrent` module provides four specialized functions for common concurrent
+processing patterns. All functions integrate with Haiway's context system and provide controlled
+parallelism.
 
 ### process_concurrently
 
-Process elements from an iterable without collecting results. Ideal for side-effect operations like notifications, logging, or data transformations.
+Process elements from an iterable without collecting results. Ideal for side-effect operations like
+notifications, logging, or data transformations.
 
 ```python
 from haiway.helpers.concurrent import process_concurrently
@@ -139,12 +147,14 @@ async def notify_users():
 ```
 
 **Parameters:**
+
 - `source: AsyncIterable[Element] | Iterable[Element]` - Elements to process
 - `handler: Callable[[Element], Coroutine[Any, Any, None]]` - Processing function
 - `concurrent_tasks: int = 2` - Maximum concurrent tasks
 - `ignore_exceptions: bool = False` - If True, log exceptions but continue processing
 
 **Key Features:**
+
 - Processes elements as they become available
 - Maintains the specified concurrency limit
 - Automatic task cancellation on errors or cancellation
@@ -152,7 +162,8 @@ async def notify_users():
 
 ### execute_concurrently
 
-Execute handler for each element and collect results in order. Perfect when you need to process collections and gather the outcomes.
+Execute handler for each element and collect results in order. Perfect when you need to process
+collections and gather the outcomes.
 
 ```python
 from haiway.helpers.concurrent import execute_concurrently
@@ -177,20 +188,24 @@ async def fetch_all_users():
 ```
 
 **Parameters:**
-- `handler: Callable[[Element], Coroutine[Any, Any, Result]]` - Processing function that returns results
+
+- `handler: Callable[[Element], Coroutine[Any, Any, Result]]` - Processing function that returns
+  results
 - `elements: AsyncIterable[Element] | Iterable[Element]` - Elements to process
 - `concurrent_tasks: int = 2` - Maximum concurrent tasks
 - `return_exceptions: bool = False` - Include exceptions in results instead of raising
 
 **Key Features:**
+
 - Results returned in same order as input elements
 - Configurable exception handling via `return_exceptions`
 - Works with both sync and async iterables
 - Preserves result ordering for predictable processing
 
-### concurrently  
+### concurrently
 
-Execute pre-created coroutine objects with controlled parallelism. More flexible than `execute_concurrently` when coroutines need different parameters or come from different sources.
+Execute pre-created coroutine objects with controlled parallelism. More flexible than
+`execute_concurrently` when coroutines need different parameters or come from different sources.
 
 ```python
 from haiway.helpers.concurrent import concurrently
@@ -216,11 +231,13 @@ async def fetch_different_endpoints():
 ```
 
 **Parameters:**
+
 - `coroutines: AsyncIterable[Coroutine] | Iterable[Coroutine]` - Coroutine objects to execute
 - `concurrent_tasks: int = 2` - Maximum concurrent tasks
 - `return_exceptions: bool = False` - Include exceptions in results instead of raising
 
 **Key Features:**
+
 - Works directly with coroutine objects rather than applying a handler function
 - Allows for different parameters per coroutine
 - Maintains result ordering matching input coroutine order
@@ -228,7 +245,8 @@ async def fetch_different_endpoints():
 
 ### stream_concurrently
 
-Merge two async iterators into a single stream, yielding elements as they become available from either source.
+Merge two async iterators into a single stream, yielding elements as they become available from
+either source.
 
 ```python
 from haiway.helpers.concurrent import stream_concurrently
@@ -256,11 +274,14 @@ async def process_events():
 ```
 
 **Parameters:**
+
 - `source_a: AsyncIterable[ElementA]` - First async iterable to consume
-- `source_b: AsyncIterable[ElementB]` - Second async iterable to consume  
-- `exhaustive: bool = False` - If True, continue until both sources complete; if False (default), stop when either exhausts
+- `source_b: AsyncIterable[ElementB]` - Second async iterable to consume
+- `exhaustive: bool = False` - If True, continue until both sources complete; if False (default),
+  stop when either exhausts
 
 **Key Features:**
+
 - Elements yielded based on availability, not source order
 - Maintains exactly one pending task per iterator for efficiency
 - Default behavior stops when either source is exhausted
@@ -268,7 +289,8 @@ async def process_events():
 
 ### AsyncStream
 
-Push-based async stream with back-pressure, suitable for coordinating producers and a single consumer.
+Push-based async stream with back-pressure, suitable for coordinating producers and a single
+consumer.
 
 ```python
 from haiway import AsyncStream, ctx
@@ -293,6 +315,7 @@ async def example_stream_usage() -> list[int]:
 ```
 
 **Behavior:**
+
 - Single-consumer: one active iteration is allowed; reuse raises an assertion.
 - Back-pressure: `send()` suspends until the consumer accepts the element.
 - Completion: `finish()` ends the stream; `finish(exc)` raises `exc` on the consumer.
@@ -300,6 +323,7 @@ async def example_stream_usage() -> list[int]:
 - Post-finish sends: `send()` to a finished/failed stream is ignored.
 
 **When to use:**
+
 - Coordinating multiple producers that should not outpace the consumer.
 - Bridging event callbacks into an async-iterable interface.
 - As a building block for higher-level streaming utilities like `stream_concurrently()`.
@@ -561,4 +585,7 @@ Haiway's concurrent processing tools provide:
 - **Resource control** through concurrency limits
 - **Error resilience** with proper exception handling
 
-By combining `ctx.spawn()` for basic task management with the specialized helpers in `haiway.helpers.concurrent`, you can build efficient, maintainable concurrent applications that fully leverage Python's async capabilities while maintaining the safety and structure of Haiway's functional programming model.
+By combining `ctx.spawn()` for basic task management with the specialized helpers in
+`haiway.helpers.concurrent`, you can build efficient, maintainable concurrent applications that
+fully leverage Python's async capabilities while maintaining the safety and structure of Haiway's
+functional programming model.

@@ -1,10 +1,14 @@
 # OpenTelemetry Integration
 
-Haiway provides seamless integration with [OpenTelemetry](https://opentelemetry.io/) for distributed tracing, metrics collection, and structured logging. This integration allows you to observe your applications with industry-standard tooling while maintaining Haiway's functional programming principles.
+Haiway provides seamless integration with [OpenTelemetry](https://opentelemetry.io/) for distributed
+tracing, metrics collection, and structured logging. This integration allows you to observe your
+applications with industry-standard tooling while maintaining Haiway's functional programming
+principles.
 
 ## Overview
 
-The OpenTelemetry integration in Haiway bridges the framework's observability abstractions with the OpenTelemetry SDK, enabling:
+The OpenTelemetry integration in Haiway bridges the framework's observability abstractions with the
+OpenTelemetry SDK, enabling:
 
 - **Distributed Tracing**: Automatic span creation and context propagation across async operations
 - **Metrics Collection**: Counter, histogram, and gauge metrics with custom attributes
@@ -25,7 +29,8 @@ pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
 
 ### 2. Configuration
 
-Configure OpenTelemetry once at application startup (configuring more than once will cause an errror):
+Configure OpenTelemetry once at application startup (configuring more than once will cause an
+errror):
 
 ```python
 from haiway.opentelemetry import OpenTelemetry
@@ -56,21 +61,20 @@ OpenTelemetry.configure(
 
 ### Basic Configuration
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `service` | `str` | Name of your service |
-| `version` | `str` | Version of your service |
+| Parameter     | Type  | Description                                            |
+| ------------- | ----- | ------------------------------------------------------ |
+| `service`     | `str` | Name of your service                                   |
+| `version`     | `str` | Version of your service                                |
 | `environment` | `str` | Deployment environment (e.g., "production", "staging") |
 
 ### OTLP Export Configuration
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `otlp_endpoint` | `str \| None` | `None` | OTLP endpoint URL. If None, uses console exporters |
-| `insecure` | `bool` | `True` | Whether to use insecure connections |
-| `export_interval_millis` | `int` | `5000` | Metrics export interval in milliseconds |
-| `attributes` | `Mapping[str, Any] \| None` | `None` | Additional resource attributes |
-
+| Parameter                | Type                        | Default | Description                                        |
+| ------------------------ | --------------------------- | ------- | -------------------------------------------------- |
+| `otlp_endpoint`          | `str \| None`               | `None`  | OTLP endpoint URL. If None, uses console exporters |
+| `insecure`               | `bool`                      | `True`  | Whether to use insecure connections                |
+| `export_interval_millis` | `int`                       | `5000`  | Metrics export interval in milliseconds            |
+| `attributes`             | `Mapping[str, Any] \| None` | `None`  | Additional resource attributes                     |
 
 ### 3. Usage with Context
 
@@ -121,8 +125,9 @@ async def process_individual_requests():
 
 ### Console vs OTLP Export
 
-**Console Export**:
-When no otlp endpoint was specified all metrics and logs will be utilizing python logging system.
+**Console Export**: When no otlp endpoint was specified all metrics and logs will be utilizing
+python logging system.
+
 ```python
 OpenTelemetry.configure(
     service="my-service",
@@ -132,8 +137,9 @@ OpenTelemetry.configure(
 )
 ```
 
-**OTLP Export**:
-With otlp endpoint provided there will be no logs mirroring, all metrics and logs will be sent to the specified endpoint.
+**OTLP Export**: With otlp endpoint provided there will be no logs mirroring, all metrics and logs
+will be sent to the specified endpoint.
+
 ```python
 OpenTelemetry.configure(
     service="my-service",
@@ -372,6 +378,7 @@ OpenTelemetry.configure(
 ### SigNoz
 
 For self-hosted SigNoz:
+
 ```python
 OpenTelemetry.configure(
     service="my-service",
@@ -437,16 +444,19 @@ ctx.record_attributes({
 ### Common Issues
 
 **1. No telemetry data appearing**
+
 - Verify OTLP endpoint is reachable
 - Check if OpenTelemetry.configure() was called before creating observability
 - Ensure proper network connectivity to your observability backend
 
 **2. High memory usage**
+
 - Consider increasing export intervals
 - Check if you're creating too many unique metric label combinations
 - Review span attribute cardinality
 
 **3. Missing trace correlation**
+
 - Ensure observability is properly passed through context scopes
 - Verify external trace ID format is correct
 - Check that async context is properly propagated

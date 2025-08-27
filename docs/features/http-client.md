@@ -1,12 +1,15 @@
 # HTTP Client
 
-Haiway provides a functional, context-aware HTTP client interface that integrates seamlessly with the framework's state management and observability features. The HTTP client supports async operations and flexible backend implementations.
+Haiway provides a functional, context-aware HTTP client interface that integrates seamlessly with
+the framework's state management and observability features. The HTTP client supports async
+operations and flexible backend implementations.
 
 ## Overview
 
 The HTTP client in Haiway follows the framework's core principles:
 
-- **Functional Interface**: All operations are performed through class methods on the `HTTPClient` state
+- **Functional Interface**: All operations are performed through class methods on the `HTTPClient`
+  state
 - **Context Integration**: HTTP implementations are injected through the context system
 - **Protocol-Based**: Uses protocols for flexibility in backend implementations
 - **Immutable Responses**: All responses are immutable state objects
@@ -245,12 +248,12 @@ async def test_user_fetching():
 ## Best Practices
 
 1. **Always use context as disposable**: Ensures proper resource cleanup
-2. **Set appropriate timeouts**: Prevent hanging requests
-3. **Handle errors gracefully**: Wrap requests in try/except blocks
-4. **Use base URLs**: Configure base URL to avoid repetition
-5. **Pool connections**: Reuse HTTP client instances within a scope
-6. **Validate responses**: Check status codes and handle errors appropriately
-7. **Use type hints**: Leverage type safety for request/response data
+1. **Set appropriate timeouts**: Prevent hanging requests
+1. **Handle errors gracefully**: Wrap requests in try/except blocks
+1. **Use base URLs**: Configure base URL to avoid repetition
+1. **Pool connections**: Reuse HTTP client instances within a scope
+1. **Validate responses**: Check status codes and handle errors appropriately
+1. **Use type hints**: Leverage type safety for request/response data
 
 ## Custom Implementations
 
