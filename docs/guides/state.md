@@ -103,10 +103,10 @@ State classes perform thorough type validation for all supported Python types:
 
 - **Basic Types**: int, str, bool, float, bytes
 - **Container Types**:
-    - **Sequence[T]**: Use `Sequence[T]` instead of `list[T]` - converted to immutable tuples
-    - **Mapping[K, V]**: Use `Mapping[K, V]` instead of `dict[K, V]` - remains as dict
-    - **Set[T]**: Use `Set[T]` instead of `set[T]` - converted to immutable frozensets
-    - **tuple[T, ...]**: Fixed or variable-length tuples
+  - **Sequence[T]**: Use `Sequence[T]` instead of `list[T]` — converted to immutable tuples
+  - **Mapping[K, V]**: Use `Mapping[K, V]` instead of `dict[K, V]` — remains as dict
+  - **Set[T]**: Use `Set[T]` instead of `set[T]` — converted to immutable frozensets
+  - **tuple[T, ...]**: Fixed or variable-length tuples
 - **Special Types**: UUID, datetime, date, time, timedelta, timezone, Path, re.Pattern
 - **Union Types**: str | None, int | float
 - **Literal Types**: Literal["a", "b", "c"]
