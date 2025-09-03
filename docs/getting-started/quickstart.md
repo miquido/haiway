@@ -197,7 +197,6 @@ async def main():
         print(f"Timeout overridden to {config.timeout}")
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
 ```
 
