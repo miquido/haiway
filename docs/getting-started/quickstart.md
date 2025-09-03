@@ -131,6 +131,27 @@ This pattern allows you to easily **swap implementations** (in-memory, database,
 3. **Context Management**: Scoped execution with state propagation
 4. **Dependency Injection**: Clean separation of concerns using function based state interfaces
 
+## Disposables
+
+Disposables are resources that require automatic clean up after they are used. You can put
+them in the context and they are going to be initialized when this context starts and cleaned
+up once the context is finished. You can define disposables like this:
+
+```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def database_connection():
+    print("Opening database connection")
+    try:
+        yield DatabaseState(connection={"status": "connected"})
+    finally:
+        print("Closing database connection")
+```
+
+Here the `database_connection()` function is a factory for a dependency that needs cleanup after
+it's used. It gets called once on the context beginning and the second time when the context ends.
+
 ## Advanced Context Usage
 
 ### Using Context Presets

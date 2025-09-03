@@ -7,6 +7,7 @@ Haiway is a framework designed to facilitate the development of applications usi
 Functional programming centers around creating pure functions - functions that have no side effects and rely solely on their inputs to produce outputs. This approach promotes predictability, easier testing, and better modularity. While Python is inherently multi-paradigm and not strictly functional, Haiway encourages adopting functional principles where feasible to enhance code clarity and reliability.
 
 Key functional concepts:
+
 - Immutability: Data structures are immutable, preventing unintended side effects.
 - Pure Functions: Functions depend only on their inputs and produce outputs without altering external state.
 - Higher-Order Functions: Functions that can take other functions as arguments or return them as results.

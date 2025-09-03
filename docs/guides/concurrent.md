@@ -139,12 +139,14 @@ async def notify_users():
 ```
 
 **Parameters:**
+
 - `source: AsyncIterable[Element] | Iterable[Element]` - Elements to process
 - `handler: Callable[[Element], Coroutine[Any, Any, None]]` - Processing function
 - `concurrent_tasks: int = 2` - Maximum concurrent tasks
 - `ignore_exceptions: bool = False` - If True, log exceptions but continue processing
 
 **Key Features:**
+
 - Processes elements as they become available
 - Maintains the specified concurrency limit
 - Automatic task cancellation on errors or cancellation
@@ -177,12 +179,14 @@ async def fetch_all_users():
 ```
 
 **Parameters:**
+
 - `handler: Callable[[Element], Coroutine[Any, Any, Result]]` - Processing function that returns results
 - `elements: AsyncIterable[Element] | Iterable[Element]` - Elements to process
 - `concurrent_tasks: int = 2` - Maximum concurrent tasks
 - `return_exceptions: bool = False` - Include exceptions in results instead of raising
 
 **Key Features:**
+
 - Results returned in same order as input elements
 - Configurable exception handling via `return_exceptions`
 - Works with both sync and async iterables
@@ -216,11 +220,13 @@ async def fetch_different_endpoints():
 ```
 
 **Parameters:**
+
 - `coroutines: AsyncIterable[Coroutine] | Iterable[Coroutine]` - Coroutine objects to execute
 - `concurrent_tasks: int = 2` - Maximum concurrent tasks
 - `return_exceptions: bool = False` - Include exceptions in results instead of raising
 
 **Key Features:**
+
 - Works directly with coroutine objects rather than applying a handler function
 - Allows for different parameters per coroutine
 - Maintains result ordering matching input coroutine order
@@ -256,11 +262,13 @@ async def process_events():
 ```
 
 **Parameters:**
+
 - `source_a: AsyncIterable[ElementA]` - First async iterable to consume
 - `source_b: AsyncIterable[ElementB]` - Second async iterable to consume  
 - `exhaustive: bool = False` - If True, continue until both sources complete; if False (default), stop when either exhausts
 
 **Key Features:**
+
 - Elements yielded based on availability, not source order
 - Maintains exactly one pending task per iterator for efficiency
 - Default behavior stops when either source is exhausted
