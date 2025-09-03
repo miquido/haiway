@@ -10,7 +10,6 @@ containers:
 
 ```python
 from haiway import State
-from typing import Sequence
 
 class User(State):
     id: str
@@ -32,6 +31,8 @@ Haiway uses **context scopes** to manage state and enable dependency injection:
 
 ```python
 from haiway import ctx
+import asyncio
+
 
 async def main():
     # Create immutable user object
@@ -55,7 +56,6 @@ async def main():
         print(f"Current user: {current_alice.name}")
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
 ```
 
@@ -69,12 +69,12 @@ if __name__ == "__main__":
   unchanged
 - Context automatically manages the lifecycle - when the scope exits, resources are cleaned up
 
-## Adding Functionality
+## Dependency Injection
 
 Haiway implements **dependency injection** through function protocols and state containers:
 
 ```python
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, Sequence
 from haiway import statemethod
 
 # Function interface - single __call__ method only
@@ -114,7 +114,6 @@ async def main():
         print(f"Found {len(users)} users")
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
 ```
 
@@ -144,6 +143,27 @@ changing the calling code.
 1. **Type Safety**: Full type checking support with modern Python features
 1. **Context Management**: Scoped execution with state propagation
 1. **Dependency Injection**: Clean separation of concerns using function based state interfaces
+
+## Disposables
+
+Disposables are resources that require automatic clean up after they are used. You can put them in
+the context and they are going to be initialized when this context starts and cleaned up once the
+context is finished. You can define disposables like this:
+
+```python
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def database_connection():
+    print("Opening database connection")
+    try:
+        yield DatabaseState(connection={"status": "connected"})
+    finally:
+        print("Closing database connection")
+```
+
+Here the `database_connection()` function is a factory for a dependency that needs cleanup after
+it's used. It gets called once on the context beginning and the second time when the context ends.
 
 ## Advanced Context Usage
 
@@ -176,7 +196,6 @@ async def main():
         print(f"Timeout overridden to {config.timeout}")
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
 ```
 

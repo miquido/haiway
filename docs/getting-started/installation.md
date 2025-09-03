@@ -19,13 +19,13 @@ You may choose to install haiway including optional support for OpenTelemetry.
 For distributed tracing and observability:
 
 ```bash
-pip install haiway[opentelemetry]
+pip install "haiway[opentelemetry]"
 ```
 
 For httpx implementation of http client:
 
 ```bash
-pip install haiway[httpx]
+pip install "haiway[httpx]"
 ```
 
 Now you're ready to continue with the [Quick Start](quickstart.md) guide!

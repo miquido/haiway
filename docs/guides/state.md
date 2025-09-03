@@ -69,11 +69,12 @@ This creates a new instance with the updated value, leaving the original instanc
 State supports generic type parameters, allowing you to create reusable containers:
 
 ```python
-from typing import Generic, TypeVar
+from typing import TypeVar
+from haiway import State
 
 T = TypeVar('T')
 
-class Container(State, Generic[T]):
+class Container[T](State):
     value: T
 
 # Create specialized instances
@@ -107,9 +108,9 @@ State classes perform thorough type validation for all supported Python types:
 
 - **Basic Types**: int, str, bool, float, bytes
 - **Container Types**:
-  - **Sequence[T]**: Use `Sequence[T]` instead of `list[T]` - converted to immutable tuples
-  - **Mapping[K, V]**: Use `Mapping[K, V]` instead of `dict[K, V]` - remains as dict
-  - **Set[T]**: Use `Set[T]` instead of `set[T]` - converted to immutable frozensets
+  - **Sequence[T]**: Use `Sequence[T]` instead of `list[T]` — are converted to immutable tuples
+  - **Mapping[K, V]**: Use `Mapping[K, V]` instead of `dict[K, V]` — remains a dict
+  - **Set[T]**: Use `Set[T]` instead of `set[T]` — are converted to immutable frozensets
   - **tuple[T, ...]**: Fixed or variable-length tuples
 - **Special Types**: UUID, datetime, date, time, timedelta, timezone, Path, re.Pattern
 - **Union Types**: str | None, int | float
