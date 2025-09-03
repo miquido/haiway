@@ -64,7 +64,7 @@ if __name__ == "__main__":
 - The `.updated()` method creates a copy of object with modified fields, leaving the original unchanged
 - Context automatically manages the lifecycle - when the scope exits, resources are cleaned up
 
-## Dependency injection
+## Dependency Injection
 
 Haiway implements **dependency injection** through function protocols and state containers:
 
