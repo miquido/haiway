@@ -147,9 +147,9 @@ changing the calling code.
 
 ## Disposables
 
-Disposables are resources that require automatic clean up after they are used. You can put
-them in the context and they are going to be initialized when this context starts and cleaned
-up once the context is finished. You can define disposables like this:
+Disposables are resources that require automatic clean up after they are used. You can put them in
+the context and they are going to be initialized when this context starts and cleaned up once the
+context is finished. You can define disposables like this:
 
 ```python
 from contextlib import asynccontextmanager

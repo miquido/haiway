@@ -189,7 +189,8 @@ async def fetch_all_users():
 
 **Parameters:**
 
-- `handler: Callable[[Element], Coroutine[Any, Any, Result]]` - Processing function that returns results
+- `handler: Callable[[Element], Coroutine[Any, Any, Result]]` - Processing function that returns
+  results
 - `elements: AsyncIterable[Element] | Iterable[Element]` - Elements to process
 - `concurrent_tasks: int = 2` - Maximum concurrent tasks
 - `return_exceptions: bool = False` - Include exceptions in results instead of raising
