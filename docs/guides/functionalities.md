@@ -1,28 +1,48 @@
 # Functionalities
 
-Haiway is a framework designed to facilitate the development of applications using the functional programming paradigm combined with structured concurrency concepts. Unlike traditional object-oriented frameworks, Haiway emphasizes immutability, pure functions, and context-based state management, enabling developers to build scalable and maintainable applications. By leveraging context managers combined with context variables, Haiway ensures safe state propagation in concurrent environments and simplifies dependency injection through function implementation propagation.
+Haiway is a framework designed to facilitate the development of applications using the functional
+programming paradigm combined with structured concurrency concepts. Unlike traditional
+object-oriented frameworks, Haiway emphasizes immutability, pure functions, and context-based state
+management, enabling developers to build scalable and maintainable applications. By leveraging
+context managers combined with context variables, Haiway ensures safe state propagation in
+concurrent environments and simplifies dependency injection through function implementation
+propagation.
 
 ### Functional Basics
 
-Functional programming centers around creating pure functions - functions that have no side effects and rely solely on their inputs to produce outputs. This approach promotes predictability, easier testing, and better modularity. While Python is inherently multi-paradigm and not strictly functional, Haiway encourages adopting functional principles where feasible to enhance code clarity and reliability.
+Functional programming centers around creating pure functions - functions that have no side effects
+and rely solely on their inputs to produce outputs. This approach promotes predictability, easier
+testing, and better modularity. While Python is inherently multi-paradigm and not strictly
+functional, Haiway encourages adopting functional principles where feasible to enhance code clarity
+and reliability.
 
 Key functional concepts:
 
 - Immutability: Data structures are immutable, preventing unintended side effects.
-- Pure Functions: Functions depend only on their inputs and produce outputs without altering external state.
-- Higher-Order Functions: Functions that can take other functions as arguments or return them as results.
+- Pure Functions: Functions depend only on their inputs and produce outputs without altering
+  external state.
+- Higher-Order Functions: Functions that can take other functions as arguments or return them as
+  results.
 
-Haiway balances functional purity with Python's flexibility by allowing limited side effects when necessary, though minimizing them is recommended for maintainability.
+Haiway balances functional purity with Python's flexibility by allowing limited side effects when
+necessary, though minimizing them is recommended for maintainability.
 
-Instead of preparing objects with internal state and methods, Haiway encourages creating structures containing sets of functions and providing state either through function arguments or contextually using execution scope state. Using explicit function arguments is the preferred method; however, some functionalities may benefit from contextual, broader accessible state.
+Instead of preparing objects with internal state and methods, Haiway encourages creating structures
+containing sets of functions and providing state either through function arguments or contextually
+using execution scope state. Using explicit function arguments is the preferred method; however,
+some functionalities may benefit from contextual, broader accessible state.
 
 ### Preparing Functionalities
 
-In Haiway, functionalities are modularized into two primary components: interfaces and implementations. This separation ensures clear contracts for functionalities, promoting modularity and ease of testing.
+In Haiway, functionalities are modularized into two primary components: interfaces and
+implementations. This separation ensures clear contracts for functionalities, promoting modularity
+and ease of testing.
 
 ### Defining Types
 
-Interfaces define the public API of a functionality, specifying the data types and functions it exposes without detailing the underlying implementation. Preparing functionality starts from defining associated types - data structures and function types.
+Interfaces define the public API of a functionality, specifying the data types and functions it
+exposes without detailing the underlying implementation. Preparing functionality starts from
+defining associated types - data structures and function types.
 
 ```python
 # types.py
@@ -39,11 +59,16 @@ class FunctionSignature(Protocol):
     async def __call__(self, argument: FunctionArgument) -> None: ...
 ```
 
-In the example above, typing.Protocol is used to fully define the function signature, along with a custom structure serving as its argument. Function type names should emphasize the nature of their operations by using continuous tense adjectives, such as 'ElementCreating' or 'ValueLoading.'
+In the example above, typing.Protocol is used to fully define the function signature, along with a
+custom structure serving as its argument. Function type names should emphasize the nature of their
+operations by using continuous tense adjectives, such as 'ElementCreating' or 'ValueLoading.'
 
 ### Defining State
 
-State represents the immutable data required by functionalities. It is propagated through contexts to maintain consistency and support dependency injection. Haiway comes with a helpful base class `State` which utilizes dataclass-like transform combined with runtime type checking and immutability.
+State represents the immutable data required by functionalities. It is propagated through contexts
+to maintain consistency and support dependency injection. Haiway comes with a helpful base class
+`State` which utilizes dataclass-like transform combined with runtime type checking and
+immutability.
 
 ```python
 # state.py
@@ -59,17 +84,20 @@ class Functionality(State):
     function: FunctionSignature
 ```
 
-This example shows a state required by the functionality as well as a container for holding function implementations. Both are intended to be propagated contextually to be accessible throughout the application and possibly altered when needed.
+This example shows a state required by the functionality as well as a container for holding function
+implementations. Both are intended to be propagated contextually to be accessible throughout the
+application and possibly altered when needed.
 
 ### Defining Implementation
 
-Implementations provide concrete behavior for the defined interfaces, ensuring that they conform to the specified contracts.
+Implementations provide concrete behavior for the defined interfaces, ensuring that they conform to
+the specified contracts.
 
 ```python
 # implementation.py
 from my_functionality.types import FunctionArgument
 from my_functionality.state import FunctionalityState, Functionality
-from haiway import ctx
+from haiway import ctx, statemethod
 
 # Concrete implementation of the FunctionInterface
 async def function_implementation(argument: FunctionArgument) -> None:
@@ -84,32 +112,43 @@ def functionality_implementation() -> Functionality:
     return Functionality(function=function_implementation)
 ```
 
-In the example above, function_implementation is a concrete implementation of the previously declared function, and functionality_implementation is a factory method suitable for creating a full implementation of the Functionality.
+In the example above, function_implementation is a concrete implementation of the previously
+declared function, and functionality_implementation is a factory method suitable for creating a full
+implementation of the Functionality.
 
-Alternatively, instead of providing a factory method, some implementations may allow defining default values within state. This approach is also valid to implement and allows skipping explicit definitions of state by leveraging automatically created defaults.
+Alternatively, instead of providing a factory method, some implementations may allow defining
+default values within state. This approach is also valid to implement and allows skipping explicit
+definitions of state by leveraging automatically created defaults.
 
-### Classmethod Calls
+### State Methods
 
-Calls act as intermediaries that invoke the function implementations within the appropriate context. This abstraction simplifies access to functionalities by hiding non-essential details and access to various required components. When possible, the preferred way of defining calls is to put them within the functionality state type as class methods. This approach allows easier access to desired functions and improves ergonomics over the free functions access.
+Calls act as intermediaries that invoke the function implementations within the appropriate context.
+This abstraction simplifies access while keeping instance resolution consistent. When possible, the
+preferred way of defining calls is to put them within the functionality state type as state methods
+using `@statemethod`. This allows calls from the class (resolved via context) and from instances
+(using the instance directly).
 
 ```python
 # state.py - revisited
 ...
 class Functionality(State):
-    # define function call as a class method
-    @classmethod
-    async def function_call(cls, argument: FunctionArgument) -> None:
-        # Invoke the function implementation from the contextual state
-        await ctx.state(cls).function(argument=argument)
+    # define function call as a state method
+    @statemethod
+    async def function_call(self, argument: FunctionArgument) -> None:
+        # Invoke the function implementation through the instance
+        await self.function(argument=argument)
 
     function: FunctionSignature
 ```
 
-Keeping it within the functionality interface class allows streamlined access and better control over the calls.
+Keeping it within the functionality interface class allows streamlined access and better control
+over the calls.
 
 ### Using Implementation
 
-To utilize the defined functionalities within an application, contexts must be established to provide the necessary state and implementations. Below is an example of how to integrate Haiway functionalities into an application.
+To utilize the defined functionalities within an application, contexts must be established to
+provide the necessary state and implementations. Below is an example of how to integrate Haiway
+functionalities into an application.
 
 ```python
 # application.py
@@ -128,13 +167,16 @@ async def application_function(argument: FunctionArgument) -> None:
         await Functionality.function_call(FunctionArgument(value="SampleValue"))
 ```
 
-Going through all of these layers may seem unnecessary at first, but in the long term, it creates a robust, modular system that is easy to manage and work with.
+Going through all of these layers may seem unnecessary at first, but in the long term, it creates a
+robust, modular system that is easy to manage and work with.
 
 ## Example
 
-To better understand the whole idea, we can take a look at a more concrete example of a notes management functionality:
+To better understand the whole idea, we can take a look at a more concrete example of a notes
+management functionality:
 
-First, we define some basic types required by our functionality - management functions signatures and the note itself.
+First, we define some basic types required by our functionality - management functions signatures
+and the note itself.
 
 ```python
 # notes/types.py
@@ -175,23 +217,25 @@ class NotesDirectory(State):
 # State encapsulating the functionality with its interface
 class Notes(State):
     # Call of note creation function
-    @classmethod
-    async def create_note(cls, content: str, **extra: Any) -> Note:
-        # Invoke the function implementation from the contextual state
-        return await ctx.state(cls).creating(content=content, **extra)
+    @statemethod
+    async def create_note(self, content: str, **extra: Any) -> Note:
+        # Invoke the function implementation through the instance
+        return await self.creating(content=content, **extra)
 
     # Call of note update function
-    @classmethod
-    async def update_note(cls, note: Note, **extra: Any) -> None:
-        # Invoke the function implementation from the contextual state
-        await ctx.state(cls).updating(note=note, **extra)
+    @statemethod
+    async def update_note(self, note: Note, **extra: Any) -> None:
+        # Invoke the function implementation through the instance
+        await self.updating(note=note, **extra)
 
     # instance variables holding function implementations
     creating: NoteCreating
     updating: NoteUpdating
 ```
 
-That allows us to provide a concrete implementation. Note that `extra` arguments would allow us to alter the `NotesDirectory` path for a single function call only. This might be a very important feature in some cases, i.e., when using recursive function calls.
+That allows us to provide a concrete implementation. Note that `extra` arguments would allow us to
+alter the `NotesDirectory` path for a single function call only. This might be a very important
+feature in some cases, i.e., when using recursive function calls.
 
 ```python
 # notes/files.py
@@ -230,7 +274,8 @@ def file_notes() -> Notes:
     )
 ```
 
-You can now use the whole functionality by defining implementation for execution context and calling functionality methods.
+You can now use the whole functionality by defining implementation for execution context and calling
+functionality methods.
 
 ```python
 # example.py
@@ -268,5 +313,5 @@ async with ctx.scope(notes_preset, NotesDirectory(path="./custom/")):
     await Notes.create_note("This uses custom path")
 ```
 
-This approach is useful when you have standard configurations that you want to reuse across different parts of your application.
-
+This approach is useful when you have standard configurations that you want to reuse across
+different parts of your application.

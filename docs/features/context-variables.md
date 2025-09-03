@@ -1,13 +1,14 @@
 # Context Variables
 
-Context variables provide scoped, mutable state within Haiway's immutable context system. They enable controlled state updates that propagate from child to parent scopes on exit.
+Context variables provide scoped, mutable state within Haiway's immutable context system. They
+enable controlled state updates that propagate from child to parent scopes on exit.
 
 ## Key Behaviors
 
 1. **No inheritance**: Child scopes start with empty variable sets
-2. **Upward propagation**: All child variables overwrite parent variables on scope exit
-3. **Task isolation**: Spawned tasks have completely isolated variable contexts
-4. **Error resilience**: Variables propagate even when exceptions occur
+1. **Upward propagation**: All child variables overwrite parent variables on scope exit
+1. **Task isolation**: Spawned tasks have completely isolated variable contexts
+1. **Error resilience**: Variables propagate even when exceptions occur
 
 ## Basic Usage
 

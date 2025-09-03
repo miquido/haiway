@@ -1,10 +1,12 @@
 # First Steps
 
-Now that you've seen Haiway in action, let's dive deeper into the core concepts that make it powerful.
+Now that you've seen Haiway in action, let's dive deeper into the core concepts that make it
+powerful.
 
 ## Understanding State
 
-In Haiway, everything is built around **immutable state objects** that ensure thread safety and predictable behavior:
+In Haiway, everything is built around **immutable state objects** that ensure thread safety and
+predictable behavior:
 
 ```python
 from haiway import State
@@ -27,9 +29,12 @@ print(f"Original: {prefs.theme}, Updated: {dark_prefs.theme}")
 
 **What's happening here:**
 
-- **Automatic Immutability**: `State` base class prevents modification after creation using `__setattr__` blocking
-- **Type Conversion**: Abstract collection types are automatically converted to immutable equivalents during validation
-- **Memory Sharing**: The `.updated()` method creates structural sharing - unchanged fields reference the same objects
+- **Automatic Immutability**: `State` base class prevents modification after creation using
+  `__setattr__` blocking
+- **Type Conversion**: Abstract collection types are automatically converted to immutable
+  equivalents during validation
+- **Memory Sharing**: The `.updated()` method creates structural sharing - unchanged fields
+  reference the same objects
 - **Type Safety**: Field types are validated at runtime, ensuring data integrity
 - **Default Values**: Fields can have defaults, and missing fields use type-appropriate defaults
 
@@ -43,14 +48,16 @@ Always use **abstract collection types** to ensure immutability:
 
 **Why this matters:**
 
-- **Automatic Conversion**: Haiway converts mutable collections (`list`, `set`) to immutable equivalents (`tuple`, `frozenset`) during validation
+- **Automatic Conversion**: Haiway converts mutable collections (`list`, `set`) to immutable
+  equivalents (`tuple`, `frozenset`) during validation
 - **Interface Flexibility**: Abstract types allow callers to pass any compatible collection type
 - **Memory Efficiency**: Immutable collections can be safely shared between state instances
 - **Thread Safety**: Immutable collections eliminate race conditions in concurrent code
 
 ## Context System
 
-The context system provides **scoped execution environments** that manage state and resources automatically:
+The context system provides **scoped execution environments** that manage state and resources
+automatically:
 
 ```python
 from haiway import ctx
@@ -84,6 +91,7 @@ Haiway uses **protocol-based dependency injection** to enable flexible, testable
 
 ```python
 from typing import Protocol, runtime_checkable
+from haiway import State, ctx, statemethod
 
 @runtime_checkable
 class EmailSending(Protocol):
@@ -91,14 +99,13 @@ class EmailSending(Protocol):
 
 class NotificationService(State):
     email_sending: EmailSending
-    
-    @classmethod
-    async def notify_user(cls, user_id: str, message: str) -> bool:
-        service = ctx.state(cls)
-        return await service.email_sending(
+
+    @statemethod
+    async def notify_user(self, user_id: str, message: str) -> bool:
+        return await self.email_sending(
             to=f"user-{user_id}@example.com",
             subject="Notification",
-            body=message
+            body=message,
         )
 
 # Implementation function
@@ -123,12 +130,17 @@ asyncio.run(main())
 
 **What's happening here:**
 
-- **Protocol Contract**: `EmailSending` defines the interface with a single `__call__` method for maximum flexibility
-- **Service State**: `NotificationService` contains the function implementation and provides a clean API
-- **Implementation Function**: `smtp_email_sending` is the concrete function that performs the actual email sending
-- **Factory Pattern**: `SMTPNotificationService()` creates a pre-configured service with the implementation wired up
-- **Context Retrieval**: `ctx.state(cls)` retrieves the service instance from the current context
-- **Transparent Calling**: The class method calls the implementation function seamlessly
+- **Protocol Contract**: `EmailSending` defines the interface with a single `__call__` method for
+  maximum flexibility
+- **Service State**: `NotificationService` contains the function implementation and provides a clean
+  API
+- **Implementation Function**: `smtp_email_sending` is the concrete function that performs the
+  actual email sending
+- **Factory Pattern**: `SMTPNotificationService()` creates a pre-configured service with the
+  implementation wired up
+- **State Method**: `@statemethod` ensures the helper always receives an instance — class calls
+  resolve from context while instance calls use that instance
+- **Transparent Calling**: The method calls the implementation function seamlessly
 - **Type Safety**: `@runtime_checkable` ensures implementations conform to the protocol at runtime
 
 ## Resource Management
@@ -161,17 +173,18 @@ asyncio.run(main())
 
 **What's happening here:**
 
-- **Disposable Pattern**: `disposables=()` parameter accepts async context managers that need cleanup
+- **Disposable Pattern**: `disposables=()` parameter accepts async context managers that need
+  cleanup
 - **Resource Lifecycle**: Resources are opened when entering the scope and closed when exiting
 - **State Injection**: The yielded state object becomes available through `ctx.state()`
 - **Exception Safety**: Resources are cleaned up even if exceptions occur within the scope
-- **Concurrent Cleanup**: Multiple disposables are managed concurrently for efficient resource handling
+- **Concurrent Cleanup**: Multiple disposables are managed concurrently for efficient resource
+  handling
 
 ## Next Steps
 
 Now that you understand the basics:
 
 1. Explore the [Functionalities](../guides/functionalities.md)
-2. Learn about [State](../guides/state.md)
-3. See how to structure [Packages](../guides/packages.md)
-
+1. Learn about [State](../guides/state.md)
+1. See how to structure [Packages](../guides/packages.md)

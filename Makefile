@@ -10,10 +10,10 @@ TESTS_PATH := tests
 -include .env
 
 ifndef UV_VERSION
-	UV_VERSION := 0.7.20
+	UV_VERSION := 0.8.13
 endif
 
-.PHONY: uv_check venv sync update format lint test docs docs-server release
+.PHONY: uv_check venv sync update format lint test docs docs-server docs-format docs-lint release
 
 # Check installed UV version and install if needed
 uv_check:
@@ -92,6 +92,18 @@ docs:
 	@echo '# Building documentation...'
 	@mkdocs build --clean
 	@echo '...documentation built in site/ directory!'
+
+# Format Markdown docs and README
+docs-format:
+	@echo '# Formatting Markdown...'
+	@uv run mdformat --wrap 100 README.md docs
+	@echo '...finished!'
+
+# Lint Markdown docs and README
+docs-lint:
+	@echo '# Linting Markdown...'
+	@uv run pymarkdown --config .pymarkdown.json scan README.md docs
+	@echo '...finished!'
 
 release: lint test
 	@echo '# Preparing release...'

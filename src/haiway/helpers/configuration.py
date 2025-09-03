@@ -4,6 +4,7 @@ from typing import Any, Literal, Protocol, Self, overload
 from typing_extensions import runtime_checkable
 
 from haiway.context import ctx
+from haiway.helpers.statemethods import statemethod
 from haiway.state import State
 from haiway.types.basic import BasicValue
 from haiway.utils.metadata import META_EMPTY, Meta
@@ -396,19 +397,51 @@ class ConfigurationRepository(State):
             assert isinstance(element, Configuration)  # nosec: B101
             storage[key] = element.to_mapping(recursive=True)
 
-        async def load(
+        async def listing(**extra: Any) -> Sequence[str]:
+            return tuple(storage.keys())
+
+        async def loading(
             identifier: str,
             **extra: Any,
         ) -> Mapping[str, BasicValue] | None:
             return storage.get(identifier, None)
 
+        async def defining(
+            identifier: str,
+            value: Mapping[str, BasicValue],
+            **extra: Any,
+        ) -> None:
+            storage[identifier] = value
+
+        async def removing(
+            identifier: str,
+            **extra: Any,
+        ) -> None:
+            del storage[identifier]
+
         return cls(
-            loading=load,
+            listing=listing,
+            loading=loading,
+            defining=defining,
+            removing=removing,
         )
 
+    @overload
     @classmethod
     async def available_configurations(
         cls,
+        **extra: Any,
+    ) -> Sequence[str]: ...
+
+    @overload
+    async def available_configurations(
+        self,
+        **extra: Any,
+    ) -> Sequence[str]: ...
+
+    @statemethod
+    async def available_configurations(
+        self,
         **extra: Any,
     ) -> Sequence[str]:
         """List all available configuration identifiers.
@@ -429,12 +462,22 @@ class ConfigurationRepository(State):
                 print(f"Available configurations: {', '.join(identifiers)}")
             ```
         """
-        return await ctx.state(cls).listing(**extra)
+        return await self.listing(**extra)
 
     @overload
     @classmethod
     async def load[Config: Configuration](
         cls,
+        config: type[Config],
+        /,
+        *,
+        identifier: str | None = None,
+        **extra: Any,
+    ) -> Config | None: ...
+
+    @overload
+    async def load[Config: Configuration](
+        self,
         config: type[Config],
         /,
         *,
@@ -463,6 +506,17 @@ class ConfigurationRepository(State):
         identifier: str | None = None,
         default: Config,
         **extra: Any,
+    ) -> Config: ...
+
+    @overload
+    async def load[Config: Configuration](
+        self,
+        config: type[Config],
+        /,
+        *,
+        identifier: str | None = None,
+        default: Config,
+        **extra: Any,
     ) -> Config:
         """Load configuration with default fallback by type.
 
@@ -481,6 +535,17 @@ class ConfigurationRepository(State):
     @classmethod
     async def load[Config: Configuration](
         cls,
+        config: type[Config],
+        /,
+        *,
+        identifier: str | None = None,
+        required: Literal[True],
+        **extra: Any,
+    ) -> Config: ...
+
+    @overload
+    async def load[Config: Configuration](
+        self,
         config: type[Config],
         /,
         *,
@@ -522,13 +587,11 @@ class ConfigurationRepository(State):
         default: Config | None,
         required: bool,
         **extra: Any,
-    ) -> Config | None:
-        """Internal overload for implementation."""
-        ...
+    ) -> Config | None: ...
 
-    @classmethod
+    @statemethod
     async def load[Config: Configuration](
-        cls,
+        self,
         config: type[Config],
         /,
         *,
@@ -586,7 +649,7 @@ class ConfigurationRepository(State):
         config_identifier: str = config.__qualname__ if identifier is None else identifier
         loaded: Mapping[str, BasicValue] | None
         try:
-            loaded = await ctx.state(cls).loading(
+            loaded = await self.loading(
                 identifier=config_identifier,
                 **extra,
             )
@@ -629,6 +692,14 @@ class ConfigurationRepository(State):
         config: Configuration,
         /,
         **extra: Any,
+    ) -> None: ...
+
+    @overload
+    async def define(
+        self,
+        config: Configuration,
+        /,
+        **extra: Any,
     ) -> None:
         """Store a configuration instance using its class name as identifier.
 
@@ -646,6 +717,15 @@ class ConfigurationRepository(State):
         /,
         value: Configuration | Mapping[str, BasicValue],
         **extra: Any,
+    ) -> None: ...
+
+    @overload
+    async def define(
+        self,
+        config: str,
+        /,
+        value: Configuration | Mapping[str, BasicValue],
+        **extra: Any,
     ) -> None:
         """Store configuration data under a custom identifier.
 
@@ -656,9 +736,9 @@ class ConfigurationRepository(State):
         """
         ...
 
-    @classmethod
+    @statemethod
     async def define(
-        cls,
+        self,
         config: Configuration | str,
         /,
         value: Configuration | Mapping[str, BasicValue] | None = None,
@@ -714,15 +794,32 @@ class ConfigurationRepository(State):
             config_identifier = config.__class__.__qualname__
             config_value = config.to_mapping(recursive=True)
 
-        return await ctx.state(cls).defining(
+        return await self.defining(
             identifier=config_identifier,
             value=config_value,
             **extra,
         )
 
+    @overload
     @classmethod
     async def remove[Config: Configuration](
         cls,
+        identifier: type[Config] | str,
+        /,
+        **extra: Any,
+    ) -> None: ...
+
+    @overload
+    async def remove[Config: Configuration](
+        self,
+        identifier: type[Config] | str,
+        /,
+        **extra: Any,
+    ) -> None: ...
+
+    @statemethod
+    async def remove[Config: Configuration](
+        self,
         identifier: type[Config] | str,
         /,
         **extra: Any,
@@ -752,7 +849,7 @@ class ConfigurationRepository(State):
         else:
             config_identifier = identifier.__qualname__
 
-        return await ctx.state(cls).removing(
+        return await self.removing(
             identifier=config_identifier,
             **extra,
         )

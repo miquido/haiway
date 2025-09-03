@@ -44,7 +44,7 @@ Haiway is a functional programming framework for Python 3.12+ designed to facili
 ## Essential Imports
 
 ```python
-from haiway import State, ctx
+from haiway import State, ctx, statemethod
 from typing import Protocol, runtime_checkable, Any
 from collections.abc import Sequence, Mapping, Set  # NEVER use list, dict, set
 from contextlib import asynccontextmanager
@@ -152,24 +152,24 @@ class UserService(State):
     creating: UserCreating
     updating: UserUpdating
 
-    # Clean API through class methods
-    @classmethod
-    async def get_user(cls, id: UUID) -> User:
-        return await ctx.state(cls).fetching(id)
+    # Clean API through state methods
+    @statemethod
+    async def get_user(self, id: UUID) -> User:
+        return await self.fetching(id)
 
-    @classmethod
-    async def create_user(cls, name: str, email: str) -> User:
-        return await ctx.state(cls).creating(name, email)
+    @statemethod
+    async def create_user(self, name: str, email: str) -> User:
+        return await self.creating(name, email)
 
-    @classmethod
-    async def update_user(cls, user: User, **changes: Any) -> User:
-        return await ctx.state(cls).updating(user, **changes)
+    @statemethod
+    async def update_user(self, user: User, **changes: Any) -> User:
+        return await self.updating(user, **changes)
 ```
 
 **Why service containers work:**
 - **Dependency injection without frameworks**: State-based containers hold implementations
-- **Clean public API**: Class methods hide the complexity of accessing context state
-- **Type safety**: `ctx.state(cls)` retrieves the exact service type with all its protocols
+- **Clean public API**: State methods hide instance resolution and context access
+- **Type safety**: Calls are made through a strongly-typed instance (resolved via context when called on the class)
 - **Composable**: Multiple services can be combined in a single context scope
 
 ### Implementation Functions
@@ -502,7 +502,7 @@ from typing import Protocol, runtime_checkable
 from collections.abc import Sequence
 from uuid import UUID, uuid4
 from datetime import datetime
-from haiway import State, ctx
+from haiway import State, ctx, statemethod
 import json
 
 # Domain Types
@@ -539,20 +539,20 @@ class BlogService(State):
     creating: ArticleCreating
     listing: ArticleListing
 
-    @classmethod
-    async def find_article(cls, id: UUID) -> Article | None:
-        return await ctx.state(cls).finding(id)
+    @statemethod
+    async def find_article(self, id: UUID) -> Article | None:
+        return await self.finding(id)
 
-    @classmethod
-    async def create_article(cls, title: str, content: str, author_id: UUID) -> Article:
+    @statemethod
+    async def create_article(self, title: str, content: str, author_id: UUID) -> Article:
         config = ctx.state(BlogConfig)
         if len(content) > config.max_content_length:
             raise ValueError(f"Content too long: {len(content)} > {config.max_content_length}")
-        return await ctx.state(cls).creating(title, content, author_id)
+        return await self.creating(title, content, author_id)
 
-    @classmethod
-    async def list_articles(cls, author_id: UUID | None = None) -> Sequence[Article]:
-        return await ctx.state(cls).listing(author_id)
+    @statemethod
+    async def list_articles(self, author_id: UUID | None = None) -> Sequence[Article]:
+        return await self.listing(author_id)
 
 # Implementation
 async def file_article_finding(id: UUID) -> Article | None:
@@ -887,7 +887,7 @@ updated_user = user_data.updated(
 ### 3. Service Pattern
 - Create service container classes inheriting from `State`
 - Hold protocol implementations as attributes
-- Provide clean API through `@classmethod` methods
+- Provide clean API through `@statemethod` methods
 - Access implementations via `ctx.state(ServiceClass).protocol_attribute()`
 
 ### 4. Context Rules

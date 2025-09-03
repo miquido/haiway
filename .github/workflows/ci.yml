@@ -31,6 +31,14 @@ jobs:
       - name: Lint
         run: uv run ruff check --output-format=github ./src ./tests && uv run pyright --project ./
 
+      - name: Docs Lint (non-Windows)
+        if: runner.os != 'Windows'
+        run: |
+          # Markdown style lint
+          uv run pymarkdown --config .pymarkdown.json scan README.md docs
+          # Formatting check (fails if reformatting would be needed)
+          uv run mdformat --wrap 100 --check README.md docs
+
       - name: Test
         run: uv run pytest --rootdir= ./tests --doctest-modules --junitxml=junit/test-results.xml
 

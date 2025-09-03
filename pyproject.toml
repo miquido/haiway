@@ -1,11 +1,11 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.8.0,<0.9.0"]
+build-backend = "uv_build"
 
 [project]
 name = "haiway"
 description = "Framework for dependency injection and state management within structured concurrency model."
-version = "0.31.0"
+version = "0.31.3"
 readme = "README.md"
 maintainers = [
   { name = "Kacper Kaliński", email = "kacper.kalinski@miquido.com" },
@@ -40,6 +40,9 @@ dev = [
   "pytest-asyncio~=0.26",
   "pytest-cov~=6.1",
   "ruff~=0.12",
+  "mdformat~=0.7",
+  "mdformat-gfm~=0.3",
+  "pymarkdownlnt~=0.9",
 ]
 docs = ["mkdocs~=1.6", "mkdocs-material~=9.5", "mkdocstrings[python]~=0.27"]
 
@@ -73,3 +76,30 @@ useLibraryCodeForTypes = true
 [tool.pyright.analysis]
 diagnosticMode = "workspace"
 typeCheckingMode = "strict"
+
+[tool.uv-build]
+packages = [{ include = "haiway", from = "src" }]
+
+[tool.uv-build.sdist]
+exclude = [
+  "site",
+  "docs",
+  "tests",
+  ".github",
+  "stubs",
+  "config",
+  "llms.txt",
+  ".vscode",
+  ".claude",
+  ".codex",
+  ".zed",
+  ".venv",
+  "**/.DS_Store",
+  "**/__pycache__",
+  ".ruff_cache",
+  ".pytest_cache",
+  ".mypy_cache",
+]
+
+[tool.uv-build.wheel]
+exclude = ["**/.DS_Store", "**/__pycache__", "**/*.pyc"]

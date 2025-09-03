@@ -1,10 +1,12 @@
 # Quick Start
 
-Let's build your first Haiway application! This guide will walk you through creating a simple user management system that demonstrates Haiway's core features.
+Let's build your first Haiway application! This guide will walk you through creating a simple user
+management system that demonstrates Haiway's core features.
 
 ## Your First State
 
-Haiway applications are built around **immutable state objects** that serve as data and dependency containers:
+Haiway applications are built around **immutable state objects** that serve as data and dependency
+containers:
 
 ```python
 from haiway import State
@@ -17,7 +19,8 @@ class User(State):
 
 **What's happening here:**
 
-- `State` is Haiway's base using dataclass like definitions that automatically makes objects immutable
+- `State` is Haiway's base using dataclass like definitions that automatically makes objects
+  immutable
 - Fields are defined with type hints - Haiway validates types at runtime
 - Once created, `User` objects cannot be modified (attempting `user.name = "new"` raises an error)
 - Optional fields use union types (`str | None`) with default values
@@ -59,9 +62,11 @@ if __name__ == "__main__":
 **What's happening here:**
 
 - `ctx.scope("app", alice)` creates an execution context named "app", containing the `alice` state
-- State is **automatically propagated** to all code within the scope (including nested function calls)
+- State is **automatically propagated** to all code within the scope (including nested function
+  calls)
 - `ctx.state(User)` retrieves contextual state using its type as a key
-- The `.updated()` method creates a copy of object with modified fields, leaving the original unchanged
+- The `.updated()` method creates a copy of object with modified fields, leaving the original
+  unchanged
 - Context automatically manages the lifecycle - when the scope exits, resources are cleaned up
 
 ## Dependency Injection
@@ -70,6 +75,7 @@ Haiway implements **dependency injection** through function protocols and state 
 
 ```python
 from typing import Protocol, runtime_checkable, Sequence
+from haiway import statemethod
 
 # Function interface - single __call__ method only
 @runtime_checkable
@@ -79,9 +85,9 @@ class UsersFetching(Protocol):
 class UsersService(State):
     fetching: UsersFetching
 
-    @classmethod
-    async def fetch_users(cls) -> Sequence[User]:
-        return await ctx.state(cls).fetching()
+    @statemethod
+    async def fetch_users(self) -> Sequence[User]:
+        return await self.fetching()
 
 # Factory function for service implementation
 def InMemoryUsersService() -> UsersService:
@@ -114,22 +120,30 @@ if __name__ == "__main__":
 
 **What's happening here:**
 
-- **Protocol Interface**: `UsersFetching` defines a contract with a single `__call__` method - this ensures implementations are interchangeable
-- **Service Container**: `UsersService` holds function implementations and provides a clean API through class methods
-- **Implementation Function**: `in_memory_users_fetching` is the concrete implementation that returns actual data
-- **Factory Pattern**: `InMemoryUsersService()` creates a configured service instance with the implementation wired up
-- **Context Injection**: The service is injected into the context scope, making it available throughout the execution
-- **Transparent Access**: `UsersService.fetch_users()` internally retrieves the service from context and calls the implementation
-- **Type Safety**: `@runtime_checkable` enables runtime validation that implementations match the protocol
+- **Protocol Interface**: `UsersFetching` defines a contract with a single `__call__` method - this
+  ensures implementations are interchangeable
+- **Service Container**: `UsersService` holds function implementations and provides a clean API
+  through class methods
+- **Implementation Function**: `in_memory_users_fetching` is the concrete implementation that
+  returns actual data
+- **Factory Pattern**: `InMemoryUsersService()` creates a configured service instance with the
+  implementation wired up
+- **Context Injection**: The service is injected into the context scope, making it available
+  throughout the execution
+- **Transparent Access**: `UsersService.fetch_users()` internally retrieves the service from context
+  and calls the implementation
+- **Type Safety**: `@runtime_checkable` enables runtime validation that implementations match the
+  protocol
 
-This pattern allows you to easily **swap implementations** (in-memory, database, API) without changing the calling code.
+This pattern allows you to easily **swap implementations** (in-memory, database, API) without
+changing the calling code.
 
 ## Key Concepts
 
 1. **Immutable State**: All state objects are immutable by default
-2. **Type Safety**: Full type checking support with modern Python features
-3. **Context Management**: Scoped execution with state propagation
-4. **Dependency Injection**: Clean separation of concerns using function based state interfaces
+1. **Type Safety**: Full type checking support with modern Python features
+1. **Context Management**: Scoped execution with state propagation
+1. **Dependency Injection**: Clean separation of concerns using function based state interfaces
 
 ## Disposables
 
@@ -192,10 +206,11 @@ if __name__ == "__main__":
 - **Preset Definition**: `ContextPreset` packages multiple state objects together
 - **Direct Usage**: Pass the preset directly to `ctx.scope()` instead of a string name
 - **State Override**: Explicit state parameters override preset state by type
-- **Priority System**: Explicit state (highest) > disposables > preset state > contextual state (lowest)
+- **Priority System**: Explicit state (highest) > disposables > preset state > contextual state
+  (lowest)
 
 ## What's Next?
 
 1. Explore the [Functionalities](../guides/functionalities.md)
-2. Learn about [State](../guides/state.md)
-3. See how to structure [Packages](../guides/packages.md)
+1. Learn about [State](../guides/state.md)
+1. See how to structure [Packages](../guides/packages.md)

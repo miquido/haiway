@@ -1,6 +1,10 @@
 # State Management
 
-Haiway's state management system is built around the `State` class, which provides immutable, type-safe data structures with validation. Unlike traditional mutable objects, State instances cannot be modified after creation, ensuring predictable behavior, especially in concurrent environments. This guide explains how to effectively use the State class to manage your application's data.
+Haiway's state management system is built around the `State` class, which provides immutable,
+type-safe data structures with validation. Unlike traditional mutable objects, State instances
+cannot be modified after creation, ensuring predictable behavior, especially in concurrent
+environments. This guide explains how to effectively use the State class to manage your
+application's data.
 
 ### Defining State Classes
 
@@ -40,7 +44,8 @@ user = User(
 )
 ```
 
-All required attributes must be provided, and all values are validated against their type annotations. If a value fails validation, an exception will be raised.
+All required attributes must be provided, and all values are validated against their type
+annotations. If a value fails validation, an exception will be raised.
 
 ### Immutability and Updates
 
@@ -56,8 +61,8 @@ Instead, create new instances with updated values using the `updated` method:
 updated_user = user.updated(name="Bob Smith")
 ```
 
-This creates a new instance with the updated value, leaving the original instance unchanged. The `updated` method accepts keyword arguments for any attributes you want to change.
-
+This creates a new instance with the updated value, leaving the original instance unchanged. The
+`updated` method accepts keyword arguments for any attributes you want to change.
 
 ### Generic State Classes
 
@@ -148,11 +153,11 @@ This requirement ensures immutability and type safety within the State system.
 ### Best Practices
 
 1. **Use Immutability**: Embrace the immutable nature of State - never try to modify instances.
-2. **Make Small States**: Keep State classes focused on a single concern.
-3. **Provide Defaults**: Use default values for optional attributes to make creation easier.
-4. **Use Type Annotations**: Always provide accurate type annotations for all attributes.
-5. **Consistent Updates**: Always use `updated` or `updating` methods for changes.
-6. **Composition**: Compose complex states from simpler ones.
+1. **Make Small States**: Keep State classes focused on a single concern.
+1. **Provide Defaults**: Use default values for optional attributes to make creation easier.
+1. **Use Type Annotations**: Always provide accurate type annotations for all attributes.
+1. **Consistent Updates**: Always use `updated` or `updating` methods for changes.
+1. **Composition**: Compose complex states from simpler ones.
 
 ### Example: Complex State Management
 
@@ -214,9 +219,12 @@ user4 = user.updated(address=new_address)
 
 ### Performance Considerations
 
-While State instances are immutable, creating new instances for updates has minimal overhead as only the changed paths are reconstructed. The validation system is optimized to be fast for typical use cases.
+While State instances are immutable, creating new instances for updates has minimal overhead as only
+the changed paths are reconstructed. The validation system is optimized to be fast for typical use
+cases.
 
 For high-performance scenarios:
+
 - Keep State classes relatively small and focused
 - Consider using path-based updates for nested changes
 - If needed, batch multiple updates into a single `updated` call
@@ -245,4 +253,5 @@ async def main():
             assert debug_config.log_level == "DEBUG"
 ```
 
-This pattern enables effective dependency injection and state propagation throughout your application.
+This pattern enables effective dependency injection and state propagation throughout your
+application.

@@ -136,3 +136,54 @@ async def test_delivers_all_when_sending_async():
         elements.append(element)
 
     assert elements == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_multiple_producers_deliver_all_once():
+    stream: AsyncStream[int] = AsyncStream()
+
+    async def producer(start: int, count: int) -> None:
+        for i in range(count):
+            await stream.send(start + i)
+
+    async def orchestrate() -> None:
+        # two producers sending disjoint ranges concurrently
+        t1 = ctx.spawn(producer, 0, 50)
+        t2 = ctx.spawn(producer, 1000, 50)
+        await t1
+        await t2
+        stream.finish()
+
+    ctx.spawn(orchestrate)
+
+    received: list[int] = []
+    async for x in stream:
+        received.append(x)
+
+    # Validate counts and no duplicates
+    assert len(received) == 100
+    assert len(received) == len(set(received))
+    assert set(range(0, 50)).issubset({x for x in received if x < 1000})
+    assert set(range(1000, 1050)).issubset(set(received))
+
+
+@pytest.mark.asyncio
+async def test_producer_race_on_same_ready():
+    stream: AsyncStream[str] = AsyncStream()
+
+    # Start two sends that will race to deliver when consumer is ready
+    ctx.spawn(stream.send, "first")
+    ctx.spawn(stream.send, "second")
+
+    got: list[str] = []
+
+    async def consume_n(n: int) -> None:
+        async for item in stream:
+            got.append(item)
+            if len(got) >= n:
+                stream.finish()
+
+    await consume_n(2)
+
+    # Exactly both values delivered once, in some order
+    assert sorted(got) == ["first", "second"]
