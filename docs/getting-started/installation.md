@@ -25,7 +25,7 @@ pip install "haiway[opentelemetry]"
 For httpx implementation of http client:
 
 ```bash
-pip install "haiway[opentelemetry]"
+pip install "haiway[httpx]"
 ```
 
 Now you're ready to continue with the [Quick Start](quickstart.md) guide!
