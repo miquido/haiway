@@ -114,7 +114,6 @@ async def main():
         print(f"Found {len(users)} users")
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
 ```
 
