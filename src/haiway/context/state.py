@@ -271,7 +271,15 @@ class StateContext(Immutable):
             )
 
         except LookupError as exc:
-            raise MissingContext("StateContext requested but not defined!") from exc
+            try:
+                if default is not None:
+                    return default
+
+                else:
+                    return state()
+
+            except Exception:
+                raise MissingContext("StateContext requested but not defined!") from exc
 
     @classmethod
     def updated(

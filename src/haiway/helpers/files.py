@@ -400,6 +400,25 @@ class FileAccess(State):
     ...     await File.write(processed)
     """
 
+    @overload
+    @classmethod
+    def open(  # pyright: ignore[reportInconsistentOverload]
+        cls,
+        /,
+        path: Path | str,
+        create: bool = False,
+        exclusive: bool = False,
+    ) -> FileContext: ...
+
+    @overload
+    def open(
+        self,
+        /,
+        path: Path | str,
+        create: bool = False,
+        exclusive: bool = False,
+    ) -> FileContext: ...
+
     @statemethod
     def open(
         self,
