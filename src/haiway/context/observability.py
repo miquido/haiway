@@ -626,12 +626,11 @@ class ObservabilityContext(Immutable):
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
 
-            if context.observability is not None:
-                context.observability.attributes_recording(
-                    context._scope,
-                    level=level,
-                    attributes=attributes,
-                )
+            context.observability.attributes_recording(
+                context._scope,
+                level=level,
+                attributes=attributes,
+            )
 
         except Exception as exc:
             cls.record_log(

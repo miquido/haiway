@@ -87,6 +87,7 @@ nav:
       - Installation: getting-started/installation.md
       - Quick Start: getting-started/quickstart.md
       - First Steps: getting-started/first-steps.md
+      - Functional Programming Guide: getting-started/functional-programming-guide.md
   - Guides:
       - guides/index.md
       - State: guides/state.md
