@@ -98,6 +98,7 @@ nav:
   - Features:
       - OpenTelemetry: features/opentelemetry.md
       - HTTPClient: features/http-client.md
+      - Postgres: features/postgres.md
       - File Access: features/file-access.md
       - Event Bus: features/event-bus.md
       - State Methods: features/state-methods.md
