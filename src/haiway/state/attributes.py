@@ -22,6 +22,8 @@ from typing import (
     overload,
 )
 
+from typing_extensions import is_typeddict as is_typeddict_ext
+
 from haiway import types as haiway_types
 from haiway.types import MISSING, Missing
 
@@ -700,7 +702,7 @@ def resolve_attribute_annotation(  # noqa: C901, PLR0911, PLR0912
         case typing.Literal:
             return _resolve_literal(annotation)
 
-        case typeddict if is_typeddict(typeddict):
+        case typeddict if is_typeddict(typeddict) or is_typeddict_ext(typeddict):
             return _resolve_type_typeddict(
                 typeddict,
                 module=module,

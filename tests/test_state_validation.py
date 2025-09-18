@@ -7,6 +7,7 @@ from typing import Any, Literal, NotRequired, Protocol, Required, TypedDict, run
 from uuid import UUID, uuid4
 
 import pytest
+from typing_extensions import TypedDict as ExtTypedDict
 
 from haiway import MISSING, Missing, State
 from haiway.state.attributes import AttributeAnnotation
@@ -34,6 +35,13 @@ class UserDict(TypedDict):
     age: int
     email: NotRequired[str]
     active: Required[bool]
+
+
+class LegacyUserDict(ExtTypedDict):
+    username: str
+    score: int
+    bio: NotRequired[str]
+    verified: Required[bool]
 
 
 class NestedState(State):
@@ -300,6 +308,38 @@ def test_validator_typed_dict() -> None:
     # Invalid missing Required field
     with pytest.raises(ValidationError):  # Should fail validation due to missing 'active'
         TypedDictTest(user={"name": "Bob", "age": 35, "email": "bob@example.com"})
+
+
+def test_validator_typed_dict_from_extensions() -> None:
+    class TypedDictExtensionsTest(State):
+        legacy_user: LegacyUserDict
+
+    instance = TypedDictExtensionsTest(
+        legacy_user={
+            "username": "legacy_john",
+            "score": 9001,
+            "bio": "veteran user",
+            "verified": True,
+        }
+    )
+    assert instance.legacy_user["username"] == "legacy_john"
+    assert instance.legacy_user["score"] == 9001
+    assert instance.legacy_user["bio"] == "veteran user"
+    assert instance.legacy_user["verified"] is True
+
+    instance_missing_optional = TypedDictExtensionsTest(
+        legacy_user={"username": "legacy_jane", "score": 420, "verified": False}
+    )
+    assert instance_missing_optional.legacy_user["username"] == "legacy_jane"
+    assert "bio" not in instance_missing_optional.legacy_user
+
+    with pytest.raises(ValidationError):
+        TypedDictExtensionsTest(
+            legacy_user={"username": "legacy_bob", "score": 3.14, "verified": True}
+        )
+
+    with pytest.raises(ValidationError):
+        TypedDictExtensionsTest(legacy_user={"username": "legacy_rita", "score": 100})
 
 
 def test_validator_state_type() -> None:

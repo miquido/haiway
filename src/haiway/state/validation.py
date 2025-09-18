@@ -8,6 +8,8 @@ from types import EllipsisType, NoneType, TracebackType, UnionType
 from typing import Any, ClassVar, Literal, Protocol, Self, Union, final, is_typeddict
 from uuid import UUID
 
+from typing_extensions import is_typeddict as is_typeddict_ext
+
 from haiway.state.attributes import AttributeAnnotation
 from haiway.types import MISSING, Missing
 
@@ -180,7 +182,7 @@ class AttributeValidator[Type]:
                 common(annotation, recursion_guard),
             )
 
-        elif is_typeddict(annotation.origin):
+        elif is_typeddict(annotation.origin) or is_typeddict_ext(annotation.origin):
             object.__setattr__(
                 validator,
                 "validation",
