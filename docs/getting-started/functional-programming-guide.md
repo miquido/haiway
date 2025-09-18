@@ -32,7 +32,8 @@ Why it matters:
 
 - Thread‑safe sharing by default; easy reasoning and testing
 - `.updated()` copies with structural sharing for performance
-- Collections: prefer `Sequence`/`Mapping`/`Set` (validated then converted to immutable forms)
+- Collections: prefer `Sequence`/`Mapping`/`Set` (sequences/sets become immutable; mappings stay
+  dicts)
 
 ## 2) Composition over Inheritance (Protocols)
 

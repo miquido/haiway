@@ -1,4 +1,5 @@
 import inspect
+from collections.abc import Mapping, MutableMapping
 from types import EllipsisType
 from typing import Any, ClassVar, Self, dataclass_transform, final, get_origin, get_type_hints
 
@@ -41,31 +42,33 @@ class ImmutableMeta(type):
 
 def _collect_attributes(
     cls: type[Any],
-) -> dict[str, DefaultValue[Any] | None]:
-    attributes: dict[str, DefaultValue[Any] | None] = {}
+) -> Mapping[str, DefaultValue[Any] | None]:
+    attributes: MutableMapping[str, DefaultValue[Any] | None] = {}
     for key, annotation in get_type_hints(cls, localns={cls.__name__: cls}).items():
-        # do not include ClassVars
-        if (get_origin(annotation) or annotation) is ClassVar:
-            continue
+        if key.startswith("__"):
+            continue  # do not dunder specials
 
-        field_value: Any = getattr(cls, key, inspect.Parameter.empty)
+        if get_origin(annotation) is ClassVar:
+            continue  # do not include ClassVars
 
-        # Create a Field instance with the default value
-        if field_value is inspect.Parameter.empty:
+        default_value: Any = getattr(cls, key, inspect.Parameter.empty)
+
+        # Create an instance of the default value if any
+        if default_value is inspect.Parameter.empty:
             attributes[key] = None
 
-        elif isinstance(field_value, DefaultValue):
-            attributes[key] = field_value
+        elif isinstance(default_value, DefaultValue):
+            attributes[key] = default_value
 
         else:
-            attributes[key] = DefaultValue(field_value)
+            attributes[key] = DefaultValue(default_value)
 
     return attributes
 
 
 class Immutable(metaclass=ImmutableMeta):
     __IMMUTABLE__: ClassVar[EllipsisType] = ...
-    __ATTRIBUTES__: ClassVar[dict[str, DefaultValue | None]]
+    __ATTRIBUTES__: ClassVar[Mapping[str, DefaultValue | None]]
 
     def __init__(
         self,

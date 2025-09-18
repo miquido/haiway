@@ -16,6 +16,7 @@ from logging import Logger
 from types import TracebackType
 from typing import Any, final, overload
 
+from haiway.attributes import State
 from haiway.context.disposables import Disposable, Disposables
 from haiway.context.events import EventsContext, EventSubscription
 from haiway.context.identifier import ScopeIdentifier
@@ -35,7 +36,7 @@ from haiway.context.presets import (
 from haiway.context.state import ScopeState, StateContext
 from haiway.context.tasks import TaskGroupContext
 from haiway.context.variables import VariablesContext
-from haiway.state import Immutable, State
+from haiway.types import Immutable
 from haiway.utils.collections import as_list
 from haiway.utils.stream import AsyncStream
 

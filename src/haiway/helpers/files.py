@@ -10,9 +10,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import Protocol, overload, runtime_checkable
 
+from haiway.attributes import State
 from haiway.helpers.asynchrony import asynchronous
 from haiway.helpers.statemethods import statemethod
-from haiway.state import State
 
 __all__ = (
     "File",

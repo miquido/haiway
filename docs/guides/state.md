@@ -148,7 +148,9 @@ class BadConfig(State):
     tags: set[str]              # Will cause validation errors
 ```
 
-This requirement ensures immutability and type safety within the State system.
+This requirement preserves type safety and predictable behavior. Sequences and sets are wrapped in
+immutable containers, while mappings stay as plain dicts—treat them as read-only to avoid accidental
+mutation.
 
 ### Best Practices
 
@@ -156,8 +158,50 @@ This requirement ensures immutability and type safety within the State system.
 1. **Make Small States**: Keep State classes focused on a single concern.
 1. **Provide Defaults**: Use default values for optional attributes to make creation easier.
 1. **Use Type Annotations**: Always provide accurate type annotations for all attributes.
-1. **Consistent Updates**: Always use `updated` or `updating` methods for changes.
+1. **Consistent Updates**: Always use `updated` (or helper functions that call it) for changes.
 1. **Composition**: Compose complex states from simpler ones.
+
+### Path-Based Updates and Requirements
+
+Every `State` subclass exposes an `AttributePath` builder via the class attribute `_`. Paths let you
+read or update deeply nested values without manually rebuilding intermediate objects, and they work
+with the same validation rules as regular constructors.
+
+```python
+from collections.abc import Mapping, Sequence
+
+from haiway import AttributeRequirement, State
+
+class Profile(State):
+    name: str
+    preferences: Mapping[str, str]
+
+class User(State):
+    profile: Profile
+    roles: Sequence[str]
+
+user = User(
+    profile=Profile(name="Alice", preferences={"locale": "en"}),
+    roles=("admin",),
+)
+
+# Read a nested value
+assert User._.profile.name(user) == "Alice"
+
+# Produce a new instance with an updated nested value
+renamed = User._.profile.name(user, "Alicia")
+assert renamed.profile.name == "Alicia"
+
+# Combine with AttributeRequirement to assert invariants
+AttributeRequirement.equal(
+    value="admin",
+    path=User._.roles[0],
+).check(renamed)
+```
+
+`AttributeRequirement` instances raise a `ValueError` when a check fails, which makes them useful in
+tests or guard clauses. Use paths for bulk updates in performance-sensitive code—they only rebuild
+the segments that actually change.
 
 ### Example: Complex State Management
 

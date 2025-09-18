@@ -31,7 +31,7 @@ from haiway.postgres.types import (
     PostgresRow,
     PostgresValue,
 )
-from haiway.state import Immutable
+from haiway.types import Immutable
 
 __all__ = ("PostgresConnectionPool",)
 

@@ -11,8 +11,7 @@ from typing import Any, ClassVar, Literal, Protocol, Self, runtime_checkable
 from uuid import UUID, uuid4
 
 from haiway.context.identifier import ScopeIdentifier
-from haiway.state import Immutable
-from haiway.types import Missing
+from haiway.types import Immutable, Missing
 from haiway.utils.formatting import format_str
 
 __all__ = (

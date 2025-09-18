@@ -4,9 +4,9 @@ from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import Any, ClassVar, Self, final
 
+from haiway.attributes import State
 from haiway.context.types import MissingContext
-from haiway.state import Immutable, State
-from haiway.types import Default
+from haiway.types import Default, Immutable
 
 __all__ = (
     "EventSubscription",

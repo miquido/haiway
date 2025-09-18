@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Concatenate
 
+from haiway.attributes import State
 from haiway.context.access import ctx
-from haiway.state import State
 
 __all__ = ("statemethod",)
 
