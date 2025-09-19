@@ -1,3 +1,4 @@
+import typing
 from collections.abc import Callable, Collection, Generator, Mapping, MutableMapping, Sequence, Set
 from contextvars import ContextVar, Token
 from datetime import date, datetime, time, timedelta, timezone
@@ -5,12 +6,24 @@ from enum import Enum
 from pathlib import Path
 from re import Pattern
 from types import EllipsisType, NoneType, TracebackType, UnionType
-from typing import Any, ClassVar, Literal, Protocol, Self, Union, final, is_typeddict
+from typing import (
+    Any,
+    ClassVar,
+    Literal,
+    Protocol,
+    Self,
+    Union,
+    cast,
+    final,
+    get_type_hints,
+    is_typeddict,
+)
 from uuid import UUID
 
+import typing_extensions
 from typing_extensions import is_typeddict as is_typeddict_ext
 
-from haiway.state.attributes import AttributeAnnotation
+from haiway.state.attributes import Attribute, resolve_attribute
 from haiway.types import MISSING, Missing
 
 __all__ = (
@@ -127,7 +140,7 @@ class AttributeValidator[Type]:
     @classmethod
     def of(
         cls,
-        annotation: AttributeAnnotation,
+        annotation: Attribute,
         /,
         *,
         recursion_guard: MutableMapping[str, Validator[Any]],
@@ -141,7 +154,7 @@ class AttributeValidator[Type]:
 
         Parameters
         ----------
-        annotation : AttributeAnnotation
+        annotation : Attribute
             The type annotation to create a validator for
         recursion_guard : MutableMapping[str, AttributeValidation[Any]]
             A mapping used to detect and handle recursive types
@@ -159,20 +172,32 @@ class AttributeValidator[Type]:
         if isinstance(annotation.origin, NotImplementedError | RuntimeError):
             raise annotation.origin  # raise an error if origin was not properly resolved
 
-        if recursive := recursion_guard.get(str(annotation)):
+        if recursive := recursion_guard.get(annotation.recursion_key):
             return recursive
 
         validator: Self = cls(
             annotation,
             validation=MISSING,
         )
-        recursion_guard[str(annotation)] = validator
+        recursion_guard[annotation.recursion_key] = validator
 
-        if hasattr(annotation.origin, "instance_validator"):
+        instance_validator: Callable[..., Any] | None = getattr(
+            annotation.origin,
+            "instance_validator",
+            None,
+        )
+        if callable(instance_validator):
             object.__setattr__(
                 validator,
                 "validation",
-                annotation.origin.instance_validator,
+                instance_validator,
+            )
+
+        elif callable(getattr(annotation.origin, "validator", None)):
+            object.__setattr__(
+                validator,
+                "validation",
+                annotation.origin.validator,
             )
 
         elif common := VALIDATORS.get(annotation.origin):
@@ -189,14 +214,14 @@ class AttributeValidator[Type]:
                 _prepare_validator_of_typed_dict(annotation, recursion_guard),
             )
 
-        elif issubclass(annotation.origin, Protocol):
+        elif isinstance(annotation.origin, type) and issubclass(annotation.origin, Protocol):
             object.__setattr__(
                 validator,
                 "validation",
                 _prepare_validator_of_type(annotation, recursion_guard),
             )
 
-        elif issubclass(annotation.origin, Enum):
+        elif isinstance(annotation.origin, type) and issubclass(annotation.origin, Enum):
             object.__setattr__(
                 validator,
                 "validation",
@@ -223,7 +248,7 @@ class AttributeValidator[Type]:
 
     def __init__(
         self,
-        annotation: AttributeAnnotation,
+        annotation: Attribute,
         validation: Validator[Type] | Missing,
     ) -> None:
         """
@@ -231,12 +256,12 @@ class AttributeValidator[Type]:
 
         Parameters
         ----------
-        annotation : AttributeAnnotation
+        annotation : Attribute
             The type annotation this validator is for
         validation : AttributeValidation[Type] | Missing
             The validation function, or MISSING if not yet set
         """
-        self.annotation: AttributeAnnotation
+        self.annotation: Attribute
         object.__setattr__(
             self,
             "annotation",
@@ -304,7 +329,7 @@ class AttributeValidator[Type]:
 
 
 def _prepare_validator_of_any(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -336,7 +361,7 @@ def _prepare_validator_of_any(
 
 
 def _prepare_validator_of_none(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -372,7 +397,7 @@ def _prepare_validator_of_none(
 
 
 def _prepare_validator_of_missing(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -408,7 +433,7 @@ def _prepare_validator_of_missing(
 
 
 def _prepare_validator_of_literal(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -447,7 +472,7 @@ def _prepare_validator_of_literal(
 
 
 def _prepare_validator_of_type(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -486,7 +511,7 @@ def _prepare_validator_of_type(
 
 
 def _prepare_validator_of_set(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -509,7 +534,7 @@ def _prepare_validator_of_set(
         A validator that validates sets and their elements
     """
     element_validator: Validator[Any] = AttributeValidator.of(
-        annotation.arguments[0],
+        cast(Attribute, annotation.arguments[0]),
         recursion_guard=recursion_guard,
     )
     formatted_type: str = str(annotation)
@@ -534,7 +559,7 @@ def _prepare_validator_of_set(
 
 
 def _prepare_validator_of_sequence(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -557,7 +582,7 @@ def _prepare_validator_of_sequence(
         A validator that validates sequences and their elements
     """
     element_validator: Validator[Any] = AttributeValidator.of(
-        annotation.arguments[0],
+        cast(Attribute, annotation.arguments[0]),
         recursion_guard=recursion_guard,
     )
     formatted_type: str = str(annotation)
@@ -582,7 +607,7 @@ def _prepare_validator_of_sequence(
 
 
 def _prepare_validator_of_collection(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -605,7 +630,7 @@ def _prepare_validator_of_collection(
         A validator that validates collections and their elements
     """
     element_validator: Validator[Any] = AttributeValidator.of(
-        annotation.arguments[0],
+        cast(Attribute, annotation.arguments[0]),
         recursion_guard=recursion_guard,
     )
     formatted_type: str = str(annotation)
@@ -630,7 +655,7 @@ def _prepare_validator_of_collection(
 
 
 def _prepare_validator_of_mapping(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -653,11 +678,11 @@ def _prepare_validator_of_mapping(
         A validator that validates mappings with their keys and values
     """
     key_validator: Validator[Any] = AttributeValidator.of(
-        annotation.arguments[0],
+        cast(Attribute, annotation.arguments[0]),
         recursion_guard=recursion_guard,
     )
     value_validator: Validator[Any] = AttributeValidator.of(
-        annotation.arguments[1],
+        cast(Attribute, annotation.arguments[1]),
         recursion_guard=recursion_guard,
     )
     formatted_type: str = str(annotation)
@@ -683,7 +708,7 @@ def _prepare_validator_of_mapping(
 
 
 def _prepare_validator_of_tuple(  # noqa: C901
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -706,11 +731,11 @@ def _prepare_validator_of_tuple(  # noqa: C901
         A validator that validates tuples based on their type specification
     """
     if (
-        annotation.arguments[-1].origin == Ellipsis
-        or annotation.arguments[-1].origin == EllipsisType
+        cast(Attribute, annotation.arguments[-1]).origin == Ellipsis
+        or cast(Attribute, annotation.arguments[-1]).origin == EllipsisType
     ):
         element_validator: Validator[Any] = AttributeValidator.of(
-            annotation.arguments[0],
+            cast(Attribute, annotation.arguments[0]),
             recursion_guard=recursion_guard,
         )
         formatted_type: str = str(annotation)
@@ -735,7 +760,7 @@ def _prepare_validator_of_tuple(  # noqa: C901
 
     else:
         element_validators: list[Validator[Any]] = [
-            AttributeValidator.of(alternative, recursion_guard=recursion_guard)
+            AttributeValidator.of(cast(Attribute, alternative), recursion_guard=recursion_guard)
             for alternative in annotation.arguments
         ]
         elements_count: int = len(element_validators)
@@ -765,7 +790,7 @@ def _prepare_validator_of_tuple(  # noqa: C901
 
 
 def _prepare_validator_of_union(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -788,7 +813,7 @@ def _prepare_validator_of_union(
         A validator that validates against any type in the union
     """
     validators: list[Validator[Any]] = [
-        AttributeValidator.of(alternative, recursion_guard=recursion_guard)
+        AttributeValidator.of(cast(Attribute, alternative), recursion_guard=recursion_guard)
         for alternative in annotation.arguments
     ]
     formatted_type: str = str(annotation)
@@ -814,7 +839,7 @@ def _prepare_validator_of_union(
 
 
 def _prepare_validator_of_callable(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -853,7 +878,7 @@ def _prepare_validator_of_callable(
 
 
 def _prepare_validator_of_typed_dict(
-    annotation: AttributeAnnotation,
+    annotation: Attribute,
     /,
     recursion_guard: MutableMapping[str, Validator[Any]],
 ) -> Validator[Any]:
@@ -887,22 +912,66 @@ def _prepare_validator_of_typed_dict(
             raise TypeError(f"'{value}' is not matching expected type of 'str'")
 
     formatted_type: str = str(annotation)
+    attributes: Mapping[str, Attribute] = annotation.attributes
+    if not attributes:
+        typeddict_module: str = getattr(annotation.origin, "__module__", "")
+        attribute_recursion_guard: dict[str, Attribute] = {}
+        generated_attributes: dict[str, Attribute] = {
+            key: resolve_attribute(
+                element,
+                module=typeddict_module,
+                parameters={},
+                recursion_guard=attribute_recursion_guard,
+            )
+            for key, element in get_type_hints(
+                annotation.origin,
+                localns={annotation.origin.__name__: annotation.origin},
+                include_extras=True,
+            ).items()
+        }
+        annotation.attributes = generated_attributes
+        attributes = generated_attributes
     values_validators: dict[str, Validator[Any]] = {
         key: AttributeValidator.of(element, recursion_guard=recursion_guard)
-        for key, element in annotation.extra["attributes"].items()
+        for key, element in attributes.items()
     }
-    required_values: Set[str] = annotation.extra["required"]
+    required_values: Set[str] = {
+        key
+        for key, element in attributes.items()
+        if not any(
+            marker in element.annotations
+            for marker in (
+                typing.NotRequired,
+                typing_extensions.NotRequired,
+            )
+        )
+    }
+    allowed_keys: set[str] = set(attributes.keys())
 
     def validator(
         value: Any,
         /,
     ) -> Any:
         if isinstance(value, Mapping):
+            unexpected_keys: set[str] = set(value.keys()) - allowed_keys
+            if unexpected_keys:
+                key: str = sorted(unexpected_keys)[0]
+                with ValidationContext.scope(f"[{key}]"):
+                    raise TypeError(
+                        f"Unexpected key '{key}' for '{formatted_type}'",
+                    )
+
             validated: MutableMapping[str, Any] = {}
             for key, validator in values_validators.items():
                 element: Any = value.get(key, MISSING)
-                if element is MISSING and key not in required_values:
-                    continue  # skip missing and not required
+                if element is MISSING:
+                    if key in required_values:
+                        with ValidationContext.scope(f"[{key}]"):
+                            raise TypeError(
+                                f"Missing required key '{key}' for '{formatted_type}'",
+                            )
+
+                    continue  # skip optional keys when they are absent
 
                 with ValidationContext.scope(f"[{key}]"):
                     validated[key_validator(key)] = validator(element)
@@ -920,7 +989,7 @@ VALIDATORS: Mapping[
     Any,
     Callable[
         [
-            AttributeAnnotation,
+            Attribute,
             MutableMapping[str, Validator[Any]],
         ],
         Validator[Any],

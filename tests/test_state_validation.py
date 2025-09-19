@@ -3,15 +3,33 @@ from collections.abc import Callable, Mapping, Sequence, Set
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any, Literal, NotRequired, Protocol, Required, TypedDict, runtime_checkable
+from typing import (
+    Any,
+    Literal,
+    NotRequired,
+    Protocol,
+    Required,
+    TypeAliasType,
+    TypedDict,
+    runtime_checkable,
+)
 from uuid import UUID, uuid4
 
 import pytest
 from typing_extensions import TypedDict as ExtTypedDict
 
 from haiway import MISSING, Missing, State
-from haiway.state.attributes import AttributeAnnotation
+from haiway.state import Attribute
 from haiway.state.validation import AttributeValidator, ValidationError
+
+RecursiveMap = TypeAliasType(  # noqa: UP040
+    "RecursiveMap",
+    Mapping[str, "RecursiveMap"],
+)
+RecursiveJsonValue = TypeAliasType(  # noqa: UP040
+    "RecursiveJsonValue",
+    str | int | Mapping[str, "RecursiveJsonValue"],
+)
 
 
 class Color(Enum):
@@ -224,6 +242,57 @@ def test_validator_mapping_type() -> None:
         MappingTest(data="not_a_mapping")
 
 
+def test_validator_concrete_collection_types() -> None:
+    class ConcreteCollections(State):
+        items: list[int]
+        data: dict[str, int]
+        tags: set[str]
+
+    instance = ConcreteCollections(items=[1, 2, 3], data={"a": 1}, tags={"x", "y"})
+    assert instance.items == (1, 2, 3)
+    assert instance.data == {"a": 1}
+    assert instance.tags == frozenset({"x", "y"})
+
+    with pytest.raises(ValidationError) as exc_info:
+        ConcreteCollections(items=["a"], data={"a": 1}, tags={"x"})
+    assert exc_info.value.path == (".items", "[0]")
+
+    with pytest.raises(ValidationError) as exc_info:
+        ConcreteCollections(items=[1], data={"a": "wrong"}, tags={"x"})
+    assert exc_info.value.path == (".data", "[a]")
+
+    with pytest.raises(ValidationError) as exc_info:
+        ConcreteCollections(items=[1], data={"a": 1}, tags={1})
+    assert exc_info.value.path == (".tags", "[0]")
+
+
+def test_validator_nested_concrete_collections() -> None:
+    class NestedConcrete(State):
+        matrix: list[list[int]]
+        payload: dict[str, dict[str, int]]
+
+    instance = NestedConcrete(
+        matrix=[[1, 2], [3, 4]],
+        payload={"outer": {"inner": 1}},
+    )
+    assert instance.matrix == ((1, 2), (3, 4))
+    assert instance.payload == {"outer": {"inner": 1}}
+
+    with pytest.raises(ValidationError) as exc_info:
+        NestedConcrete(
+            matrix=[[1, 2], [3, "bad"]],
+            payload={"outer": {"inner": 1}},
+        )
+    assert exc_info.value.path == (".matrix", "[1]", "[1]")
+
+    with pytest.raises(ValidationError) as exc_info:
+        NestedConcrete(
+            matrix=[[1, 2], [3, 4]],
+            payload={"outer": {"inner": "bad"}},
+        )
+    assert exc_info.value.path == (".payload", "[outer]", "[inner]")
+
+
 def test_validator_tuple_type() -> None:
     class TupleTest(State):
         fixed: tuple[str, int, bool]
@@ -308,6 +377,97 @@ def test_validator_typed_dict() -> None:
     # Invalid missing Required field
     with pytest.raises(ValidationError):  # Should fail validation due to missing 'active'
         TypedDictTest(user={"name": "Bob", "age": 35, "email": "bob@example.com"})
+
+    # Unexpected key should raise
+    with pytest.raises(ValidationError) as exc_info:
+        TypedDictTest(
+            user={
+                "name": "John",
+                "age": 30,
+                "email": "john@example.com",
+                "active": True,
+                "extra": "value",
+            }
+        )
+    assert exc_info.value.path == (".user", "[extra]")
+
+
+def test_validator_typed_dict_nested_values() -> None:
+    class WrapperDict(TypedDict):
+        profile: UserDict
+        tags: list[str]
+
+    class TypedDictNestedTest(State):
+        wrapper: WrapperDict
+
+    instance = TypedDictNestedTest(
+        wrapper={
+            "profile": {
+                "name": "John",
+                "age": 30,
+                "active": True,
+            },
+            "tags": ["one", "two"],
+        }
+    )
+    assert instance.wrapper["tags"] == ("one", "two")
+
+    with pytest.raises(ValidationError) as exc_info:
+        TypedDictNestedTest(
+            wrapper={
+                "profile": {
+                    "name": "John",
+                    "age": 30,
+                    "active": True,
+                },
+                "tags": [1, 2],
+            }
+        )
+    assert exc_info.value.path == (".wrapper", "[tags]", "[0]")
+
+    with pytest.raises(ValidationError) as exc_info:
+        TypedDictNestedTest(
+            wrapper={
+                "profile": {
+                    "name": "John",
+                    "age": 30,
+                    "active": True,
+                    "email": 123,
+                },
+                "tags": ["valid"],
+            }
+        )
+    assert exc_info.value.path == (".wrapper", "[profile]", "[email]")
+
+
+def test_recursive_mapping_type_alias() -> None:
+    class JsonState(State):
+        data: RecursiveMap  # pyright: ignore[reportInvalidTypeForm]
+
+    instance = JsonState(data={})
+    assert instance.data == {}
+
+    nested = JsonState(data={"child": {"grandchild": {}}})
+    assert nested.data["child"]["grandchild"] == {}
+
+    with pytest.raises(ValidationError) as exc_info:
+        JsonState(data={"child": 123})
+    assert exc_info.value.path == (".data", "[child]")
+
+
+def test_recursive_union_type_alias() -> None:
+    class JsonNode(State):
+        value: RecursiveJsonValue  # pyright: ignore[reportInvalidTypeForm]
+
+    assert JsonNode(value="leaf").value == "leaf"
+    assert JsonNode(value=1).value == 1
+
+    tree = JsonNode(value={"child": {"grand": "leaf"}})
+    assert tree.value["child"]["grand"] == "leaf"
+
+    with pytest.raises(ValidationError) as exc_info:
+        JsonNode(value={"child": {"grand": ["invalid"]}})
+    assert exc_info.value.path == (".value",)
 
 
 def test_validator_typed_dict_from_extensions() -> None:
@@ -524,7 +684,7 @@ def test_validator_with_defaults() -> None:
 
 def test_attribute_validator_direct_usage() -> None:
     # Create validator for str type
-    str_annotation = AttributeAnnotation(origin=str, arguments=())
+    str_annotation = Attribute(recursion_key="str", origin=str, arguments=())
     validator = AttributeValidator.of(str_annotation, recursion_guard={})
 
     # Valid string
@@ -582,7 +742,7 @@ def test_unsupported_type_annotation() -> None:
     class ArbitraryType:
         pass
 
-    annotation = AttributeAnnotation(origin=ArbitraryType, arguments=())
+    annotation = Attribute(recursion_key="ArbitraryType", origin=ArbitraryType, arguments=())
 
     validator = AttributeValidator.of(annotation, recursion_guard={})
     assert validator is not None

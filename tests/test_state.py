@@ -243,6 +243,54 @@ def test_copying_leaves_same_object() -> None:
     assert deepcopy(origin) is origin
 
 
+def test_updated_returns_self_when_no_changes() -> None:
+    class Example(State):
+        value: int
+        text: str
+
+    instance = Example(value=1, text="a")
+    assert instance.updated() is instance
+    assert instance.updated(value=1) is instance
+    assert instance.updated(text="a", value=1) is instance
+
+
+def test_updated_only_validates_changed_attributes() -> None:
+    counter: dict[str, int] = {"calls": 0}
+
+    class Tracked(State):
+        value: int
+
+        @classmethod
+        def validator(
+            cls,
+            value: Any,
+            /,
+        ) -> "Tracked":
+            counter["calls"] += 1
+            return super().validator(value)
+
+    class Container(State):
+        first: int
+        tracked: Tracked
+
+    instance = Container(first=1, tracked=Tracked(value=1))
+    counter["calls"] = 0
+
+    same = instance.updated(first=1)
+    assert same is instance
+    assert counter["calls"] == 0
+
+    updated_first = instance.updated(first=2)
+    assert updated_first is not instance
+    assert updated_first.tracked is instance.tracked
+    assert counter["calls"] == 0
+
+    counter["calls"] = 0
+    replacement = instance.updated(tracked=Tracked(value=2))
+    assert replacement is not instance
+    assert counter["calls"] == 1
+
+
 def test_hash_consistency_with_missing_values() -> None:
     class HashTest(State):
         required: str

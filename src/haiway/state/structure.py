@@ -12,7 +12,7 @@ from typing import (
 )
 from weakref import WeakValueDictionary
 
-from haiway.state.attributes import AttributeAnnotation, attribute_annotations
+from haiway.state.attributes import Attribute, resolve_class_attributes
 from haiway.state.path import AttributePath
 from haiway.state.validation import AttributeValidator, ValidationContext, Validator
 from haiway.types import MISSING, DefaultValue, Missing, not_missing
@@ -32,7 +32,7 @@ class StateAttribute[Value]:
     """
 
     __slots__ = (
-        "annotation",
+        "attribute",
         "default",
         "name",
         "validator",
@@ -41,7 +41,7 @@ class StateAttribute[Value]:
     def __init__(
         self,
         name: str,
-        annotation: AttributeAnnotation,
+        attribute: Attribute,
         default: DefaultValue[Value],
         validator: Validator[Value],
     ) -> None:
@@ -52,8 +52,8 @@ class StateAttribute[Value]:
         ----------
         name : str
             The name of the attribute
-        annotation : AttributeAnnotation
-            The type annotation of the attribute
+        attribute : Attribute
+            The the attribute typing details
         default : DefaultValue[Value]
             The default value provider for the attribute
         validator : AttributeValidation[Value]
@@ -65,11 +65,11 @@ class StateAttribute[Value]:
             "name",
             name,
         )
-        self.annotation: AttributeAnnotation
+        self.attribute: Attribute
         object.__setattr__(
             self,
-            "annotation",
-            annotation,
+            "attribute",
+            attribute,
         )
         self.default: DefaultValue[Value]
         object.__setattr__(
@@ -83,6 +83,10 @@ class StateAttribute[Value]:
             "validator",
             validator,
         )
+
+    @property
+    def annotation(self) -> Attribute:
+        return self.attribute
 
     def validated(
         self,
@@ -105,7 +109,11 @@ class StateAttribute[Value]:
         Value
             The validated and potentially transformed value
         """
-        return self.validator(self.default() if value is MISSING else value)
+        if value is MISSING:
+            return self.validator(self.default())
+
+        else:
+            return self.validator(value)
 
     def __setattr__(
         self,
@@ -165,20 +173,20 @@ class StateMeta(type):
             **kwargs,
         )
 
-        attributes: dict[str, StateAttribute[Any]] = {}
-
-        for key, annotation in attribute_annotations(
+        self_attribute: Attribute = resolve_class_attributes(
             cls,
-            type_parameters=type_parameters or {},
-        ).items():
+            parameters=type_parameters or {},
+        )
+        attributes: dict[str, StateAttribute[Any]] = {}
+        for key, attribute in self_attribute.attributes.items():
             default: Any = getattr(cls, key, MISSING)
             attributes[key] = StateAttribute(
                 name=key,
-                annotation=annotation.update_required(default is MISSING),
+                attribute=attribute,
                 default=_resolve_default(default),
                 validator=AttributeValidator.of(
-                    annotation,
-                    recursion_guard={str(AttributeAnnotation(origin=cls)): cls.instance_validator},  # pyright: ignore[reportAttributeAccessIssue]
+                    attribute,
+                    recursion_guard={self_attribute.recursion_key: cls.validator},
                 ),
             )
 
@@ -194,24 +202,7 @@ class StateMeta(type):
         cls,
         value: Any,
         /,
-    ) -> Any:
-        """
-        Placeholder for the validator method that will be implemented in each State class.
-
-        This method validates and potentially transforms a value to ensure it
-        conforms to the class's requirements.
-
-        Parameters
-        ----------
-        value : Any
-            The value to validate
-
-        Returns
-        -------
-        Any
-            The validated value
-        """
-        ...
+    ) -> Any: ...
 
     def __instancecheck__(
         self,
@@ -455,11 +446,12 @@ class State(metaclass=StateMeta):
         )
         # Set origin for subclass checks
         parametrized_type.__origin__ = cls  # pyright: ignore[reportAttributeAccessIssue]
+        parametrized_type.__args__ = type_arguments  # pyright: ignore[reportAttributeAccessIssue]
         _types_cache[(cls, type_arguments)] = parametrized_type
         return parametrized_type
 
     @classmethod
-    def instance_validator(
+    def validator(
         cls,
         value: Any,
         /,
@@ -729,9 +721,50 @@ class State(metaclass=StateMeta):
         Self
             A new instance with replaced values
         """
-        return self.__class__(
-            **{
-                **vars(self),
-                **kwargs,
-            }
+        if not kwargs:
+            return self
+
+        attributes: Mapping[str, StateAttribute[Any]] = self.__ATTRIBUTES__
+        extra_keys: tuple[str, ...] = tuple(
+            key
+            for key in kwargs
+            if key not in attributes
         )
+        if extra_keys:
+            return self.__class__(
+                **{
+                    **vars(self),
+                    **kwargs,
+                }
+            )
+
+        relevant_updates: dict[str, Any] = {
+            key: value
+            for key, value in kwargs.items()
+            if key in attributes
+        }
+        if not relevant_updates:
+            return self
+
+        if all(
+            getattr(self, key, MISSING) == value
+            for key, value in relevant_updates.items()
+        ):
+            return self
+
+        updated_state: Self = object.__new__(self.__class__)
+        for name, attribute in attributes.items():
+            if name in relevant_updates:
+                with ValidationContext.scope(f".{name}"):
+                    new_value: Any = attribute.validated(relevant_updates[name])
+
+            else:
+                new_value = getattr(self, name)
+
+            object.__setattr__(
+                updated_state,
+                name,
+                new_value,
+            )
+
+        return updated_state
