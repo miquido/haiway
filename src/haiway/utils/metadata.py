@@ -43,6 +43,18 @@ class Meta(Mapping[str, MetaValue]):
 
     __IMMUTABLE__: ClassVar[EllipsisType] = ...
 
+    @classmethod
+    def validate(
+        cls,
+        value: Any,
+    ) -> Self:
+        match value:
+            case {**values}:
+                return cls({key: _validated_meta_value(element) for key, element in values.items()})
+
+            case _:
+                raise TypeError(f"'{value}' is not matching expected type of 'Meta'")
+
     __slots__ = ("_values",)
 
     def __init__(

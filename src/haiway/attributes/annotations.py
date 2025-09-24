@@ -37,7 +37,7 @@ import typing_extensions
 
 from haiway import types as haiway_types
 from haiway.attributes.validation import ValidationContext, Validator
-from haiway.types import Immutable
+from haiway.types import Immutable, Map
 from haiway.types.missing import MISSING
 
 __all__ = (
@@ -117,10 +117,14 @@ class AnyAttribute(Immutable):
         return value  # Any is always valid
 
 
+def _unresolved_alias_validator(value: Any) -> Any:
+    raise RuntimeError("Unresolved alias attribute")
+
+
 class AliasAttribute(Immutable):
     alias: str
     module: str
-    _validator: Validator | None = None
+    validate: Validator = _unresolved_alias_validator
     _resolved: AttributeAnnotation | None = None
 
     def annotated(
@@ -130,10 +134,10 @@ class AliasAttribute(Immutable):
         return self.__class__(
             alias=self.alias,
             module=self.module,
+            validate=self.validate,
             _resolved=self._resolved.annotated(annotations)
             if self._resolved is not None
             else self._resolved,
-            _validator=self._validator,
         )
 
     def resolve(
@@ -147,7 +151,7 @@ class AliasAttribute(Immutable):
         )
         object.__setattr__(
             self,
-            "_validator",
+            "validate",
             target.validate,
         )
 
@@ -167,13 +171,6 @@ class AliasAttribute(Immutable):
     def annotations(self) -> Sequence[Any]:
         assert self._resolved is not None  # nosec: B101
         return self._resolved.annotations
-
-    def validate(
-        self,
-        value: Any,
-    ) -> Any:
-        assert self._validator is not None  # nosec: B101
-        return self._validator(value)
 
 
 class MissingAttribute(Immutable):
@@ -728,16 +725,23 @@ class MappingAttribute(Immutable):
                     with ValidationContext.scope(f"[{key}]"):
                         yield (self.keys.validate(key), self.values.validate(element))
 
-            return dict(validated())
+            return Map(validated())
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'Mapping'")
 
 
 class ValidableAttribute(Immutable):
-    base: Any
+    attribute: AttributeAnnotation
     validator: Validator
-    annotations: Sequence[Any] = ()
+
+    @property
+    def base(self) -> Any:
+        return self.attribute.base
+
+    @property
+    def annotations(self) -> Sequence[Any]:
+        return self.attribute.annotations
 
     def annotated(
         self,
@@ -745,9 +749,8 @@ class ValidableAttribute(Immutable):
     ) -> Self:
         if annotations != self.annotations:
             return self.__class__(
-                base=self.base,
+                attribute=self.attribute.annotated(annotations),
                 validator=self.validator,
-                annotations=annotations,
             )
 
         return self
@@ -837,7 +840,7 @@ class TypedDictAttribute(Immutable):
                             elif typing.Required in attribute.annotations:
                                 raise KeyError(f"Value for '{key}' is required")
 
-                return self.base(**dict(validated()))
+                return dict(validated())
 
             case _:
                 raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
@@ -1574,16 +1577,16 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912
             )
 
         case origin:
-            if validator := getattr(origin, "validate", None):
-                assert isinstance(validator, Validator)  # nosec: B101
-                return ValidableAttribute(
-                    base=origin,
-                    validator=validator,
-                )
-
             if self_attribute := getattr(annotation, "__SELF_ATTRIBUTE__", None):
                 assert isinstance(self_attribute, ObjectAttribute)  # nosec: B101
-                return self_attribute
+                if validator := getattr(origin, "validate", None):
+                    return ValidableAttribute(
+                        attribute=self_attribute,
+                        validator=validator,
+                    )
+
+                else:
+                    return self_attribute
 
             parameters: Sequence[AttributeAnnotation] = _resolve_parameters(
                 annotation,
@@ -1597,6 +1600,16 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912
             )
             if guard := recursion_guard.get(recursion_key):
                 return guard
+
+            if validator := getattr(origin, "validate", None):
+                assert isinstance(validator, Validator)  # nosec: B101
+                return ValidableAttribute(
+                    attribute=CustomAttribute(
+                        base=origin,
+                        parameters=parameters,
+                    ),
+                    validator=validator,
+                )
 
             return CustomAttribute(
                 base=origin,
