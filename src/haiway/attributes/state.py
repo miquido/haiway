@@ -651,8 +651,8 @@ class State(metaclass=StateMeta):
         Self
             A new instance with replaced values
         """
-        if not kwargs:
-            return self
+        if not kwargs or kwargs.keys().isdisjoint(getattr(self, "__slots__", ())):
+            return self  # do not make a copy when nothing will be updated
 
         updated: Self = object.__new__(self.__class__)
         for field in self.__class__.__FIELDS__:

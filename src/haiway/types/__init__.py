@@ -1,6 +1,7 @@
 from haiway.types.basic import BasicValue, RawValue
 from haiway.types.default import Default, DefaultValue
 from haiway.types.immutable import Immutable
+from haiway.types.map import Map
 from haiway.types.missing import MISSING, Missing, is_missing, not_missing, unwrap_missing
 
 __all__ = (
@@ -9,6 +10,7 @@ __all__ = (
     "Default",
     "DefaultValue",
     "Immutable",
+    "Map",
     "Missing",
     "RawValue",
     "is_missing",
