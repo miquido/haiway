@@ -8,7 +8,8 @@ from contextlib import AbstractAsyncContextManager
 from types import TracebackType
 from typing import Self
 
-from haiway.state import Immutable, State
+from haiway.attributes import State
+from haiway.types import Immutable
 
 __all__ = (
     "Disposable",

@@ -3,10 +3,10 @@
 import pkgutil
 from collections.abc import Sequence
 from importlib import import_module
-from pathlib import Path
 from types import ModuleType
 from typing import Any, Final, overload
 
+from haiway.attributes import State
 from haiway.context import ctx
 from haiway.helpers import statemethod
 from haiway.postgres.types import (
@@ -18,7 +18,6 @@ from haiway.postgres.types import (
     PostgresTransactionContext,
     PostgresTransactionPreparing,
 )
-from haiway.state import State
 
 __all__ = (
     "Postgres",
@@ -153,14 +152,14 @@ class Postgres(State):
     @classmethod
     async def execute_migrations(
         cls,
-        migrations: Sequence[PostgresMigrating] | Path | str,
+        migrations: Sequence[PostgresMigrating] | str,
         /,
     ) -> None: ...
 
     @overload
     async def execute_migrations(
         self,
-        migrations: Sequence[PostgresMigrating] | Path | str,
+        migrations: Sequence[PostgresMigrating] | str,
         /,
     ) -> None: ...
 

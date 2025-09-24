@@ -1,16 +1,25 @@
+from __future__ import annotations
+
 import re
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any, Literal, NotRequired, Protocol, Required, TypedDict, runtime_checkable
+from typing import (
+    Any,
+    Literal,
+    NotRequired,
+    Protocol,
+    TypeAliasType,
+    TypedDict,
+    TypeVar,
+    runtime_checkable,
+)
 from uuid import UUID, uuid4
 
 import pytest
 
-from haiway import MISSING, Missing, State
-from haiway.state.attributes import AttributeAnnotation
-from haiway.state.validation import AttributeValidator, ValidationError
+from haiway import MISSING, Missing, State, ValidationError
 
 
 class Color(Enum):
@@ -24,525 +33,673 @@ class Status(StrEnum):
     INACTIVE = "inactive"
 
 
+class BasicTypes(State):
+    string_val: str
+    int_val: int
+    float_val: float
+    bool_val: bool
+    bytes_val: bytes
+
+
+BASIC_PAYLOAD: dict[str, object] = {
+    "string_val": "text",
+    "int_val": 7,
+    "float_val": 1.5,
+    "bool_val": True,
+    "bytes_val": b"blob",
+}
+
+
+class SequenceState(State):
+    items: Sequence[str]
+    numbers: Sequence[int]
+
+
+class SetState(State):
+    tags: set[str]
+    ids: set[int]
+
+
+class MappingState(State):
+    data: Mapping[str, int]
+
+
+class ConcreteCollections(State):
+    items: list[int]
+    mapping: dict[str, int]
+    tags: set[str]
+
+
+class NestedCollections(State):
+    matrix: list[list[int]]
+    payload: dict[str, dict[str, int]]
+
+
+class TupleState(State):
+    fixed: tuple[str, int, bool]
+    variable: tuple[int, ...]
+
+
+class UnionState(State):
+    value: str | int
+    optional: str | None
+
+
 @runtime_checkable
 class Processor(Protocol):
-    def __call__(self, data: str) -> str: ...
+    def __call__(self, data: str, /) -> str: ...
 
 
-class UserDict(TypedDict):
+class CallableState(State):
+    func: Callable[[], None]
+    processor: Processor
+
+
+class UserPayload(TypedDict):
     name: str
     age: int
+    active: bool
     email: NotRequired[str]
-    active: Required[bool]
+
+
+class TypedDictState(State):
+    user: UserPayload
+
+
+class WrapperPayload(TypedDict):
+    profile: UserPayload
+    tags: list[str]
+
+
+class TypedDictWrapperState(State):
+    wrapper: WrapperPayload
+
+
+RecursiveMap: TypeAliasType = TypeAliasType(
+    "RecursiveMap",
+    Mapping[str, "RecursiveMap"],
+)
+
+
+class RecursiveMapState(State):
+    data: RecursiveMap
+
+
+RecursiveJsonValue: TypeAliasType = TypeAliasType(
+    "RecursiveJsonValue",
+    str | int | Mapping[str, "RecursiveJsonValue"],
+)
+
+
+class RecursiveJsonState(State):
+    value: RecursiveJsonValue
+
+
+class ComplexState(State):
+    uuid_val: UUID
+    date_val: date
+    datetime_val: datetime
+    time_val: time
+    timedelta_val: timedelta
+    timezone_val: timezone
+    path_val: Path
+    pattern_val: re.Pattern[str]
+
+
+class BoxState[T](State):
+    item: T
+
+
+class BoxContainerState(State):
+    box: BoxState[int]
+
+
+T = TypeVar("T")
+
+
+class GenericWrapperState[T](State):
+    value: T
+
+
+class GenericContainerState(State):
+    int_value: GenericWrapperState[int]
+    str_value: GenericWrapperState[str]
+
+
+class RecursiveState(State):
+    name: str
+    child: RecursiveState | None
+
+
+class GenericState[T](State):
+    value: T
+
+
+class ContainerState(State):
+    string_generic: GenericState[str]
+    int_generic: GenericState[int]
+
+
+class AnyState(State):
+    anything: Any
+
+
+class DefaultState(State):
+    required: str
+    optional: str = "default"
+    optional_union: str | None = None
 
 
 class NestedState(State):
     value: str
 
 
-class SimpleState(State):
-    name: str
+class ParentState(State):
+    nested: NestedState
 
 
-def test_validator_basic_types() -> None:
-    class BasicTypes(State):
-        string_val: str
-        int_val: int
-        float_val: float
-        bool_val: bool
-        bytes_val: bytes
+class DeepNestedState(State):
+    items: Sequence[str]
+    mapping: Mapping[str, int]
+    nested: NestedState
 
-    # Valid values
-    instance = BasicTypes(
-        string_val="test",
-        int_val=42,
-        float_val=3.14,
-        bool_val=True,
-        bytes_val=b"data",
-    )
-    assert instance.string_val == "test"
-    assert instance.int_val == 42
-    assert instance.float_val == 3.14
+
+class NoneState(State):
+    value: None
+
+
+class MissingState(State):
+    value: Missing
+
+
+class LiteralState(State):
+    mode: Literal["read", "write", "append"]
+
+
+class EnumState(State):
+    color: Color
+    status: Status
+
+
+class ErrorState(State):
+    string_val: str
+    literal_val: Literal["a", "b"]
+    none_val: None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    (
+        ("string_val", 42, "str"),
+        ("int_val", "forty-two", "int"),
+        ("float_val", "pi", "float"),
+        ("bool_val", "no", "expected values"),
+        ("bytes_val", "data", "bytes"),
+    ),
+)
+def test_basic_types_validation_errors(field: str, value: object, expected: str) -> None:
+    payload = dict(BASIC_PAYLOAD)
+    payload[field] = value
+    with pytest.raises(ValidationError) as exc:
+        BasicTypes(**payload)
+    assert exc.value.path == (f".{field}",)
+    assert expected in str(exc.value.cause)
+
+
+def test_basic_types_validation_success() -> None:
+    instance = BasicTypes(**BASIC_PAYLOAD)
+    assert instance.string_val == "text"
+    assert instance.int_val == 7
+    assert instance.float_val == 1.5
     assert instance.bool_val is True
-    assert instance.bytes_val == b"data"
-
-    # Invalid types should raise ValidationError
-    with pytest.raises(ValidationError):
-        BasicTypes(
-            string_val=42,
-            int_val=42,
-            float_val=3.14,
-            bool_val=True,
-            bytes_val=b"data",
-        )
-
-    with pytest.raises(ValidationError):
-        BasicTypes(
-            string_val="test",
-            int_val="not_int",
-            float_val=3.14,
-            bool_val=True,
-            bytes_val=b"data",
-        )
+    assert instance.bytes_val == b"blob"
 
 
-def test_validator_none_type() -> None:
-    class NoneTest(State):
-        none_val: None
-
-    # Valid None
-    instance = NoneTest(none_val=None)
-    assert instance.none_val is None
-
-    # Invalid non-None
-    with pytest.raises(ValidationError):
-        NoneTest(none_val="not_none")
+def test_none_type_validation() -> None:
+    assert NoneState(value=None).value is None
+    with pytest.raises(ValidationError) as exc:
+        NoneState(value="invalid")
+    assert exc.value.path == (".value",)
 
 
-def test_validator_missing_type() -> None:
-    class MissingTest(State):
-        missing_val: Missing
-
-    # Valid Missing
-    instance = MissingTest(missing_val=MISSING)
-    assert instance.missing_val is MISSING
-
-    # Invalid non-Missing
-    with pytest.raises(ValidationError):
-        MissingTest(missing_val="not_missing")
+def test_missing_type_validation() -> None:
+    assert MissingState(value=MISSING).value is MISSING
+    with pytest.raises(ValidationError) as exc:
+        MissingState(value=None)
+    assert exc.value.path == (".value",)
 
 
-def test_validator_literal_type() -> None:
-    class LiteralTest(State):
-        mode: Literal["read", "write", "append"]
+def test_literal_validation() -> None:
+    instance = LiteralState(mode="read")
+    assert instance.mode == "read"
+
+    with pytest.raises(ValidationError) as exc:
+        LiteralState(mode="invalid")
+    assert exc.value.path == (".mode",)
+
+
+def test_literal_non_string_values() -> None:
+    class NumericLiteralState(State):
         count: Literal[1, 2, 3]
 
-    # Valid literals
-    instance = LiteralTest(mode="read", count=2)
-    assert instance.mode == "read"
-    assert instance.count == 2
-
-    # Invalid literals
-    with pytest.raises(ValidationError):
-        LiteralTest(mode="invalid", count=2)
+    assert NumericLiteralState(count=1).count == 1
 
     with pytest.raises(ValidationError):
-        LiteralTest(mode="read", count=5)
+        NumericLiteralState(count=4)
 
 
-def test_validator_enum_type() -> None:
-    class EnumTest(State):
-        color: Color
-        status: Status
+def test_enum_validation() -> None:
+    instance = EnumState(color=Color.RED, status=Status.ACTIVE)
+    assert instance.color is Color.RED
+    assert instance.status is Status.ACTIVE
 
-    # Valid enums
-    instance = EnumTest(color=Color.RED, status=Status.ACTIVE)
-    assert instance.color == Color.RED
-    assert instance.status == Status.ACTIVE
+    with pytest.raises(ValidationError) as exc:
+        EnumState(color=123, status=Status.ACTIVE)
+    assert exc.value.path == (".color",)
 
-    # Invalid enum values
-    with pytest.raises(ValidationError):
-        EnumTest(color="red", status=Status.ACTIVE)
+    with pytest.raises(ValidationError) as exc:
+        EnumState(color="red", status=Status.ACTIVE)
+    assert exc.value.path == (".color",)
 
-    with pytest.raises(ValidationError):
-        EnumTest(color=Color.RED, status="active")
+    status_instance = EnumState(color=Color.RED, status="active")
+    assert status_instance.status is Status.ACTIVE
+
+    with pytest.raises(ValidationError) as exc:
+        EnumState(color=Color.RED, status="invalid")
+    assert exc.value.path == (".status",)
 
 
-def test_validator_sequence_type() -> None:
-    class SequenceTest(State):
-        items: Sequence[str]
-        numbers: Sequence[int]
-
-    # Valid sequences (lists converted to tuples)
-    instance = SequenceTest(items=["a", "b", "c"], numbers=[1, 2, 3])
-    assert instance.items == ("a", "b", "c")
+def test_sequence_validation() -> None:
+    instance = SequenceState(items=["a", "b"], numbers=[1, 2, 3])
+    assert instance.items == ("a", "b")
     assert instance.numbers == (1, 2, 3)
 
-    # Valid empty sequence
-    instance_empty = SequenceTest(items=[], numbers=[])
-    assert instance_empty.items == ()
-    assert instance_empty.numbers == ()
+    with pytest.raises(ValidationError) as exc:
+        SequenceState(items=["ok", 3], numbers=[1, 2, 3])
+    assert exc.value.path == (".items", "[1]")
 
-    # Invalid element types
-    with pytest.raises(ValidationError) as exc_info:
-        SequenceTest(items=[1, 2, 3], numbers=[1, 2, 3])
-    # Should fail on first element of items sequence
-    assert exc_info.value.path == (".items", "[0]")
-
-    # Invalid non-sequence type
-    with pytest.raises(ValidationError):
-        SequenceTest(items="not_a_sequence", numbers=[1, 2, 3])
+    with pytest.raises(ValidationError) as exc:
+        SequenceState(items="nope", numbers=[1, 2, 3])
+    assert exc.value.path == (".items",)
 
 
-def test_validator_set_type() -> None:
-    class SetTest(State):
-        tags: Set[str]
-        numbers: Set[int]
+def test_set_validation() -> None:
+    instance = SetState(tags={"x", "y"}, ids={1, 2})
+    assert instance.tags == frozenset({"x", "y"})
+    assert instance.ids == frozenset({1, 2})
 
-    # Valid sets (converted to frozenset)
-    instance = SetTest(tags={"a", "b", "c"}, numbers={1, 2, 3})
-    assert instance.tags == frozenset({"a", "b", "c"})
-    assert instance.numbers == frozenset({1, 2, 3})
+    with pytest.raises(ValidationError) as exc:
+        SetState(tags=[1], ids=[1, 2])
+    assert exc.value.path == (".tags", "[0]")
 
-    # Invalid element types
-    with pytest.raises(ValidationError):
-        SetTest(tags={1, 2, 3}, numbers={1, 2, 3})
-
-    # Invalid non-set type
-    with pytest.raises(ValidationError):
-        SetTest(tags="not_a_set", numbers={1, 2, 3})
+    with pytest.raises(ValidationError) as exc:
+        SetState(tags=["x"], ids="not-set")
+    assert exc.value.path == (".ids",)
 
 
-def test_validator_mapping_type() -> None:
-    class MappingTest(State):
-        data: Mapping[str, int]
-
-    # Valid mapping
-    instance = MappingTest(data={"a": 1, "b": 2})
+def test_mapping_validation() -> None:
+    instance = MappingState(data={"a": 1, "b": 2})
     assert instance.data == {"a": 1, "b": 2}
 
-    # Invalid key types
-    with pytest.raises(ValidationError) as exc_info:
-        MappingTest(data={1: 1, 2: 2})
-    # Should fail on first key validation
-    assert exc_info.value.path == (".data", "[1]")
+    with pytest.raises(ValidationError) as exc:
+        MappingState(data={1: 1})
+    assert exc.value.path == (".data", "[1]")
 
-    # Invalid value types
-    with pytest.raises(ValidationError):
-        MappingTest(data={"a": "not_int", "b": "also_not_int"})
+    with pytest.raises(ValidationError) as exc:
+        MappingState(data={"a": "x"})
+    assert exc.value.path == (".data", "[a]")
 
-    # Invalid non-mapping type
-    with pytest.raises(ValidationError):
-        MappingTest(data="not_a_mapping")
+    with pytest.raises(ValidationError) as exc:
+        MappingState(data="not-mapping")
+    assert exc.value.path == (".data",)
 
 
-def test_validator_tuple_type() -> None:
-    class TupleTest(State):
-        fixed: tuple[str, int, bool]
-        variable: tuple[str, ...]
+def test_concrete_collection_validation() -> None:
+    instance = ConcreteCollections(items=[1, 2], mapping={"a": 1}, tags={"x"})
+    assert instance.items == (1, 2)
+    assert instance.mapping == {"a": 1}
+    assert instance.tags == frozenset({"x"})
 
-    # Valid fixed tuple
-    instance = TupleTest(fixed=["hello", 42, True], variable=["a", "b", "c"])
-    assert instance.fixed == ("hello", 42, True)
-    assert instance.variable == ("a", "b", "c")
+    with pytest.raises(ValidationError) as exc:
+        ConcreteCollections(items=["a"], mapping={"a": 1}, tags={"x"})
+    assert exc.value.path == (".items", "[0]")
 
-    # Invalid fixed tuple length
-    with pytest.raises(ValidationError):
-        TupleTest(fixed=["hello", 42], variable=["a", "b"])
+    with pytest.raises(ValidationError) as exc:
+        ConcreteCollections(items=[1], mapping={"a": "x"}, tags={"x"})
+    assert exc.value.path == (".mapping", "[a]")
 
-    # Invalid fixed tuple types
-    with pytest.raises(ValidationError):
-        TupleTest(fixed=["hello", "not_int", True], variable=["a", "b"])
-
-    # Invalid variable tuple element types
-    with pytest.raises(ValidationError):
-        TupleTest(fixed=["hello", 42, True], variable=["a", 1, "c"])
+    with pytest.raises(ValidationError) as exc:
+        ConcreteCollections(items=[1], mapping={"a": 1}, tags=[1])
+    assert exc.value.path == (".tags", "[0]")
 
 
-def test_validator_union_type() -> None:
-    class UnionTest(State):
-        value: str | int
-        optional: str | None
+def test_nested_collection_validation() -> None:
+    instance = NestedCollections(
+        matrix=[[1, 2], [3, 4]],
+        payload={"left": {"inner": 1}},
+    )
+    assert instance.matrix == ((1, 2), (3, 4))
+    assert instance.payload == {"left": {"inner": 1}}
 
-    # Valid union values
-    instance1 = UnionTest(value="string", optional="text")
-    assert instance1.value == "string"
-    assert instance1.optional == "text"
+    with pytest.raises(ValidationError) as exc:
+        NestedCollections(
+            matrix=[[1, 2], [3, "bad"]],
+            payload={"left": {"inner": 1}},
+        )
+    assert exc.value.path == (".matrix", "[1]", "[1]")
 
-    instance2 = UnionTest(value=42, optional=None)
-    assert instance2.value == 42
-    assert instance2.optional is None
+    with pytest.raises(ValidationError) as exc:
+        NestedCollections(
+            matrix=[[1, 2], [3, 4]],
+            payload={"left": {"inner": "bad"}},
+        )
+    assert exc.value.path == (".payload", "[left]", "[inner]")
 
-    # Invalid union type
-    with pytest.raises(ValidationError):
-        UnionTest(value=[], optional="text")
+
+def test_tuple_validation() -> None:
+    instance = TupleState(fixed=["ok", 3, True], variable=[1, 2, 3])
+    assert instance.fixed == ("ok", 3, True)
+    assert instance.variable == (1, 2, 3)
+
+    with pytest.raises(ValidationError) as exc:
+        TupleState(fixed=["ok", "no", True], variable=[1])
+    assert exc.value.path == (".fixed", "[1]")
+
+    with pytest.raises(ValidationError) as exc:
+        TupleState(fixed=["ok", 3, True], variable=[1, "bad"])
+    assert exc.value.path == (".variable", "[1]")
 
 
-def test_validator_callable_type() -> None:
-    class CallableTest(State):
-        func: Callable[[], None]
-        processor: Processor
+def test_union_validation() -> None:
+    instance = UnionState(value="hello", optional="x")
+    assert instance.value == "hello"
+    assert instance.optional == "x"
 
-    def test_func() -> None:
-        pass
+    instance = UnionState(value=3, optional=None)
+    assert instance.value == 3
+    assert instance.optional is None
 
-    def test_processor(data: str) -> str:
+    with pytest.raises(ValidationError) as exc:
+        UnionState(value=["bad"], optional="x")
+    assert exc.value.path == (".value",)
+
+
+def test_callable_validation() -> None:
+    def noop() -> None:
+        return None
+
+    def upper(data: str, /) -> str:
         return data.upper()
 
-    # Valid callables
-    instance = CallableTest(func=test_func, processor=test_processor)
-    assert callable(instance.func)
-    assert isinstance(instance.processor, Processor)
+    instance = CallableState(func=noop, processor=upper)
+    assert instance.processor("ok") == "OK"
 
-    # Invalid non-callable
-    with pytest.raises(ValidationError):
-        CallableTest(func="not_callable", processor=test_processor)
+    with pytest.raises(ValidationError) as exc:
+        CallableState(func="not callable", processor=upper)
+    assert exc.value.path == (".func",)
+
+    with pytest.raises(ValidationError) as exc:
+        CallableState(func=noop, processor="not callable")
+    assert exc.value.path == (".processor",)
 
 
-def test_validator_typed_dict() -> None:
-    class TypedDictTest(State):
-        user: UserDict
-
-    # Valid TypedDict with all fields
-    instance = TypedDictTest(
-        user={"name": "John", "age": 30, "email": "john@example.com", "active": True}
+def test_typed_dict_validation() -> None:
+    instance = TypedDictState(
+        user={
+            "name": "Jane",
+            "age": 30,
+            "active": True,
+            "email": "jane@example.com",
+        },
     )
-    assert instance.user["name"] == "John"
-    assert instance.user["age"] == 30
-    assert instance.user["email"] == "john@example.com"
+    assert instance.user["name"] == "Jane"
     assert instance.user["active"] is True
 
-    # Valid TypedDict with missing NotRequired field
-    instance2 = TypedDictTest(user={"name": "Jane", "age": 25, "active": False})
-    assert instance2.user["name"] == "Jane"
-    assert "email" not in instance2.user
-
-    # Invalid missing Required field
-    with pytest.raises(ValidationError):  # Should fail validation due to missing 'active'
-        TypedDictTest(user={"name": "Bob", "age": 35, "email": "bob@example.com"})
+    instance = TypedDictState(user={"name": "Alice", "age": 25, "active": True})
+    assert instance.user["name"] == "Alice"
+    assert "email" not in instance.user
 
 
-def test_validator_state_type() -> None:
-    class StateTest(State):
-        nested: NestedState
-        simple: SimpleState
+def test_typed_dict_preserves_false_values() -> None:
+    instance = TypedDictState(user={"name": "Bob", "age": 40, "active": False})
+    assert instance.user["active"] is False
 
-    # Valid State instances
-    instance = StateTest(nested=NestedState(value="test"), simple=SimpleState(name="example"))
-    assert instance.nested.value == "test"
-    assert instance.simple.name == "example"
 
-    # Invalid State type - dict conversion not supported for State types in validation
+def test_typed_dict_requires_required_fields() -> None:
     with pytest.raises(ValidationError):
-        StateTest(nested="not_a_state", simple=SimpleState(name="valid"))
-
-    # Another invalid type test
-    with pytest.raises(ValidationError):
-        StateTest(nested=NestedState(value="valid"), simple="not_a_state")
+        TypedDictState(user={"name": "Eve", "age": 30})
 
 
-def test_validator_complex_types() -> None:
-    class ComplexTest(State):
-        uuid_val: UUID
-        date_val: date
-        datetime_val: datetime
-        time_val: time
-        timedelta_val: timedelta
-        timezone_val: timezone
-        path_val: Path
-        pattern_val: re.Pattern[str]
-
-    # Valid complex types
-    uuid_val = uuid4()
-    date_val = date.today()
-    datetime_val = datetime.now()
-    time_val = time(12, 30, 45)
-    timedelta_val = timedelta(days=1, hours=2)
-    timezone_val = UTC
-    path_val = Path("/tmp/test")
-    pattern_val = re.compile(r"test.*")
-
-    instance = ComplexTest(
-        uuid_val=uuid_val,
-        date_val=date_val,
-        datetime_val=datetime_val,
-        time_val=time_val,
-        timedelta_val=timedelta_val,
-        timezone_val=timezone_val,
-        path_val=path_val,
-        pattern_val=pattern_val,
+def test_typed_dict_nested_validation() -> None:
+    instance = TypedDictWrapperState(
+        wrapper={
+            "profile": {"name": "Ana", "age": 20, "active": True},
+            "tags": ["one", "two"],
+        },
     )
+    assert instance.wrapper["tags"] == ("one", "two")
 
-    assert instance.uuid_val == uuid_val
-    assert instance.date_val == date_val
-    assert instance.datetime_val == datetime_val
-    assert instance.time_val == time_val
-    assert instance.timedelta_val == timedelta_val
-    assert instance.timezone_val == timezone_val
-    assert instance.path_val == path_val
-    assert instance.pattern_val == pattern_val
-
-    # Invalid types
-    with pytest.raises(ValidationError):
-        ComplexTest(
-            uuid_val="not_uuid",
-            date_val=date_val,
-            datetime_val=datetime_val,
-            time_val=time_val,
-            timedelta_val=timedelta_val,
-            timezone_val=timezone_val,
-            path_val=path_val,
-            pattern_val=pattern_val,
+    with pytest.raises(ValidationError) as exc:
+        TypedDictWrapperState(
+            wrapper={
+                "profile": {"name": "Ana", "age": 20, "active": True},
+                "tags": ["one", 2],
+            },
         )
+    assert exc.value.path == (".wrapper", '["tags"]', "[1]")
+
+    with pytest.raises(ValidationError) as exc:
+        TypedDictWrapperState(
+            wrapper={
+                "profile": {
+                    "name": "Ana",
+                    "age": 20,
+                    "active": True,
+                    "email": 123,
+                },
+                "tags": ["ok"],
+            },
+        )
+    assert exc.value.path == (".wrapper", '["profile"]', '["email"]')
 
 
-def test_validator_recursive_state() -> None:
-    class RecursiveState(State):
-        name: str
-        child: "RecursiveState | None"
+def test_recursive_type_alias_validation() -> None:
+    instance = RecursiveMapState(data={"child": {}})
+    assert instance.data["child"] == {}
 
-    # Valid recursive structure
-    instance = RecursiveState(name="parent", child=RecursiveState(name="child", child=None))
-
-    assert instance.name == "parent"
-    assert instance.child is not None
-    assert instance.child.name == "child"
-    assert instance.child.child is None
-
-    # Valid None child
-    instance2 = RecursiveState(name="single", child=None)
-    assert instance2.name == "single"
-    assert instance2.child is None
+    with pytest.raises(ValidationError) as exc:
+        RecursiveMapState(data={"child": 1})
+    assert exc.value.path == (".data", "[child]")
 
 
-def test_validator_generic_state() -> None:
-    class GenericState[T](State):
-        value: T
+def test_recursive_union_alias_validation() -> None:
+    instance = RecursiveJsonState(value="leaf")
+    assert instance.value == "leaf"
 
-    class ContainerState(State):
-        string_generic: GenericState[str]
-        int_generic: GenericState[int]
+    instance = RecursiveJsonState(value={"child": {"grand": "leaf"}})
+    assert instance.value["child"]["grand"] == "leaf"
 
-    # Valid generic instances
-    instance = ContainerState(
-        string_generic=GenericState[str](value="test"), int_generic=GenericState[int](value=42)
+    with pytest.raises(ValidationError) as exc:
+        RecursiveJsonState(value={"child": {"grand": ["bad"]}})
+    assert exc.value.path == (".value",)
+
+
+def test_state_attribute_validation() -> None:
+    instance = ParentState(nested=NestedState(value="child"))
+    assert instance.nested.value == "child"
+
+    with pytest.raises(ValidationError) as exc:
+        ParentState(nested={"value": 123})
+    assert exc.value.path == (".nested", ".value")
+
+    with pytest.raises(ValidationError) as exc:
+        ParentState(nested="not-a-state")
+    assert exc.value.path == (".nested",)
+
+
+def test_complex_type_validation() -> None:
+    instance = ComplexState(
+        uuid_val=uuid4(),
+        date_val=date.today(),
+        datetime_val=datetime.now(tz=UTC),
+        time_val=time(12, 30, 45),
+        timedelta_val=timedelta(days=1),
+        timezone_val=UTC,
+        path_val=Path("/tmp/test"),
+        pattern_val=re.compile(r"test.*"),
     )
+    assert isinstance(instance.uuid_val, UUID)
+    assert instance.timezone_val is UTC
 
-    assert instance.string_generic.value == "test"
-    assert instance.int_generic.value == 42
+    with pytest.raises(ValidationError) as exc:
+        ComplexState(
+            uuid_val="not-uuid",
+            date_val=date.today(),
+            datetime_val=datetime.now(tz=UTC),
+            time_val=time(12),
+            timedelta_val=timedelta(days=1),
+            timezone_val=UTC,
+            path_val=Path("/tmp/test"),
+            pattern_val=re.compile(r"test.*"),
+        )
+    assert exc.value.path == (".uuid_val",)
 
-    # Invalid type for generic state
-    with pytest.raises(ValidationError):
-        ContainerState(string_generic="not_a_state", int_generic=GenericState[int](value=42))
+
+def test_recursive_state_validation() -> None:
+    child = RecursiveState(name="child", child=None)
+    parent = RecursiveState(name="parent", child=child)
+    assert parent.child is child
+    assert parent.child.child is None
+
+
+def test_generic_state_validation() -> None:
+    container = ContainerState(
+        string_generic=GenericState[str](value="text"),
+        int_generic=GenericState[int](value=10),
+    )
+    assert container.string_generic.value == "text"
+    assert container.int_generic.value == 10
+
+    with pytest.raises(ValidationError) as exc:
+        GenericState[str](value=1)
+    assert exc.value.path == (".value",)
+
+    with pytest.raises(ValidationError) as exc:
+        ContainerState(string_generic="bad", int_generic=GenericState[int](value=10))
+    assert exc.value.path == (".string_generic",)
+
+
+def test_generic_state_specialization_validation() -> None:
+    specialized_instance = BoxContainerState(box=BoxState(item=1))
+    assert specialized_instance.box.item == 1
+
+    with pytest.raises(ValidationError) as exc:
+        BoxContainerState(box={"item": "oops"})
+    assert exc.value.path == (".box", ".item")
+
+    with pytest.raises(ValidationError) as exc:
+        GenericWrapperState[int](value="nope")
+    assert exc.value.path == (".value",)
+
+    generic_container = GenericContainerState(
+        int_value=GenericWrapperState[int](value=5),
+        str_value=GenericWrapperState[str](value="ok"),
+    )
+    assert generic_container.int_value.value == 5
+    assert generic_container.str_value.value == "ok"
+
+    with pytest.raises(ValidationError) as exc:
+        GenericContainerState(
+            int_value={"value": "wrong"},
+            str_value=GenericWrapperState[str](value="ok"),
+        )
+    assert exc.value.path == (".int_value", ".value")
+
+    with pytest.raises(ValidationError) as exc:
+        GenericContainerState(int_value=GenericWrapperState[int](value=5), str_value={"value": 7})
+    assert exc.value.path == (".str_value", ".value")
 
 
 def test_validation_error_messages() -> None:
-    class ErrorTest(State):
-        string_val: str
-        literal_val: Literal["a", "b"]
-        none_val: None
+    with pytest.raises(ValidationError) as exc:
+        ErrorState(string_val=42, literal_val="a", none_val=None)
+    assert exc.value.path == (".string_val",)
+    assert "str" in str(exc.value.cause)
 
-    # String type error
-    with pytest.raises(ValidationError) as exc_info:
-        ErrorTest(string_val=42, literal_val="a", none_val=None)
-    assert "is not matching expected type" in str(exc_info.value.cause)
-    assert exc_info.value.path == (".string_val",)
+    with pytest.raises(ValidationError) as exc:
+        ErrorState(string_val="ok", literal_val="z", none_val=None)
+    assert exc.value.path == (".literal_val",)
+    assert "literal" in str(exc.value.cause)
 
-    # Literal value error
-    with pytest.raises(ValidationError) as exc_info:
-        ErrorTest(string_val="test", literal_val="invalid", none_val=None)
-    assert "is not matching expected values" in str(exc_info.value.cause)
-    assert exc_info.value.path == (".literal_val",)
-
-    # None type error
-    with pytest.raises(ValidationError) as exc_info:
-        ErrorTest(string_val="test", literal_val="a", none_val="not_none")
-    assert "is not matching expected type of 'None'" in str(exc_info.value.cause)
-    assert exc_info.value.path == (".none_val",)
+    with pytest.raises(ValidationError) as exc:
+        ErrorState(string_val="ok", literal_val="a", none_val="nope")
+    assert exc.value.path == (".none_val",)
+    assert "None" in str(exc.value.cause)
 
 
-def test_validation_any_type() -> None:
-    class AnyTest(State):
-        anything: Any
+def test_any_type_accepts_all_values() -> None:
+    instance = AnyState(anything="string")
+    assert instance.anything == "string"
 
-    # Any accepts all types
-    instance1 = AnyTest(anything="string")
-    assert instance1.anything == "string"
+    instance = AnyState(anything=42)
+    assert instance.anything == 42
 
-    instance2 = AnyTest(anything=42)
-    assert instance2.anything == 42
-
-    instance3 = AnyTest(anything=[1, 2, 3])
-    assert instance3.anything == [1, 2, 3]
-
-    instance4 = AnyTest(anything=None)
-    assert instance4.anything is None
+    instance = AnyState(anything=None)
+    assert instance.anything is None
 
 
-def test_validator_with_defaults() -> None:
-    class DefaultTest(State):
-        required: str
-        optional: str = "default"
-        optional_union: str | None = None
-
-    # Using defaults
-    instance = DefaultTest(required="test")
-    assert instance.required == "test"
+def test_default_value_handling() -> None:
+    instance = DefaultState(required="value")
     assert instance.optional == "default"
     assert instance.optional_union is None
 
-    # Overriding defaults
-    instance2 = DefaultTest(required="test", optional="custom", optional_union="not_none")
-    assert instance2.required == "test"
-    assert instance2.optional == "custom"
-    assert instance2.optional_union == "not_none"
+    override = DefaultState(
+        required="value",
+        optional="custom",
+        optional_union="present",
+    )
+    assert override.optional == "custom"
+    assert override.optional_union == "present"
 
-    # Invalid override of default
-    with pytest.raises(ValidationError):
-        DefaultTest(required="test", optional=42)
-
-
-def test_attribute_validator_direct_usage() -> None:
-    # Create validator for str type
-    str_annotation = AttributeAnnotation(origin=str, arguments=())
-    validator = AttributeValidator.of(str_annotation, recursion_guard={})
-
-    # Valid string
-    result = validator("test")
-    assert result == "test"
-
-    # Invalid type
-    with pytest.raises(TypeError):
-        validator(42)
+    with pytest.raises(ValidationError) as exc:
+        DefaultState(required="value", optional=123)
+    assert exc.value.path == (".optional",)
 
 
 def test_validation_error_paths() -> None:
-    """Test that ValidationError contains correct path information."""
-
-    class NestedTest(State):
-        items: Sequence[str]
-        mapping: Mapping[str, int]
-        nested: SimpleState
-
-    # Test sequence element path
-    with pytest.raises(ValidationError) as exc_info:
-        NestedTest(
-            items=["valid", 123, "also_valid"], mapping={"key": 1}, nested=SimpleState(name="test")
+    with pytest.raises(ValidationError) as exc:
+        DeepNestedState(
+            items=["ok", 2],
+            mapping={"key": 1},
+            nested=NestedState(value="child"),
         )
-    assert exc_info.value.path == (".items", "[1]")
+    assert exc.value.path == (".items", "[1]")
 
-    # Test mapping key path
-    with pytest.raises(ValidationError) as exc_info:
-        NestedTest(items=["valid"], mapping={123: 1}, nested=SimpleState(name="test"))
-    assert exc_info.value.path == (".mapping", "[123]")
-
-    # Test mapping value path
-    with pytest.raises(ValidationError) as exc_info:
-        NestedTest(items=["valid"], mapping={"key": "not_int"}, nested=SimpleState(name="test"))
-    assert exc_info.value.path == (".mapping", "[key]")
-
-    # Test nested state path
-    with pytest.raises(ValidationError) as exc_info:
-        NestedTest(items=["valid"], mapping={"key": 1}, nested={"name": 123})
-    assert exc_info.value.path == (".nested", ".name")
-
-    # Test deeply nested state path
-    class DeeplyNestedTest(State):
-        level1: NestedTest
-
-    with pytest.raises(ValidationError) as exc_info:
-        DeeplyNestedTest(
-            level1={"items": ["valid"], "mapping": {"key": 1}, "nested": {"name": 456}}
+    with pytest.raises(ValidationError) as exc:
+        DeepNestedState(
+            items=["ok"],
+            mapping={1: 1},
+            nested=NestedState(value="child"),
         )
-    assert exc_info.value.path == (".level1", ".nested", ".name")
+    assert exc.value.path == (".mapping", "[1]")
 
+    with pytest.raises(ValidationError) as exc:
+        DeepNestedState(
+            items=["ok"],
+            mapping={"key": 1},
+            nested={"value": 123},
+        )
+    assert exc.value.path == (".nested", ".value")
 
-def test_unsupported_type_annotation() -> None:
-    # Create annotation for arbitrary type
-    class ArbitraryType:
-        pass
+    class Wrapped(State):
+        level1: DeepNestedState
 
-    annotation = AttributeAnnotation(origin=ArbitraryType, arguments=())
-
-    validator = AttributeValidator.of(annotation, recursion_guard={})
-    assert validator is not None
+    with pytest.raises(ValidationError) as exc:
+        Wrapped(
+            level1={
+                "items": ["ok"],
+                "mapping": {"key": 1},
+                "nested": {"value": 123},
+            },
+        )
+    assert exc.value.path == (".level1", ".nested", ".value")

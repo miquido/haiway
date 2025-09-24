@@ -651,6 +651,9 @@ class AttributePath[Root, Attribute]:
     ```python
     # Get value
     name = User._.name(user)
+
+    # Create an updated copy with a nested change
+    updated = User._.profile.preferences["locale"](user, "pl")
     ```
     """
 

@@ -4,8 +4,9 @@ from threading import Lock
 from types import TracebackType
 from typing import ClassVar, Self, cast
 
+from haiway.attributes import State
 from haiway.context.types import MissingContext, MissingState
-from haiway.state import Immutable, State
+from haiway.types import Immutable
 
 __all__ = (
     "ScopeState",

@@ -1,11 +1,9 @@
 from collections.abc import Mapping, MutableMapping, Sequence
-from typing import Any, Literal, Protocol, Self, overload
+from typing import Any, Literal, Protocol, Self, overload, runtime_checkable
 
-from typing_extensions import runtime_checkable
-
+from haiway.attributes import State
 from haiway.context import ctx
 from haiway.helpers.statemethods import statemethod
-from haiway.state import State
 from haiway.types.basic import BasicValue
 from haiway.utils.metadata import META_EMPTY, Meta
 

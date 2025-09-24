@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableSequence, Sequence
 from types import EllipsisType, GenericAlias
 from typing import (
     Any,
@@ -8,83 +8,37 @@ from typing import (
     TypeVar,
     cast,
     dataclass_transform,
-    final,
 )
 from weakref import WeakValueDictionary
 
-from haiway.state.attributes import AttributeAnnotation, attribute_annotations
-from haiway.state.path import AttributePath
-from haiway.state.validation import AttributeValidator, ValidationContext, Validator
+from haiway.attributes.annotations import (
+    AttributeAnnotation,
+    ObjectAttribute,
+    resolve_state_self_attribute,
+)
+from haiway.attributes.path import AttributePath
+from haiway.attributes.validation import ValidationContext
 from haiway.types import MISSING, DefaultValue, Missing, not_missing
+from haiway.types.immutable import Immutable
 
 __all__ = ("State",)
 
 
-@final
-class StateAttribute[Value]:
+class StateField[Value](Immutable):
     """
-    Represents an attribute in a State class with its metadata.
+    Represents a field in a State class with its metadata.
 
-    This class holds information about a specific attribute in a State class,
-    including its name, type annotation, default value, and validation rules.
+    This class holds information about a specific attribute of a State class,
+    including its name, typing, default value, and validation rules.
     It is used internally by the State metaclass to manage state attributes
     and ensure their immutability and type safety.
     """
 
-    __slots__ = (
-        "annotation",
-        "default",
-        "name",
-        "validator",
-    )
+    name: str
+    annotation: AttributeAnnotation
+    default: DefaultValue[Value]
 
-    def __init__(
-        self,
-        name: str,
-        annotation: AttributeAnnotation,
-        default: DefaultValue[Value],
-        validator: Validator[Value],
-    ) -> None:
-        """
-        Initialize a new StateAttribute.
-
-        Parameters
-        ----------
-        name : str
-            The name of the attribute
-        annotation : AttributeAnnotation
-            The type annotation of the attribute
-        default : DefaultValue[Value]
-            The default value provider for the attribute
-        validator : AttributeValidation[Value]
-            The validation function for the attribute values
-        """
-        self.name: str
-        object.__setattr__(
-            self,
-            "name",
-            name,
-        )
-        self.annotation: AttributeAnnotation
-        object.__setattr__(
-            self,
-            "annotation",
-            annotation,
-        )
-        self.default: DefaultValue[Value]
-        object.__setattr__(
-            self,
-            "default",
-            default,
-        )
-        self.validator: Validator[Value]
-        object.__setattr__(
-            self,
-            "validator",
-            validator,
-        )
-
-    def validated(
+    def validate(
         self,
         value: Any | Missing,
         /,
@@ -105,26 +59,11 @@ class StateAttribute[Value]:
         Value
             The validated and potentially transformed value
         """
-        return self.validator(self.default() if value is MISSING else value)
+        if value is MISSING:
+            return self.annotation.validate(self.default())
 
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> Any:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> None:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be deleted"
-        )
+        else:
+            return self.annotation.validate(value)
 
 
 @dataclass_transform(
@@ -138,7 +77,7 @@ class StateMeta(type):
 
     This metaclass is responsible for:
     - Processing attribute annotations and defaults
-    - Creating StateAttribute instances for each attribute
+    - Building ``StateField`` entries from resolved ``AttributeAnnotation`` metadata
     - Setting up validation for attributes
     - Managing generic type parameters and specialization
     - Creating immutable class instances
@@ -165,53 +104,34 @@ class StateMeta(type):
             **kwargs,
         )
 
-        attributes: dict[str, StateAttribute[Any]] = {}
-
-        for key, annotation in attribute_annotations(
+        self_attribute: ObjectAttribute = resolve_state_self_attribute(
             cls,
-            type_parameters=type_parameters or {},
-        ).items():
+            parameters=type_parameters or {},
+        )
+        fields: MutableSequence[StateField] = []
+        for key, attribute in self_attribute.attributes.items():
             default: Any = getattr(cls, key, MISSING)
-            attributes[key] = StateAttribute(
-                name=key,
-                annotation=annotation.update_required(default is MISSING),
-                default=_resolve_default(default),
-                validator=AttributeValidator.of(
-                    annotation,
-                    recursion_guard={str(AttributeAnnotation(origin=cls)): cls.instance_validator},  # pyright: ignore[reportAttributeAccessIssue]
-                ),
+            fields.append(
+                StateField(
+                    name=key,
+                    annotation=attribute,
+                    default=_resolve_default(default),
+                )
             )
 
+        cls.__SELF_ATTRIBUTE__ = self_attribute  # pyright: ignore[reportAttributeAccessIssue]
         cls.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportAttributeAccessIssue]
-        cls.__ATTRIBUTES__ = attributes  # pyright: ignore[reportAttributeAccessIssue]
-        cls.__slots__ = frozenset(attributes.keys())  # pyright: ignore[reportAttributeAccessIssue]
+        cls.__FIELDS__ = tuple(fields)  # pyright: ignore[reportAttributeAccessIssue]
+        cls.__slots__ = tuple(field.name for field in fields)  # pyright: ignore[reportAttributeAccessIssue]
         cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
         cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
 
         return cls
 
-    def validator(
+    def validate(
         cls,
         value: Any,
-        /,
-    ) -> Any:
-        """
-        Placeholder for the validator method that will be implemented in each State class.
-
-        This method validates and potentially transforms a value to ensure it
-        conforms to the class's requirements.
-
-        Parameters
-        ----------
-        value : Any
-            The value to validate
-
-        Returns
-        -------
-        Any
-            The validated value
-        """
-        ...
+    ) -> Any: ...
 
     def __instancecheck__(
         self,
@@ -349,7 +269,8 @@ class State(metaclass=StateMeta):
     - Type-safe: Attributes are validated based on type annotations
     - Generic: Can be parameterized with type variables
     - Declarative: Uses a class-based declaration syntax similar to dataclasses
-    - Validated: Custom validation rules can be applied to attributes
+    - Validated: Custom validation rules can be applied to attributes (sequences and
+      sets are coerced to immutable containers; mappings remain regular dicts)
 
     State classes can be created by subclassing State and declaring attributes:
 
@@ -376,7 +297,8 @@ class State(metaclass=StateMeta):
     _: ClassVar[Self]
     __IMMUTABLE__: ClassVar[EllipsisType] = ...
     __TYPE_PARAMETERS__: ClassVar[Mapping[str, Any] | None] = None
-    __ATTRIBUTES__: ClassVar[dict[str, StateAttribute[Any]]]
+    __SELF_ATTRIBUTE__: ClassVar[ObjectAttribute]
+    __FIELDS__: ClassVar[Sequence[StateField]]
 
     @classmethod
     def __class_getitem__(
@@ -455,14 +377,14 @@ class State(metaclass=StateMeta):
         )
         # Set origin for subclass checks
         parametrized_type.__origin__ = cls  # pyright: ignore[reportAttributeAccessIssue]
+        parametrized_type.__args__ = type_arguments  # pyright: ignore[reportAttributeAccessIssue]
         _types_cache[(cls, type_arguments)] = parametrized_type
         return parametrized_type
 
     @classmethod
-    def instance_validator(
+    def validate(
         cls,
         value: Any,
-        /,
     ) -> Self:
         """
         Validate and convert a value to an instance of this class.
@@ -521,16 +443,16 @@ class State(metaclass=StateMeta):
         Exception
             If validation fails for any attribute
         """
-        for name, attribute in self.__ATTRIBUTES__.items():
-            with ValidationContext.scope(f".{name}"):
+        for field in self.__FIELDS__:
+            with ValidationContext.scope(f".{field.name}"):
                 object.__setattr__(
                     self,  # pyright: ignore[reportUnknownArgumentType]
-                    name,
-                    attribute.validated(
+                    field.name,
+                    field.validate(
                         kwargs.get(
-                            name,
+                            field.name,
                             MISSING,
-                        ),
+                        )
                     ),
                 )
 
@@ -585,13 +507,13 @@ class State(metaclass=StateMeta):
             A mapping of attribute names to values
         """
         dict_result: dict[str, Any] = {}
-        for key in self.__ATTRIBUTES__.keys():
-            value: Any | Missing = getattr(self, key, MISSING)
+        for field in self.__FIELDS__:
+            value: Any | Missing = getattr(self, field.name, MISSING)
             if recursive and isinstance(value, State):
-                dict_result[key] = value.to_mapping(recursive=recursive)
+                dict_result[field.name] = value.to_mapping(recursive=recursive)
 
             elif not_missing(value):
-                dict_result[key] = value
+                dict_result[field.name] = value
 
         return dict_result
 
@@ -634,14 +556,14 @@ class State(metaclass=StateMeta):
             return False
 
         return all(
-            getattr(self, key, MISSING) == getattr(other, key, MISSING)
-            for key in self.__ATTRIBUTES__.keys()
+            getattr(self, field.name, MISSING) == getattr(other, field.name, MISSING)
+            for field in self.__FIELDS__
         )
 
     def __hash__(self) -> int:
         hash_values: list[int] = []
-        for key in self.__ATTRIBUTES__.keys():
-            value: Any = getattr(self, key, MISSING)
+        for field in self.__FIELDS__:
+            value: Any = getattr(self, field.name, MISSING)
 
             # Skip MISSING values to ensure consistent hashing
             if value is MISSING:
@@ -729,9 +651,25 @@ class State(metaclass=StateMeta):
         Self
             A new instance with replaced values
         """
-        return self.__class__(
-            **{
-                **vars(self),
-                **kwargs,
-            }
-        )
+        if not kwargs:
+            return self
+
+        updated: Self = object.__new__(self.__class__)
+        for field in self.__class__.__FIELDS__:
+            update: Any | Missing = kwargs.get(field.name, MISSING)
+            if update is MISSING:  # reuse missing elements
+                object.__setattr__(
+                    updated,
+                    field.name,
+                    getattr(self, field.name),
+                )
+
+            else:  # and validate updates
+                with ValidationContext.scope(f".{field.name}"):
+                    object.__setattr__(
+                        updated,
+                        field.name,
+                        field.validate(update),
+                    )
+
+        return updated

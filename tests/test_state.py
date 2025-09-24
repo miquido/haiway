@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from pytest import raises
 
 from haiway import MISSING, Default, Missing, State
-from haiway.state.validation import ValidationError
+from haiway.attributes.validation import ValidationError
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -241,6 +241,47 @@ def test_copying_leaves_same_object() -> None:
     origin = Copied(string="42", nested=Nested(string="answer"))
     assert copy(origin) is origin
     assert deepcopy(origin) is origin
+
+
+def test_updated_returns_self_when_no_changes() -> None:
+    class Example(State):
+        value: int
+        text: str
+
+    instance = Example(value=1, text="a")
+    assert instance.updated() is instance
+
+
+def test_updated_only_validates_provided_attributes() -> None:
+    counter: dict[str, int] = {"calls": 0}
+
+    class Tracked(State):
+        value: int
+
+        @classmethod
+        def validate(
+            cls,
+            value: Any,
+        ) -> Self:
+            counter["calls"] += 1
+            return super().validate(value)
+
+    class Container(State):
+        first: int
+        tracked: Tracked
+
+    instance = Container(first=1, tracked=Tracked(value=1))
+    counter["calls"] = 0
+
+    updated_first = instance.updated(first=2)
+    assert updated_first is not instance
+    assert updated_first.tracked is instance.tracked
+    assert counter["calls"] == 0
+
+    counter["calls"] = 0
+    replacement = instance.updated(tracked=Tracked(value=2))
+    assert replacement is not instance
+    assert counter["calls"] == 1
 
 
 def test_hash_consistency_with_missing_values() -> None:

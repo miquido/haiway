@@ -16,7 +16,7 @@ class UserPreferences(State):
     theme: str = "light"
     notifications: bool = True
     languages: Sequence[str] = ("en",)  # Becomes tuple
-    metadata: Mapping[str, str] = {}    # Becomes immutable
+    metadata: Mapping[str, str] = {}    # Stays a dict (treat as read-only)
 
 # State objects are immutable
 prefs = UserPreferences()
@@ -31,8 +31,8 @@ print(f"Original: {prefs.theme}, Updated: {dark_prefs.theme}")
 
 - **Automatic Immutability**: `State` base class prevents modification after creation using
   `__setattr__` blocking
-- **Type Conversion**: Abstract collection types are automatically converted to immutable
-  equivalents during validation
+- **Type Conversion**: Sequences and sets are converted to immutable counterparts during validation
+  (mappings stay as plain dicts)
 - **Memory Sharing**: The `.updated()` method creates structural sharing - unchanged fields
   reference the same objects
 - **Type Safety**: Field types are validated at runtime, ensuring data integrity
@@ -43,12 +43,12 @@ print(f"Original: {prefs.theme}, Updated: {dark_prefs.theme}")
 Always use **abstract collection types** to ensure immutability:
 
 - `Sequence[T]` instead of `list[T]` (becomes tuple)
-- `Mapping[K,V]` instead of `dict[K,V]` (becomes immutable)
+- `Mapping[K,V]` instead of `dict[K,V]` (remains a dict; treat it as read-only)
 - `Set[T]` instead of `set[T]` (becomes frozenset)
 
 **Why this matters:**
 
-- **Automatic Conversion**: Haiway converts mutable collections (`list`, `set`) to immutable
+- **Automatic Conversion**: Haiway converts mutable sequences and sets (`list`, `set`) to immutable
   equivalents (`tuple`, `frozenset`) during validation
 - **Interface Flexibility**: Abstract types allow callers to pass any compatible collection type
 - **Memory Efficiency**: Immutable collections can be safely shared between state instances

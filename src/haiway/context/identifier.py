@@ -3,7 +3,7 @@ from types import TracebackType
 from typing import Any, ClassVar, Self
 from uuid import UUID, uuid4
 
-from haiway.state import Immutable
+from haiway.types import Immutable
 
 __all__ = ("ScopeIdentifier",)
 

@@ -12,7 +12,7 @@ from haiway.helpers import (
     HTTPQueryParams,
     HTTPResponse,
 )
-from haiway.state import Immutable
+from haiway.types import Immutable
 
 __all__ = ("HTTPXClient",)
 

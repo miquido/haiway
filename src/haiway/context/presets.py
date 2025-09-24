@@ -4,9 +4,10 @@ from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import ClassVar, Protocol, Self, cast
 
+from haiway.attributes import State
 from haiway.context.disposables import Disposable, Disposables
 from haiway.context.state import StateContext
-from haiway.state import Immutable, State
+from haiway.types import Immutable
 
 __all__ = (
     "ContextPreset",

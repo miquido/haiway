@@ -3,8 +3,7 @@ from collections.abc import AsyncGenerator
 
 from pytest import mark, raises
 
-from haiway import ctx
-from haiway.state.structure import State
+from haiway import State, ctx
 
 
 class FakeException(Exception):

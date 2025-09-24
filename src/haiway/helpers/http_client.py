@@ -1,8 +1,8 @@
 from collections.abc import Mapping, Sequence
 from typing import Protocol, final, overload, runtime_checkable
 
+from haiway.attributes import State
 from haiway.helpers.statemethods import statemethod
-from haiway.state import State
 
 __all__ = (
     "HTTPClient",

@@ -3,7 +3,7 @@ import unicodedata
 from collections.abc import Callable, Collection, Iterable, Sequence, Set
 from typing import Any, Literal, Self, cast, final
 
-from haiway.state.path import AttributePath
+from haiway.attributes.path import AttributePath
 
 __all__ = ("AttributeRequirement",)
 
