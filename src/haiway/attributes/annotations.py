@@ -169,7 +169,9 @@ class AliasAttribute(Immutable):
 
     @property
     def annotations(self) -> Sequence[Any]:
-        assert self._resolved is not None  # nosec: B101
+        if self._resolved is None:
+            return ()
+
         return self._resolved.annotations
 
 
@@ -1432,7 +1434,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912
     recursion_guard: MutableMapping[Any, AttributeAnnotation],
 ) -> AttributeAnnotation:
     match get_origin(annotation) or annotation:
-        case None:
+        case types.NoneType | None:
             return NONE_ATTRIBUTE
 
         case typeddict if is_typeddict(typeddict) or is_typeddict_ext(typeddict):

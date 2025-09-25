@@ -14,9 +14,11 @@ import typing_extensions as te
 
 from haiway import State
 from haiway.attributes.annotations import (
+    AliasAttribute,
     AttributeAnnotation,
     CustomAttribute,
     DatetimeAttribute,
+    NoneAttribute,
     ObjectAttribute,
     PathAttribute,
     StrEnumAttribute,
@@ -48,6 +50,28 @@ def attribute_of(cls: type[State], name: str) -> AttributeAnnotation:
     self_attribute = getattr(cls, "__SELF_ATTRIBUTE__", None)
     assert isinstance(self_attribute, ObjectAttribute)
     return self_attribute.attributes[name]
+
+
+def test_alias_attribute_annotations_returns_empty_before_resolution() -> None:
+    alias = AliasAttribute(
+        alias="Example",
+        module="tests.test_state_attributes",
+    )
+
+    assert alias.annotations == ()
+
+
+def test_type_none_attribute_resolves_to_none_attribute() -> None:
+    class Example(State):
+        explicit_none: type(None)
+
+    annotation = attribute_of(Example, "explicit_none")
+
+    assert isinstance(annotation, NoneAttribute)
+    assert annotation.base is None
+    assert annotation.validate(None) is None
+    with pytest.raises(TypeError):
+        annotation.validate("not-none")
 
 
 def test_attribute_annotations_preserve_annotated_metadata() -> None:
