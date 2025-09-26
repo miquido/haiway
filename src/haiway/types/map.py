@@ -1,7 +1,7 @@
 """Utilities for working with immutable mapping-like objects."""
 
 import json
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Mapping
 from types import EllipsisType
 from typing import Any, ClassVar, Self, final
 
@@ -9,34 +9,12 @@ __all__ = ("Map",)
 
 
 @final
-class Map[Key, Element](Mapping[Key, Element]):
-    """An immutable ``Mapping`` wrapper with convenience conversion helpers."""
+class Map[Key, Element](dict[Key, Element]):
+    """An immutable ``dict`` wrapper with convenience conversion helpers."""
 
     __IMMUTABLE__: ClassVar[EllipsisType] = ...
 
-    __slots__ = ("_elements",)
-
-    def __init__(
-        self,
-        values: Mapping[Key, Element] | Iterable[tuple[Key, Element]],
-        /,
-    ):
-        """Create a ``Map`` from a mapping or key/value iterable."""
-        self._elements: Mapping[Key, Element]
-        match values:
-            case {**elements}:
-                object.__setattr__(
-                    self,
-                    "_elements",
-                    elements,
-                )
-
-            case items:
-                object.__setattr__(
-                    self,
-                    "_elements",
-                    dict(items),
-                )
+    __slots__ = ()
 
     @classmethod
     def from_mapping(
@@ -75,24 +53,13 @@ class Map[Key, Element](Mapping[Key, Element]):
         self,
     ) -> str:
         """Serialize the map into a JSON object string."""
-        return json.dumps(self._elements)
-
-    def __bool__(self) -> bool:
-        """Return ``True`` when the map contains at least one item."""
-        return bool(self._elements)
-
-    def __contains__(
-        self,
-        element: Any,
-    ) -> bool:
-        """Return ``True`` when ``element`` exists as a key in the map."""
-        return self._elements.__contains__(element)
+        return json.dumps(self)
 
     def __setattr__(
         self,
         name: str,
-        value: Any,
-    ) -> Any:
+        value: object,
+    ) -> None:
         """Prevent attribute mutation, enforcing immutability."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
@@ -113,7 +80,7 @@ class Map[Key, Element](Mapping[Key, Element]):
         self,
         key: Key,
         value: Element,
-    ) -> Any:
+    ) -> None:
         """Prevent item mutation, enforcing immutability."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
@@ -123,27 +90,69 @@ class Map[Key, Element](Mapping[Key, Element]):
     def __delitem__(
         self,
         key: Key,
-    ) -> Element:
+    ) -> None:
         """Prevent item deletion, enforcing immutability."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be deleted"
         )
 
-    def __getitem__(
+    def clear(self) -> None:
+        """Prevent removing all elements via ``clear``."""
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, clear is not supported"
+        )
+
+    def pop(
         self,
         key: Key,
+        default: Any | None = None,
+        /,
     ) -> Element:
-        """Return the value stored for ``key``."""
-        return self._elements[key]
+        """Prevent removing elements via ``pop``."""
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, pop is not supported"
+        )
 
-    def __iter__(self) -> Iterator[Key]:
-        """Iterate over stored keys in insertion order."""
-        return iter(self._elements)
+    def popitem(self) -> tuple[Key, Element]:
+        """Prevent removing elements via ``popitem``."""
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, popitem is not supported"
+        )
 
-    def __len__(self) -> int:
-        """Return the number of stored key/value pairs."""
-        return len(self._elements)
+    def setdefault(
+        self,
+        key: Key,
+        default: Element | None = None,
+        /,
+    ) -> Element:
+        """Prevent mutation via ``setdefault``."""
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, setdefault is not supported"
+        )
+
+    def update(
+        self,
+        *updates: object,
+        **kwargs: Element,
+    ) -> None:
+        """Prevent mutation via ``update``."""
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, update is not supported"
+        )
+
+    def __ior__(
+        self,
+        other: object,
+    ) -> Self:
+        """Prevent in-place union operations from mutating the map."""
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, |= is not supported"
+        )
+
+    def copy(self) -> Self:
+        """Return ``self`` instead of a shallow copy since the map is immutable."""
+        return self
 
     def __copy__(self) -> Self:
         """Return ``self`` because the structure is immutable."""
