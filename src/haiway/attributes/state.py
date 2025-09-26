@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping, MutableSequence, Sequence
 from types import EllipsisType, GenericAlias
 from typing import (
@@ -16,6 +17,7 @@ from haiway.attributes.annotations import (
     ObjectAttribute,
     resolve_state_self_attribute,
 )
+from haiway.attributes.coding import StateJSONEncoder
 from haiway.attributes.path import AttributePath
 from haiway.attributes.validation import ValidationContext
 from haiway.types import MISSING, DefaultValue, Missing, not_missing
@@ -421,6 +423,72 @@ class State(metaclass=StateMeta):
         /,
     ) -> Self:
         return cls(**value)
+
+    @classmethod
+    def from_json(
+        cls,
+        value: str | bytes,
+        /,
+        decoder: type[json.JSONDecoder] = json.JSONDecoder,
+    ) -> Self:
+        try:
+            return cls(
+                **json.loads(
+                    value,
+                    cls=decoder,
+                )
+            )
+
+        except Exception as exc:
+            raise ValueError(f"Failed to decode {cls.__name__} from json: {exc}") from exc
+
+    @classmethod
+    def from_json_array(
+        cls,
+        value: str | bytes,
+        /,
+        decoder: type[json.JSONDecoder] = json.JSONDecoder,
+    ) -> Sequence[Self]:
+        payload: Any
+        try:
+            payload = json.loads(
+                value,
+                cls=decoder,
+            )
+
+        except Exception as exc:
+            raise ValueError(f"Failed to decode {cls.__name__} from json: {exc}") from exc
+
+        match payload:
+            case [*elements]:
+                try:
+                    return tuple(cls(**element) for element in elements)
+
+                except Exception as exc:
+                    raise ValueError(
+                        f"Failed to decode {cls.__name__} from json array: {exc}"
+                    ) from exc
+
+            case _:
+                raise ValueError("Provided json is not an array!")
+
+    def to_json(
+        self,
+        indent: int | None = None,
+        encoder_class: type[json.JSONEncoder] = StateJSONEncoder,
+    ) -> str:
+        mapping: Mapping[str, Any] = self.to_mapping()
+        try:
+            return json.dumps(
+                mapping,
+                indent=indent,
+                cls=encoder_class,
+            )
+
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to encode {self.__class__.__name__} to json:\n{mapping}"
+            ) from exc
 
     def __init__(
         self,
