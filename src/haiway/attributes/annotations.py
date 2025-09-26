@@ -1583,7 +1583,7 @@ MISSING_ATTRIBUTE: Final[MissingAttribute] = MissingAttribute()
 NONE_ATTRIBUTE: Final[NoneAttribute] = NoneAttribute()
 
 
-def _resolve_type(  # noqa: C901, PLR0911, PLR0912
+def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
     annotation: Any,
     *,
     module: str,
@@ -1652,7 +1652,17 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912
             | typing.Dict  # noqa: UP006
             | typing_extensions.Dict
         ):
-            keys_annotation, values_annotation = get_args(annotation)
+            keys_annotation: Any
+            values_annotation: Any
+            match get_args(annotation):
+                case (keys, values):
+                    keys_annotation = keys
+                    values_annotation = values
+
+                case _:
+                    keys_annotation = Any
+                    values_annotation = Any
+
             return MappingAttribute(
                 base=Mapping[keys_annotation, values_annotation],
                 keys=resolve_attribute(
@@ -1678,7 +1688,14 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912
             | typing_extensions.Set
             | typing_extensions.MutableSet
         ):
-            (values_annotation,) = get_args(annotation)
+            values_annotation: Any
+            match get_args(annotation):
+                case (values,):
+                    values_annotation = values
+
+                case _:
+                    values_annotation = Any
+
             return SetAttribute(
                 base=Set[values_annotation],
                 values=resolve_attribute(
@@ -1724,7 +1741,14 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912
             | typing.List  # noqa: UP006
             | typing_extensions.List
         ):
-            (values_annotation,) = get_args(annotation)
+            values_annotation: Any
+            match get_args(annotation):
+                case (values,):
+                    values_annotation = values
+
+                case _:
+                    values_annotation = Any
+
             return SequenceAttribute(
                 base=Sequence[values_annotation],
                 values=resolve_attribute(
