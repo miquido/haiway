@@ -29,7 +29,7 @@ def test_state_typing_subclass_and_instance_checks() -> None:
 
     # Any
     assert issubclass(GenericState[str], GenericState[Any])
-    assert not issubclass(GenericState[Any], GenericState[str])
+    assert issubclass(GenericState[Any], GenericState[str])
 
     # Unrelated
     assert not issubclass(GenericState[Unrelated], GenericState[Parent])

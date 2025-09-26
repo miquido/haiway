@@ -15,11 +15,11 @@ from weakref import WeakValueDictionary
 from haiway.attributes.annotations import (
     AttributeAnnotation,
     ObjectAttribute,
-    resolve_state_self_attribute,
+    resolve_self_attribute,
 )
 from haiway.attributes.coding import StateJSONEncoder
 from haiway.attributes.path import AttributePath
-from haiway.attributes.validation import ValidationContext
+from haiway.attributes.validation import ValidationContext, ValidationError
 from haiway.types import MISSING, DefaultValue, Missing, not_missing
 from haiway.types.immutable import Immutable
 
@@ -106,7 +106,7 @@ class StateMeta(type):
             **kwargs,
         )
 
-        self_attribute: ObjectAttribute = resolve_state_self_attribute(
+        self_attribute: ObjectAttribute = resolve_self_attribute(
             cls,
             parameters=type_parameters or {},
         )
@@ -139,24 +139,18 @@ class StateMeta(type):
         self,
         instance: Any,
     ) -> bool:
-        # check for type match
-        if self.__subclasscheck__(type(instance)):
-            return True
-
-        # otherwise check if we are dealing with unparametrized base
-        # against the parametrized one, our generic subtypes have base of unparametrized type
-        if type(instance) not in self.__bases__:
+        instance_type: type[Any] = type(instance)
+        if not self.__subclasscheck__(instance_type):
             return False
 
-        try:
-            # validate instance to check unparametrized fields
-            _ = self(**vars(instance))
+        if hasattr(self, "__origin__") or hasattr(instance_type, "__origin__"):
+            try:  # TODO: find a better way to validate partially typed instances
+                self(**vars(instance))
 
-        except Exception:
-            return False
+            except ValidationError:
+                return False
 
-        else:
-            return True
+        return True
 
     def __subclasscheck__(
         self,
@@ -166,14 +160,15 @@ class StateMeta(type):
             return True
 
         self_origin: type[Any] = getattr(self, "__origin__", self)
-        subclass_origin: type[Any] = getattr(subclass, "__origin__", subclass)
 
-        # Handle case where we're checking a parameterized type against unparameterized
+        # Handle case where we're checking not parameterized type
         if self_origin is self:
             return type.__subclasscheck__(self, subclass)
 
+        subclass_origin: type[Any] = getattr(subclass, "__origin__", subclass)
+
         # Both must be based on the same generic class
-        if not issubclass(subclass_origin, self_origin):
+        if self_origin is not subclass_origin:
             return False
 
         return self._check_type_parameters(subclass)
@@ -182,45 +177,43 @@ class StateMeta(type):
         self,
         subclass: type[Any],
     ) -> bool:
-        self_params: Mapping[str, Any] | None = getattr(self, "__TYPE_PARAMETERS__", None)
-        subclass_params: Mapping[str, Any] | None = getattr(subclass, "__TYPE_PARAMETERS__", None)
+        self_args: Sequence[Any] | None = getattr(
+            self,
+            "__args__",
+            None,
+        )
+        subclass_args: Sequence[Any] | None = getattr(
+            subclass,
+            "__args__",
+            None,
+        )
 
-        if self_params is None:
+        if self_args is None and subclass_args is None:
             return True
 
-        # If subclass doesn't have type parameters, look in the MRO for a parametrized base
-        if subclass_params is None:
-            subclass_params = self._find_parametrized_base(subclass)
-            if subclass_params is None:
-                return False
+        if self_args is None:
+            assert subclass_args is not None  # nosec: B101
+            self_args = tuple(Any for _ in subclass_args)
+
+        elif subclass_args is None:
+            assert self_args is not None  # nosec: B101
+            subclass_args = tuple(Any for _ in self_args)
 
         # Check if the type parameters are compatible (covariant)
-        for key, self_param in self_params.items():
-            subclass_param: type[Any] = subclass_params.get(key, Any)
-            if self_param is Any:
+        for self_arg, subclass_arg in zip(
+            self_args,
+            subclass_args,
+            strict=True,
+        ):
+            if self_arg is Any or subclass_arg is Any:
                 continue
 
             # For covariance: GenericState[Child] should be subclass of GenericState[Parent]
             # This means subclass_param should be a subclass of self_param
-            if not issubclass(subclass_param, self_param):
+            if not issubclass(subclass_arg, self_arg):
                 return False
 
         return True
-
-    def _find_parametrized_base(
-        self,
-        subclass: type[Any],
-    ) -> Mapping[str, Any] | None:
-        self_origin: type[Any] = getattr(self, "__origin__", self)
-        for base in getattr(subclass, "__mro__", ()):
-            if getattr(base, "__origin__", None) is not self_origin:
-                continue
-
-            subclass_params: Mapping[str, Any] | None = getattr(base, "__TYPE_PARAMETERS__", None)
-            if subclass_params is not None:
-                return subclass_params
-
-        return None
 
 
 def _resolve_default[Value](
