@@ -7,8 +7,7 @@ from uuid import UUID, uuid4
 
 from pytest import raises
 
-from haiway import MISSING, Default, Missing, State
-from haiway.attributes.validation import ValidationError
+from haiway import MISSING, Default, Missing, State, ValidationError
 
 
 def test_basic_initializes_with_arguments() -> None:

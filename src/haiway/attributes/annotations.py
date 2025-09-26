@@ -70,7 +70,7 @@ __all__ = (
     "UnionAttribute",
     "ValidableAttribute",
     "resolve_attribute",
-    "resolve_state_self_attribute",
+    "resolve_self_attribute",
 )
 
 
@@ -1064,7 +1064,7 @@ class IntEnumAttribute(Immutable):
             raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
 
 
-def resolve_state_self_attribute(
+def resolve_self_attribute(
     cls: type[Any],
     /,
     parameters: Mapping[str, Any],
@@ -1095,6 +1095,7 @@ def resolve_state_self_attribute(
         )
     ] = self_attribute
 
+    # TODO: globalns to be removed after updating to python 3.13 as a base
     module = sys.modules.get(self_attribute.base.__module__)
     globalns: dict[str, Any]
     if module is None:
@@ -1103,21 +1104,18 @@ def resolve_state_self_attribute(
     else:
         globalns = dict(vars(module))
 
-    localns: dict[str, Any] = {self_attribute.base.__name__: self_attribute.base}
-    type_parameters_namespace: dict[str, Any] = {
-        parameter.__name__: parameter
-        for parameter in getattr(self_attribute.base, "__type_params__", ()) or ()
-    }
-    if type_parameters_namespace:
-        localns.update(type_parameters_namespace)
-
-    if parameters:
-        localns.update(parameters)
-
     for key, annotation in get_type_hints(
         self_attribute.base,
         globalns=globalns,
-        localns=localns,
+        localns={
+            self_attribute.base.__name__: self_attribute.base,
+            # TODO: extended localns to be removed after updating to python 3.13 as a base
+            **{
+                parameter.__name__: parameter
+                for parameter in getattr(cls, "__type_params__", ()) or ()
+            },
+            **parameters,
+        },
         include_extras=True,
     ).items():
         if key.startswith("__"):
