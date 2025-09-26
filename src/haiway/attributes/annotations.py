@@ -1228,6 +1228,157 @@ def _resolve_literal(
     )
 
 
+def _finalize_alias_resolution(  # noqa: C901, PLR0912
+    attribute: AttributeAnnotation,
+    *,
+    alias_name: str,
+    alias_module: str,
+    alias_target: AttributeAnnotation,
+    visited: set[int],
+) -> None:
+    attribute_id = id(attribute)
+    if attribute_id in visited:
+        return
+
+    visited.add(attribute_id)
+
+    if isinstance(attribute, AliasAttribute):
+        if attribute.alias == alias_name and attribute.module == alias_module:
+            if attribute._resolved is None:
+                attribute.resolve(alias_target)
+
+            resolved: AttributeAnnotation | None = attribute._resolved
+            if resolved is not None:
+                _finalize_alias_resolution(
+                    resolved,
+                    alias_name=alias_name,
+                    alias_module=alias_module,
+                    alias_target=alias_target,
+                    visited=visited,
+                )
+
+        elif attribute._resolved is not None:
+            _finalize_alias_resolution(
+                attribute._resolved,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+    elif isinstance(attribute, UnionAttribute):
+        for alternative in attribute.alternatives:
+            _finalize_alias_resolution(
+                alternative,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+    elif isinstance(attribute, TypedDictAttribute):
+        for child in attribute.attributes.values():
+            _finalize_alias_resolution(
+                child,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+        for parameter in attribute.parameters:
+            _finalize_alias_resolution(
+                parameter,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+    elif isinstance(attribute, ObjectAttribute):
+        for child in attribute.attributes.values():
+            _finalize_alias_resolution(
+                child,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+        for parameter in attribute.parameters:
+            _finalize_alias_resolution(
+                parameter,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+    elif isinstance(attribute, SequenceAttribute | SetAttribute):
+        _finalize_alias_resolution(
+            attribute.values,
+            alias_name=alias_name,
+            alias_module=alias_module,
+            alias_target=alias_target,
+            visited=visited,
+        )
+
+    elif isinstance(attribute, TupleAttribute):
+        for value in attribute.values:
+            _finalize_alias_resolution(
+                value,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+    elif isinstance(attribute, MappingAttribute):
+        _finalize_alias_resolution(
+            attribute.keys,
+            alias_name=alias_name,
+            alias_module=alias_module,
+            alias_target=alias_target,
+            visited=visited,
+        )
+        _finalize_alias_resolution(
+            attribute.values,
+            alias_name=alias_name,
+            alias_module=alias_module,
+            alias_target=alias_target,
+            visited=visited,
+        )
+
+    elif isinstance(attribute, CustomAttribute):
+        for parameter in attribute.parameters:
+            _finalize_alias_resolution(
+                parameter,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+    elif isinstance(attribute, ValidableAttribute):
+        _finalize_alias_resolution(
+            attribute.attribute,
+            alias_name=alias_name,
+            alias_module=alias_module,
+            alias_target=alias_target,
+            visited=visited,
+        )
+
+    elif isinstance(attribute, FunctionAttribute):
+        for argument in attribute.arguments:
+            _finalize_alias_resolution(
+                argument,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+
 def _resolve_type_alias(
     annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
     *,
@@ -1268,6 +1419,14 @@ def _resolve_type_alias(
     recursion_guard[annotation] = resolved_attribute
     recursion_guard[recursion_key] = resolved_attribute
     recursion_guard[alias_name] = resolved_attribute
+
+    _finalize_alias_resolution(
+        resolved_attribute,
+        alias_name=placeholder.alias,
+        alias_module=placeholder.module,
+        alias_target=resolved_attribute,
+        visited=set(),
+    )
 
     return resolved_attribute
 

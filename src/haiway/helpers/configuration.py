@@ -426,19 +426,19 @@ class ConfigurationRepository(State):
 
     @overload
     @classmethod
-    async def available_configurations(
+    async def configurations(
         cls,
         **extra: Any,
     ) -> Sequence[str]: ...
 
     @overload
-    async def available_configurations(
+    async def configurations(
         self,
         **extra: Any,
     ) -> Sequence[str]: ...
 
     @statemethod
-    async def available_configurations(
+    async def configurations(
         self,
         **extra: Any,
     ) -> Sequence[str]:
@@ -681,6 +681,43 @@ class ConfigurationRepository(State):
                 raise ConfigurationMissing(identifier=config_identifier) from None
 
         else:
+            return None
+
+    @overload
+    @classmethod
+    async def load_raw(
+        cls,
+        identifier: str,
+        /,
+        **extra: Any,
+    ) -> Mapping[str, BasicValue] | None: ...
+
+    @overload
+    async def load_raw(
+        self,
+        identifier: str,
+        /,
+        **extra: Any,
+    ) -> Mapping[str, BasicValue] | None: ...
+
+    @statemethod
+    async def load_raw(
+        self,
+        identifier: str,
+        /,
+        **extra: Any,
+    ) -> Mapping[str, BasicValue] | None:
+        try:
+            return await self.loading(
+                identifier=identifier,
+                **extra,
+            )
+
+        except Exception as exc:
+            ctx.log_error(
+                f"Failed to load raw configuration '{identifier}', using None...",
+                exception=exc,
+            )
             return None
 
     @overload
