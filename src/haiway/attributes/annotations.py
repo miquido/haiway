@@ -31,9 +31,9 @@ from typing import (
     get_type_hints,
     is_typeddict,
 )
-from typing import is_typeddict as is_typeddict_ext
 
 import typing_extensions
+from typing_extensions import is_typeddict as is_typeddict_ext
 
 from haiway import types as haiway_types
 from haiway.attributes.validation import ValidationContext, Validator
