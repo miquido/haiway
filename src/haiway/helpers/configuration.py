@@ -340,7 +340,7 @@ class ConfigurationRepository(State):
 
         async with ctx.scope("app", repo):
             # Repository available throughout the scope
-            configs = await ConfigurationRepository.available_configurations()
+            configs = await ConfigurationRepository.configurations()
             my_config = await MyConfig.load("production")
         ```
     """
@@ -456,7 +456,7 @@ class ConfigurationRepository(State):
         Example:
             ```python
             async with ctx.scope("app", my_repository):
-                identifiers = await ConfigurationRepository.available_configurations()
+                identifiers = await ConfigurationRepository.configurations()
                 print(f"Available configurations: {', '.join(identifiers)}")
             ```
         """
