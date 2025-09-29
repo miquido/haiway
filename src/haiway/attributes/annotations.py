@@ -23,6 +23,7 @@ from typing import (
     ClassVar,
     Final,
     ForwardRef,
+    Literal,
     Protocol,
     Self,
     TypeVar,
@@ -76,6 +77,9 @@ __all__ = (
 
 class AttributeAnnotation(Protocol):
     @property
+    def name(self) -> str: ...
+
+    @property
     def base(self) -> Any: ...
 
     @property
@@ -93,11 +97,12 @@ class AttributeAnnotation(Protocol):
 
 
 class AnyAttribute(Immutable):
+    name: Literal["Any"] = "Any"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> Any:
         return typing.Any
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -126,6 +131,10 @@ class AliasAttribute(Immutable):
     module: str
     validate: Validator = _unresolved_alias_validator
     _resolved: AttributeAnnotation | None = None
+
+    @property
+    def name(self) -> str:
+        return f"{self.module}.{self.alias}"
 
     def annotated(
         self,
@@ -176,11 +185,12 @@ class AliasAttribute(Immutable):
 
 
 class MissingAttribute(Immutable):
+    name: Literal["Missing"] = "Missing"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[haiway_types.Missing]:
         return haiway_types.Missing
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -205,11 +215,12 @@ class MissingAttribute(Immutable):
 
 
 class NoneAttribute(Immutable):
+    name: Literal["None"] = "None"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> None:
         return None
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -238,6 +249,14 @@ class LiteralAttribute(Immutable):
     values: Sequence[Any]
     annotations: Sequence[Any] = ()
 
+    @property
+    def name(self) -> str:
+        if not self.values:
+            return "Literal"
+
+        formatted_values: str = ", ".join(repr(value) for value in self.values)
+        return f"Literal[{formatted_values}]"
+
     def annotated(
         self,
         annotations: Sequence[Any],
@@ -265,11 +284,12 @@ class LiteralAttribute(Immutable):
 
 
 class BoolAttribute(Immutable):
+    name: Literal["bool"] = "bool"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[bool]:
         return bool
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -306,11 +326,12 @@ class BoolAttribute(Immutable):
 
 
 class IntegerAttribute(Immutable):
+    name: Literal["int"] = "int"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[int]:
         return int
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -338,11 +359,12 @@ class IntegerAttribute(Immutable):
 
 
 class FloatAttribute(Immutable):
+    name: Literal["float"] = "float"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[float]:
         return float
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -370,11 +392,12 @@ class FloatAttribute(Immutable):
 
 
 class BytesAttribute(Immutable):
+    name: Literal["bytes"] = "bytes"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[bytes]:
         return bytes
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -399,11 +422,12 @@ class BytesAttribute(Immutable):
 
 
 class UUIDAttribute(Immutable):
+    name: Literal["UUID"] = "UUID"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[uuid.UUID]:
         return uuid.UUID
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -435,11 +459,12 @@ class UUIDAttribute(Immutable):
 
 
 class StringAttribute(Immutable):
+    name: Literal["str"] = "str"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[str]:
         return str
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -464,11 +489,12 @@ class StringAttribute(Immutable):
 
 
 class DatetimeAttribute(Immutable):
+    name: Literal["datetime"] = "datetime"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[datetime.datetime]:
         return datetime.datetime
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -502,11 +528,12 @@ class DatetimeAttribute(Immutable):
 
 
 class TimeAttribute(Immutable):
+    name: Literal["time"] = "time"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[datetime.time]:
         return datetime.time
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -540,11 +567,12 @@ class TimeAttribute(Immutable):
 
 
 class PathAttribute(Immutable):
+    name: Literal["Path"] = "Path"
+    annotations: Sequence[Any] = ()
+
     @property
     def base(self) -> type[pathlib.Path]:
         return pathlib.Path
-
-    annotations: Sequence[Any] = ()
 
     def annotated(
         self,
@@ -576,6 +604,7 @@ class PathAttribute(Immutable):
 
 
 class TupleAttribute(Immutable):
+    name: Literal["tuple"] = "tuple"
     base: type[Sequence]
     values: Sequence[AttributeAnnotation]
     annotations: Sequence[Any] = ()
@@ -616,6 +645,7 @@ class TupleAttribute(Immutable):
 
 
 class SequenceAttribute(Immutable):
+    name: Literal["Sequence"] = "Sequence"
     base: type[Sequence]
     values: AttributeAnnotation
     annotations: Sequence[Any] = ()
@@ -652,6 +682,7 @@ class SequenceAttribute(Immutable):
 
 
 class SetAttribute(Immutable):
+    name: Literal["Set"] = "Set"
     base: type[Set]
     values: AttributeAnnotation
     annotations: Sequence[Any] = ()
@@ -697,6 +728,7 @@ class SetAttribute(Immutable):
 
 
 class MappingAttribute(Immutable):
+    name: Literal["Mapping"] = "Mapping"
     base: type[Mapping]
     keys: AttributeAnnotation
     values: AttributeAnnotation
@@ -738,6 +770,10 @@ class ValidableAttribute(Immutable):
     validator: Validator
 
     @property
+    def name(self) -> str:
+        return self.attribute.name
+
+    @property
     def base(self) -> Any:
         return self.attribute.base
 
@@ -769,6 +805,10 @@ class ObjectAttribute(Immutable):
     parameters: Sequence[AttributeAnnotation] = ()
     attributes: Mapping[str, AttributeAnnotation]
     annotations: Sequence[Any] = ()
+
+    @property
+    def name(self) -> str:
+        return self.base.__qualname__
 
     def annotated(
         self,
@@ -812,6 +852,10 @@ class TypedDictAttribute(Immutable):
     attributes: Mapping[str, AttributeAnnotation]
     annotations: Sequence[Any] = ()
 
+    @property
+    def name(self) -> str:
+        return self.base.__qualname__
+
     def annotated(
         self,
         annotations: Sequence[Any],
@@ -853,6 +897,10 @@ class FunctionAttribute(Immutable):
     arguments: Sequence[AttributeAnnotation]
     annotations: Sequence[Any] = ()
 
+    @property
+    def name(self) -> str:
+        return self.base.__name__
+
     def annotated(
         self,
         annotations: Sequence[Any],
@@ -882,6 +930,10 @@ class ProtocolAttribute(Immutable):
     base: Any
     annotations: Sequence[Any] = ()
 
+    @property
+    def name(self) -> str:
+        return self.base.__qualname__
+
     def annotated(
         self,
         annotations: Sequence[Any],
@@ -909,6 +961,10 @@ class UnionAttribute(Immutable):
     base: Any
     alternatives: Sequence[AttributeAnnotation] = ()
     annotations: Sequence[Any] = ()
+
+    @property
+    def name(self) -> str:
+        return "|".join(alt.name for alt in self.alternatives)
 
     def annotated(
         self,
@@ -946,6 +1002,10 @@ class CustomAttribute(Immutable):
     parameters: Sequence[AttributeAnnotation] = ()
     annotations: Sequence[Any] = ()
 
+    @property
+    def name(self) -> str:
+        return self.base.__qualname__
+
     def annotated(
         self,
         annotations: Sequence[Any],
@@ -973,6 +1033,10 @@ class CustomAttribute(Immutable):
 class StrEnumAttribute(Immutable):
     base: type[enum.StrEnum]
     annotations: Sequence[Any] = ()
+
+    @property
+    def name(self) -> str:
+        return self.base.__qualname__
 
     def annotated(
         self,
@@ -1014,6 +1078,10 @@ class StrEnumAttribute(Immutable):
 class IntEnumAttribute(Immutable):
     base: type[enum.IntEnum]
     annotations: Sequence[Any] = ()
+
+    @property
+    def name(self) -> str:
+        return self.base.__qualname__
 
     def annotated(
         self,

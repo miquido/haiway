@@ -51,7 +51,7 @@ class ServerConfig(Configuration):
     host: str = "0.0.0.0"
     port: int = 8000
     workers: int = 4
-    
+
 # This succeeds even if no configuration is stored,
 # using the default values from the class
 config = await ServerConfig.load(required=True)
@@ -89,13 +89,13 @@ from pathlib import Path
 class FileStorage:
     def __init__(self, config_dir: Path):
         self.config_dir = config_dir
-    
+
     async def load_config(self, identifier: str, **extra):
         config_file = self.config_dir / f"{identifier}.json"
         if config_file.exists():
             return json.loads(config_file.read_text())
         return None
-    
+
     async def define_config(self, identifier: str, value, **extra):
         self.config_dir.mkdir(parents=True, exist_ok=True)
         config_file = self.config_dir / f"{identifier}.json"
@@ -131,15 +131,15 @@ except ConfigurationInvalid as exc:
 async with ctx.scope("app", repo):
     # Load configuration
     config = await ConfigurationRepository.load(DatabaseConfig)
-    
+
     # Store configuration
     await ConfigurationRepository.define(config)
-    
+
     # Remove configuration
     await ConfigurationRepository.remove(DatabaseConfig)
-    
+
     # List available configurations
-    available = await ConfigurationRepository.available_configurations()
+    available = await ConfigurationRepository.configurations()
 ```
 
 That's it! The configuration system is designed to be simple and integrate seamlessly with Haiway's
