@@ -325,7 +325,7 @@ class PostgresRow(Mapping[str, PostgresValue]):
     def __iter__(self) -> Iterator[str]:
         """Iterate over column names."""
 
-        return iter(self._record)
+        return iter(self._record.keys())
 
     def __len__(self) -> int:
         """Return number of columns in the row."""
