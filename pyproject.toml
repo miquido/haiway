@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "haiway"
 description = "Framework for dependency injection and state management within structured concurrency model."
-version = "0.34.6"
+version = "0.34.7"
 readme = "README.md"
 maintainers = [
   { name = "Kacper Kaliński", email = "kacper.kalinski@miquido.com" },
@@ -28,24 +28,28 @@ Repository = "https://github.com/miquido/haiway.git"
 
 [project.optional-dependencies]
 opentelemetry = [
-  "opentelemetry-api~=1.33",
-  "opentelemetry-sdk~=1.33",
-  "opentelemetry-exporter-otlp-proto-grpc~=1.33",
+  "opentelemetry-api~=1.37",
+  "opentelemetry-sdk~=1.37",
+  "opentelemetry-exporter-otlp-proto-grpc~=1.37",
 ]
 httpx = ["httpx~=0.28"]
 postgres = ["asyncpg~=0.30"]
 dev = [
   "bandit~=1.8",
   "pyright~=1.1",
-  "pytest~=8.3",
+  "pytest~=8.4",
   "pytest-asyncio~=1.2",
   "pytest-cov~=7.0",
   "ruff~=0.13",
+]
+docs = [
+  "mkdocs~=1.6",
+  "mkdocs-material~=9.6",
+  "mkdocstrings[python]~=0.30",
   "mdformat~=0.7",
-  "mdformat-gfm~=0.3",
+  "mdformat-gfm~=0.4",
   "pymarkdownlnt~=0.9",
 ]
-docs = ["mkdocs~=1.6", "mkdocs-material~=9.5", "mkdocstrings[python]~=0.27"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
