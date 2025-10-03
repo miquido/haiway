@@ -70,13 +70,13 @@ class User(State):
 
     # CRITICAL: Use abstract collection types for immutability
     roles: Sequence[str] = ()        # Becomes tuple (not list)
-    metadata: Mapping[str, Any] = {} # Stays dict but validated
+    metadata: Mapping[str, Any] = {} # Becomes haiway.types.Map (immutable mapping)
     tags: Set[str] = frozenset()     # Becomes frozenset (not set)
 ```
 
 **Why this pattern works:**
 - **Type annotations are MANDATORY**: Every State attribute MUST have a type annotation - Haiway validates all values at runtime
-- **Abstract collection types ensure immutability**: `Sequence[T]` becomes `tuple`, `Set[T]` becomes `frozenset`
+- **Abstract collection types ensure immutability**: `Sequence[T]` becomes `tuple`, `Set[T]` becomes `frozenset`, `Mapping[K, V]` becomes `haiway.types.Map`
 - **Optional fields use union syntax**: `str | None` follows Python 3.10+ union syntax - NEVER use `Optional[T]`
 - **Defaults prevent constructor errors**: Provide sensible defaults for optional attributes
 - **NO missing type hints allowed**: State classes without complete type annotations will fail at runtime
@@ -377,7 +377,7 @@ async def event_processing():
         # Subscribe to events (returns async iterator)
         async def handle_user_events():
             async for event in ctx.subscribe(UserCreated):
-                print(f"User created: {event.user_id}")
+                ctx.log_info("user_created", user_id=event.user_id)
 
         # Start event handler
         ctx.spawn(handle_user_events)
@@ -644,7 +644,7 @@ user = ctx.state(UserData, default=default_user)   # Get state with fallback
 has_user = ctx.check_state(UserData)               # Check if state exists (boolean)
 
 # Nested context with updated state
-async with ctx.updated(new_config, updated_service):
+with ctx.updated(new_config, updated_service):
     # Temporary context with additional/overridden state
     pass
 ```
@@ -847,7 +847,7 @@ container = StringContainer(items=["a", "b"])  # ✓ Valid
 user_data = UserData(
     roles=["admin", "user"],        # Becomes ("admin", "user") - tuple
     tags={"vip", "premium"},        # Becomes frozenset({"vip", "premium"})
-    metadata={"role": "admin"}      # Stays dict but validated
+    metadata={"role": "admin"}      # Validated into haiway.types.Map (immutable)
 )
 
 # Attempting mutation raises AttributeError
@@ -876,13 +876,12 @@ updated_user = user_data.updated(
 - Never mutate State instances - use `.updated()` or `.updating()` methods
 
 ### 2. Protocol Rules (STRICT TYPE SIGNATURES REQUIRED)
-- **MANDATORY `@runtime_checkable`**: Every Protocol class MUST have this decorator
-- **Complete method signatures**: Every protocol method MUST have full type annotations for all parameters and return types
-- **NO missing type hints**: Protocol methods without complete typing will fail at runtime
-- Protocol functions should have single `__call__` method only
-- Name protocols with continuous tense (e.g., `UserFetching`, `DataProcessing`)
-- Protocols define contracts, not implementations
-- **Type parameters must be explicit**: Generic protocols must specify their type parameters clearly
+- **Complete method signatures**: Give every protocol method full parameter and return annotations; omit nothing.
+- **Runtime checks when needed**: Add `@runtime_checkable` only if you plan to call `isinstance` / `issubclass` on the protocol; skip it for purely static contracts like the caching and file helpers.
+- **Multiple methods allowed**: Protocols can expose rich method sets (e.g., read/write/clear). Keep names descriptive and respect async/await semantics.
+- Name protocols with continuous tense (e.g., `UserFetching`, `DataProcessing`).
+- Protocols define contracts, not implementations.
+- **Type parameters must be explicit**: Declare generic arguments (`Protocol[T_co]`, etc.) so implementers stay precise.
 
 ### 3. Service Pattern
 - Create service container classes inheriting from `State`
