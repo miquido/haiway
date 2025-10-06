@@ -43,7 +43,7 @@ Why it matters:
 
 Replace deep hierarchies with small protocol contracts and compose behaviors as data.
 
-```python:
+```python
 from typing import Protocol, runtime_checkable
 
 from haiway import State

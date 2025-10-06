@@ -59,7 +59,8 @@ Always use **abstract collection types** to ensure immutability:
 The context system provides **scoped execution environments** that manage state and resources
 automatically:
 
-```pythonfrom haiway import ctx
+```python
+from haiway import ctx
 import asyncio
 
 from haiway import ctx
