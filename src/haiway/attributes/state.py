@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping, MutableSequence, Sequence
+from collections.abc import Mapping, MutableMapping, MutableSequence, Sequence
 from types import EllipsisType, GenericAlias
 from typing import (
     Any,
@@ -14,14 +14,25 @@ from weakref import WeakValueDictionary
 
 from haiway.attributes.annotations import (
     AttributeAnnotation,
+    NotRequired,
     ObjectAttribute,
     resolve_self_attribute,
 )
 from haiway.attributes.coding import StateJSONEncoder
 from haiway.attributes.path import AttributePath
+from haiway.attributes.specification import type_specification
 from haiway.attributes.validation import ValidationContext, ValidationError
-from haiway.types import MISSING, DefaultValue, Missing, not_missing
-from haiway.types.immutable import Immutable
+from haiway.types import (
+    MISSING,
+    Alias,
+    DefaultValue,
+    Description,
+    Immutable,
+    Missing,
+    Specification,
+    TypeSpecification,
+    not_missing,
+)
 
 __all__ = ("State",)
 
@@ -37,35 +48,62 @@ class StateField[Value](Immutable):
     """
 
     name: str
+    alias: str | None
     annotation: AttributeAnnotation
+    required: bool
     default: DefaultValue[Value]
+    specification: TypeSpecification | None
 
     def validate(
         self,
-        value: Any | Missing,
+        value: Any,
         /,
     ) -> Value:
-        """
-        Validate and potentially transform the provided value.
-
-        If the value is MISSING, the default value is used instead.
-        The value (or default) is then passed through the validator.
-
-        Parameters
-        ----------
-        value : Any | Missing
-            The value to validate, or MISSING to use the default
-
-        Returns
-        -------
-        Value
-            The validated and potentially transformed value
-        """
         if value is MISSING:
             return self.annotation.validate(self.default())
 
         else:
             return self.annotation.validate(value)
+
+    def validate_from(
+        self,
+        mapping: Mapping[str, Any],
+        /,
+    ) -> Value:
+        """
+        Validate a value retrieved from the mapping with alias and default fallbacks.
+
+        Parameters
+        ----------
+        mapping : Mapping[str, Any]
+            Mapping to pull the attribute value from.
+
+        Returns
+        -------
+        Value
+            Value produced by ``self.annotation.validate`` after resolution.
+
+        The value is resolved by checking ``self.alias`` when set, falling back to
+        ``self.name``, and using ``self.default`` if neither key is present before
+        delegating to ``self.annotation.validate``.
+        """
+        value: Any
+        if self.alias is None:
+            value = mapping.get(
+                self.name,
+                self.default(),
+            )
+
+        else:
+            value = mapping.get(
+                self.alias,
+                mapping.get(
+                    self.name,
+                    self.default(),
+                ),
+            )
+
+        return self.annotation.validate(value)
 
 
 @dataclass_transform(
@@ -89,7 +127,13 @@ class StateMeta(type):
     and validation logic.
     """
 
-    def __new__(
+    __IMMUTABLE__: EllipsisType = ...
+    __SELF_ATTRIBUTE__: ObjectAttribute
+    __TYPE_PARAMETERS__: Mapping[str, Any] | None
+    __SPECIFICATION__: TypeSpecification | None
+    __FIELDS__: Sequence[StateField]
+
+    def __new__(  # noqa: C901, PLR0912
         mcs,
         /,
         name: str,
@@ -105,25 +149,75 @@ class StateMeta(type):
             namespace,
             **kwargs,
         )
-
         self_attribute: ObjectAttribute = resolve_self_attribute(
             cls,
             parameters=type_parameters or {},
         )
+        specification_fields: MutableMapping[str, TypeSpecification] | None = {}
+        required_fields: MutableSequence[str] = []
         fields: MutableSequence[StateField] = []
         for key, attribute in self_attribute.attributes.items():
             default: Any = getattr(cls, key, MISSING)
-            fields.append(
-                StateField(
-                    name=key,
-                    annotation=attribute,
-                    default=_resolve_default(default),
-                )
-            )
+            alias: str | None = None
+            description: str | None = None
+            specification: TypeSpecification | None = None
+            required: bool = True
+            for annotation in attribute.annotations:
+                if isinstance(annotation, Alias):
+                    alias = annotation.alias
 
-        cls.__SELF_ATTRIBUTE__ = self_attribute  # pyright: ignore[reportAttributeAccessIssue]
-        cls.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportAttributeAccessIssue]
-        cls.__FIELDS__ = tuple(fields)  # pyright: ignore[reportAttributeAccessIssue]
+                elif isinstance(annotation, Specification):
+                    specification = annotation.specification
+
+                elif isinstance(annotation, Description):
+                    description = annotation.description
+
+                elif isinstance(annotation, NotRequired):
+                    required = False
+
+            if specification is None:
+                specification = type_specification(
+                    attribute,
+                    description=description,
+                )
+
+            field: StateField = StateField(
+                name=key,
+                alias=alias,
+                annotation=attribute,
+                required=required,
+                default=_resolve_default(default),
+                specification=specification,
+            )
+            fields.append(field)
+            if specification_fields is not None:
+                if specification is None:
+                    # there will be no specification at all
+                    specification_fields = None
+
+                elif field.alias is not None:
+                    specification_fields[field.alias] = specification
+                    if field.required:
+                        required_fields.append(field.alias)
+
+                else:
+                    specification_fields[field.name] = specification
+                    if field.required:
+                        required_fields.append(field.name)
+
+        cls.__SELF_ATTRIBUTE__ = self_attribute
+        cls.__TYPE_PARAMETERS__ = type_parameters
+        cls.__SPECIFICATION__ = (
+            {  # pyright: ignore[reportAttributeAccessIssue]
+                "type": "object",
+                "properties": specification_fields,
+                "required": required_fields,
+                "additionalProperties": False,
+            }
+            if specification_fields is not None
+            else None
+        )
+        cls.__FIELDS__ = tuple(fields)
         cls.__slots__ = tuple(field.name for field in fields)  # pyright: ignore[reportAttributeAccessIssue]
         cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
         cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
@@ -291,8 +385,9 @@ class State(metaclass=StateMeta):
 
     _: ClassVar[Self]
     __IMMUTABLE__: ClassVar[EllipsisType] = ...
-    __TYPE_PARAMETERS__: ClassVar[Mapping[str, Any] | None] = None
     __SELF_ATTRIBUTE__: ClassVar[ObjectAttribute]
+    __TYPE_PARAMETERS__: ClassVar[Mapping[str, Any] | None] = None
+    __SPECIFICATION__: ClassVar[TypeSpecification | None] = None
     __FIELDS__: ClassVar[Sequence[StateField]]
 
     @classmethod
@@ -314,12 +409,6 @@ class State(metaclass=StateMeta):
         -------
         type[Self]
             A specialized version of the class
-
-        Raises
-        ------
-        AssertionError
-            If the class is not generic or is already specialized,
-            or if the number of type arguments doesn't match the parameters
         """
         assert Generic in cls.__bases__, "Can't specialize non generic type!"  # nosec: B101
         assert cls.__TYPE_PARAMETERS__ is None, "Can't specialize already specialized type!"  # nosec: B101
@@ -509,12 +598,7 @@ class State(metaclass=StateMeta):
                 object.__setattr__(
                     self,  # pyright: ignore[reportUnknownArgumentType]
                     field.name,
-                    field.validate(
-                        kwargs.get(
-                            field.name,
-                            MISSING,
-                        )
-                    ),
+                    field.validate_from(kwargs),
                 )
 
     def updated(
@@ -552,15 +636,19 @@ class State(metaclass=StateMeta):
 
     def to_mapping(
         self,
-        recursive: bool = False,
+        recursive: bool = True,
+        aliased: bool = True,
     ) -> Mapping[str, Any]:
         """
         Convert this instance to a mapping of attribute names to values.
 
         Parameters
         ----------
-        recursive : bool, default=False
+        recursive : bool, default=True
             If True, nested State instances are also converted to mappings
+
+        aliased : bool, default=True
+            If True, nested field aliases will be used instead of regular names
 
         Returns
         -------
@@ -569,12 +657,16 @@ class State(metaclass=StateMeta):
         """
         dict_result: dict[str, Any] = {}
         for field in self.__FIELDS__:
+            key: str = field.alias if aliased and field.alias is not None else field.name
             value: Any | Missing = getattr(self, field.name, MISSING)
             if recursive and isinstance(value, State):
-                dict_result[field.name] = value.to_mapping(recursive=recursive)
+                dict_result[key] = value.to_mapping(
+                    recursive=recursive,
+                    aliased=aliased,
+                )
 
             elif not_missing(value):
-                dict_result[field.name] = value
+                dict_result[key] = value
 
         return dict_result
 
@@ -712,12 +804,29 @@ class State(metaclass=StateMeta):
         Self
             A new instance with replaced values
         """
-        if not kwargs or kwargs.keys().isdisjoint(getattr(self, "__slots__", ())):
+        if not kwargs:
             return self  # do not make a copy when nothing will be updated
 
+        fields: Sequence[StateField] = self.__class__.__FIELDS__
+        alias_to_name: dict[str, str] = {
+            field.alias if field.alias is not None else field.name: field.name for field in fields
+        }
+        valid_keys: set[str] = set(alias_to_name.keys()) | set(alias_to_name.values())
+
+        if kwargs.keys().isdisjoint(valid_keys):
+            return self  # do not make a copy when nothing will be updated
+
+        canonical_updates: dict[str, Any] = {}
+        for key, value in kwargs.items():
+            if key in valid_keys:
+                canonical_updates[alias_to_name.get(key, key)] = value
+
+        if not canonical_updates:
+            return self
+
         updated: Self = object.__new__(self.__class__)
-        for field in self.__class__.__FIELDS__:
-            update: Any | Missing = kwargs.get(field.name, MISSING)
+        for field in fields:
+            update: Any | Missing = canonical_updates.get(field.name, MISSING)
             if update is MISSING:  # reuse missing elements
                 object.__setattr__(
                     updated,

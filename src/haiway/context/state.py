@@ -319,11 +319,6 @@ class StateContext(Immutable):
         Enter this state context.
 
         Sets this context's state as the current state in the context.
-
-        Raises
-        ------
-        AssertionError
-            If attempting to re-enter an already active context
         """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         object.__setattr__(
@@ -351,11 +346,6 @@ class StateContext(Immutable):
             Exception instance that caused the exit
         exc_tb: TracebackType | None
             Traceback for the exception
-
-        Raises
-        ------
-        AssertionError
-            If the context is not active
         """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         StateContext._context.reset(self._token)

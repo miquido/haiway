@@ -2,12 +2,22 @@ from collections.abc import Callable, Mapping, Sequence, Set
 from copy import copy, deepcopy
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any, Literal, NotRequired, Protocol, Required, Self, TypedDict, runtime_checkable
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    NotRequired,
+    Protocol,
+    Required,
+    Self,
+    TypedDict,
+    runtime_checkable,
+)
 from uuid import UUID, uuid4
 
 from pytest import raises
 
-from haiway import MISSING, Default, Missing, State, ValidationError
+from haiway import MISSING, Alias, Default, Missing, State, ValidationError
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -180,6 +190,55 @@ def test_dict_skips_missing_properties() -> None:
     assert Basics(string="a", integer=1).to_mapping() == {"string": "a", "integer": 1}
     assert Basics(string="a", integer=MISSING).to_mapping() == {"string": "a"}
     assert Basics(string="a", integer=None).to_mapping() == {"string": "a", "integer": None}
+
+
+def test_to_mapping_uses_alias_for_nested_states() -> None:
+    class Child(State):
+        value: Annotated[str, Alias("child_value")]
+
+    class Container(State):
+        child: Annotated[Child, Alias("child_alias")]
+        metadata: Annotated[str, Alias("meta_alias")]
+
+    container = Container(
+        child=Child(value="ok"),
+        metadata="info",
+    )
+    assert container.to_mapping() == {
+        "child_alias": {"child_value": "ok"},
+        "meta_alias": "info",
+    }
+
+
+def test_from_mapping_accepts_nested_aliases() -> None:
+    class Child(State):
+        value: Annotated[str, Alias("child_value")]
+
+    class Container(State):
+        child: Annotated[Child, Alias("child_alias")]
+
+    container = Container.from_mapping(
+        {
+            "child_alias": {
+                "child_value": "ok",
+            },
+        }
+    )
+    assert container.child == Child(value="ok")
+    assert container.to_mapping() == {
+        "child_alias": {"child_value": "ok"},
+    }
+
+
+def test_updated_honors_aliases() -> None:
+    class Example(State):
+        value: Annotated[int, Alias("external")]
+
+    example = Example(value=1)
+    updated = example.updated(external=2)
+
+    assert updated.value == 2
+    assert updated != example
 
 
 def test_initialization_allows_missing_properties() -> None:

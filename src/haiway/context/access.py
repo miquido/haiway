@@ -709,7 +709,7 @@ class ctx:
 
     @staticmethod
     def stream[Element, **Arguments](
-        source: Callable[Arguments, AsyncGenerator[Element, None]],
+        source: Callable[Arguments, AsyncGenerator[Element]],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,

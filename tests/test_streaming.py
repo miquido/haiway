@@ -12,7 +12,7 @@ class FakeException(Exception):
 
 @mark.asyncio
 async def test_fails_when_generator_fails():
-    async def generator(value: int) -> AsyncGenerator[int, None]:
+    async def generator(value: int) -> AsyncGenerator[int]:
         yield value
         raise FakeException()
 
@@ -26,7 +26,7 @@ async def test_fails_when_generator_fails():
 
 @mark.asyncio
 async def test_cancels_when_iteration_cancels():
-    async def generator(value: int) -> AsyncGenerator[int, None]:
+    async def generator(value: int) -> AsyncGenerator[int]:
         await sleep(0)
         yield value
 
@@ -41,7 +41,7 @@ async def test_cancels_when_iteration_cancels():
 
 @mark.asyncio
 async def test_ends_when_generator_ends():
-    async def generator(value: int) -> AsyncGenerator[int, None]:
+    async def generator(value: int) -> AsyncGenerator[int]:
         yield value
 
     elements: int = 0
@@ -53,7 +53,7 @@ async def test_ends_when_generator_ends():
 
 @mark.asyncio
 async def test_delivers_updates_when_generating():
-    async def generator(value: int) -> AsyncGenerator[int, None]:
+    async def generator(value: int) -> AsyncGenerator[int]:
         for i in range(0, value):
             yield i
 
@@ -71,7 +71,7 @@ async def test_streaming_context_variables_access_is_preserved():
         value: int = 42
         other: str = "other"
 
-    async def generator(value: int) -> AsyncGenerator[TestState, None]:
+    async def generator(value: int) -> AsyncGenerator[TestState]:
         yield ctx.state(TestState)
         async with ctx.scope("nested", ctx.state(TestState).updated(value=value)):
             yield ctx.state(TestState)
@@ -94,12 +94,12 @@ async def test_nested_streaming_streams_correctly():
         value: int = 42
         other: str = "other"
 
-    async def inner(value: int) -> AsyncGenerator[TestState, None]:
+    async def inner(value: int) -> AsyncGenerator[TestState]:
         yield ctx.state(TestState)
         async with ctx.scope("inner", ctx.state(TestState).updated(value=value, other="inner")):
             yield ctx.state(TestState)
 
-    async def outer(value: int) -> AsyncGenerator[TestState, None]:
+    async def outer(value: int) -> AsyncGenerator[TestState]:
         yield ctx.state(TestState)
         async with ctx.scope("outer", ctx.state(TestState).updated(other="outer")):
             async for item in ctx.stream(inner, value):

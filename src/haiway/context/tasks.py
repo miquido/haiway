@@ -105,11 +105,6 @@ class TaskGroupContext(Immutable):
         Enter this task group context.
 
         Enters the underlying task group and sets this context as current.
-
-        Raises
-        ------
-        AssertionError
-            If attempting to re-enter an already active context
         """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         object.__setattr__(
@@ -146,11 +141,6 @@ class TaskGroupContext(Immutable):
             Exception instance that caused the exit
         exc_tb: TracebackType | None
             Traceback for the exception
-
-        Raises
-        ------
-        AssertionError
-            If the context is not active
         """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         assert self._group is not None  # nosec: B101

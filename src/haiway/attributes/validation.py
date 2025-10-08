@@ -11,6 +11,7 @@ from typing import (
 )
 
 __all__ = (
+    "Validating",
     "ValidationContext",
     "ValidationError",
     "Validator",
@@ -18,7 +19,7 @@ __all__ = (
 
 
 @runtime_checkable
-class Validator[Type](Protocol):
+class Validating[Type](Protocol):
     """
     Protocol defining the interface for validation functions.
 
@@ -108,3 +109,35 @@ class ValidationError(Exception):
         super().__init__(f"Validation of {''.join(path)} failed: {cause}")
         self.path: Sequence[str] = path
         self.cause: Exception = cause
+
+
+@final
+class Validator[Type]:
+    __slots__ = ("validator",)
+
+    def __init__(
+        self,
+        validator: Validating[Type],
+        /,
+    ) -> None:
+        assert validator  # nosec: B101
+
+        self.validator: Validating[Type]
+        object.__setattr__(
+            self,
+            "validator",
+            validator,
+        )
+
+    def __setattr__(
+        self,
+        __name: str,
+        __value: Any,
+    ) -> None:
+        raise AttributeError("Validator can't be modified")
+
+    def __delattr__(
+        self,
+        __name: str,
+    ) -> None:
+        raise AttributeError("Validator can't be modified")
