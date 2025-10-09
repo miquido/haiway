@@ -10,6 +10,7 @@ transformations.
 
 ```python
 from datetime import datetime
+
 from haiway import State
 
 class User(State):
@@ -25,7 +26,10 @@ class User(State):
         )
 
 u = User(name="Alice", email="alice@example.com")
-u2 = u.with_login()  # u remains unchanged
+u2 = u.with_login()
+
+print(f"User1: {u}")  # u remains unchanged
+print(f"User2: {u2}")
 ```
 
 Why it matters:
@@ -41,21 +45,27 @@ Replace deep hierarchies with small protocol contracts and compose behaviors as 
 
 ```python
 from typing import Protocol, runtime_checkable
+
 from haiway import State
+
 
 @runtime_checkable
 class Barking(Protocol):
-    async def __call__(self, name: str) -> str: ...
+    def __call__(self, name: str) -> str: ...
+
 
 class Dog(State):
     name: str
     bark: Barking
 
-async def loud_bark(name: str) -> str:
+
+def loud_bark(name: str) -> str:
     return f"{name} BARKS!"
 
+
 dog = Dog(name="Rex", bark=loud_bark)
-# Swap implementation by constructing a different state if needed
+
+print(dog.bark("Reksio"))
 ```
 
 Why it matters:
@@ -69,12 +79,16 @@ Haiway’s context provides scoped execution, dependency resolution by type, and
 state using its type only, and expose behavior with `@statemethod`.
 
 ```python
+import asyncio
 from typing import Protocol, runtime_checkable
+
 from haiway import State, ctx, statemethod
+
 
 @runtime_checkable
 class EmailSending(Protocol):
     async def __call__(self, to: str, subject: str, body: str) -> bool: ...
+
 
 class NotificationService(State):
     email_sending: EmailSending
@@ -87,14 +101,21 @@ class NotificationService(State):
             body=message,
         )
 
+
 async def smtp_send(to: str, subject: str, body: str) -> bool:
     # ... real send
     return True
 
-service = NotificationService(send_email=smtp_send)
-async with ctx.scope("app", service):
-    # Class call resolves instance from context; instance call uses itself
-    await NotificationService.notify("123", "Welcome")
+
+async def main():
+    service = NotificationService(email_sending=smtp_send)
+    async with ctx.scope("app", service):
+        # Class call resolves instance from context; instance call uses itself
+        await NotificationService.notify("123", "Welcome")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 Key rules:
@@ -119,16 +140,24 @@ Start tasks within the active scope; Haiway manages their lifecycle and cleanup.
 
 ```python
 import asyncio
+
 from haiway import ctx
+
 
 async def worker():
     # Inherits current scope (state, observability, variables)
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.5)
+    print("ZZZZzzzzz....")
+
 
 async def main():
     async with ctx.scope("app"):
         t = ctx.spawn(worker)
         await t  # or gather/spawn more
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 Why it matters:
@@ -142,12 +171,18 @@ Tests become wiring exercises: build small states and protocols, enter a scope, 
 `@statemethod`s.
 
 ```python
+import asyncio
 from typing import Sequence
+
 from haiway import State, ctx, statemethod
 
+
+# This class defines the "interface" for the dependency.
 class UsersFetching(State):
     async def __call__(self) -> Sequence[str]: ...
 
+
+# This service depends on an instance of UsersFetching.
 class UsersService(State):
     fetching: UsersFetching
 
@@ -155,12 +190,24 @@ class UsersService(State):
     async def all(self) -> Sequence[str]:
         return await self.fetching()
 
-async def fake_fetching() -> Sequence[str]:
-    return ("alice", "bob")
 
-svc = UsersService(fetching=fake_fetching)
-async with ctx.scope("test", svc):
-    assert await UsersService.all() == ("alice", "bob")
+class FakeUsersFetching(UsersFetching):
+    async def __call__(self) -> Sequence[str]:
+        return ("alice", "bob")
+
+
+svc = UsersService(fetching=FakeUsersFetching())
+
+
+async def main():
+    async with ctx.scope("test", svc):
+        users = await UsersService.all()
+        print(f"Fetched users: {users}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
 ```
 
 Guidelines:

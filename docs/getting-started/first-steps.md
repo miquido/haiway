@@ -9,8 +9,8 @@ In Haiway, everything is built around **immutable state objects** that ensure th
 predictable behavior:
 
 ```python
+from typing import Mapping, Sequence
 from haiway import State
-from typing import Sequence, Mapping
 
 class UserPreferences(State):
     theme: str = "light"
@@ -63,6 +63,9 @@ automatically:
 from haiway import ctx
 import asyncio
 
+from haiway import ctx
+
+
 async def main():
     # Contexts can be nested
     async with ctx.scope("database"):
@@ -90,7 +93,9 @@ asyncio.run(main())
 Haiway uses **protocol-based dependency injection** to enable flexible, testable architectures:
 
 ```python
+import asyncio
 from typing import Protocol, runtime_checkable
+
 from haiway import State, ctx, statemethod
 
 @runtime_checkable
@@ -148,8 +153,12 @@ asyncio.run(main())
 Haiway provides **automatic resource cleanup** through disposable context managers:
 
 ```python
-from typing import Mapping
+import asyncio
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
+
+from haiway import State, ctx
+
 
 @asynccontextmanager
 async def database_connection():
