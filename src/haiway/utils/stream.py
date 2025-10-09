@@ -166,8 +166,6 @@ class AsyncStream[Element](AsyncIterator[Element]):
         BaseException
             The exception provided to finish(), or StopAsyncIteration if
             finish() was called without an exception
-        AssertionError
-            If the stream is being consumed by multiple consumers
         """
         assert self._waiting is None, "AsyncStream can't be reused"  # nosec: B101
 

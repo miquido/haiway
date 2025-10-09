@@ -11,8 +11,8 @@ class FakeException(Exception):
 
 
 @fixture
-def fake_random() -> Callable[[], Generator[int, None, None]]:
-    def random_next() -> Generator[int, None, None]:
+def fake_random() -> Callable[[], Generator[int]]:
+    def random_next() -> Generator[int]:
         yield from range(0, 65536)
 
     return random_next

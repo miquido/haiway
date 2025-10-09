@@ -691,11 +691,6 @@ class AttributePath[Root, Attribute]:
             Path components defining the traversal from root to attribute
         attribute : type[Attribute]
             The type of the attribute at the end of this path
-
-        Raises
-        ------
-        AssertionError
-            If no components are provided and root != attribute
         """
 
     def __init__(

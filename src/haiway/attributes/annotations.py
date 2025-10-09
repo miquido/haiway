@@ -9,8 +9,10 @@ import typing
 import uuid
 from collections import abc as collections_abc
 from collections.abc import (
+    Collection,
     Generator,
     Hashable,
+    Iterable,
     Mapping,
     MutableMapping,
     MutableSequence,
@@ -25,7 +27,6 @@ from typing import (
     ForwardRef,
     Literal,
     Protocol,
-    Self,
     TypeVar,
     get_args,
     get_origin,
@@ -37,9 +38,8 @@ import typing_extensions
 from typing_extensions import is_typeddict as is_typeddict_ext
 
 from haiway import types as haiway_types
-from haiway.attributes.validation import ValidationContext, Validator
-from haiway.types import Immutable, Map
-from haiway.types.missing import MISSING
+from haiway.attributes.validation import Validating, ValidationContext, Validator
+from haiway.types import MISSING, Alias, Description, Immutable, Map, Specification
 
 __all__ = (
     "AliasAttribute",
@@ -57,6 +57,7 @@ __all__ = (
     "MappingAttribute",
     "MissingAttribute",
     "NoneAttribute",
+    "NotRequired",
     "ObjectAttribute",
     "PathAttribute",
     "ProtocolAttribute",
@@ -75,6 +76,15 @@ __all__ = (
 )
 
 
+class NotRequired(Immutable):
+    pass
+
+
+NOT_REQUIRED: Final[NotRequired] = NotRequired()
+
+Annotation = Alias | Description | Specification | Validator | NotRequired
+
+
 class AttributeAnnotation(Protocol):
     @property
     def name(self) -> str: ...
@@ -83,12 +93,12 @@ class AttributeAnnotation(Protocol):
     def base(self) -> Any: ...
 
     @property
-    def annotations(self) -> Sequence[Any]: ...
+    def annotations(self) -> Sequence[Annotation]: ...
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self: ...
+        annotations: Sequence[Annotation],
+    ) -> "AttributeAnnotation": ...
 
     def validate(
         self,
@@ -98,7 +108,7 @@ class AttributeAnnotation(Protocol):
 
 class AnyAttribute(Immutable):
     name: Literal["Any"] = "Any"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> Any:
@@ -106,8 +116,8 @@ class AnyAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -129,30 +139,41 @@ def _unresolved_alias_validator(value: Any) -> Any:
 class AliasAttribute(Immutable):
     alias: str
     module: str
-    validate: Validator = _unresolved_alias_validator
+    validate: Validating = _unresolved_alias_validator
     _resolved: AttributeAnnotation | None = None
 
     @property
     def name(self) -> str:
         return f"{self.module}.{self.alias}"
 
+    @property
+    def base(self) -> Any:
+        assert self._resolved is not None  # nosec: B101
+        return self._resolved.base
+
+    @property
+    def annotations(self) -> Sequence[Annotation]:
+        if self._resolved is None:
+            return ()
+
+        return self._resolved.annotations
+
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         return self.__class__(
             alias=self.alias,
             module=self.module,
             validate=self.validate,
-            _resolved=self._resolved.annotated(annotations)
-            if self._resolved is not None
-            else self._resolved,
+            _resolved=self._resolved.annotated(annotations) if self._resolved is not None else None,
         )
 
     def resolve(
         self,
         target: AttributeAnnotation,
     ) -> None:
+        assert self._resolved is None  # nosec: B101
         object.__setattr__(
             self,
             "_resolved",
@@ -171,22 +192,10 @@ class AliasAttribute(Immutable):
 
         return self._resolved
 
-    @property
-    def base(self) -> Any:
-        assert self._resolved is not None  # nosec: B101
-        return self._resolved.base
-
-    @property
-    def annotations(self) -> Sequence[Any]:
-        if self._resolved is None:
-            return ()
-
-        return self._resolved.annotations
-
 
 class MissingAttribute(Immutable):
     name: Literal["Missing"] = "Missing"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[haiway_types.Missing]:
@@ -194,8 +203,8 @@ class MissingAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -216,7 +225,7 @@ class MissingAttribute(Immutable):
 
 class NoneAttribute(Immutable):
     name: Literal["None"] = "None"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> None:
@@ -224,8 +233,8 @@ class NoneAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -247,20 +256,16 @@ class NoneAttribute(Immutable):
 class LiteralAttribute(Immutable):
     base: Any
     values: Sequence[Any]
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def name(self) -> str:
-        if not self.values:
-            return "Literal"
-
-        formatted_values: str = ", ".join(repr(value) for value in self.values)
-        return f"Literal[{formatted_values}]"
+        return f"Literal[{', '.join(repr(value) for value in self.values)}]"
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -279,13 +284,13 @@ class LiteralAttribute(Immutable):
 
         raise ValueError(
             f"'{value}' is not matching any of expected literal values"
-            f" [{', '.join(str(literal) for literal in self.values)}]"
+            f" [{', '.join(repr(literal) for literal in self.values)}]"
         )
 
 
 class BoolAttribute(Immutable):
     name: Literal["bool"] = "bool"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[bool]:
@@ -293,8 +298,8 @@ class BoolAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -327,7 +332,7 @@ class BoolAttribute(Immutable):
 
 class IntegerAttribute(Immutable):
     name: Literal["int"] = "int"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[int]:
@@ -335,8 +340,8 @@ class IntegerAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -360,7 +365,7 @@ class IntegerAttribute(Immutable):
 
 class FloatAttribute(Immutable):
     name: Literal["float"] = "float"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[float]:
@@ -368,8 +373,8 @@ class FloatAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -393,7 +398,7 @@ class FloatAttribute(Immutable):
 
 class BytesAttribute(Immutable):
     name: Literal["bytes"] = "bytes"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[bytes]:
@@ -401,8 +406,8 @@ class BytesAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -423,7 +428,7 @@ class BytesAttribute(Immutable):
 
 class UUIDAttribute(Immutable):
     name: Literal["UUID"] = "UUID"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[uuid.UUID]:
@@ -431,8 +436,8 @@ class UUIDAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -452,7 +457,7 @@ class UUIDAttribute(Immutable):
                 return uuid.UUID(value)
 
             except Exception as exc:
-                raise ValueError(f"'{value}' is not matching expected type of 'UUID'") from exc
+                raise ValueError(f"'{value}' is not matching expected format of 'UUID'") from exc
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'UUID'")
@@ -460,7 +465,7 @@ class UUIDAttribute(Immutable):
 
 class StringAttribute(Immutable):
     name: Literal["str"] = "str"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[str]:
@@ -468,8 +473,8 @@ class StringAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -490,7 +495,7 @@ class StringAttribute(Immutable):
 
 class DatetimeAttribute(Immutable):
     name: Literal["datetime"] = "datetime"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[datetime.datetime]:
@@ -498,8 +503,8 @@ class DatetimeAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -518,7 +523,7 @@ class DatetimeAttribute(Immutable):
             try:
                 return datetime.datetime.fromisoformat(value)
 
-            except ValueError as exc:
+            except Exception as exc:
                 raise ValueError(
                     f"'{value}' is not matching expected ISO format for 'datetime'"
                 ) from exc
@@ -529,7 +534,7 @@ class DatetimeAttribute(Immutable):
 
 class TimeAttribute(Immutable):
     name: Literal["time"] = "time"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[datetime.time]:
@@ -537,8 +542,8 @@ class TimeAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -557,7 +562,7 @@ class TimeAttribute(Immutable):
             try:
                 return datetime.time.fromisoformat(value)
 
-            except ValueError as exc:
+            except Exception as exc:
                 raise ValueError(
                     f"'{value}' is not matching expected ISO format for 'time'"
                 ) from exc
@@ -568,7 +573,7 @@ class TimeAttribute(Immutable):
 
 class PathAttribute(Immutable):
     name: Literal["Path"] = "Path"
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def base(self) -> type[pathlib.Path]:
@@ -576,8 +581,8 @@ class PathAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 annotations=annotations,
@@ -607,12 +612,12 @@ class TupleAttribute(Immutable):
     name: Literal["tuple"] = "tuple"
     base: type[Sequence]
     values: Sequence[AttributeAnnotation]
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -626,34 +631,36 @@ class TupleAttribute(Immutable):
         self,
         value: Any,
     ) -> Any:
-        match value:
-            case [*values]:
-                if len(values) != len(self.values):
-                    raise ValueError(
-                        f"'{value}' does not match expected tuple length {len(self.values)}"
-                    )
+        if isinstance(value, str | bytes | bytearray | memoryview):
+            raise TypeError(f"'{value}' is not matching expected type of 'tuple'")
 
-                def validated() -> Generator:
-                    for idx, element in enumerate(self.values):
-                        with ValidationContext.scope(f"[{idx}]"):
-                            yield element.validate(values[idx])
+        if isinstance(value, Collection):
+            if len(value) != len(self.values):
+                raise ValueError(
+                    f"'{value}' does not match expected tuple length {len(self.values)}"
+                )
 
-                return tuple(validated())
+            def validated() -> Generator:
+                for idx, element in enumerate(value):
+                    with ValidationContext.scope(f"[{idx}]"):
+                        yield self.values[idx].validate(element)
 
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of 'tuple'")
+            return tuple(validated())
+
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of 'tuple'")
 
 
 class SequenceAttribute(Immutable):
     name: Literal["Sequence"] = "Sequence"
     base: type[Sequence]
     values: AttributeAnnotation
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -667,30 +674,32 @@ class SequenceAttribute(Immutable):
         self,
         value: Any,
     ) -> Any:
-        match value:
-            case [*values]:
+        if isinstance(value, str | bytes | bytearray | memoryview):
+            raise TypeError(f"'{value}' is not matching expected type of 'Sequence'")
 
-                def validated() -> Generator:
-                    for idx, element in enumerate(values):
-                        with ValidationContext.scope(f"[{idx}]"):
-                            yield self.values.validate(element)
+        if isinstance(value, Iterable):
 
-                return tuple(validated())
+            def validated() -> Generator:
+                for idx, element in enumerate(value):
+                    with ValidationContext.scope(f"[{idx}]"):
+                        yield self.values.validate(element)
 
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of 'Sequence'")
+            return tuple(validated())
+
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of 'Sequence'")
 
 
 class SetAttribute(Immutable):
     name: Literal["Set"] = "Set"
     base: type[Set]
     values: AttributeAnnotation
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -704,27 +713,20 @@ class SetAttribute(Immutable):
         self,
         value: Any,
     ) -> Any:
-        match value:
-            case set() | frozenset():
+        if isinstance(value, str | bytes | bytearray | memoryview):
+            raise TypeError(f"'{value}' is not matching expected type of 'Set'")
 
-                def validated() -> Generator:
-                    for idx, element in enumerate(value):
-                        with ValidationContext.scope(f"[{idx}]"):
-                            yield self.values.validate(element)
+        if isinstance(value, Iterable):
 
-                return frozenset(validated())
+            def validated() -> Generator:
+                for idx, element in enumerate(value):
+                    with ValidationContext.scope(f"[{idx}]"):
+                        yield self.values.validate(element)
 
-            case [*values]:
+            return frozenset(validated())
 
-                def validated() -> Generator:
-                    for idx, element in enumerate(values):
-                        with ValidationContext.scope(f"[{idx}]"):
-                            yield self.values.validate(element)
-
-                return frozenset(validated())
-
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of 'Set'")
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of 'Set'")
 
 
 class MappingAttribute(Immutable):
@@ -732,12 +734,12 @@ class MappingAttribute(Immutable):
     base: type[Mapping]
     keys: AttributeAnnotation
     values: AttributeAnnotation
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -767,7 +769,7 @@ class MappingAttribute(Immutable):
 
 class ValidableAttribute(Immutable):
     attribute: AttributeAnnotation
-    validator: Validator
+    validate: Validating
 
     @property
     def name(self) -> str:
@@ -778,33 +780,27 @@ class ValidableAttribute(Immutable):
         return self.attribute.base
 
     @property
-    def annotations(self) -> Sequence[Any]:
+    def annotations(self) -> Sequence[Annotation]:
         return self.attribute.annotations
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 attribute=self.attribute.annotated(annotations),
-                validator=self.validator,
+                validate=self.validate,
             )
 
         return self
-
-    def validate(
-        self,
-        value: Any,
-    ) -> Any:
-        return self.validator(value)
 
 
 class ObjectAttribute(Immutable):
     base: Any
     parameters: Sequence[AttributeAnnotation] = ()
     attributes: Mapping[str, AttributeAnnotation]
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def name(self) -> str:
@@ -812,8 +808,8 @@ class ObjectAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -831,26 +827,20 @@ class ObjectAttribute(Immutable):
         if isinstance(value, self.base):
             return value
 
-        match value:
-            case {**values}:
+        elif isinstance(
+            value, collections_abc.Mapping | typing.Mapping | typing_extensions.Mapping
+        ):
+            return self.base(**value)
 
-                def validated() -> Generator:
-                    for key, attribute in self.attributes.items():
-                        with ValidationContext.scope(f".{key}"):
-                            if key in values:
-                                yield (key, attribute.validate(values[key]))
-
-                return self.base(**dict(validated()))
-
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
 
 
 class TypedDictAttribute(Immutable):
     base: Any
     parameters: Sequence[AttributeAnnotation] = ()
     attributes: Mapping[str, AttributeAnnotation]
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def name(self) -> str:
@@ -858,8 +848,8 @@ class TypedDictAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -874,28 +864,27 @@ class TypedDictAttribute(Immutable):
         self,
         value: Any,
     ) -> Any:
-        match value:
-            case {**values}:
+        if isinstance(value, collections_abc.Mapping | typing.Mapping | typing_extensions.Mapping):
 
-                def validated() -> Generator:
-                    for key, attribute in self.attributes.items():
-                        with ValidationContext.scope(f'["{key}"]'):
-                            if key in values:
-                                yield (key, attribute.validate(values[key]))
+            def validated() -> Generator:
+                for key, attribute in self.attributes.items():
+                    with ValidationContext.scope(f'["{key}"]'):
+                        if key in value:
+                            yield (key, attribute.validate(value[key]))
 
-                            elif typing.Required in attribute.annotations:
-                                raise KeyError(f"Value for '{key}' is required")
+                        elif NOT_REQUIRED not in attribute.annotations:
+                            raise KeyError(f"Value for '{key}' is required")
 
-                return dict(validated())
+            return dict(validated())
 
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
 
 
 class FunctionAttribute(Immutable):
     base: Any
     arguments: Sequence[AttributeAnnotation]
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def name(self) -> str:
@@ -903,8 +892,8 @@ class FunctionAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -928,7 +917,7 @@ class FunctionAttribute(Immutable):
 
 class ProtocolAttribute(Immutable):
     base: Any
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def name(self) -> str:
@@ -936,8 +925,8 @@ class ProtocolAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -960,7 +949,7 @@ class ProtocolAttribute(Immutable):
 class UnionAttribute(Immutable):
     base: Any
     alternatives: Sequence[AttributeAnnotation] = ()
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def name(self) -> str:
@@ -968,8 +957,8 @@ class UnionAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -1000,7 +989,7 @@ class UnionAttribute(Immutable):
 class CustomAttribute(Immutable):
     base: Any
     parameters: Sequence[AttributeAnnotation] = ()
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def name(self) -> str:
@@ -1008,8 +997,8 @@ class CustomAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -1032,7 +1021,7 @@ class CustomAttribute(Immutable):
 
 class StrEnumAttribute(Immutable):
     base: type[enum.StrEnum]
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def name(self) -> str:
@@ -1040,8 +1029,8 @@ class StrEnumAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -1061,7 +1050,7 @@ class StrEnumAttribute(Immutable):
             try:
                 return self.base(value)
 
-            except ValueError:
+            except Exception:
                 try:
                     return self.base[value]
 
@@ -1077,7 +1066,7 @@ class StrEnumAttribute(Immutable):
 
 class IntEnumAttribute(Immutable):
     base: type[enum.IntEnum]
-    annotations: Sequence[Any] = ()
+    annotations: Sequence[Annotation] = ()
 
     @property
     def name(self) -> str:
@@ -1085,8 +1074,8 @@ class IntEnumAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Any],
-    ) -> Self:
+        annotations: Sequence[Annotation],
+    ) -> AttributeAnnotation:
         if annotations != self.annotations:
             return self.__class__(
                 base=self.base,
@@ -1106,7 +1095,7 @@ class IntEnumAttribute(Immutable):
             try:
                 return self.base(value)
 
-            except ValueError as exc:
+            except Exception as exc:
                 allowed_values: str = ", ".join(str(member.value) for member in self.base)
                 raise ValueError(
                     f"'{value}' is not matching any of expected"
@@ -1121,7 +1110,7 @@ class IntEnumAttribute(Immutable):
                 try:
                     return self.base(int(value))
 
-                except (ValueError, KeyError):
+                except Exception:
                     allowed_names: str = ", ".join(member.name for member in self.base)
                     raise ValueError(
                         f"'{value}' is not matching any of expected"
@@ -1163,26 +1152,10 @@ def resolve_self_attribute(
         )
     ] = self_attribute
 
-    # TODO: globalns to be removed after updating to python 3.13 as a base
-    module = sys.modules.get(self_attribute.base.__module__)
-    globalns: dict[str, Any]
-    if module is None:
-        globalns = {}
-
-    else:
-        globalns = dict(vars(module))
-
     for key, annotation in get_type_hints(
         self_attribute.base,
-        globalns=globalns,
         localns={
             self_attribute.base.__name__: self_attribute.base,
-            # TODO: extended localns to be removed after updating to python 3.13 as a base
-            **{
-                parameter.__name__: parameter
-                for parameter in getattr(cls, "__type_params__", ()) or ()
-            },
-            **parameters,
         },
         include_extras=True,
     ).items():
@@ -1192,12 +1165,16 @@ def resolve_self_attribute(
         if get_origin(annotation) is ClassVar:
             continue  # do not include class variables
 
-        attributes[key] = resolve_attribute(
+        attribute: AttributeAnnotation = resolve_attribute(
             annotation,
             module=self_attribute.base.__module__,
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
         )
+        if hasattr(cls, key) and NOT_REQUIRED not in attribute.annotations:
+            attribute = attribute.annotated((*attribute.annotations, NOT_REQUIRED))
+
+        attributes[key] = attribute
 
     return self_attribute
 
@@ -1628,15 +1605,12 @@ def _resolve_typeddict(
             recursion_guard=recursion_guard,
         )
 
-        if typing.Required in attribute.annotations or typing.NotRequired in attribute.annotations:
+        if NOT_REQUIRED in attribute.annotations:
             attributes[key] = attribute
             continue  # already annotated
 
-        if key in annotation.__required_keys__:
-            attribute = attribute.annotated((*attribute.annotations, typing.Required))
-
-        else:
-            attribute = attribute.annotated((*attribute.annotations, typing.NotRequired))
+        if key not in annotation.__required_keys__:
+            attribute = attribute.annotated((*attribute.annotations, NOT_REQUIRED))
 
         attributes[key] = attribute
 
@@ -1830,10 +1804,10 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
         case origin:
             if self_attribute := getattr(annotation, "__SELF_ATTRIBUTE__", None):
                 assert isinstance(self_attribute, ObjectAttribute)  # nosec: B101
-                if validator := getattr(origin, "validate", None):
+                if validate := getattr(origin, "validate", None):
                     return ValidableAttribute(
                         attribute=self_attribute,
-                        validator=validator,
+                        validate=validate,
                     )
 
                 else:
@@ -1852,20 +1826,30 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             if guard := recursion_guard.get(recursion_key):
                 return guard
 
-            if validator := getattr(origin, "validate", None):
-                assert isinstance(validator, Validator)  # nosec: B101
+            if validate := getattr(origin, "validate", None):
+                assert isinstance(validate, Validating)  # nosec: B101
                 return ValidableAttribute(
                     attribute=CustomAttribute(
                         base=origin,
                         parameters=parameters,
                     ),
-                    validator=validator,
+                    validate=validate,
                 )
 
             return CustomAttribute(
                 base=origin,
                 parameters=parameters,
             )
+
+
+def _compose_validators[Value](
+    first: Validating[Value],
+    second: Validating[Value],
+) -> Validating[Value]:
+    def composed(value: Any) -> Value:
+        return second(first(value))
+
+    return composed
 
 
 def resolve_attribute(  # noqa: C901, PLR0911, PLR0912, PLR0915
@@ -1914,13 +1898,43 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912, PLR0915
             )
 
         case typing.Annotated | typing_extensions.Annotated:
-            annotations: Sequence[Any] = get_args(annotation)
-            return resolve_attribute(
-                annotations[0],
+            annotation_args: Sequence[Any] = get_args(annotation)
+            attribute: AttributeAnnotation = resolve_attribute(
+                annotation_args[0],
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
-            ).annotated(annotations[1:])
+            )
+            arg_annotations: MutableSequence[Annotation] = []
+            for arg in annotation_args[1:]:
+                if isinstance(arg, Alias | Description | Specification):
+                    arg_annotations.append(arg)
+
+                    continue
+
+                if isinstance(arg, Validator):
+                    if isinstance(attribute, ValidableAttribute):
+                        attribute = ValidableAttribute(
+                            attribute=attribute.attribute,
+                            validate=_compose_validators(
+                                attribute.validate,
+                                arg.validator,
+                            ),
+                        )
+
+                    else:
+                        base_attribute = attribute
+                        attribute = ValidableAttribute(
+                            attribute=base_attribute,
+                            validate=_compose_validators(
+                                base_attribute.validate,
+                                arg.validator,
+                            ),
+                        )
+
+                    continue
+
+            return attribute.annotated(tuple(arg_annotations))
 
         case typing.TypeVar | typing_extensions.TypeVar:
             if resolved := resolved_parameters.get(annotation.__name__):
@@ -1956,10 +1970,13 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
             )
-            annotations: Sequence[Any] = attribute.annotations
-            if typing.Required not in annotations:
-                annotations = (*annotations, typing.Required)
-            return attribute.annotated(annotations)
+            annotations: Sequence[Annotation] = attribute.annotations
+            if NOT_REQUIRED in annotations:
+                return attribute.annotated(
+                    tuple(ann for ann in annotations if ann is not NOT_REQUIRED)
+                )
+
+            return attribute
 
         case typing.NotRequired | typing_extensions.NotRequired:
             attribute: AttributeAnnotation = resolve_attribute(
@@ -1969,14 +1986,11 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 recursion_guard=recursion_guard,
             )
 
-            annotations: Sequence[Any] = attribute.annotations
-            if (
-                typing.NotRequired not in annotations
-                and typing_extensions.NotRequired not in annotations
-            ):
-                annotations = (*annotations, typing.NotRequired)
+            annotations: Sequence[Annotation] = attribute.annotations
+            if NOT_REQUIRED not in annotations:
+                return attribute.annotated((*annotations, NOT_REQUIRED))
 
-            return attribute.annotated(annotations)
+            return attribute
 
         case typing.Optional | typing_extensions.Optional:
             return UnionAttribute(
@@ -1993,16 +2007,12 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912, PLR0915
             )
 
         case typing.Final | typing_extensions.Final:
-            attribute: AttributeAnnotation = resolve_attribute(
+            return resolve_attribute(
                 get_args(annotation)[0],
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
             )
-            annotations: Sequence[Any] = attribute.annotations
-            if typing.Final not in annotations:
-                annotations = (*annotations, typing.Final)
-            return attribute.annotated(annotations)
 
         case typing.ForwardRef | typing_extensions.ForwardRef:
             resolved: Any = _evaluate_forward_ref(

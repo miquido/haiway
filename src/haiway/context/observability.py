@@ -215,7 +215,7 @@ class Observability(Immutable):  # avoiding State inheritance to prevent propaga
     scope_exiting: ObservabilityScopeExiting
 
 
-def _logger_observability(
+def _logger_observability(  # noqa: C901
     logger: Logger,
     /,
 ) -> Observability:
@@ -334,6 +334,13 @@ def _logger_observability(
             f"[{trace_id_hex}] {scope.unique_name} Exiting scope: {scope.name}",
             exc_info=exception,
         )
+
+        if isinstance(exception, Exception):
+            logger.log(
+                ObservabilityLevel.ERROR,
+                f"[{trace_id_hex}] {scope.unique_name} Scope error: {exception}",
+                exc_info=exception,
+            )
 
     return Observability(
         trace_identifying=trace_identifying,
@@ -668,11 +675,6 @@ class ObservabilityContext(Immutable):
         Enter this observability context.
 
         Sets this context as the current one and records scope entry.
-
-        Raises
-        ------
-        AssertionError
-            If attempting to re-enter an already active context
         """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         object.__setattr__(
@@ -701,11 +703,6 @@ class ObservabilityContext(Immutable):
             Exception instance that caused the exit
         exc_tb: TracebackType | None
             Traceback for the exception
-
-        Raises
-        ------
-        AssertionError
-            If the context is not active
         """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         ObservabilityContext._context.reset(self._token)  # pyright: ignore[reportArgumentType]

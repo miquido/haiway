@@ -14,6 +14,7 @@ import typing_extensions as te
 
 from haiway import State
 from haiway.attributes.annotations import (
+    NOT_REQUIRED,
     AliasAttribute,
     AttributeAnnotation,
     CustomAttribute,
@@ -28,8 +29,17 @@ from haiway.attributes.annotations import (
     UUIDAttribute,
     ValidableAttribute,
 )
+from haiway.attributes.validation import Validator
+from haiway.types import Alias, Description, Specification
 
 _SENTINEL = object()
+
+
+def ensure_positive(value: int) -> int:
+    if value <= 0:
+        raise ValueError("expected positive value")
+
+    return value
 
 
 @contextmanager
@@ -63,7 +73,7 @@ def test_alias_attribute_annotations_returns_empty_before_resolution() -> None:
 
 def test_type_none_attribute_resolves_to_none_attribute() -> None:
     class Example(State):
-        explicit_none: type(None)
+        explicit_none: None
 
     annotation = attribute_of(Example, "explicit_none")
 
@@ -74,23 +84,130 @@ def test_type_none_attribute_resolves_to_none_attribute() -> None:
         annotation.validate("not-none")
 
 
-def test_attribute_annotations_preserve_annotated_metadata() -> None:
+def test_attribute_annotations_skip_additional_annotated_metadata() -> None:
     class Example(State):
         value: Annotated[Annotated[int, "inner"], "outer"]
 
     annotation = attribute_of(Example, "value")
-    assert annotation.annotations == ("inner", "outer")
+    assert "inner" not in annotation.annotations
+    assert "outer" not in annotation.annotations
 
 
-def test_attribute_annotations_mark_final_wrapper() -> None:
+def test_attribute_annotations_skip_final_wrapper() -> None:
     class Example(State):
         value: Final[int]
 
     annotation = attribute_of(Example, "value")
-    assert typing.Final in annotation.annotations
+    assert typing.Final not in annotation.annotations
 
 
-def test_typed_dict_annotations_include_metadata() -> None:
+def test_attribute_annotations_attach_validator_metadata() -> None:
+    class Example(State):
+        value: Annotated[int, Validator(ensure_positive)]
+
+    annotation = attribute_of(Example, "value")
+    assert isinstance(annotation, ValidableAttribute)
+    assert annotation.validate(5) == 5
+    with pytest.raises(ValueError):
+        annotation.validate(0)
+
+
+class PositiveInt(int):
+    @classmethod
+    def validate(cls, value: Any) -> PositiveInt:
+        candidate = cls(value)
+        if candidate <= 0:
+            raise ValueError("expected positive value")
+
+        return candidate
+
+
+def ensure_less_than_ten(value: PositiveInt) -> PositiveInt:
+    if value >= 10:
+        raise ValueError("expected value lower than ten")
+
+    return value
+
+
+class Example(State):
+    value: Annotated[PositiveInt, Validator(ensure_less_than_ten)]
+
+
+def test_attribute_annotations_stack_validators() -> None:
+    annotation = attribute_of(Example, "value")
+    assert isinstance(annotation, ValidableAttribute)
+    assert annotation.validate(5) == PositiveInt(5)
+
+    with pytest.raises(ValueError):
+        annotation.validate(-1)
+
+    with pytest.raises(ValueError):
+        annotation.validate(10)
+
+
+def test_attribute_annotations_include_alias_description_specification() -> None:
+    class Example(State):
+        value: Annotated[
+            str,
+            Alias("example"),
+            Description("Example value"),
+            Specification({"type": "string"}),
+        ]
+
+    annotation = attribute_of(Example, "value")
+    assert any(
+        isinstance(meta, Alias) and meta.alias == "example" for meta in annotation.annotations
+    )
+    assert any(
+        isinstance(meta, Description) and meta.description == "Example value"
+        for meta in annotation.annotations
+    )
+    assert any(
+        isinstance(meta, Specification) and meta.specification == {"type": "string"}
+        for meta in annotation.annotations
+    )
+
+
+def test_state_specification_uses_alias_and_description_metadata() -> None:
+    class Example(State):
+        value: Annotated[str, Alias("external_name"), Description("External name description")]
+
+    specification = Example.__SPECIFICATION__
+    assert specification is not None
+
+    properties = specification["properties"]
+    assert "external_name" in properties
+    assert properties["external_name"]["description"] == "External name description"
+
+
+def test_state_specification_marks_required_fields() -> None:
+    class Example(State):
+        required_value: str
+        alias_required: Annotated[int, Alias("external")]
+        optional_default: int = 1
+
+    specification = Example.__SPECIFICATION__
+    assert specification is not None
+    assert specification["required"] == ["required_value", "external"]
+
+
+def test_state_specification_missing_when_child_has_no_specification() -> None:
+    class Example(State):
+        callback: typing.Callable[[int], int]
+
+    assert Example.__SPECIFICATION__ is None
+
+
+def test_state_specification_manual_override_for_unspecified_type() -> None:
+    class Example(State):
+        callback: Annotated[typing.Callable[[int], int], Specification({"type": "string"})]
+
+    specification = Example.__SPECIFICATION__
+    assert specification is not None
+    assert specification["properties"]["callback"] == {"type": "string"}
+
+
+def test_typed_dict_annotations_converts() -> None:
     class ExampleMapping(TypedDict):
         annotated: Annotated[int, "meta"]
         required_value: Required[int]
@@ -105,15 +222,16 @@ def test_typed_dict_annotations_include_metadata() -> None:
     assert isinstance(annotation, TypedDictAttribute)
 
     attributes = annotation.attributes
-    assert "meta" in attributes["annotated"].annotations
-    assert typing.Required in attributes["annotated"].annotations
-    assert typing.Required in attributes["required_value"].annotations
-    assert typing.NotRequired in attributes["optional_value"].annotations
+    assert "meta" not in attributes["annotated"].annotations
+    assert NOT_REQUIRED not in attributes["annotated"].annotations
+    assert NOT_REQUIRED not in attributes["required_value"].annotations
+    assert NOT_REQUIRED in attributes["optional_value"].annotations
 
 
 def test_typed_dict_required_preserves_inner_annotations() -> None:
     class ExampleMapping(TypedDict):
         required_value: Required[Annotated[int, "inner"]]
+        required: Required[Annotated[int, Description("required")]]
 
     with register_type("ExampleMapping", ExampleMapping):
 
@@ -121,8 +239,11 @@ def test_typed_dict_required_preserves_inner_annotations() -> None:
             mapping: ExampleMapping
 
     annotation = attribute_of(Example, "mapping")
-    required_annotation = annotation.attributes["required_value"]
-    assert "inner" in required_annotation.annotations
+    assert "inner" not in annotation.attributes["required_value"].annotations
+
+    assert any(
+        isinstance(ann, Description) for ann in annotation.attributes["required"].annotations
+    )
 
 
 def test_typed_dict_not_required_metadata_from_typing_extensions() -> None:
@@ -136,7 +257,7 @@ def test_typed_dict_not_required_metadata_from_typing_extensions() -> None:
 
     annotation = attribute_of(Example, "mapping")
     flag_annotation = annotation.attributes["flag"]
-    assert any(ann in {typing.NotRequired, te.NotRequired} for ann in flag_annotation.annotations)
+    assert any(ann is NOT_REQUIRED for ann in flag_annotation.annotations)
 
 
 def test_private_annotations_are_exposed() -> None:

@@ -122,11 +122,6 @@ class ScopeStore:
     def exit(self) -> None:
         """
         Mark this scope as exited.
-
-        Raises
-        ------
-        AssertionError
-            If the scope has already been exited
         """
         assert not self._exited  # nosec: B101
         self._exited = True
@@ -536,11 +531,6 @@ class OpenTelemetry:
             -------
             UUID
                 A UUID representation of the OpenTelemetry trace ID
-
-            Raises
-            ------
-            AssertionError
-                If called outside an initialized scope context
             """
             assert root_scope is not None  # nosec: B101
             assert scope.scope_id in scopes  # nosec: B101

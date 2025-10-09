@@ -46,11 +46,6 @@ class AttributeRequirement[Root]:
         -------
         Self
             A new requirement instance
-
-        Raises
-        ------
-        AssertionError
-            If path is not an AttributePath
         """
         assert isinstance(  # nosec: B101
             path, AttributePath
@@ -89,11 +84,6 @@ class AttributeRequirement[Root]:
         -------
         Self
             A new requirement instance
-
-        Raises
-        ------
-        AssertionError
-            If path is not an AttributePath
         """
         assert isinstance(  # nosec: B101
             path, AttributePath
@@ -166,11 +156,6 @@ class AttributeRequirement[Root]:
         -------
         Self
             A new requirement instance
-
-        Raises
-        ------
-        AssertionError
-            If path is not an AttributePath
         """
         assert isinstance(  # nosec: B101
             path, AttributePath
@@ -216,11 +201,6 @@ class AttributeRequirement[Root]:
         -------
         Self
             A new requirement instance
-
-        Raises
-        ------
-        AssertionError
-            If path is not an AttributePath
         """
         assert isinstance(  # nosec: B101
             path, AttributePath
@@ -266,11 +246,6 @@ class AttributeRequirement[Root]:
         -------
         Self
             A new requirement instance
-
-        Raises
-        ------
-        AssertionError
-            If path is not an AttributePath
         """
         assert isinstance(  # nosec: B101
             path, AttributePath
@@ -311,11 +286,6 @@ class AttributeRequirement[Root]:
         -------
         Self
             A new requirement instance
-
-        Raises
-        ------
-        AssertionError
-            If path is not an AttributePath
         """
         assert isinstance(  # nosec: B101
             path, AttributePath

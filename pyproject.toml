@@ -1,16 +1,16 @@
 [build-system]
-requires = ["uv_build>=0.8.0,<0.9.0"]
+requires = ["uv_build>=0.9.0,<0.10.0"]
 build-backend = "uv_build"
 
 [project]
 name = "haiway"
 description = "Framework for dependency injection and state management within structured concurrency model."
-version = "0.34.7"
+version = "0.35.0"
 readme = "README.md"
 maintainers = [
   { name = "Kacper Kaliński", email = "kacper.kalinski@miquido.com" },
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 classifiers = [
   "License :: OSI Approved :: MIT License",
   "Intended Audience :: Developers",
@@ -40,7 +40,7 @@ dev = [
   "pytest~=8.4",
   "pytest-asyncio~=1.2",
   "pytest-cov~=7.0",
-  "ruff~=0.13",
+  "ruff~=0.14",
 ]
 docs = [
   "mkdocs~=1.6",
@@ -55,7 +55,7 @@ docs = [
 pythonpath = ["src"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
 line-length = 100
 extend-exclude = [".venv", ".git", ".cache"]
 lint.select = ["E", "F", "A", "I", "B", "PL", "W", "C", "RUF", "UP"]
@@ -69,7 +69,7 @@ max-args = 12
 "./tests/*.py" = ["PLR2004"]
 
 [tool.pyright]
-pythonVersion = "3.12"
+pythonVersion = "3.13"
 venvPath = "."
 venv = ".venv"
 include = ["./src"]

@@ -138,11 +138,6 @@ class ScopeIdentifier(Immutable):
         Enter this scope identifier's context.
 
         Sets this identifier as the current scope identifier in the context.
-
-        Raises
-        ------
-        AssertionError
-            If this context is already active
         """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         object.__setattr__(
@@ -170,11 +165,6 @@ class ScopeIdentifier(Immutable):
             Exception instance that caused the exit
         exc_tb: TracebackType | None
             Traceback for the exception
-
-        Raises
-        ------
-        AssertionError
-            If this context is not active
         """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         ScopeIdentifier._context.reset(self._token)  # pyright: ignore[reportArgumentType]
