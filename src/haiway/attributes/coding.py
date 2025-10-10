@@ -5,10 +5,10 @@ from typing import (
 )
 from uuid import UUID
 
-__all__ = ("StateJSONEncoder",)
+__all__ = ("AttributesJSONEncoder",)
 
 
-class StateJSONEncoder(json.JSONEncoder):
+class AttributesJSONEncoder(json.JSONEncoder):
     def default(self, o: object) -> Any:
         if isinstance(o, UUID):
             return o.hex

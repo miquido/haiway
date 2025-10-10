@@ -1,8 +1,7 @@
 import json
 from collections.abc import Collection, Iterator, Mapping
 from datetime import datetime
-from types import EllipsisType
-from typing import Any, ClassVar, Final, Self, TypeGuard, cast, final, overload
+from typing import Any, Final, Self, TypeGuard, cast, final, overload
 from uuid import UUID
 
 __all__ = (
@@ -40,8 +39,6 @@ class Meta(Mapping[str, MetaValue]):
     >>> print(meta.kind)  # "user"
     >>> print(meta.tags)  # ("active", "verified")
     """
-
-    __IMMUTABLE__: ClassVar[EllipsisType] = ...
 
     @classmethod
     def validate(

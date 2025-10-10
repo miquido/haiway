@@ -2,8 +2,7 @@
 
 import json
 from collections.abc import Mapping
-from types import EllipsisType
-from typing import Any, ClassVar, Self, final
+from typing import Any, Self, final
 
 __all__ = ("Map",)
 
@@ -11,8 +10,6 @@ __all__ = ("Map",)
 @final
 class Map[Key, Element](dict[Key, Element]):
     """An immutable ``dict`` wrapper with convenience conversion helpers."""
-
-    __IMMUTABLE__: ClassVar[EllipsisType] = ...
 
     __slots__ = ()
 
