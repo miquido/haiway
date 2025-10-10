@@ -1,5 +1,8 @@
 import json
-from collections.abc import Mapping, MutableMapping, MutableSequence, Sequence
+import typing
+from collections.abc import Iterable, Mapping, MutableMapping, MutableSequence, Sequence
+from copy import deepcopy
+from dataclasses import fields, is_dataclass
 from types import EllipsisType, GenericAlias
 from typing import (
     Any,
@@ -20,7 +23,7 @@ from haiway.attributes.annotations import (
     ObjectAttribute,
     resolve_self_attribute,
 )
-from haiway.attributes.coding import StateJSONEncoder
+from haiway.attributes.coding import AttributesJSONEncoder
 from haiway.attributes.path import AttributePath
 from haiway.attributes.specification import type_specification
 from haiway.attributes.validation import ValidationContext, ValidationError
@@ -36,19 +39,13 @@ from haiway.types import (
     not_missing,
 )
 
-__all__ = ("State",)
+__all__ = (
+    "Attribute",
+    "State",
+)
 
 
-class StateField[Value](Immutable):
-    """
-    Represents a field in a State class with its metadata.
-
-    This class holds information about a specific attribute of a State class,
-    including its name, typing, default value, and validation rules.
-    It is used internally by the State metaclass to manage state attributes
-    and ensure their immutability and type safety.
-    """
-
+class Attribute[Value](Immutable):
     name: str
     alias: str | None
     annotation: AttributeAnnotation
@@ -72,23 +69,6 @@ class StateField[Value](Immutable):
         mapping: Mapping[str, Any],
         /,
     ) -> Value:
-        """
-        Validate a value retrieved from the mapping with alias and default fallbacks.
-
-        Parameters
-        ----------
-        mapping : Mapping[str, Any]
-            Mapping to pull the attribute value from.
-
-        Returns
-        -------
-        Value
-            Value produced by ``self.annotation.validate`` after resolution.
-
-        The value is resolved by checking ``self.alias`` when set, falling back to
-        ``self.name``, and using ``self.default`` if neither key is present before
-        delegating to ``self.annotation.validate``.
-        """
         value: Any
         if self.alias is None:
             value = mapping.get(
@@ -133,7 +113,7 @@ class StateMeta(type):
     __SELF_ATTRIBUTE__: ObjectAttribute
     __TYPE_PARAMETERS__: Mapping[str, Any] | None
     __SPECIFICATION__: TypeSpecification | None
-    __FIELDS__: Sequence[StateField]
+    __FIELDS__: Sequence[Attribute]
 
     def __new__(  # noqa: C901, PLR0912
         mcs,
@@ -157,7 +137,7 @@ class StateMeta(type):
         )
         specification_fields: MutableMapping[str, TypeSpecification] | None = {}
         required_fields: MutableSequence[str] = []
-        fields: MutableSequence[StateField] = []
+        fields: MutableSequence[Attribute] = []
         for key, attribute in self_attribute.attributes.items():
             default: Any = getattr(cls, key, MISSING)
             alias: str | None = None
@@ -183,7 +163,7 @@ class StateMeta(type):
                     description=description,
                 )
 
-            field: StateField = StateField(
+            field: Attribute = Attribute(
                 name=key,
                 alias=alias,
                 annotation=attribute,
@@ -315,19 +295,6 @@ class StateMeta(type):
 def _resolve_default[Value](
     value: DefaultValue[Value] | Value | Missing,
 ) -> DefaultValue[Value]:
-    """
-    Ensure a value is wrapped in a DefaultValue container.
-
-    Parameters
-    ----------
-    value : DefaultValue[Value] | Value | Missing
-        The value or default value container to resolve
-
-    Returns
-    -------
-    DefaultValue[Value]
-        The value wrapped in a DefaultValue container
-    """
     if isinstance(value, DefaultValue):
         return cast(DefaultValue[Value], value)
 
@@ -386,11 +353,6 @@ class State(metaclass=StateMeta):
     """
 
     _: ClassVar[Self]
-    __IMMUTABLE__: ClassVar[EllipsisType] = ...
-    __SELF_ATTRIBUTE__: ClassVar[ObjectAttribute]
-    __TYPE_PARAMETERS__: ClassVar[Mapping[str, Any] | None] = None
-    __SPECIFICATION__: ClassVar[TypeSpecification | None] = None
-    __FIELDS__: ClassVar[Sequence[StateField]]
 
     @classmethod
     def __class_getitem__(
@@ -490,15 +452,14 @@ class State(metaclass=StateMeta):
         TypeError
             If the value cannot be converted to an instance of this class
         """
-        match value:
-            case validated if isinstance(validated, cls):
-                return validated
+        if isinstance(value, cls):
+            return value
 
-            case {**values}:
-                return cls(**values)
+        elif isinstance(value, Mapping | typing.Mapping):
+            return cls(**value)
 
-            case _:
-                raise TypeError(f"'{value}' is not matching expected type of '{cls}'")
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of '{cls}'")
 
     @classmethod
     def from_mapping(
@@ -669,7 +630,7 @@ class State(metaclass=StateMeta):
     def to_json(
         self,
         indent: int | None = None,
-        encoder_class: type[json.JSONEncoder] = StateJSONEncoder,
+        encoder_class: type[json.JSONEncoder] = AttributesJSONEncoder,
     ) -> str:
         """
         Serialize this instance to a JSON string.
@@ -691,7 +652,7 @@ class State(metaclass=StateMeta):
         ValueError
             If encoding fails.
         """
-        mapping: Mapping[str, Any] = self.to_mapping()
+        mapping: Mapping[str, Any] = self.to_mapping(recursive=True)
         try:
             return json.dumps(
                 mapping,
@@ -769,7 +730,6 @@ class State(metaclass=StateMeta):
     def to_mapping(
         self,
         recursive: bool = True,
-        aliased: bool = True,
     ) -> Mapping[str, Any]:
         """
         Convert this instance to a mapping of attribute names to values.
@@ -777,10 +737,7 @@ class State(metaclass=StateMeta):
         Parameters
         ----------
         recursive : bool, default=True
-            If True, nested State instances are also converted to mappings
-
-        aliased : bool, default=True
-            If True, nested field aliases will be used instead of regular names
+            If True, nested instances are also converted to mappings
 
         Returns
         -------
@@ -788,17 +745,20 @@ class State(metaclass=StateMeta):
             A mapping of attribute names to values
         """
         dict_result: dict[str, Any] = {}
-        for field in self.__FIELDS__:
-            key: str = field.alias if aliased and field.alias is not None else field.name
-            value: Any | Missing = getattr(self, field.name, MISSING)
-            if recursive and isinstance(value, State):
-                dict_result[key] = value.to_mapping(
-                    recursive=recursive,
-                    aliased=aliased,
-                )
+        if recursive:
+            for field in self.__FIELDS__:
+                key: str = field.alias if field.alias is not None else field.name
+                value: Any | Missing = getattr(self, field.name, MISSING)
 
-            elif not_missing(value):
-                dict_result[key] = value
+                if not_missing(value):
+                    dict_result[key] = _recursive_mapping(value)
+
+        else:
+            for field in self.__FIELDS__:
+                key: str = field.alias if field.alias is not None else field.name
+                value: Any | Missing = getattr(self, field.name, MISSING)
+                if not_missing(value):
+                    dict_result[key] = value
 
         return dict_result
 
@@ -811,7 +771,12 @@ class State(metaclass=StateMeta):
         str
             A string representation in the format "ClassName(attr1: value1, attr2: value2)"
         """
-        attributes: str = ", ".join([f"{key}: {value}" for key, value in vars(self).items()])
+        attributes: str = ", ".join(
+            [
+                f"{field.alias or field.name}: {getattr(self, field.name)}"
+                for field in self.__class__.__FIELDS__
+            ]
+        )
         return f"{self.__class__.__name__}({attributes})"
 
     def __repr__(self) -> str:
@@ -823,7 +788,8 @@ class State(metaclass=StateMeta):
         str
             ``repr`` string mirroring ``__str__`` for readability.
         """
-        return str(self)
+        attributes: str = ", ".join([f"{key}: {value}" for key, value in vars(self).items()])
+        return f"{self.__class__.__name__}({attributes})"
 
     def __eq__(
         self,
@@ -983,7 +949,7 @@ class State(metaclass=StateMeta):
         if not kwargs:
             return self  # do not make a copy when nothing will be updated
 
-        fields: Sequence[StateField] = self.__class__.__FIELDS__
+        fields: Sequence[Attribute] = self.__class__.__FIELDS__
         alias_to_name: dict[str, str] = {
             field.alias if field.alias is not None else field.name: field.name for field in fields
         }
@@ -1019,3 +985,30 @@ class State(metaclass=StateMeta):
                     )
 
         return updated
+
+
+def _recursive_mapping(  # noqa: PLR0911
+    value: Any,
+) -> Any:
+    if isinstance(value, str | bytes | float | int | bool | None):
+        return value
+
+    elif isinstance(value, State):
+        return value.to_mapping(recursive=True)
+
+    elif hasattr(value, "to_mapping") and callable(value.to_mapping):
+        return value.to_mapping()
+
+    elif is_dataclass(value):
+        return {
+            field.name: _recursive_mapping(getattr(value, field.name)) for field in fields(value)
+        }
+
+    elif isinstance(value, Mapping):
+        return {key: _recursive_mapping(element) for key, element in value.items()}
+
+    elif isinstance(value, Iterable):
+        return [_recursive_mapping(element) for element in value]
+
+    else:
+        return deepcopy(value)

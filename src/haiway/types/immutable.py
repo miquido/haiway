@@ -1,6 +1,5 @@
 import inspect
 from collections.abc import Mapping, MutableMapping
-from types import EllipsisType
 from typing import Any, ClassVar, Self, dataclass_transform, final, get_origin, get_type_hints
 
 from haiway.types.default import DefaultValue
@@ -67,7 +66,6 @@ def _collect_attributes(
 
 
 class Immutable(metaclass=ImmutableMeta):
-    __IMMUTABLE__: ClassVar[EllipsisType] = ...
     __ATTRIBUTES__: ClassVar[Mapping[str, DefaultValue | None]]
 
     def __init__(
