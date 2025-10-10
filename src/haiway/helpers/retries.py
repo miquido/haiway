@@ -14,21 +14,20 @@ def retry[**Args, Result](
     function: Callable[Args, Result],
     /,
 ) -> Callable[Args, Result]:
-    """\
-    Function wrapper retrying the wrapped function again on fail. \
-    Works for both sync and async functions. \
-    It is not allowed to be used on class methods. \
-    This wrapper is not thread safe.
+    """
+    Retry the supplied function with the default configuration.
 
     Parameters
     ----------
-    function: Callable[_Args_T, _Result_T]
-        function to wrap in auto retry, either sync or async.
+    function: Callable[Args, Result]
+        Function to wrap. When used as ``@retry`` the value is provided
+        automatically.
 
     Returns
     -------
-    Callable[_Args_T, _Result_T]
-        provided function wrapped in auto retry with default configuration.
+    Callable[Args, Result]
+        The wrapped function. It will retry once on handled exceptions,
+        propagating ``CancelledError`` immediately.
     """
 
 
@@ -37,31 +36,27 @@ def retry[**Args, Result](
     *,
     limit: int = 1,
     delay: Callable[[int, Exception], float] | float | None = None,
-    catching: set[type[Exception]] | tuple[type[Exception], ...] | type[Exception] = Exception,
+    catching: Callable[[Exception], bool] | type[Exception] = Exception,
 ) -> Callable[[Callable[Args, Result]], Callable[Args, Result]]:
-    """\
-    Function wrapper retrying the wrapped function again on fail. \
-    Works for both sync and async functions. \
-    It is not allowed to be used on class methods. \
-    This wrapper is not thread safe.
+    """
+    Configure the retry decorator.
 
     Parameters
     ----------
-    limit: int
-        limit of retries, default is 1
-    delay: Callable[[int, Exception], float] | float | None
-        retry delay time in seconds, either concrete value or a function producing it, \
-        default is None (no delay)
-    catching: set[type[Exception]] | type[Exception] | None
-        Exception types that are triggering auto retry. Retry will trigger only when \
-        exceptions of matching types (including subclasses) will occur. CancelledError \
-        will be always propagated even if specified explicitly.
-        Default is Exception - all subclasses of Exception will be handled.
+    limit: int, default=1
+        Maximum number of retry attempts after the initial call. Must be greater than
+        zero.
+    delay: Callable[[int, Exception], float] | float | None, default=None
+        Delay between attempts in seconds. ``Callable`` receives the retry attempt
+        number (starting at 1) and the raised exception.
+    catching: Callable[[Exception], bool] | type[Exception], default=Exception
+        Predicate or exception type deciding whether a raised exception should trigger
+        another attempt. ``CancelledError`` is always propagated.
 
     Returns
     -------
-    Callable[[Callable[_Args_T, _Result_T]], Callable[_Args_T, _Result_T]]
-        function wrapper for adding auto retry
+    Callable[[Callable[Args, Result]], Callable[Args, Result]]
+        Decorator that applies retry logic to the target function.
     """
 
 
@@ -70,50 +65,45 @@ def retry[**Args, Result](
     *,
     limit: int = 1,
     delay: Callable[[int, Exception], float] | float | None = None,
-    catching: set[type[Exception]] | tuple[type[Exception], ...] | type[Exception] = Exception,
+    catching: Callable[[Exception], bool] | type[Exception] = Exception,
 ) -> Callable[[Callable[Args, Result]], Callable[Args, Result]] | Callable[Args, Result]:
     """
-    Automatically retry a function on failure.
+    Automatically retry a function when it raises handled exceptions.
 
-    This decorator attempts to execute a function and, if it fails with a specified
-    exception type, retries the execution up to a configurable number of times,
-    with an optional delay between attempts.
-
-    Can be used as a simple decorator (@retry) or with configuration
-    parameters (@retry(limit=3, delay=1.0)).
+    The decorator can be used without arguments (``@retry``) or configured with keyword
+    arguments (``@retry(limit=3, delay=1.0)``). It supports both synchronous and
+    asynchronous callables and preserves the wrapped function's metadata.
 
     Parameters
     ----------
     function: Callable[Args, Result] | None
-        The function to wrap with retry logic. When used as a simple decorator,
-        this parameter is provided automatically.
-    limit: int
-        Maximum number of retry attempts. Default is 1, meaning the function
-        will be called at most twice (initial attempt + 1 retry).
-    delay: Callable[[int, Exception], float] | float | None
-        Delay between retry attempts in seconds. Can be:
-          - None: No delay between retries (default)
-          - float: Fixed delay in seconds
-          - Callable: A function that calculates delay based on attempt number
-            and the caught exception, allowing for backoff strategies
-    catching: set[type[Exception]] | tuple[type[Exception], ...] | type[Exception]
-        Exception types that should trigger retry. Can be a single exception type,
-        a set, or a tuple of exception types. Default is Exception (all exception
-        types except for CancelledError, which is always propagated).
+        The function to wrap. When used as ``@retry`` this argument is injected
+        automatically.
+    limit: int, default=1
+        Maximum number of retry attempts after the initial call. The function can be
+        executed at most ``limit + 1`` times.
+    delay: Callable[[int, Exception], float] | float | None, default=None
+        Delay between retry attempts in seconds. May be:
+          - ``None``: retries occur immediately.
+          - ``float``: fixed delay applied before every retry.
+          - ``Callable``: invoked with the retry attempt number (starting at 1) and the
+            most recent exception to compute a delay.
+    catching: Callable[[Exception], bool] | type[Exception]
+        Predicate or exception type that determines whether the raised exception should
+        trigger another attempt. ``CancelledError`` is always propagated, even when the
+        predicate returns ``True`` or the type matches.
 
     Returns
     -------
     Callable
-        When used as @retry: Returns the wrapped function with retry logic.
-        When used as @retry(...): Returns a decorator that can be applied to a function.
+        ``@retry`` returns the wrapped function. ``@retry(...)`` returns a decorator
+        that can be applied to a function.
 
     Notes
     -----
     - Works with both synchronous and asynchronous functions.
-    - Not thread-safe; concurrent invocations are not coordinated.
-    - Cannot be used on class methods.
-    - Always propagates asyncio.CancelledError regardless of catching parameter.
-    - The function preserves the original function's signature, docstring, and other attributes.
+    - Always propagates ``asyncio.CancelledError`` regardless of the ``catching`` value.
+    - Preserves the wrapped function's signature, docstring, and other attributes.
 
     Examples
     --------
@@ -141,6 +131,17 @@ def retry[**Args, Result](
     ...     return perform_operation()
     """
 
+    catch_check: Callable[[Exception], bool]
+    if isinstance(catching, type):
+
+        def check(exc: Exception) -> bool:
+            return isinstance(exc, catching)
+
+        catch_check = check
+
+    else:
+        catch_check = catching
+
     def _wrap(
         function: Callable[Args, Result],
         /,
@@ -152,7 +153,7 @@ def retry[**Args, Result](
                     function,
                     limit=limit,
                     delay=delay,
-                    catching=catching if isinstance(catching, set | tuple) else {catching},
+                    catching=catch_check,
                 ),
             )
 
@@ -161,7 +162,7 @@ def retry[**Args, Result](
                 function,
                 limit=limit,
                 delay=delay,
-                catching=catching if isinstance(catching, set | tuple) else {catching},
+                catching=catch_check,
             )
 
     if function is not None:
@@ -175,7 +176,7 @@ def _wrap_sync[**Args, Result](
     *,
     limit: int,
     delay: Callable[[int, Exception], float] | float | None,
-    catching: set[type[Exception]] | tuple[type[Exception], ...],
+    catching: Callable[[Exception], bool],
 ) -> Callable[Args, Result]:
     assert limit > 0, "Limit has to be greater than zero"  # nosec: B101
 
@@ -192,7 +193,7 @@ def _wrap_sync[**Args, Result](
                 raise exc
 
             except Exception as exc:
-                if attempt < limit and any(isinstance(exc, exception) for exception in catching):
+                if attempt < limit and catching(exc):
                     attempt += 1
                     ctx.log_error(
                         "Attempting to retry %s which failed due to an error: %s",
@@ -221,7 +222,7 @@ def _wrap_async[**Args, Result](
     *,
     limit: int,
     delay: Callable[[int, Exception], float] | float | None,
-    catching: set[type[Exception]] | tuple[type[Exception], ...],
+    catching: Callable[[Exception], bool],
 ) -> Callable[Args, Coroutine[Any, Any, Result]]:
     assert limit > 0, "Limit has to be greater than zero"  # nosec: B101
 
@@ -238,7 +239,7 @@ def _wrap_async[**Args, Result](
                 raise exc
 
             except Exception as exc:
-                if attempt < limit and any(isinstance(exc, exception) for exception in catching):
+                if attempt < limit and catching(exc):
                     attempt += 1
                     ctx.log_error(
                         "Attempting to retry %s which failed due to an error",
