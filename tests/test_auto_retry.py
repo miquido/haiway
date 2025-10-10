@@ -116,7 +116,10 @@ async def test_retries_with_selected_errors():
 async def test_fails_with_not_selected_errors():
     executions: int = 0
 
-    @retry(catching={ValueError})
+    def should_retry(exc: Exception) -> bool:
+        return isinstance(exc, ValueError)
+
+    @retry(catching=should_retry)
     def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -126,6 +129,30 @@ async def test_fails_with_not_selected_errors():
         compute("expected")
 
     assert executions == 1
+
+
+@mark.asyncio
+async def test_retries_with_custom_predicate():
+    executions: int = 0
+    observed: list[Exception] = []
+
+    def should_retry(exc: Exception) -> bool:
+        observed.append(exc)
+        return isinstance(exc, FakeException)
+
+    @retry(catching=should_retry)
+    def compute(value: str, /) -> str:
+        nonlocal executions
+        executions += 1
+        if executions == 1:
+            raise FakeException("retryable")
+        else:
+            return value
+
+    assert compute("expected") == "expected"
+    assert executions == 2
+    assert len(observed) == 1
+    assert isinstance(observed[0], FakeException)
 
 
 @mark.asyncio
@@ -285,7 +312,10 @@ async def test_async_retries_with_selected_errors():
 async def test_async_fails_with_not_selected_errors():
     executions: int = 0
 
-    @retry(catching={ValueError})
+    def should_retry(exc: Exception) -> bool:
+        return isinstance(exc, ValueError)
+
+    @retry(catching=should_retry)
     async def compute(value: str, /) -> str:
         nonlocal executions
         executions += 1
@@ -295,3 +325,27 @@ async def test_async_fails_with_not_selected_errors():
         await compute("expected")
 
     assert executions == 1
+
+
+@mark.asyncio
+async def test_async_retries_with_custom_predicate():
+    executions: int = 0
+    observed: list[Exception] = []
+
+    def should_retry(exc: Exception) -> bool:
+        observed.append(exc)
+        return isinstance(exc, FakeException)
+
+    @retry(catching=should_retry)
+    async def compute(value: str, /) -> str:
+        nonlocal executions
+        executions += 1
+        if executions == 1:
+            raise FakeException("retryable")
+        else:
+            return value
+
+    assert await compute("expected") == "expected"
+    assert executions == 2
+    assert len(observed) == 1
+    assert isinstance(observed[0], FakeException)
