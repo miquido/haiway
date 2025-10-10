@@ -28,6 +28,8 @@ Key features of State class definitions:
 - **Optional Attributes**: Provide default values for optional attributes
 - **Immutability**: All instances are immutable once created
 - **Validation**: Values are validated against their type annotations at creation time
+- **Metadata Support**: Attach aliases, descriptions, specifications, and validators via
+  `typing.Annotated`
 
 ### Creating State Instances
 
@@ -47,6 +49,29 @@ user = User(
 All required attributes must be provided, and all values are validated against their type
 annotations. If a value fails validation, an exception will be raised.
 
+### Default Values and Lazy Initialization
+
+Use the `Default` helper when a field needs to be computed lazily or resolved from the environment.
+`Default` returns a `DefaultValue` container that the State runtime unwraps when the field is
+accessed:
+
+```python
+from uuid import uuid4
+from haiway import Default, State
+
+class ServiceConfig(State):
+    correlation_id: str = Default(factory=lambda: uuid4().hex)
+    timeout_seconds: float = Default(1.5)  # literal defaults still work
+    api_key: str | None = Default(env="SERVICE_API_KEY")  # read from environment when needed
+
+config = ServiceConfig()
+assert isinstance(config.correlation_id, str)
+```
+
+Factories are called every time a new instance is created, so each `ServiceConfig` receives its own
+identifier. Environment defaults are resolved on demand, which keeps tests deterministic—set the
+environment variable or pass an explicit value when constructing the state.
+
 ### Immutability and Updates
 
 State instances are immutable, so you cannot modify them directly:
@@ -63,6 +88,39 @@ updated_user = user.updated(name="Bob Smith")
 
 This creates a new instance with the updated value, leaving the original instance unchanged. The
 `updated` method accepts keyword arguments for any attributes you want to change.
+
+### Attribute Metadata with `typing.Annotated`
+
+Haiway uses `typing.Annotated` to attach field-level metadata that controls how attributes are
+validated, exposed, and documented. Combine your base type with one or more annotations:
+
+```python
+from typing import Annotated
+from haiway import Alias, Description, Specification, State, Validator
+
+def ensure_positive(value: int) -> int:
+    if value <= 0:
+        raise ValueError("value must be positive")
+    return value
+
+class Invoice(State):
+    # Externally exposed as "customer_id" when encoding/decoding mappings or JSON.
+    customer: Annotated[str, Alias("customer_id"), Description("Public customer identifier")]
+    total_cents: Annotated[int, Specification({"type": "integer", "minimum": 0}), Validator(ensure_positive)]
+    notes: Annotated[str | None, Description("Free-form note about the invoice")] = None
+```
+
+Supported annotations include:
+
+- `Alias("external_name")` — maps the attribute to an alternate key when using `to_mapping`,
+  `from_mapping`, JSON helpers, and `updated`.
+- `Description("text")` — surfaces in generated JSON schemas and downstream documentation.
+- `Specification({...})` — overrides the JSON Schema fragment when the inferred schema is
+  insufficient.
+- `Validator(callable)` — applies additional validation logic after type checking succeeds.
+
+Attributes annotated as `typing.NotRequired[T]` are treated as optional even without a default. This
+is useful when mirroring typed dictionaries or validating payloads where the field may be omitted.
 
 ### Generic State Classes
 
@@ -88,7 +146,7 @@ The type parameter is enforced during validation:
 int_container.updated(value="string")  # Raises TypeError
 ```
 
-### Conversion to Dictionary
+### Conversion to Mappings and JSON
 
 You can convert a State instance to a dictionary using the `to_mapping` method:
 
@@ -101,6 +159,20 @@ user_dict = user.to_mapping(recursive=True)
 ```
 
 This is useful for serialization or when you need to work with plain dictionaries.
+
+When working with external payloads, use the complementary helpers:
+
+- `State.from_mapping(mapping)` — accepts both attribute names and aliases.
+- `State.from_json(payload)` / `State.from_json_array(payload)` — decode JSON strings into State
+  instances (or tuples of instances). Validation errors are converted into informative exceptions.
+- `state.to_json(indent=2)` — encode a State instance to JSON using the same alias behaviour as
+  `to_mapping`.
+- `State.validate(value)` — coerce an instance or compatible mapping into the target State type.
+  This is handy when accepting heterogeneous inputs.
+
+Aliases apply consistently across these helpers. For example, the `Invoice.customer` field above
+accepts `customer` or `customer_id` when instantiating, and `Invoice.to_mapping(aliased=True)` emits
+`{"customer_id": "...", ...}`.
 
 ### Type Validation
 
@@ -151,6 +223,20 @@ class BadConfig(State):
 This requirement preserves type safety and predictable behavior. Sequences and sets are wrapped in
 immutable containers, while mappings stay as plain dicts—treat them as read-only to avoid accidental
 mutation.
+
+### JSON Schema Generation
+
+Every State exposes a JSON Schema fragment through the `__SPECIFICATION__` attribute. Call
+`State.json_schema(indent=2)` when you need a ready-to-serialize schema definition:
+
+```python
+schema = Invoice.json_schema(indent=2)
+```
+
+Aliases and descriptions propagate into the schema automatically, and any custom `Specification`
+overrides are respected. If a State cannot be represented as JSON Schema (for example, when it holds
+callables), `json_schema(required=True)` raises a `TypeError` so you can detect unsupported shapes
+early.
 
 ### Best Practices
 

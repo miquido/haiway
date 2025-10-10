@@ -5,10 +5,12 @@ from typing import (
     Any,
     ClassVar,
     Generic,
+    Literal,
     Self,
     TypeVar,
     cast,
     dataclass_transform,
+    overload,
 )
 from weakref import WeakValueDictionary
 
@@ -504,7 +506,77 @@ class State(metaclass=StateMeta):
         value: Mapping[str, Any],
         /,
     ) -> Self:
+        """
+        Build an instance from a mapping of attribute values.
+
+        Parameters
+        ----------
+        value : Mapping[str, Any]
+            Mapping containing attribute names or aliases and their values.
+
+        Returns
+        -------
+        Self
+            New instance constructed from the provided mapping.
+        """
         return cls(**value)
+
+    @overload
+    @classmethod
+    def json_schema(
+        cls,
+        *,
+        indent: int | None = None,
+        required: Literal[True],
+    ) -> str: ...
+
+    @overload
+    @classmethod
+    def json_schema(
+        cls,
+        *,
+        indent: int | None = None,
+        required: Literal[False] = False,
+    ) -> str | None: ...
+
+    @classmethod
+    def json_schema(
+        cls,
+        *,
+        indent: int | None = None,
+        required: bool = False,
+    ) -> str | None:
+        """
+        Render this State's JSON Schema definition.
+
+        Parameters
+        ----------
+        indent : int | None, optional
+            Indentation passed to ``json.dumps`` for pretty-printing.
+        required : bool, default=False
+            When ``True``, raises if the class has no specification.
+
+        Returns
+        -------
+        str | None
+            JSON Schema string when available; ``None`` if no schema is defined
+            and ``required`` is ``False``.
+
+        Raises
+        ------
+        TypeError
+            If ``required`` is ``True`` but the class does not declare a schema.
+        """
+        if cls.__SPECIFICATION__ is not None:
+            return json.dumps(
+                cls.__SPECIFICATION__,
+                indent=indent,
+            )
+
+        elif required:
+            raise TypeError(f"{cls.__name__} cannot be represented using json schema")
+
+        return None
 
     @classmethod
     def from_json(
@@ -513,6 +585,26 @@ class State(metaclass=StateMeta):
         /,
         decoder: type[json.JSONDecoder] = json.JSONDecoder,
     ) -> Self:
+        """
+        Deserialize an instance from a JSON object payload.
+
+        Parameters
+        ----------
+        value : str | bytes
+            JSON payload representing a single instance.
+        decoder : type[json.JSONDecoder], default=json.JSONDecoder
+            Decoder class used by ``json.loads``.
+
+        Returns
+        -------
+        Self
+            Instance built from the decoded payload.
+
+        Raises
+        ------
+        ValueError
+            If the payload cannot be decoded or does not match the schema.
+        """
         try:
             return cls(
                 **json.loads(
@@ -531,6 +623,26 @@ class State(metaclass=StateMeta):
         /,
         decoder: type[json.JSONDecoder] = json.JSONDecoder,
     ) -> Sequence[Self]:
+        """
+        Deserialize a sequence of instances from a JSON array payload.
+
+        Parameters
+        ----------
+        value : str | bytes
+            JSON payload representing an array of objects.
+        decoder : type[json.JSONDecoder], default=json.JSONDecoder
+            Decoder class used by ``json.loads``.
+
+        Returns
+        -------
+        Sequence[Self]
+            Tuple of instances decoded from the array payload.
+
+        Raises
+        ------
+        ValueError
+            If decoding fails or the payload is not an array of valid objects.
+        """
         payload: Any
         try:
             payload = json.loads(
@@ -559,6 +671,26 @@ class State(metaclass=StateMeta):
         indent: int | None = None,
         encoder_class: type[json.JSONEncoder] = StateJSONEncoder,
     ) -> str:
+        """
+        Serialize this instance to a JSON string.
+
+        Parameters
+        ----------
+        indent : int | None, optional
+            Indentation passed to ``json.dumps`` for pretty-printing.
+        encoder_class : type[json.JSONEncoder], default=StateJSONEncoder
+            Encoder class responsible for encoding custom types.
+
+        Returns
+        -------
+        str
+            JSON representation of this instance.
+
+        Raises
+        ------
+        ValueError
+            If encoding fails.
+        """
         mapping: Mapping[str, Any] = self.to_mapping()
         try:
             return json.dumps(
@@ -683,6 +815,14 @@ class State(metaclass=StateMeta):
         return f"{self.__class__.__name__}({attributes})"
 
     def __repr__(self) -> str:
+        """
+        Return the canonical representation of this instance.
+
+        Returns
+        -------
+        str
+            ``repr`` string mirroring ``__str__`` for readability.
+        """
         return str(self)
 
     def __eq__(
@@ -714,6 +854,14 @@ class State(metaclass=StateMeta):
         )
 
     def __hash__(self) -> int:
+        """
+        Compute a hash value for this immutable instance.
+
+        Returns
+        -------
+        int
+            Hash derived from non-missing attribute values.
+        """
         hash_values: list[int] = []
         for field in self.__FIELDS__:
             value: Any = getattr(self, field.name, MISSING)
@@ -736,6 +884,21 @@ class State(metaclass=StateMeta):
         name: str,
         value: Any,
     ) -> Any:
+        """
+        Disallow attribute assignment to preserve immutability.
+
+        Parameters
+        ----------
+        name : str
+            Attribute name being set.
+        value : Any
+            Incoming value (unused).
+
+        Raises
+        ------
+        AttributeError
+            Always raised to signal immutability.
+        """
         raise AttributeError(
             f"Can't modify immutable state {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -745,6 +908,19 @@ class State(metaclass=StateMeta):
         self,
         name: str,
     ) -> None:
+        """
+        Disallow attribute deletion to preserve immutability.
+
+        Parameters
+        ----------
+        name : str
+            Attribute name being deleted.
+
+        Raises
+        ------
+        AttributeError
+            Always raised to signal immutability.
+        """
         raise AttributeError(
             f"Can't modify immutable state {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
