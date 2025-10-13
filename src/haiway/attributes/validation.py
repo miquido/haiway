@@ -15,6 +15,8 @@ __all__ = (
     "ValidationContext",
     "ValidationError",
     "Validator",
+    "Verifier",
+    "Verifying",
 )
 
 
@@ -30,6 +32,21 @@ class Validating[Type](Protocol):
     def __call__(
         self,
         value: Any,
+    ) -> Type: ...
+
+
+@runtime_checkable
+class Verifying[Type](Protocol):
+    """
+    Protocol defining the interface for verification functions.
+
+    These functions verify input values after initial validation to
+    ensure they conform to the expected type or format.
+    """
+
+    def __call__(
+        self,
+        value: Type,
     ) -> Type: ...
 
 
@@ -141,3 +158,35 @@ class Validator[Type]:
         __name: str,
     ) -> None:
         raise AttributeError("Validator can't be modified")
+
+
+@final
+class Verifier[Type]:
+    __slots__ = ("verifier",)
+
+    def __init__(
+        self,
+        verifier: Verifying[Type],
+        /,
+    ) -> None:
+        assert verifier  # nosec: B101
+
+        self.verifier: Verifying[Type]
+        object.__setattr__(
+            self,
+            "verifier",
+            verifier,
+        )
+
+    def __setattr__(
+        self,
+        __name: str,
+        __value: Any,
+    ) -> None:
+        raise AttributeError("Verifier can't be modified")
+
+    def __delattr__(
+        self,
+        __name: str,
+    ) -> None:
+        raise AttributeError("Verifier can't be modified")

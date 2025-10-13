@@ -49,7 +49,6 @@ class NumberSpecification(TypedDict, total=False):
 @final
 class StringSpecification(TypedDict, total=False):
     type: Required[Literal["string"]]
-    description: NotRequired[str]
     format: NotRequired[
         Literal[
             "uri",
@@ -59,6 +58,7 @@ class StringSpecification(TypedDict, total=False):
             "date-time",
         ]
     ]
+    description: NotRequired[str]
 
 
 @final
