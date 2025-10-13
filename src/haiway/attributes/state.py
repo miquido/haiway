@@ -140,15 +140,12 @@ class StateMeta(type):
             description: str | None = attribute.description
             required: bool = attribute.required
 
-            specification: TypeSpecification | None
-            if attribute.specification is None:
+            specification: TypeSpecification | None = attribute.specification
+            if specification is None:
                 specification = type_specification(
                     attribute,
                     description=description,
                 )
-
-            else:
-                specification = attribute.specification
 
             field: Attribute = Attribute(
                 name=key,
@@ -983,19 +980,19 @@ def _recursive_mapping(  # noqa: PLR0911
     elif isinstance(value, State):
         return value.to_mapping(recursive=True)
 
-    elif hasattr(value, "to_mapping") and callable(value.to_mapping):
-        return value.to_mapping()
-
     elif is_dataclass(value):
         return {
             field.name: _recursive_mapping(getattr(value, field.name)) for field in fields(value)
         }
 
-    elif isinstance(value, Mapping):
+    elif isinstance(value, Mapping | typing.Mapping):
         return {key: _recursive_mapping(element) for key, element in value.items()}
 
-    elif isinstance(value, Iterable):
+    elif isinstance(value, Iterable | typing.Iterable):
         return [_recursive_mapping(element) for element in value]
+
+    elif hasattr(value, "to_mapping") and callable(value.to_mapping):
+        return value.to_mapping()
 
     else:
         return deepcopy(value)

@@ -40,12 +40,6 @@ class Map[Key, Element](dict[Key, Element]):
         """Return the string representation of the map."""
         return self.__str__()
 
-    def to_mapping(
-        self,
-    ) -> Mapping[Key, Element]:
-        """Expose as mapping."""
-        return self
-
     def to_json(
         self,
     ) -> str:
