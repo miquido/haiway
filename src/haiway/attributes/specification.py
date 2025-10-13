@@ -5,7 +5,6 @@ from typing import (
 )
 
 from haiway.attributes.annotations import (
-    NOT_REQUIRED,
     AliasAttribute,
     AnyAttribute,
     AttributeAnnotation,
@@ -454,7 +453,7 @@ def _prepare_specification_of_typed_dict(
 
         properties[key] = specification
 
-        if NOT_REQUIRED in element.annotations:
+        if not element.required:
             continue
 
         required.append(key)

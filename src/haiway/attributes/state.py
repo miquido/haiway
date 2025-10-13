@@ -19,7 +19,6 @@ from weakref import WeakValueDictionary
 
 from haiway.attributes.annotations import (
     AttributeAnnotation,
-    NotRequired,
     ObjectAttribute,
     resolve_self_attribute,
 )
@@ -29,12 +28,9 @@ from haiway.attributes.specification import type_specification
 from haiway.attributes.validation import ValidationContext, ValidationError
 from haiway.types import (
     MISSING,
-    Alias,
     DefaultValue,
-    Description,
     Immutable,
     Missing,
-    Specification,
     TypeSpecification,
     not_missing,
 )
@@ -115,7 +111,7 @@ class StateMeta(type):
     __SPECIFICATION__: TypeSpecification | None
     __FIELDS__: Sequence[Attribute]
 
-    def __new__(  # noqa: C901, PLR0912
+    def __new__(
         mcs,
         /,
         name: str,
@@ -140,28 +136,19 @@ class StateMeta(type):
         fields: MutableSequence[Attribute] = []
         for key, attribute in self_attribute.attributes.items():
             default: Any = getattr(cls, key, MISSING)
-            alias: str | None = None
-            description: str | None = None
-            specification: TypeSpecification | None = None
-            required: bool = True
-            for annotation in attribute.annotations:
-                if isinstance(annotation, Alias):
-                    alias = annotation.alias
+            alias: str | None = attribute.alias
+            description: str | None = attribute.description
+            required: bool = attribute.required
 
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-            if specification is None:
+            specification: TypeSpecification | None
+            if attribute.specification is None:
                 specification = type_specification(
                     attribute,
                     description=description,
                 )
+
+            else:
+                specification = attribute.specification
 
             field: Attribute = Attribute(
                 name=key,
