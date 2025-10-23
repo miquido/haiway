@@ -1,7 +1,9 @@
 """AsyncPG-backed connection pooling for the Postgres state integration."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import TracebackType
+from typing import Self
+from urllib.parse import ParseResult, parse_qs, urlparse
 
 from asyncpg import (  # pyright: ignore[reportMissingTypeStubs]
     Connection,
@@ -38,6 +40,54 @@ __all__ = ("PostgresConnectionPool",)
 
 class PostgresConnectionPool(Immutable):
     """Disposable that instantiates a connection pool."""
+
+    @classmethod
+    def of(
+        cls,
+        dsn: str,
+        *,
+        ssl: str = POSTGRES_SSLMODE,
+        connection_limit: int = POSTGRES_CONNECTIONS,
+    ) -> Self:
+        parsed: ParseResult = urlparse(dsn)
+        if parsed.scheme not in {"postgres", "postgresql"}:
+            raise ValueError(f"Unsupported Postgres DSN scheme: {parsed.scheme!r}")
+
+        host: str = parsed.hostname or POSTGRES_HOST
+        port: str = str(parsed.port) if parsed.port is not None else POSTGRES_PORT
+        database_path: str = parsed.path.lstrip("/")
+        database: str = database_path or POSTGRES_DATABASE
+        user: str = parsed.username or POSTGRES_USER
+        password: str = parsed.password or POSTGRES_PASSWORD
+
+        query: Mapping[str, Sequence[str]] = parse_qs(
+            parsed.query,
+            keep_blank_values=True,
+        )
+
+        ssl_values: Sequence[str] = query.get("sslmode", query.get("ssl", ()))
+        resolved_ssl: str = ssl_values[-1] if ssl_values else ssl
+
+        for key in ("connections", "connection_limit", "maxsize", "max_size"):
+            if values := query.get(key):
+                try:
+                    connection_limit = int(values[-1])
+                    break  # use first value found
+
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid connection limit value in Postgres DSN: {values}"
+                    ) from exc
+
+        return cls(
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
+            ssl=resolved_ssl,
+            connection_limit=connection_limit,
+        )
 
     host: str = POSTGRES_HOST
     port: str = POSTGRES_PORT

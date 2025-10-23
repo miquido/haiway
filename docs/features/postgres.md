@@ -59,6 +59,18 @@ defaults so the driver works out of the box:
 Provide custom environment variables or pass explicit keyword arguments to `PostgresConnectionPool`
 when instantiating it to tweak connection parameters.
 
+To bootstrap from an existing connection string (DSN, or *Data Source Name*), use the `of`
+constructor. The DSN can be provided positionally or as the `dsn` keyword:
+
+```python
+pool = PostgresConnectionPool.of(
+    dsn="postgresql://analytics@db.internal:5432/events?sslmode=require&connections=6",
+)
+```
+
+The helper parses the DSN, applies sane defaults for missing components, and respects query-string
+overrides such as `sslmode` or `connections`.
+
 ## Working with Connections
 
 `Postgres` is a `State` that exposes functional helpers: `fetch`, `fetch_one`, and `execute`. When
