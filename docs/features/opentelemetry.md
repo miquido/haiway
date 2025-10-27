@@ -5,6 +5,9 @@ tracing, metrics collection, and structured logging. This integration allows you
 applications with industry-standard tooling while maintaining Haiway's functional programming
 principles.
 
+**Note:** OpenTelemetry is supported in Haiway **ONLY through GRPC**. We do not support HTTP. You
+need to make sure you use the GRPC port in your collector (for example port 4317 in OtelCollector).
+
 ## Overview
 
 The OpenTelemetry integration in Haiway bridges the framework's observability abstractions with the
