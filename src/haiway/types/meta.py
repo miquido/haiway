@@ -1,24 +1,26 @@
 import json
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from typing import Any, Final, Self, TypeGuard, cast, final, overload
 from uuid import UUID
+
+from haiway.types.basic import BasicValue
+from haiway.types.map import Map
 
 __all__ = (
     "META_EMPTY",
     "Meta",
     "MetaTags",
-    "MetaValue",
     "MetaValues",
 )
 
-type MetaValue = Mapping[str, MetaValue] | Collection[MetaValue] | str | float | int | bool | None
-type MetaValues = Mapping[str, MetaValue]
+
+type MetaValues = Mapping[str, BasicValue]
 type MetaTags = Collection[str]
 
 
 @final
-class Meta(Mapping[str, MetaValue]):
+class Meta(dict[str, BasicValue]):
     """
     Immutable metadata container with type-safe access to common fields.
 
@@ -40,6 +42,8 @@ class Meta(Mapping[str, MetaValue]):
     >>> print(meta.tags)  # ("active", "verified")
     """
 
+    __slots__ = ()
+
     @classmethod
     def validate(
         cls,
@@ -51,21 +55,6 @@ class Meta(Mapping[str, MetaValue]):
 
             case _:
                 raise TypeError(f"'{value}' is not matching expected type of 'Meta'")
-
-    __slots__ = ("_values",)
-
-    def __init__(
-        self,
-        values: MetaValues,
-        /,
-    ):
-        assert isinstance(values, Mapping)  # nosec: B101
-        self._values: MetaValues
-        object.__setattr__(
-            self,
-            "_values",
-            values,
-        )
 
     @overload
     @classmethod
@@ -80,7 +69,7 @@ class Meta(Mapping[str, MetaValue]):
     def of(
         cls,
         /,
-        **values: MetaValue,
+        **values: BasicValue,
     ) -> Self: ...
 
     @classmethod
@@ -88,7 +77,7 @@ class Meta(Mapping[str, MetaValue]):
         cls,
         meta: Self | MetaValues | None = None,
         /,
-        **values: MetaValue,
+        **values: BasicValue,
     ) -> Self:
         """
         Create a Meta instance from various input types.
@@ -103,7 +92,7 @@ class Meta(Mapping[str, MetaValue]):
             an existing Meta instance (returns as-is), or a mapping
             of values to validate and wrap.
 
-        **values: MetaValue
+        **values: BasicValue
             Key-value pairs to be added to the result metadata.
 
         Returns
@@ -130,7 +119,7 @@ class Meta(Mapping[str, MetaValue]):
     @classmethod
     def from_mapping(
         cls,
-        mapping: Mapping[str, Any],
+        mapping: Mapping[str, BasicValue],
         /,
     ) -> Self:
         return cls({key: _validated_meta_value(value) for key, value in mapping.items()})
@@ -146,24 +135,19 @@ class Meta(Mapping[str, MetaValue]):
                 return cls({key: _validated_meta_value(val) for key, val in values.items()})
 
             case other:
-                raise ValueError(f"Invalid json: {other}")
+                raise ValueError(f"Invalid Meta value json: {other}")
 
     def to_str(self) -> str:
         return self.__str__()
 
-    def to_mapping(
-        self,
-    ) -> Mapping[str, Any]:
-        return self._values
-
     def to_json(
         self,
     ) -> str:
-        return json.dumps(self._values)
+        return json.dumps(self)
 
     @property
     def kind(self) -> str | None:
-        value: MetaValue = self._values.get("kind")
+        value: BasicValue = self.get("kind")
         if value is None:
             return value
 
@@ -179,7 +163,7 @@ class Meta(Mapping[str, MetaValue]):
     ) -> Self:
         return self.__class__(
             {
-                **self._values,
+                **self,
                 "kind": kind,
             }
         )
@@ -204,7 +188,7 @@ class Meta(Mapping[str, MetaValue]):
         *,
         default: UUID | None = None,
     ) -> UUID | None:
-        value: MetaValue = self._values.get(key)
+        value: BasicValue = self.get(key)
         if value is None:
             return default
 
@@ -221,7 +205,7 @@ class Meta(Mapping[str, MetaValue]):
     ) -> Self:
         return self.__class__(
             {
-                **self._values,
+                **self,
                 key: str(value),
             }
         )
@@ -246,7 +230,7 @@ class Meta(Mapping[str, MetaValue]):
         *,
         default: datetime | None = None,
     ) -> datetime | None:
-        value: MetaValue = self._values.get(key)
+        value: BasicValue = self.get(key)
         if value is None:
             return default
 
@@ -263,7 +247,7 @@ class Meta(Mapping[str, MetaValue]):
     ) -> Self:
         return self.__class__(
             {
-                **self._values,
+                **self,
                 key: value.isoformat(),
             }
         )
@@ -288,7 +272,7 @@ class Meta(Mapping[str, MetaValue]):
         *,
         default: str | None = None,
     ) -> str | None:
-        value: MetaValue = self._values.get(key)
+        value: BasicValue = self.get(key)
         if value is None:
             return default
 
@@ -317,7 +301,7 @@ class Meta(Mapping[str, MetaValue]):
         *,
         default: int | None = None,
     ) -> int | None:
-        value: MetaValue = self._values.get(key)
+        value: BasicValue = self.get(key)
         if value is None:
             return default
 
@@ -346,7 +330,7 @@ class Meta(Mapping[str, MetaValue]):
         *,
         default: float | None = None,
     ) -> float | None:
-        value: MetaValue = self._values.get(key)
+        value: BasicValue = self.get(key)
         if value is None:
             return default
 
@@ -377,7 +361,7 @@ class Meta(Mapping[str, MetaValue]):
         *,
         default: bool | None = None,
     ) -> bool | None:
-        value: MetaValue = self._values.get(key)
+        value: BasicValue = self.get(key)
         if value is None:
             return default
 
@@ -402,7 +386,7 @@ class Meta(Mapping[str, MetaValue]):
 
     @property
     def name(self) -> str | None:
-        value: MetaValue = self._values.get("name")
+        value: BasicValue = self.get("name")
         if value is None:
             return value
 
@@ -418,14 +402,14 @@ class Meta(Mapping[str, MetaValue]):
     ) -> Self:
         return self.__class__(
             {
-                **self._values,
+                **self,
                 "name": name,
             }
         )
 
     @property
     def description(self) -> str | None:
-        value: MetaValue = self._values.get("description")
+        value: BasicValue = self.get("description")
         if value is None:
             return value
 
@@ -443,14 +427,14 @@ class Meta(Mapping[str, MetaValue]):
     ) -> Self:
         return self.__class__(
             {
-                **self._values,
+                **self,
                 "description": description,
             }
         )
 
     @property
     def tags(self) -> MetaTags:
-        match self._values.get("tags"):
+        match self.get("tags"):
             case [*tags]:
                 return tuple(tag for tag in tags if _validate_tag(tag))
 
@@ -462,11 +446,11 @@ class Meta(Mapping[str, MetaValue]):
         tags: MetaTags,
         /,
     ) -> Self:
-        match self._values.get("tags"):
+        match self.get("tags"):
             case [*current_tags]:
                 return self.__class__(
                     {
-                        **self._values,
+                        **self,
                         "tags": (
                             *current_tags,
                             *(
@@ -479,14 +463,19 @@ class Meta(Mapping[str, MetaValue]):
                 )
 
             case _:
-                return self.__class__({**self._values, "tags": tags})
+                return self.__class__(
+                    {
+                        **self,
+                        "tags": _validated_meta_value(tags),
+                    }
+                )
 
     def has_tags(
         self,
         tags: MetaTags,
         /,
     ) -> bool:
-        match self._values.get("tags"):
+        match self.get("tags"):
             case [*meta_tags]:
                 return all(tag in meta_tags for tag in tags)
 
@@ -495,7 +484,7 @@ class Meta(Mapping[str, MetaValue]):
 
     @property
     def created(self) -> datetime | None:
-        value: MetaValue = self._values.get("created")
+        value: BasicValue = self.get("created")
         if value is None:
             return value
 
@@ -513,14 +502,14 @@ class Meta(Mapping[str, MetaValue]):
     ) -> Self:
         return self.__class__(
             {
-                **self._values,
+                **self,
                 "created": created.isoformat(),
             }
         )
 
     @property
     def last_updated(self) -> datetime | None:
-        value: MetaValue = self._values.get("last_updated")
+        value: BasicValue = self.get("last_updated")
         if value is None:
             return value
 
@@ -538,7 +527,7 @@ class Meta(Mapping[str, MetaValue]):
     ) -> Self:
         return self.__class__(
             {
-                **self._values,
+                **self,
                 "last_updated": last_updated.isoformat(),
             }
         )
@@ -553,7 +542,7 @@ class Meta(Mapping[str, MetaValue]):
 
         return self.__class__(
             {
-                **self._values,  # already validated
+                **self,  # already validated
                 **{key: _validated_meta_value(value) for key, value in values.items()},
             }
         )
@@ -567,12 +556,12 @@ class Meta(Mapping[str, MetaValue]):
 
         excluded_set: set[str] = set(excluded)
         return self.__class__(
-            {key: value for key, value in self._values.items() if key not in excluded_set}
+            {key: value for key, value in self.items() if key not in excluded_set}
         )
 
     def updated(
         self,
-        **values: MetaValue,
+        **values: BasicValue,
     ) -> Self:
         return self.__replace__(**values)
 
@@ -581,15 +570,6 @@ class Meta(Mapping[str, MetaValue]):
         **values: Any,
     ) -> Self:
         return self.merged_with(values)
-
-    def __bool__(self) -> bool:
-        return bool(self._values)
-
-    def __contains__(
-        self,
-        element: Any,
-    ) -> bool:
-        return element in self._values
 
     def __setattr__(
         self,
@@ -614,7 +594,7 @@ class Meta(Mapping[str, MetaValue]):
         self,
         key: str,
         value: Any,
-    ) -> MetaValue:
+    ) -> None:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be modified"
@@ -623,35 +603,73 @@ class Meta(Mapping[str, MetaValue]):
     def __delitem__(
         self,
         key: str,
-    ) -> MetaValue:
+    ) -> None:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be deleted"
         )
 
-    def __getitem__(
+    def clear(self) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, clear is not supported"
+        )
+
+    def pop(
         self,
         key: str,
-    ) -> MetaValue:
-        return self._values[key]
+        default: Any | None = None,
+        /,
+    ) -> BasicValue:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, pop is not supported"
+        )
 
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._values)
+    def popitem(self) -> tuple[str, BasicValue]:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, popitem is not supported"
+        )
 
-    def __len__(self) -> int:
-        return len(self._values)
+    def setdefault(
+        self,
+        key: str,
+        default: BasicValue | None = None,
+        /,
+    ) -> Any:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, setdefault is not supported"
+        )
+
+    def update(
+        self,
+        *updates: Any,
+        **kwargs: Any,
+    ) -> None:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, update is not supported"
+        )
+
+    def __ior__(
+        self,
+        other: Any,
+    ) -> Self:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}, |= is not supported"
+        )
+
+    def copy(self) -> Self:
+        return self
 
     def __copy__(self) -> Self:
-        return self  # Metadata is immutable, no need to provide an actual copy
+        return self  # Meta is immutable, no need to provide an actual copy
 
     def __deepcopy__(
         self,
         memo: dict[int, Any] | None,
     ) -> Self:
-        return self  # Metadata is immutable, no need to provide an actual copy
+        return self  # Meta is immutable, no need to provide an actual copy
 
 
-def _validated_meta_value(value: Any) -> MetaValue:  # noqa: PLR0911
+def _validated_meta_value(value: Any) -> BasicValue:  # noqa: PLR0911
     match value:
         case None:
             return value
@@ -672,7 +690,7 @@ def _validated_meta_value(value: Any) -> MetaValue:  # noqa: PLR0911
             return tuple(_validated_meta_value(value) for value in values)
 
         case {**values}:
-            return {key: _validated_meta_value(value) for key, value in values.items()}
+            return Map({key: _validated_meta_value(value) for key, value in values.items()})
 
         case other:
             raise TypeError(f"Invalid Meta value: '{type(other).__name__}'")

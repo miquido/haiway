@@ -89,7 +89,23 @@ class EventSubscription[Payload: State](AsyncIterator[Payload]):
 
 class Events(Immutable):
     _loop: AbstractEventLoop
-    _heads: MutableMapping[type[State], Future[Event[Any]]] = Default(factory=dict)
+    _heads: MutableMapping[type[State], Future[Event[Any]]] = Default(
+        default_factory=dict[type[State], Future[Event[Any]]]
+    )
+
+    def __init__(
+        self,
+        *,
+        _loop: AbstractEventLoop,
+        _heads: MutableMapping[type[State], Future[Event[Any]]] | None = None,
+    ) -> None:
+        heads: MutableMapping[type[State], Future[Event[Any]]] = (
+            _heads if _heads is not None else {}
+        )
+        super().__init__(
+            _loop=_loop,
+            _heads=heads,
+        )
 
     def send(
         self,
@@ -121,7 +137,7 @@ class Events(Immutable):
 
         return EventSubscription(future_event=current)
 
-    def __del__(self) -> None:
+    def close(self) -> None:
         for future in self._heads.values():
             if future.done():
                 continue
@@ -275,6 +291,7 @@ class EventsContext(Immutable):
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         assert self._events is not None  # nosec: B101
 
+        self._events.close()
         EventsContext._context.reset(self._token)
         object.__setattr__(
             self,

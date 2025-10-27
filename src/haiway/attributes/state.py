@@ -28,6 +28,7 @@ from haiway.attributes.specification import type_specification
 from haiway.attributes.validation import ValidationContext, ValidationError
 from haiway.types import (
     MISSING,
+    Default,
     DefaultValue,
     Immutable,
     Missing,
@@ -41,19 +42,19 @@ __all__ = (
 )
 
 
-class Attribute[Value](Immutable):
+class Attribute(Immutable):
     name: str
     alias: str | None
     annotation: AttributeAnnotation
     required: bool
-    default: DefaultValue[Value]
+    default: DefaultValue
     specification: TypeSpecification | None
 
     def validate(
         self,
         value: Any,
         /,
-    ) -> Value:
+    ) -> Any:
         if value is MISSING:
             return self.annotation.validate(self.default())
 
@@ -64,7 +65,7 @@ class Attribute[Value](Immutable):
         self,
         mapping: Mapping[str, Any],
         /,
-    ) -> Value:
+    ) -> Any:
         value: Any
         if self.alias is None:
             value = mapping.get(
@@ -87,7 +88,7 @@ class Attribute[Value](Immutable):
 @dataclass_transform(
     kw_only_default=True,
     frozen_default=True,
-    field_specifiers=(),
+    field_specifiers=(Default,),
 )
 class StateMeta(type):
     """
@@ -95,7 +96,7 @@ class StateMeta(type):
 
     This metaclass is responsible for:
     - Processing attribute annotations and defaults
-    - Building ``StateField`` entries from resolved ``AttributeAnnotation`` metadata
+    - Building ``Attribute`` entries from resolved ``AttributeAnnotation`` metadata
     - Setting up validation for attributes
     - Managing generic type parameters and specialization
     - Creating immutable class instances
@@ -110,6 +111,7 @@ class StateMeta(type):
     __TYPE_PARAMETERS__: Mapping[str, Any] | None
     __SPECIFICATION__: TypeSpecification | None
     __FIELDS__: Sequence[Attribute]
+    __slots__: tuple[str, ...]
 
     def __new__(
         mcs,
@@ -171,9 +173,9 @@ class StateMeta(type):
                     if field.required:
                         required_fields.append(field.name)
 
-        cls.__SELF_ATTRIBUTE__ = self_attribute
-        cls.__TYPE_PARAMETERS__ = type_parameters
-        cls.__SPECIFICATION__ = (
+        cls.__SELF_ATTRIBUTE__ = self_attribute  # pyright: ignore[reportConstantRedefinition]
+        cls.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportConstantRedefinition]
+        cls.__SPECIFICATION__ = (  # pyright: ignore[reportConstantRedefinition]
             {  # pyright: ignore[reportAttributeAccessIssue]
                 "type": "object",
                 "properties": specification_fields,
@@ -183,7 +185,7 @@ class StateMeta(type):
             if specification_fields is not None
             else None
         )
-        cls.__FIELDS__ = tuple(fields)
+        cls.__FIELDS__ = tuple(fields)  # pyright: ignore[reportConstantRedefinition]
         cls.__slots__ = tuple(field.name for field in fields)  # pyright: ignore[reportAttributeAccessIssue]
         cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
         cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
@@ -199,7 +201,7 @@ class StateMeta(type):
         self,
         instance: Any,
     ) -> bool:
-        instance_type: type[Any] = type(instance)
+        instance_type: type[Any] = type(instance)  # pyright: ignore[reportUnknownVariableType]
         if not self.__subclasscheck__(instance_type):
             return False
 
@@ -276,16 +278,16 @@ class StateMeta(type):
         return True
 
 
-def _resolve_default[Value](
-    value: DefaultValue[Value] | Value | Missing,
-) -> DefaultValue[Value]:
+def _resolve_default(
+    value: DefaultValue | Any | Missing,
+) -> DefaultValue:
     if isinstance(value, DefaultValue):
-        return cast(DefaultValue[Value], value)
+        return value
 
-    return DefaultValue[Value](
-        value,
+    return DefaultValue(
+        default=value,
+        default_factory=MISSING,
         env=MISSING,
-        factory=MISSING,
     )
 
 
@@ -772,7 +774,7 @@ class State(metaclass=StateMeta):
         str
             ``repr`` string mirroring ``__str__`` for readability.
         """
-        attributes: str = ", ".join([f"{key}: {value}" for key, value in vars(self).items()])
+        attributes: str = ", ".join(f"{name}: {getattr(self, name)}" for name in self.__slots__)
         return f"{self.__class__.__name__}({attributes})"
 
     def __eq__(
@@ -986,10 +988,10 @@ def _recursive_mapping(  # noqa: PLR0911
         }
 
     elif isinstance(value, Mapping | typing.Mapping):
-        return {key: _recursive_mapping(element) for key, element in value.items()}
+        return {key: _recursive_mapping(element) for key, element in value.items()}  # pyright: ignore[reportUnknownVariableType]
 
     elif isinstance(value, Iterable | typing.Iterable):
-        return [_recursive_mapping(element) for element in value]
+        return [_recursive_mapping(element) for element in value]  # pyright: ignore[reportUnknownVariableType]
 
     elif hasattr(value, "to_mapping") and callable(value.to_mapping):
         return value.to_mapping()

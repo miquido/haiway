@@ -1,7 +1,7 @@
 from asyncio import AbstractEventLoop, CancelledError, Future, get_running_loop
 from collections import deque
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable
+from typing import Any, cast
 
 __all__ = ("AsyncQueue",)
 
@@ -193,7 +193,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
                 self._loop.create_future(),
             )
             # wait for the result
-            return await self._waiting  # pyright: ignore[reportGeneralTypeIssues]
+            return await cast(Awaitable[Element], self._waiting)
 
         finally:
             # cleanup

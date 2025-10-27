@@ -4,7 +4,8 @@ from uuid import uuid4
 
 from pytest import raises
 
-from haiway.utils.metadata import META_EMPTY, Meta, _validated_meta_value
+from haiway.types import META_EMPTY, Map, Meta
+from haiway.types.meta import _validated_meta_value
 
 
 def test_meta_empty_is_singleton():
@@ -66,7 +67,7 @@ def test_meta_from_json_valid():
 
 
 def test_meta_from_json_invalid():
-    with raises(ValueError, match="Invalid json"):
+    with raises(ValueError, match="Invalid Meta value json: not an object"):
         Meta.from_json('"not an object"')
 
 
@@ -75,13 +76,6 @@ def test_meta_to_json():
     json_str = meta.to_json()
     assert "kind" in json_str
     assert "test" in json_str
-
-
-def test_meta_to_mapping():
-    original_mapping = {"kind": "test", "active": True}
-    meta = Meta(original_mapping)
-    result = meta.to_mapping()
-    assert result == original_mapping
 
 
 def test_meta_kind_property():
@@ -171,6 +165,32 @@ def test_meta_with_tags_new():
     meta = Meta({})
     updated = meta.with_tags(["new", "tags"])
     assert updated.tags == ("new", "tags")
+
+
+def test_meta_with_tags_isolated_from_source_mutation():
+    tags = ["ui"]
+    meta = Meta.of()
+
+    updated = meta.with_tags(tags)
+    tags.append("mutated")
+
+    assert updated.tags == ("ui",)
+
+
+def test_meta_with_mapping_isolated_from_source_mutation():
+    payload = {"a": "value", "nested": {"items": ["one"]}}
+    meta = Meta.of({"payload": payload})
+
+    payload["a"] = "mutated"
+    payload["nested"]["items"].append("two")
+
+    stored_payload = meta["payload"]
+    assert isinstance(stored_payload, Map)
+    assert stored_payload["a"] == "value"
+    assert stored_payload["nested"]["items"] == ("one",)
+
+    with raises(AttributeError, match="Can't modify immutable"):
+        stored_payload["a"] = "other"  # type: ignore[index]
 
 
 def test_meta_with_tags_append():

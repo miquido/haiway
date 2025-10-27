@@ -167,6 +167,10 @@ class ScopeState(Immutable):
         combined_state = {**self._state, **{type(s): s for s in state_list}}
         return self.__class__(combined_state.values())
 
+    def snapshot(self) -> Collection[State]:
+        with self._lock:
+            return tuple(self._state.values())
+
 
 class StateContext(Immutable):
     """
@@ -192,8 +196,7 @@ class StateContext(Immutable):
         """
         try:
             scope_state: ScopeState = cls._context.get()
-            with scope_state._lock:
-                return tuple(scope_state._state.values())
+            return scope_state.snapshot()
 
         except LookupError:
             return ()  # return empty as default

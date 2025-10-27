@@ -28,6 +28,7 @@ from typing import (
     Literal,
     Protocol,
     TypeVar,
+    cast,
     get_args,
     get_origin,
     get_type_hints,
@@ -46,11 +47,13 @@ from haiway.attributes.validation import (
     Verifying,
 )
 from haiway.types import (
+    META_EMPTY,
     MISSING,
     Alias,
     Description,
     Immutable,
     Map,
+    Meta,
     Specification,
     TypeSpecification,
 )
@@ -62,6 +65,7 @@ __all__ = (
     "BoolAttribute",
     "BytesAttribute",
     "CustomAttribute",
+    "DateAttribute",
     "DatetimeAttribute",
     "FloatAttribute",
     "FunctionAttribute",
@@ -69,6 +73,7 @@ __all__ = (
     "IntegerAttribute",
     "LiteralAttribute",
     "MappingAttribute",
+    "MetaAttribute",
     "MissingAttribute",
     "NoneAttribute",
     "NotRequired",
@@ -96,7 +101,9 @@ class NotRequired(Immutable):
 
 NOT_REQUIRED: Final[NotRequired] = NotRequired()
 
-Annotation = Alias | Description | Specification | Validator | Verifier | NotRequired
+Annotation = (
+    Alias | Description | Specification | Validator[Any] | Verifier[Any] | Meta | NotRequired
+)
 
 
 class AttributeAnnotation(Protocol):
@@ -116,11 +123,14 @@ class AttributeAnnotation(Protocol):
     def specification(self) -> TypeSpecification | None: ...
 
     @property
+    def meta(self) -> Meta: ...
+
+    @property
     def required(self) -> bool: ...
 
     def annotated(
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> "AttributeAnnotation": ...
 
     def validate(
@@ -140,14 +150,15 @@ class AnyAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> Any:
         return typing.Any
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -156,6 +167,7 @@ class AnyAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -171,10 +183,13 @@ class AnyAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -183,6 +198,7 @@ class AnyAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -193,6 +209,7 @@ class AnyAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -258,6 +275,17 @@ class AliasAttribute(Immutable):
         return self._resolved.specification
 
     @property
+    def meta(self) -> Meta:
+        if self._resolved is None:
+            for annotation in self.annotations:
+                if isinstance(annotation, Meta):
+                    return annotation
+
+            return META_EMPTY
+
+        return self._resolved.meta
+
+    @property
     def required(self) -> bool:
         if self._resolved is None:
             return not any(isinstance(annotation, NotRequired) for annotation in self.annotations)
@@ -266,7 +294,7 @@ class AliasAttribute(Immutable):
 
     def annotated(
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         return self.__class__(
             type_alias=self.type_alias,
@@ -315,14 +343,15 @@ class MissingAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = False
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> type[haiway_types.Missing]:
         return haiway_types.Missing
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -331,6 +360,7 @@ class MissingAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -346,10 +376,13 @@ class MissingAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -358,6 +391,7 @@ class MissingAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -368,6 +402,7 @@ class MissingAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -391,14 +426,15 @@ class NoneAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> None:
         return None
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -407,6 +443,7 @@ class NoneAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -422,10 +459,13 @@ class NoneAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -434,6 +474,7 @@ class NoneAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -444,6 +485,7 @@ class NoneAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -468,14 +510,15 @@ class LiteralAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def name(self) -> str:
         return f"Literal[{', '.join(repr(value) for value in self.values)}]"
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -484,6 +527,7 @@ class LiteralAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -499,10 +543,13 @@ class LiteralAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -513,6 +560,7 @@ class LiteralAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -525,6 +573,7 @@ class LiteralAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -550,14 +599,15 @@ class BoolAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> type[bool]:
         return bool
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -566,6 +616,7 @@ class BoolAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -581,10 +632,13 @@ class BoolAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -593,6 +647,7 @@ class BoolAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -603,6 +658,7 @@ class BoolAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -638,14 +694,15 @@ class IntegerAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> type[int]:
         return int
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -654,6 +711,7 @@ class IntegerAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -669,10 +727,13 @@ class IntegerAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -681,6 +742,7 @@ class IntegerAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -691,6 +753,7 @@ class IntegerAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -717,14 +780,15 @@ class FloatAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> type[float]:
         return float
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -733,6 +797,7 @@ class FloatAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -748,10 +813,13 @@ class FloatAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -760,6 +828,7 @@ class FloatAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -770,6 +839,7 @@ class FloatAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -796,14 +866,15 @@ class BytesAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> type[bytes]:
         return bytes
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -812,6 +883,7 @@ class BytesAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -827,10 +899,13 @@ class BytesAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -839,6 +914,7 @@ class BytesAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -849,6 +925,7 @@ class BytesAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -872,14 +949,15 @@ class UUIDAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> type[uuid.UUID]:
         return uuid.UUID
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -888,6 +966,7 @@ class UUIDAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -903,10 +982,13 @@ class UUIDAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -915,6 +997,7 @@ class UUIDAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -925,6 +1008,7 @@ class UUIDAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -955,14 +1039,15 @@ class StringAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> type[str]:
         return str
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -971,6 +1056,7 @@ class StringAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -986,10 +1072,13 @@ class StringAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -998,6 +1087,7 @@ class StringAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1008,6 +1098,7 @@ class StringAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1031,14 +1122,15 @@ class DatetimeAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> type[datetime.datetime]:
         return datetime.datetime
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1047,6 +1139,7 @@ class DatetimeAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1062,10 +1155,13 @@ class DatetimeAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1074,6 +1170,7 @@ class DatetimeAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1084,6 +1181,7 @@ class DatetimeAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1109,21 +1207,22 @@ class DatetimeAttribute(Immutable):
             raise TypeError(f"'{value}' is not matching expected type of 'datetime'")
 
 
-class TimeAttribute(Immutable):
-    name: Final[Literal["time"]] = "time"
+class DateAttribute(Immutable):
+    name: Final[Literal["date"]] = "date"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
-    def base(self) -> type[datetime.time]:
-        return datetime.time
+    def base(self) -> type[datetime.date]:
+        return datetime.date
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1132,6 +1231,7 @@ class TimeAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1147,10 +1247,13 @@ class TimeAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1159,6 +1262,7 @@ class TimeAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1169,6 +1273,99 @@ class TimeAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
+                ),
+            )
+
+        return self
+
+    def validate(
+        self,
+        value: Any,
+    ) -> Any:
+        if isinstance(value, datetime.date):
+            return self.verifying(value)
+
+        elif isinstance(value, str):
+            try:
+                return self.verifying(datetime.date.fromisoformat(value))
+
+            except Exception as exc:
+                raise ValueError(
+                    f"'{value}' is not matching expected ISO format for 'date'"
+                ) from exc
+
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of 'date'")
+
+
+class TimeAttribute(Immutable):
+    name: Final[Literal["time"]] = "time"
+    alias: str | None = None
+    description: str | None = None
+    verifying: Verifying[Any] = _no_verify
+    required: bool = True
+    specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
+
+    @property
+    def base(self) -> type[datetime.time]:
+        return datetime.time
+
+    def annotated(  # noqa: C901
+        self,
+        annotations: Sequence[Any],
+    ) -> AttributeAnnotation:
+        if annotations:
+            alias: str | None = self.alias
+            description: str | None = self.description
+            verifying: Verifying[Any] = self.verifying
+            required: bool = self.required
+            specification: TypeSpecification | None = self.specification
+            validating: Validating[Any] | None = None
+            meta: Meta = self.meta
+
+            for annotation in annotations:
+                if isinstance(annotation, Description):
+                    description = annotation.description
+
+                elif isinstance(annotation, Alias):
+                    alias = annotation.alias
+
+                elif isinstance(annotation, Specification):
+                    specification = annotation.specification
+
+                elif isinstance(annotation, NotRequired):
+                    required = False
+
+                elif isinstance(annotation, Verifier):
+                    verifying = cast(Verifier[Any], annotation).verifier
+
+                elif isinstance(annotation, Validator):
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
+
+            if validating is None:
+                return self.__class__(
+                    alias=alias,
+                    description=description,
+                    verifying=verifying,
+                    required=required,
+                    specification=specification,
+                    meta=meta,
+                )
+
+            return ValidableAttribute(
+                validating=validating,
+                attribute=self.__class__(
+                    alias=alias,
+                    description=description,
+                    verifying=verifying,
+                    required=required,
+                    specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1201,14 +1398,15 @@ class PathAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def base(self) -> type[pathlib.Path]:
         return pathlib.Path
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1217,6 +1415,7 @@ class PathAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1232,10 +1431,13 @@ class PathAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1244,6 +1446,7 @@ class PathAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1254,6 +1457,7 @@ class PathAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1266,9 +1470,9 @@ class PathAttribute(Immutable):
         if isinstance(value, pathlib.Path):
             return self.verifying(value)
 
-        elif isinstance(value, str | os.PathLike):
+        elif isinstance(value, str | os.PathLike):  # pyright: ignore[reportUnknownArgumentType]
             try:
-                return self.verifying(pathlib.Path(value))
+                return self.verifying(pathlib.Path(value))  # pyright: ignore[reportUnknownArgumentType]
 
             except Exception as exc:
                 raise ValueError(f"'{value}' is not matching expected path format") from exc
@@ -1279,17 +1483,18 @@ class PathAttribute(Immutable):
 
 class TupleAttribute(Immutable):
     name: Final[Literal["tuple"]] = "tuple"
-    base: type[Sequence]
+    base: type[Sequence[Any]]
     values: Sequence[AttributeAnnotation]
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1298,6 +1503,7 @@ class TupleAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1313,10 +1519,13 @@ class TupleAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1327,6 +1536,7 @@ class TupleAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1339,6 +1549,7 @@ class TupleAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1352,13 +1563,13 @@ class TupleAttribute(Immutable):
             raise TypeError(f"'{value}' is not matching expected type of 'tuple'")
 
         if isinstance(value, Collection):
-            if len(value) != len(self.values):
+            if len(value) != len(self.values):  # pyright: ignore[reportUnknownArgumentType]
                 raise ValueError(
                     f"'{value}' does not match expected tuple length {len(self.values)}"
                 )
 
-            def validated() -> Generator:
-                for idx, element in enumerate(value):
+            def validated() -> Generator[Any]:
+                for idx, element in enumerate(value):  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
                     with ValidationContext.scope(f"[{idx}]"):
                         yield self.values[idx].validate(element)
 
@@ -1370,17 +1581,18 @@ class TupleAttribute(Immutable):
 
 class SequenceAttribute(Immutable):
     name: Literal["Sequence"] = "Sequence"
-    base: type[Sequence]
+    base: type[Sequence[Any]]
     values: AttributeAnnotation
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1389,6 +1601,7 @@ class SequenceAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1404,10 +1617,13 @@ class SequenceAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1418,6 +1634,7 @@ class SequenceAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1430,6 +1647,7 @@ class SequenceAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1444,8 +1662,8 @@ class SequenceAttribute(Immutable):
 
         if isinstance(value, Iterable):
 
-            def validated() -> Generator:
-                for idx, element in enumerate(value):
+            def validated() -> Generator[Any]:
+                for idx, element in enumerate(value):  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
                     with ValidationContext.scope(f"[{idx}]"):
                         yield self.values.validate(element)
 
@@ -1457,17 +1675,18 @@ class SequenceAttribute(Immutable):
 
 class SetAttribute(Immutable):
     name: Literal["Set"] = "Set"
-    base: type[Set]
+    base: type[Set[Any]]
     values: AttributeAnnotation
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1476,6 +1695,7 @@ class SetAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1491,10 +1711,13 @@ class SetAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1505,6 +1728,7 @@ class SetAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1517,6 +1741,7 @@ class SetAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1531,8 +1756,8 @@ class SetAttribute(Immutable):
 
         if isinstance(value, Iterable):
 
-            def validated() -> Generator:
-                for idx, element in enumerate(value):
+            def validated() -> Generator[Any]:
+                for idx, element in enumerate(value):  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
                     with ValidationContext.scope(f"[{idx}]"):
                         yield self.values.validate(element)
 
@@ -1544,7 +1769,7 @@ class SetAttribute(Immutable):
 
 class MappingAttribute(Immutable):
     name: Literal["Mapping"] = "Mapping"
-    base: type[Mapping]
+    base: type[Mapping[Any, Any]]
     keys: AttributeAnnotation
     values: AttributeAnnotation
     alias: str | None = None
@@ -1552,10 +1777,11 @@ class MappingAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1564,6 +1790,7 @@ class MappingAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1579,10 +1806,13 @@ class MappingAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1594,6 +1824,7 @@ class MappingAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1607,6 +1838,7 @@ class MappingAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1618,8 +1850,8 @@ class MappingAttribute(Immutable):
     ) -> Any:
         if isinstance(value, collections_abc.Mapping | typing.Mapping | typing_extensions.Mapping):
 
-            def validated() -> Generator:
-                for key, element in value.items():
+            def validated() -> Generator[Any]:
+                for key, element in value.items():  # pyright: ignore[reportUnknownVariableType]
                     with ValidationContext.scope(f"[{key}]"):
                         yield (self.keys.validate(key), self.values.validate(element))
 
@@ -1627,6 +1859,94 @@ class MappingAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'Mapping'")
+
+
+class MetaAttribute(Immutable):
+    name: Literal["Meta"] = "Meta"
+    alias: str | None = None
+    description: str | None = None
+    verifying: Verifying[Any] = _no_verify
+    required: bool = True
+    specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
+
+    @property
+    def base(self) -> type[haiway_types.Meta]:
+        return haiway_types.Meta
+
+    def annotated(  # noqa: C901
+        self,
+        annotations: Sequence[Any],
+    ) -> AttributeAnnotation:
+        if annotations:
+            alias: str | None = self.alias
+            description: str | None = self.description
+            verifying: Verifying[Any] = self.verifying
+            required: bool = self.required
+            specification: TypeSpecification | None = self.specification
+            validating: Validating[Any] | None = None
+            meta: Meta = self.meta
+
+            for annotation in annotations:
+                if isinstance(annotation, Description):
+                    description = annotation.description
+
+                elif isinstance(annotation, Alias):
+                    alias = annotation.alias
+
+                elif isinstance(annotation, Specification):
+                    specification = annotation.specification
+
+                elif isinstance(annotation, NotRequired):
+                    required = False
+
+                elif isinstance(annotation, Verifier):
+                    verifying = cast(Verifier[Any], annotation).verifier
+
+                elif isinstance(annotation, Validator):
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
+
+            if validating is None:
+                return self.__class__(
+                    alias=alias,
+                    description=description,
+                    verifying=verifying,
+                    required=required,
+                    specification=specification,
+                    meta=meta,
+                )
+
+            return ValidableAttribute(
+                validating=validating,
+                attribute=self.__class__(
+                    alias=alias,
+                    description=description,
+                    verifying=verifying,
+                    required=required,
+                    specification=specification,
+                    meta=meta,
+                ),
+            )
+
+        return self
+
+    def validate(
+        self,
+        value: Any,
+    ) -> Any:
+        if isinstance(value, Meta):
+            return self.verifying(value)
+
+        elif isinstance(
+            value, collections_abc.Mapping | typing.Mapping | typing_extensions.Mapping
+        ):
+            return self.verifying(Meta.validate(value))
+
+        else:
+            raise TypeError(f"'{value}' is not matching expected type of 'Meta'")
 
 
 class ValidableAttribute(Immutable):
@@ -1654,12 +1974,16 @@ class ValidableAttribute(Immutable):
         return self.attribute.specification
 
     @property
+    def meta(self) -> Meta:
+        return self.attribute.meta
+
+    @property
     def required(self) -> bool:
         return self.attribute.required
 
     def annotated(
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             return self.__class__(
@@ -1685,14 +2009,15 @@ class ObjectAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1701,6 +2026,7 @@ class ObjectAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1716,10 +2042,13 @@ class ObjectAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1731,6 +2060,7 @@ class ObjectAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1744,6 +2074,7 @@ class ObjectAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1774,14 +2105,15 @@ class TypedDictAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1790,6 +2122,7 @@ class TypedDictAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1805,10 +2138,13 @@ class TypedDictAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1820,6 +2156,7 @@ class TypedDictAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1833,6 +2170,7 @@ class TypedDictAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1844,7 +2182,7 @@ class TypedDictAttribute(Immutable):
     ) -> Any:
         if isinstance(value, collections_abc.Mapping | typing.Mapping | typing_extensions.Mapping):
 
-            def validated() -> Generator:
+            def validated() -> Generator[Any]:
                 for key, attribute in self.attributes.items():
                     with ValidationContext.scope(f'["{key}"]'):
                         if key in value:
@@ -1867,14 +2205,15 @@ class FunctionAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def name(self) -> str:
         return self.base.__name__
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1883,6 +2222,7 @@ class FunctionAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1898,10 +2238,13 @@ class FunctionAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1912,6 +2255,7 @@ class FunctionAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -1924,6 +2268,7 @@ class FunctionAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -1948,14 +2293,15 @@ class ProtocolAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -1964,6 +2310,7 @@ class ProtocolAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -1979,10 +2326,13 @@ class ProtocolAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -1992,6 +2342,7 @@ class ProtocolAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -2003,6 +2354,7 @@ class ProtocolAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -2027,14 +2379,15 @@ class UnionAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def name(self) -> str:
         return "|".join(alt.name for alt in self.alternatives)
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -2043,6 +2396,7 @@ class UnionAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -2058,10 +2412,13 @@ class UnionAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -2072,6 +2429,7 @@ class UnionAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -2084,6 +2442,7 @@ class UnionAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -2115,14 +2474,15 @@ class CustomAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -2131,6 +2491,7 @@ class CustomAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -2146,10 +2507,13 @@ class CustomAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -2160,6 +2524,7 @@ class CustomAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -2172,6 +2537,7 @@ class CustomAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -2195,14 +2561,15 @@ class StrEnumAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -2211,6 +2578,7 @@ class StrEnumAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -2226,10 +2594,13 @@ class StrEnumAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -2239,6 +2610,7 @@ class StrEnumAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -2250,6 +2622,7 @@ class StrEnumAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -2287,14 +2660,15 @@ class IntEnumAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
+    meta: Meta = META_EMPTY
 
     @property
     def name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(
+    def annotated(  # noqa: C901
         self,
-        annotations: Sequence[Annotation],
+        annotations: Sequence[Any],
     ) -> AttributeAnnotation:
         if annotations:
             alias: str | None = self.alias
@@ -2303,6 +2677,7 @@ class IntEnumAttribute(Immutable):
             required: bool = self.required
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
+            meta: Meta = self.meta
 
             for annotation in annotations:
                 if isinstance(annotation, Description):
@@ -2318,10 +2693,13 @@ class IntEnumAttribute(Immutable):
                     required = False
 
                 elif isinstance(annotation, Verifier):
-                    verifying = annotation.verifier
+                    verifying = cast(Verifier[Any], annotation).verifier
 
                 elif isinstance(annotation, Validator):
-                    validating = annotation.validator
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
 
             if validating is None:
                 return self.__class__(
@@ -2331,6 +2709,7 @@ class IntEnumAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 )
 
             return ValidableAttribute(
@@ -2342,6 +2721,7 @@ class IntEnumAttribute(Immutable):
                     verifying=verifying,
                     required=required,
                     specification=specification,
+                    meta=meta,
                 ),
             )
 
@@ -2500,28 +2880,31 @@ def _evaluate_forward_ref(
     /,
     module: str,
 ) -> Any:
-    forward_ref: ForwardRef
-    match annotation:
-        case str() as string:
-            forward_ref = ForwardRef(
-                string,
-                module=module,
-            )
-
-        case reference:
-            forward_ref = reference
-
-    if evaluated := forward_ref._evaluate(
-        globalns=sys.modules.get(forward_ref.__module__).__dict__
-        if forward_ref.__module__ in sys.modules
-        else None,
-        localns=None,
-        recursive_guard=frozenset(),
-    ):
-        return evaluated
-
+    # ForwardRef._evaluate is deprecated; evaluate compiled expression directly.
+    if isinstance(annotation, str):
+        forward_ref = ForwardRef(
+            annotation,
+            module=module,
+        )
     else:
-        raise RuntimeError(f"Cannot resolve annotation of {annotation}")
+        forward_ref = annotation
+
+    if getattr(forward_ref, "__forward_evaluated__", False):
+        return forward_ref.__forward_value__
+
+    module_name = forward_ref.__forward_module__ or module
+    namespace: dict[str, Any]
+    if module_name and module_name in sys.modules:
+        namespace = dict(sys.modules[module_name].__dict__)
+    else:
+        namespace = {}
+
+    namespace.setdefault("__builtins__", builtins.__dict__)
+
+    try:
+        return eval(forward_ref.__forward_code__, namespace, namespace)  # nosec: B307
+    except (NameError, AttributeError) as error:
+        raise RuntimeError(f"Cannot resolve annotation of {annotation}") from error
 
 
 def _resolve_literal(
@@ -2550,10 +2933,10 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
 
     if isinstance(attribute, AliasAttribute):
         if attribute.alias == alias_name and attribute.module == alias_module:
-            if attribute._resolved is None:
+            if attribute._resolved is None:  # pyright: ignore[reportPrivateUsage]
                 attribute.resolve(alias_target)
 
-            resolved: AttributeAnnotation | None = attribute._resolved
+            resolved: AttributeAnnotation | None = attribute._resolved  # pyright: ignore[reportPrivateUsage]
             if resolved is not None:
                 _finalize_alias_resolution(
                     resolved,
@@ -2563,9 +2946,9 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
                     visited=visited,
                 )
 
-        elif attribute._resolved is not None:
+        elif attribute._resolved is not None:  # pyright: ignore[reportPrivateUsage]
             _finalize_alias_resolution(
-                attribute._resolved,
+                attribute._resolved,  # pyright: ignore[reportPrivateUsage]
                 alias_name=alias_name,
                 alias_module=alias_module,
                 alias_target=alias_target,
@@ -2774,7 +3157,7 @@ def _resolve_generic_alias(
     )
 
     # if we have resolved it use what we got
-    if not isinstance(resolved_origin, types.GenericAlias | typing._GenericAlias):  # pyright: ignore[reportAttributeAccessIssue]
+    if not isinstance(resolved_origin, types.GenericAlias | typing._GenericAlias):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
         if specialized_self := getattr(resolved_origin, "__SELF_ATTRIBUTE__", None):
             assert isinstance(specialized_self, ObjectAttribute)  # nosec: B101
             return specialized_self
@@ -2913,6 +3296,9 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
         case typing.Any | typing_extensions.Any:
             return ANY_ATTRIBUTE
 
+        case haiway_types.Meta:
+            return MetaAttribute()
+
         case builtins.str:
             return StringAttribute()
 
@@ -2933,6 +3319,9 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
         case datetime.datetime:
             return DatetimeAttribute()
+
+        case datetime.date:
+            return DateAttribute()
 
         case datetime.time:
             return TimeAttribute()
@@ -3092,7 +3481,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             if validate := getattr(origin, "validate", None):
                 assert isinstance(validate, Validating)  # nosec: B101
                 return ValidableAttribute(
-                    validating=validate,
+                    validating=validate,  # pyright: ignore[reportUnknownArgumentType]
                     attribute=CustomAttribute(
                         base=origin,
                         parameters=parameters,
@@ -3114,7 +3503,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 ) -> AttributeAnnotation:
     origin: Any | None = get_origin(annotation)
 
-    if isinstance(annotation, types.GenericAlias | typing._GenericAlias) and any(  # pyright: ignore[reportAttributeAccessIssue]
+    if isinstance(annotation, types.GenericAlias | typing._GenericAlias) and any(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
         isinstance(argument, TypeVar) for argument in get_args(annotation)
     ):
         return _resolve_generic_alias(
@@ -3175,13 +3564,13 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case typing.Literal | typing_extensions.Literal:
             return _resolve_literal(annotation)
 
-        case collections_abc.Callable | typing.Callable | typing_extensions.Callable:
+        case collections_abc.Callable | typing.Callable | typing_extensions.Callable:  # pyright: ignore[reportUnknownMemberType]
             return FunctionAttribute(
                 base=annotation,
                 arguments=(),  # TODO: use function with arguments
             )
 
-        case typing.Self | typing_extensions.Self:
+        case typing.Self | typing_extensions.Self:  # pyright: ignore[reportUnknownMemberType]
             if self_attribute := recursion_guard.get("Self"):
                 return self_attribute
 

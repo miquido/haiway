@@ -1,10 +1,11 @@
 import os
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, Self, cast, final
+from typing import Any, ClassVar, Self, final
 from uuid import UUID
 
+from grpc import ChannelCredentials
 from opentelemetry import metrics, trace
-from opentelemetry._logs import get_logger, set_logger_provider
+from opentelemetry._logs import set_logger_provider
 from opentelemetry._logs._internal import Logger
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.context import Context, attach, detach, get_current
@@ -14,7 +15,6 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.metrics._internal import Meter
 from opentelemetry.metrics._internal.instrument import Counter, Gauge, Histogram
 from opentelemetry.sdk._logs import LoggerProvider
-from opentelemetry.sdk._logs._internal import LogRecord
 from opentelemetry.sdk._logs._internal.export import (
     BatchLogRecordProcessor,
     ConsoleLogExporter,
@@ -181,8 +181,8 @@ class ScopeStore:
         """
         Record a log message with the specified level.
 
-        Creates a LogRecord with the current span context and scope identifiers,
-        and emits it through the OpenTelemetry logger.
+        Emits a log record with the current span context and scope identifiers
+        using the OpenTelemetry logger.
 
         Parameters
         ----------
@@ -191,16 +191,12 @@ class ScopeStore:
         level : ObservabilityLevel
             The severity level of the log
         """
-        span_context: SpanContext = self.span.get_span_context()
+
         self.logger.emit(
-            LogRecord(
-                span_id=span_context.span_id,
-                trace_id=span_context.trace_id,
-                trace_flags=span_context.trace_flags,
-                body=message,
-                severity_text=level.name,
-                severity_number=SEVERITY_MAPPING[level],
-            )
+            context=self.context,
+            body=message,
+            severity_text=level.name,
+            severity_number=SEVERITY_MAPPING[level],
         )
 
     def record_exception(
@@ -235,13 +231,10 @@ class ScopeStore:
         attributes : Mapping[str, ObservabilityAttribute]
             Attributes to attach to the event
         """
+
         self.span.add_event(
             event,
-            attributes={
-                key: cast(Any, value)
-                for key, value in attributes.items()
-                if value is not None and value is not MISSING
-            },
+            attributes=self._sanitize_attributes(attributes),
         )
 
     def record_metric(
@@ -283,11 +276,7 @@ class ScopeStore:
 
                 self._counters[name].add(
                     value,
-                    attributes={
-                        key: cast(Any, value)
-                        for key, value in attributes.items()
-                        if value is not None and value is not MISSING
-                    },
+                    attributes=self._sanitize_attributes(attributes),
                 )
 
             case "histogram":
@@ -299,11 +288,7 @@ class ScopeStore:
 
                 self._histograms[name].record(
                     value,
-                    attributes={
-                        key: cast(Any, value)
-                        for key, value in attributes.items()
-                        if value is not None and value is not MISSING
-                    },
+                    attributes=self._sanitize_attributes(attributes),
                 )
 
             case "gauge":
@@ -315,11 +300,7 @@ class ScopeStore:
 
                 self._gauges[name].set(
                     value,
-                    attributes={
-                        key: cast(Any, value)
-                        for key, value in attributes.items()
-                        if value is not None and value is not MISSING
-                    },
+                    attributes=self._sanitize_attributes(attributes),
                 )
 
     def record_attributes(
@@ -337,14 +318,29 @@ class ScopeStore:
         attributes : Mapping[str, ObservabilityAttribute]
             Attributes to set on the span
         """
-        for name, value in attributes.items():
-            if value is None or value is MISSING:
-                continue
+        sanitized_attributes: Mapping[str, Any] | None = self._sanitize_attributes(attributes)
+        if sanitized_attributes is None:
+            return
 
+        for name, value in sanitized_attributes.items():
             self.span.set_attribute(
                 name,
-                value=cast(Any, value),
+                value=value,
             )
+
+    @staticmethod
+    def _sanitize_attributes(
+        attributes: Mapping[str, ObservabilityAttribute],
+        /,
+    ) -> Mapping[str, Any] | None:
+        if not attributes:
+            return None
+
+        return {
+            key: value
+            for key, value in attributes.items()
+            if value is not None and value is not MISSING
+        }
 
 
 @final
@@ -360,8 +356,10 @@ class OpenTelemetry:
     class method before it can be used.
     """
 
-    service: ClassVar[str]
-    environment: ClassVar[str]
+    service: ClassVar[str] = ""
+    version: ClassVar[str] = ""
+    environment: ClassVar[str] = ""
+    _logger: ClassVar[Logger | None] = None
 
     @classmethod
     def configure(
@@ -372,6 +370,7 @@ class OpenTelemetry:
         environment: str,
         otlp_endpoint: str | None = None,
         insecure: bool = True,
+        credentials: ChannelCredentials | None = None,
         export_interval_millis: int = 5000,
         attributes: Mapping[str, Any] | None = None,
     ) -> type[Self]:
@@ -395,6 +394,9 @@ class OpenTelemetry:
             exporters will be used instead.
         insecure : bool, default=True
             Whether to use insecure connections to the OTLP endpoint
+        credentials : ChannelCredentials | None, optional
+            Shared gRPC channel credentials used by all OTLP exporters. When
+            provided, secure channel configuration will be enforced.
         export_interval_millis : int, default=5000
             How often to export metrics, in milliseconds
         attributes : Mapping[str, Any] | None, optional
@@ -405,8 +407,6 @@ class OpenTelemetry:
         type[Self]
             The OpenTelemetry class, for method chaining
         """
-        cls.service = service
-        cls.environment = environment
         # Create shared resource for both metrics and traces
         resource: Resource = Resource.create(
             {
@@ -417,23 +417,30 @@ class OpenTelemetry:
                 **(attributes if attributes is not None else {}),
             },
         )
+        cls.service = service
+        cls.version = version
+        cls.environment = environment
 
         logs_exporter: LogExporter
         span_exporter: SpanExporter
         metric_exporter: MetricExporter
 
         if otlp_endpoint:
+            exporter_insecure: bool = insecure if credentials is None else False
             logs_exporter = OTLPLogExporter(
                 endpoint=otlp_endpoint,
-                insecure=insecure,
+                insecure=exporter_insecure,
+                credentials=credentials,
             )
             span_exporter = OTLPSpanExporter(
                 endpoint=otlp_endpoint,
-                insecure=insecure,
+                insecure=exporter_insecure,
+                credentials=credentials,
             )
             metric_exporter = OTLPMetricExporter(
                 endpoint=otlp_endpoint,
-                insecure=insecure,
+                insecure=exporter_insecure,
+                credentials=credentials,
             )
 
         else:
@@ -448,6 +455,7 @@ class OpenTelemetry:
         )
         log_processor: BatchLogRecordProcessor = BatchLogRecordProcessor(logs_exporter)
         logger_provider.add_log_record_processor(log_processor)
+        cls._logger = logger_provider.get_logger(service, version=version)
         set_logger_provider(logger_provider)
 
         # Set up metrics provider
@@ -570,8 +578,15 @@ class OpenTelemetry:
             if level < observed_level:
                 return
 
+            formatted_message: str = message
+            if args:
+                try:
+                    formatted_message = message % args
+                except Exception:
+                    formatted_message = message
+
             scopes[scope.scope_id].record_log(
-                message % args,
+                formatted_message,
                 level=level,
             )
             if exception is not None:
@@ -716,6 +731,9 @@ class OpenTelemetry:
             and creates meter instruments if this is the first scope entry.
             """
             assert scope.scope_id not in scopes  # nosec: B101
+            assert cls._logger is not None, (  # nosec: B101
+                "OpenTelemetry.configure must be called before using observability."
+            )
 
             nonlocal root_scope
             nonlocal meter
@@ -737,11 +755,8 @@ class OpenTelemetry:
                         links = (
                             Link(
                                 SpanContext(
-                                    (  # Assume external_trace_id is a hex string, convert to int
-                                        int(external_trace_id, 16)
-                                        if isinstance(external_trace_id, str)
-                                        else int(external_trace_id)
-                                    ),
+                                    # Assume external_trace_id is a hex string, convert to int
+                                    int(external_trace_id, 16),
                                     id_generator.generate_span_id(),  # Generate proper span ID
                                     True,  # is_remote=True
                                     TraceFlags.SAMPLED,  # pyright: ignore[reportArgumentType]
@@ -763,7 +778,7 @@ class OpenTelemetry:
                         links=links,
                     ),
                     meter=meter,
-                    logger=get_logger(scope.name),
+                    logger=cls._logger,
                 )
                 root_scope = scope
 
@@ -777,7 +792,7 @@ class OpenTelemetry:
                         context=scopes[scope.parent_id].context,
                     ),
                     meter=meter,
-                    logger=get_logger(scope.name),
+                    logger=cls._logger,
                 )
                 scopes[scope.parent_id].nested.append(scope_store)
 

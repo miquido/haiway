@@ -59,21 +59,24 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
     elif isinstance(value, bool):
         return str(value)
 
+    elif isinstance(value, bytes | bytearray | memoryview):
+        return f"<<<{len(value)} bytes>>>"  # pyright: ignore[reportUnknownArgumentType]
+
     elif isinstance(value, set | frozenset | Set):
         return _set_str(
-            value,
+            value,  # pyright: ignore[reportUnknownArgumentType]
             indent=indent,
         )
 
     elif isinstance(value, Mapping):
         return _mapping_str(
-            value,
+            value,  # pyright: ignore[reportUnknownArgumentType]
             indent=indent,
         )
 
     elif isinstance(value, Sequence):
         return _sequence_str(
-            value,
+            value,  # pyright: ignore[reportUnknownArgumentType]
             indent=indent,
         )
 
@@ -85,9 +88,6 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
 
     elif isinstance(value, datetime):
         return value.isoformat()
-
-    elif isinstance(value, bytes):
-        return f"<<<{len(value)} bytes>>>"
 
     else:  # fallback to object
         return _object_str(

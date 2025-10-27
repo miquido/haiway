@@ -123,14 +123,16 @@ class PostgresConnectionPool(Immutable):
         exc_tb: TracebackType | None,
     ) -> None:
         assert self._pool is not None, "Postgres connection pool is not initialized"  # nosec: B101
-        if self._pool._initialized:
+        try:
             await self._pool.close()
+        except Exception:
+            pass  # nosec: B110
 
     def acquire_connection(self) -> PostgresConnectionContext:
         """Return an async context manager yielding a ``PostgresConnection``."""
 
         assert self._pool is not None, "Postgres connection pool is not initialized"  # nosec: B101
-        return _ConnectionContext(_pool_context=self._pool.acquire())
+        return _ConnectionContext(_pool_context=self._pool.acquire())  # pyright: ignore[reportUnknownMemberType, reportUnknownMemberType]
 
 
 class _TransactionContext(Immutable):
@@ -145,7 +147,7 @@ class _TransactionContext(Immutable):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        await self._transaction_context.__aexit__(
+        await self._transaction_context.__aexit__(  # pyright: ignore[reportUnknownMemberType]
             exc_type,
             exc_val,
             exc_tb,
@@ -156,7 +158,7 @@ class _ConnectionContext(Immutable):
     _pool_context: PoolAcquireContext
 
     async def __aenter__(self) -> PostgresConnection:
-        acquired_connection: Connection = await self._pool_context.__aenter__()
+        acquired_connection: Connection = await self._pool_context.__aenter__()  # pyright: ignore[reportUnknownVariableType]
 
         async def execute(
             statement: str,
@@ -165,8 +167,8 @@ class _ConnectionContext(Immutable):
         ) -> Sequence[PostgresRow]:
             try:
                 return tuple(
-                    PostgresRow(record)
-                    for record in await acquired_connection.fetch(
+                    PostgresRow(record)  # pyright: ignore[reportUnknownArgumentType]
+                    for record in await acquired_connection.fetch(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
                         statement,
                         *args,
                     )
@@ -176,7 +178,9 @@ class _ConnectionContext(Immutable):
                 raise PostgresException("Failed to execute SQL statement") from exc
 
         def transaction() -> PostgresTransactionContext:
-            return _TransactionContext(_transaction_context=acquired_connection.transaction())
+            return _TransactionContext(
+                _transaction_context=acquired_connection.transaction(),  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
+            )
 
         return PostgresConnection(
             statement_executing=execute,
@@ -189,7 +193,7 @@ class _ConnectionContext(Immutable):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        await self._pool_context.__aexit__(
+        await self._pool_context.__aexit__(  # pyright: ignore[reportUnknownMemberType]
             exc_type,
             exc_val,
             exc_tb,
