@@ -19,6 +19,7 @@ from haiway.attributes.annotations import (
     CustomAttribute,
     DatetimeAttribute,
     IntegerAttribute,
+    MetaAttribute,
     NoneAttribute,
     ObjectAttribute,
     PathAttribute,
@@ -30,7 +31,7 @@ from haiway.attributes.annotations import (
     ValidableAttribute,
 )
 from haiway.attributes.validation import Validator
-from haiway.types import Alias, Description, Specification
+from haiway.types import Alias, Description, Meta, Specification
 
 _SENTINEL = object()
 
@@ -205,6 +206,25 @@ def test_state_specification_manual_override_for_unspecified_type() -> None:
     specification = Example.__SPECIFICATION__
     assert specification is not None
     assert specification["properties"]["callback"] == {"type": "string"}
+
+
+def test_meta_attribute_resolution_and_specification() -> None:
+    class Example(State):
+        meta: Meta
+
+    annotation = attribute_of(Example, "meta")
+    assert isinstance(annotation, MetaAttribute)
+    meta_value = Meta.of({"name": "example"})
+    assert annotation.validate(meta_value) is meta_value
+    validated = annotation.validate({"kind": "example"})
+    assert isinstance(validated, Meta)
+
+    specification = Example.__SPECIFICATION__
+    assert specification is not None
+    assert specification["properties"]["meta"] == {
+        "type": "object",
+        "additionalProperties": True,
+    }
 
 
 def test_typed_dict_annotations_converts() -> None:

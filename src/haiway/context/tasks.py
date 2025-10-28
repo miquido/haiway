@@ -1,8 +1,9 @@
 from asyncio import Task, TaskGroup, get_running_loop
 from collections.abc import Callable, Coroutine
 from contextvars import ContextVar, Token, copy_context
+from inspect import iscoroutine
 from types import TracebackType
-from typing import Any, ClassVar
+from typing import ClassVar, cast
 
 from haiway.context.variables import VariablesContext
 from haiway.types import Immutable
@@ -24,7 +25,7 @@ class TaskGroupContext(Immutable):
     @classmethod
     def run[Result, **Arguments](
         cls,
-        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result],
+        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
@@ -49,16 +50,25 @@ class TaskGroupContext(Immutable):
         Task[Result]
             The created task
         """
+        coroutine: Coroutine[None, None, Result]
+        if iscoroutine(coro):
+            coroutine = cast(Coroutine[None, None, Result], coro)
+
+        else:
+            coroutine = cast(Callable[Arguments, Coroutine[None, None, Result]], coro)(
+                *args, **kwargs
+            )
+
         try:
             with VariablesContext(isolated=True):  # isolate variables
                 return cls._context.get().create_task(
-                    coro if isinstance(coro, Coroutine) else coro(*args, **kwargs),
+                    coroutine,
                     context=copy_context(),
                 )
 
         except LookupError:  # spawn task in the background as a fallback
             return cls.background_run(
-                coro,
+                coroutine,
                 *args,
                 **kwargs,
             )
@@ -66,7 +76,7 @@ class TaskGroupContext(Immutable):
     @classmethod
     def background_run[Result, **Arguments](
         cls,
-        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result],
+        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
@@ -89,11 +99,20 @@ class TaskGroupContext(Immutable):
             The created task
         """
 
+        coroutine: Coroutine[None, None, Result]
+        if iscoroutine(coro):
+            coroutine = cast(Coroutine[None, None, Result], coro)
+
+        else:
+            coroutine = cast(Callable[Arguments, Coroutine[None, None, Result]], coro)(
+                *args, **kwargs
+            )
+
         with VariablesContext(isolated=True):  # isolate variables
             # TODO: isolate further with detached state and observability scope?
             # TODO: manage custom background task group?
             return get_running_loop().create_task(
-                coro if isinstance(coro, Coroutine) else coro(*args, **kwargs),
+                coroutine,
                 context=copy_context(),
             )
 

@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "haiway"
 description = "Framework for dependency injection and state management within structured concurrency model."
-version = "0.35.4"
+version = "0.36.0"
 readme = "README.md"
 maintainers = [
   { name = "Kacper Kaliński", email = "kacper.kalinski@miquido.com" },
@@ -23,7 +23,7 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 license = { file = "LICENSE" }
-dependencies = []
+dependencies = ["typing-extensions~=4.15"]
 
 [project.urls]
 Homepage = "https://miquido.com"
@@ -81,11 +81,7 @@ ignore = []
 stubPath = "./stubs"
 reportMissingImports = true
 reportMissingTypeStubs = false
-userFileIndexingLimit = -1
 useLibraryCodeForTypes = true
-
-[tool.pyright.analysis]
-diagnosticMode = "workspace"
 typeCheckingMode = "strict"
 
 [tool.uv-build]

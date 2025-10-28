@@ -60,7 +60,7 @@ from uuid import uuid4
 from haiway import Default, State
 
 class ServiceConfig(State):
-    correlation_id: str = Default(factory=lambda: uuid4().hex)
+    correlation_id: str = Default(default_factory=lambda: uuid4().hex)
     timeout_seconds: float = Default(1.5)  # literal defaults still work
     api_key: str | None = Default(env="SERVICE_API_KEY")  # read from environment when needed
 
@@ -115,12 +115,50 @@ Supported annotations include:
 - `Alias("external_name")` — maps the attribute to an alternate key when using `to_mapping`,
   `from_mapping`, JSON helpers, and `updated`.
 - `Description("text")` — surfaces in generated JSON schemas and downstream documentation.
+- `Meta.of({...})` — attaches structured metadata that you can later inspect from field definitions.
 - `Specification({...})` — overrides the JSON Schema fragment when the inferred schema is
   insufficient.
 - `Validator(callable)` — applies additional validation logic after type checking succeeds.
 
 Attributes annotated as `typing.NotRequired[T]` are treated as optional even without a default. This
 is useful when mirroring typed dictionaries or validating payloads where the field may be omitted.
+
+### Structured Metadata with `Meta`
+
+Use the `Meta` container when you need immutable, JSON-compatible metadata on either a field itself
+or on the annotations that describe it. `Meta` instances validate every value, expose convenience
+accessors (such as `.kind`, `.tags`, `.has_tags(...)`, `.with_identifier(...)`), and are exported
+directly from `haiway`.
+
+```python
+from typing import Annotated
+from haiway import Description, Meta, State
+
+class Dataset(State):
+    meta: Meta = Meta.of(kind="dataset", tags=("exports",))
+    export_path: Annotated[
+        str,
+        Description("S3 key for the generated export"),
+        Meta.of(tags=("pii", "s3")),
+    ]
+```
+
+`Meta.of(...)` accepts existing mappings or keyword arguments, and you can combine builders—for
+example, `Meta.of(kind="dataset").with_last_updated(timestamp)` returns a new instance with the
+timestamp recorded. When no metadata is provided, Haiway uses the singleton `META_EMPTY`, so you can
+always compare with identity checks.
+
+To inspect metadata added through annotations, read it from the resolved attribute definition:
+
+```python
+fields = Dataset.__SELF_ATTRIBUTE__.attributes
+path_meta = fields["export_path"].meta
+assert path_meta.has_tags(("pii",))
+```
+
+Metadata values are limited to strings, numbers, booleans, `None`, sequences, and nested mappings.
+Passing unsupported objects raises a `TypeError`, which keeps emitted schemas and observability
+events consistent.
 
 ### Generic State Classes
 

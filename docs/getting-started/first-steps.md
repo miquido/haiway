@@ -10,13 +10,17 @@ predictable behavior:
 
 ```python
 from typing import Mapping, Sequence
-from haiway import State
+from haiway import Meta, State
 
 class UserPreferences(State):
     theme: str = "light"
     notifications: bool = True
     languages: Sequence[str] = ("en",)  # Becomes tuple
-    metadata: Mapping[str, str] = {}    # Stays a dict (treat as read-only)
+    overrides: Mapping[str, str] = {}   # Stays a dict (treat as read-only)
+    metadata: Meta = Meta.of(
+        kind="user-preferences",
+        tags=("ui", "notifications"),
+    )
 
 # State objects are immutable
 prefs = UserPreferences()
@@ -32,11 +36,17 @@ print(f"Original: {prefs.theme}, Updated: {dark_prefs.theme}")
 - **Automatic Immutability**: `State` base class prevents modification after creation using
   `__setattr__` blocking
 - **Type Conversion**: Sequences and sets are converted to immutable counterparts during validation
-  (mappings stay as plain dicts)
+  (`overrides` stays a plain dict while `languages` becomes a tuple)
+- **Structured Metadata**: `Meta` ensures metadata values stay JSON-compatible, offers helpers such
+  as `.with_tags(...)`, and keeps instances immutable
 - **Memory Sharing**: The `.updated()` method creates structural sharing - unchanged fields
   reference the same objects
 - **Type Safety**: Field types are validated at runtime, ensuring data integrity
 - **Default Values**: Fields can have defaults, and missing fields use type-appropriate defaults
+
+`Meta` behaves like an immutable mapping with convenience accessors, so you can safely check
+`prefs.metadata.kind` or call `prefs.metadata.has_tags(("ui",))` without worrying about accidental
+mutation.
 
 ### Important Collection Types
 

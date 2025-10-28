@@ -13,7 +13,7 @@ __all__ = ("VariablesContext",)
 @final
 class Variables(Immutable):
     _parent: Self | None
-    _values: MutableMapping[type[State], State] = Default(factory=dict)
+    _values: MutableMapping[type[State], State] = Default(default_factory=dict[type[State], State])
 
     def get[Variable: State](
         self,

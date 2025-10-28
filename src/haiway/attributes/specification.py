@@ -10,12 +10,14 @@ from haiway.attributes.annotations import (
     AttributeAnnotation,
     BoolAttribute,
     CustomAttribute,
+    DateAttribute,
     DatetimeAttribute,
     FloatAttribute,
     IntegerAttribute,
     IntEnumAttribute,
     LiteralAttribute,
     MappingAttribute,
+    MetaAttribute,
     MissingAttribute,
     NoneAttribute,
     SequenceAttribute,
@@ -29,7 +31,6 @@ from haiway.attributes.annotations import (
     ValidableAttribute,
 )
 from haiway.types import TypeSpecification
-from haiway.utils import Meta
 
 __all__ = ("type_specification",)
 
@@ -252,7 +253,7 @@ def _prepare_specification_of_tuple(
     elements_specification: MutableSequence[TypeSpecification] = []
     for element in tuple_attribute.values:
         element_specification: TypeSpecification | None = _specification(
-            cast(AttributeAnnotation, element),
+            element,
             recursion_guard=recursion_guard,
         )
 
@@ -415,12 +416,6 @@ def _prepare_specification_of_custom(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification | None:
-    if annotation.base is Meta:
-        return {
-            "type": "object",
-            "additionalProperties": True,
-        }
-
     return None
 
 
@@ -519,7 +514,9 @@ SPECIFICATIONS: Mapping[
     UnionAttribute: _prepare_specification_of_union,
     ValidableAttribute: _prepare_specification_of_validable,
     UUIDAttribute: _prepare_specification_of_uuid,
+    DateAttribute: _prepare_specification_of_date,
     DatetimeAttribute: _prepare_specification_of_datetime,
     TimeAttribute: _prepare_specification_of_time,
+    MetaAttribute: _prepare_specification_of_meta,
     CustomAttribute: _prepare_specification_of_custom,
 }

@@ -931,7 +931,7 @@ class AttributePath[Root, Attribute]:
                             self.__root__,
                             *(
                                 *self.__components__,
-                                SequenceItemAttributePathComponent(
+                                SequenceItemAttributePathComponent[Any, Any](
                                     root=self.__attribute__,  # pyright: ignore[reportArgumentType]
                                     attribute=element_annotation,
                                     index=key,
@@ -945,7 +945,7 @@ class AttributePath[Root, Attribute]:
                             self.__root__,
                             *(
                                 *self.__components__,
-                                SequenceItemAttributePathComponent(
+                                SequenceItemAttributePathComponent[Any, Any](
                                     root=self.__attribute__,  # pyright: ignore[reportArgumentType]
                                     attribute=other[key],
                                     index=key,
@@ -967,7 +967,7 @@ class AttributePath[Root, Attribute]:
                             self.__root__,
                             *(
                                 *self.__components__,
-                                SequenceItemAttributePathComponent(
+                                SequenceItemAttributePathComponent[Any, Any](
                                     root=self.__attribute__,  # pyright: ignore[reportArgumentType]
                                     attribute=element_annotation,
                                     index=key,
@@ -1092,19 +1092,17 @@ class AttributePath[Root, Attribute]:
             return resolved
 
 
-def _unaliased_origin(base: type[Any]) -> type[Any]:
-    match base:
-        case TypeAliasType() as aliased:
-            return get_origin(aliased.__value__) or aliased.__value__
+def _unaliased_origin(base: Any) -> Any:
+    if isinstance(base, TypeAliasType):
+        return get_origin(base.__value__) or base.__value__
 
-        case concrete:
-            return get_origin(concrete) or concrete
+    else:
+        return get_origin(base) or base
 
 
-def _unaliased(base: type[Any]) -> type[Any]:
-    match base:
-        case TypeAliasType() as aliased:
-            return aliased.__value__
+def _unaliased(base: Any) -> Any:
+    if isinstance(base, TypeAliasType):
+        return base.__value__
 
-        case concrete:
-            return concrete
+    else:
+        return base

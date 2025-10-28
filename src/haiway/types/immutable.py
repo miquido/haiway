@@ -2,7 +2,7 @@ import inspect
 from collections.abc import Mapping, MutableMapping
 from typing import Any, ClassVar, Self, dataclass_transform, final, get_origin, get_type_hints
 
-from haiway.types.default import DefaultValue
+from haiway.types.default import Default, DefaultValue
 
 __all__ = ("Immutable",)
 
@@ -10,9 +10,11 @@ __all__ = ("Immutable",)
 @dataclass_transform(
     kw_only_default=True,
     frozen_default=True,
-    field_specifiers=(),
+    field_specifiers=(Default,),
 )
 class ImmutableMeta(type):
+    __slots__: tuple[str, ...]
+
     def __new__(
         mcs,
         name: str,
@@ -41,8 +43,8 @@ class ImmutableMeta(type):
 
 def _collect_attributes(
     cls: type[Any],
-) -> Mapping[str, DefaultValue[Any] | None]:
-    attributes: MutableMapping[str, DefaultValue[Any] | None] = {}
+) -> Mapping[str, DefaultValue | None]:
+    attributes: MutableMapping[str, DefaultValue | None] = {}
     for key, annotation in get_type_hints(cls, localns={cls.__name__: cls}).items():
         if key.startswith("__"):
             continue  # do not dunder specials
@@ -60,7 +62,7 @@ def _collect_attributes(
             attributes[key] = default_value
 
         else:
-            attributes[key] = DefaultValue(default_value)
+            attributes[key] = DefaultValue(default=default_value)
 
     return attributes
 
@@ -112,7 +114,7 @@ class Immutable(metaclass=ImmutableMeta):
         )
 
     def __str__(self) -> str:
-        attributes: str = ", ".join([f"{key}: {value}" for key, value in vars(self).items()])
+        attributes: str = ", ".join(f"{name}: {getattr(self, name)}" for name in self.__slots__)
         return f"{self.__class__.__name__}({attributes})"
 
     def __repr__(self) -> str:

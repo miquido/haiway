@@ -102,7 +102,7 @@ def test_basic_initializes_with_defaults() -> None:
         string: str = ""
         integer: int = 0
         optional: str | None = None
-        unique: UUID = Default(factory=uuid4)
+        unique: UUID = Default(default_factory=uuid4)
         same: UUID = Default(uuid4())
 
     basic = Basics()

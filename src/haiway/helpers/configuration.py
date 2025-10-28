@@ -4,8 +4,7 @@ from typing import Any, Literal, Protocol, Self, overload, runtime_checkable
 from haiway.attributes import State
 from haiway.context import ctx
 from haiway.helpers.statemethods import statemethod
-from haiway.types.basic import BasicValue
-from haiway.utils.metadata import META_EMPTY, Meta
+from haiway.types import META_EMPTY, BasicValue, Meta
 
 __all__ = (
     "Configuration",

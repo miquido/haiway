@@ -495,14 +495,13 @@ class ObservabilityContext(Immutable):
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
 
-            if context.observability is not None:
-                context.observability.log_recording(
-                    context._scope,
-                    level,
-                    message,
-                    *args,
-                    exception=exception,
-                )
+            context.observability.log_recording(
+                context._scope,
+                level,
+                message,
+                *args,
+                exception=exception,
+            )
 
         except LookupError:
             getLogger().log(
@@ -539,18 +538,17 @@ class ObservabilityContext(Immutable):
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
 
-            if context.observability is not None:
-                context.observability.event_recording(
-                    context._scope,
-                    level=level,
-                    event=event,
-                    attributes=attributes,
-                )
+            context.observability.event_recording(
+                context._scope,
+                level=level,
+                event=event,
+                attributes=attributes,
+            )
 
         except Exception as exc:
             cls.record_log(
                 ObservabilityLevel.ERROR,
-                f"Failed to record event: {type(event).__qualname__}",
+                f"Failed to record event: {event}",
                 exception=exc,
             )
 
@@ -590,16 +588,15 @@ class ObservabilityContext(Immutable):
         try:  # catch exceptions - we don't wan't to blow up on observability
             context: Self = cls._context.get()
 
-            if context.observability is not None:
-                context.observability.metric_recording(
-                    context._scope,
-                    level=level,
-                    metric=metric,
-                    value=value,
-                    unit=unit,
-                    kind=kind,
-                    attributes=attributes,
-                )
+            context.observability.metric_recording(
+                context._scope,
+                level=level,
+                metric=metric,
+                value=value,
+                unit=unit,
+                kind=kind,
+                attributes=attributes,
+            )
 
         except Exception as exc:
             cls.record_log(
@@ -652,7 +649,7 @@ class ObservabilityContext(Immutable):
     def __init__(
         self,
         scope: ScopeIdentifier,
-        observability: Observability | None,
+        observability: Observability,
     ) -> None:
         object.__setattr__(
             self,

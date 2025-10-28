@@ -3,16 +3,12 @@ from os import getenv as os_getenv
 from typing import Any, cast, final, overload
 
 from haiway.types.missing import MISSING, Missing, not_missing
-from haiway.utils.always import always
 
-__all__ = (
-    "Default",
-    "DefaultValue",
-)
+__all__ = ("Default", "DefaultValue")
 
 
 @final
-class DefaultValue[Value]:
+class DefaultValue:
     """
     Container for a default value or a factory function that produces a default value.
 
@@ -28,8 +24,9 @@ class DefaultValue[Value]:
     @overload
     def __init__(
         self,
-        value: Value,
         /,
+        *,
+        default: Any | Missing,
     ) -> None: ...
 
     @overload
@@ -37,60 +34,45 @@ class DefaultValue[Value]:
         self,
         /,
         *,
-        env: str | Missing = MISSING,
+        default_factory: Callable[[], Any] | Missing,
     ) -> None: ...
 
     @overload
     def __init__(
         self,
-        /,
-        *,
-        factory: Callable[[], Value],
-    ) -> None: ...
-
-    @overload
-    def __init__(
-        self,
-        value: Value | Missing,
         /,
         *,
         env: str | Missing,
-        factory: Callable[[], Value] | Missing,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        /,
+        *,
+        default: Any | Missing,
+        default_factory: Callable[[], Any] | Missing,
+        env: str | Missing,
     ) -> None: ...
 
     def __init__(
         self,
-        value: Value | Missing = MISSING,
-        /,
         *,
+        default: Any | Missing = MISSING,
+        default_factory: Callable[[], Any] | Missing = MISSING,
         env: str | Missing = MISSING,
-        factory: Callable[[], Value] | Missing = MISSING,
     ) -> None:
-        """
-        Initialize with either a default value or a factory function.
-
-        Parameters
-        ----------
-        value : Value | Missing
-            The default value to be used.
-        factory : Callable[[], Value] | Missing
-            A function that returns the default value when called.
-        env: str | Missing
-            Name of environment variable to use as default, resolved when requesting a default.
-        """
-        assert (  # nosec: B101
-            value is MISSING or factory is MISSING
-        ), "Can't specify both default value and factory"
-
-        self._value: Callable[[], Value | Missing]
-        if not_missing(factory):
+        self._value: Callable[[], Any | Missing]
+        if not_missing(default_factory):
+            assert default is MISSING and env is MISSING  # nosec: B101
             object.__setattr__(
                 self,
                 "_value",
-                factory,
+                default_factory,
             )
 
         elif not_missing(env):
+            assert default is MISSING  # nosec: B101
             object.__setattr__(
                 self,
                 "_value",
@@ -101,18 +83,10 @@ class DefaultValue[Value]:
             object.__setattr__(
                 self,
                 "_value",
-                always(value),
+                lambda: default,
             )
 
-    def __call__(self) -> Value | Missing:
-        """
-        Get the default value.
-
-        Returns
-        -------
-        Value | Missing
-            The stored default value, or the result of calling the factory function
-        """
+    def __call__(self) -> Any | Missing:
         return self._value()
 
     def __setattr__(
@@ -129,64 +103,17 @@ class DefaultValue[Value]:
         raise AttributeError("DefaultValue can't be modified")
 
 
-@overload
 def Default[Value](
-    value: Value,
-    /,
-) -> Value: ...
-
-
-@overload
-def Default[Value](
+    default: Value | Missing = MISSING,
     *,
-    factory: Callable[[], Value],
-) -> Value: ...
-
-
-@overload
-def Default(
-    *,
-    env: str,
-) -> str: ...
-
-
-def Default[Value](
-    value: Value | Missing = MISSING,
-    /,
-    *,
-    factory: Callable[[], Value] | Missing = MISSING,
+    default_factory: Callable[[], Value] | Missing = MISSING,
     env: str | Missing = MISSING,
-) -> Value:  # it is actually a DefaultValue, but type checker has to be fooled most some cases
-    """
-    Create a default value container that appears as the actual value type.
-
-    This function creates a DefaultValue instance but returns it typed as the actual
-    value type it contains. This allows type checkers to treat it as if it were the
-    actual value while still maintaining the lazy evaluation behavior.
-
-    Parameters
-    ----------
-    value : Value | Missing
-        The default value to be used.
-    factory : Callable[[], Value] | Missing
-        A function that returns the default value when called.
-    env: str | Missing
-        Name of environment variable to use as default, resolved when requesting a default.
-
-    Returns
-    -------
-    Value
-        A DefaultValue instance that appears to be of type Value for type checking purposes
-
-    Notes
-    -----
-    Only one of value or factory or env should be provided. If more than one is provided, an exception will be raised.
-    """  # noqa: E501
+) -> Value:
     return cast(
         Value,
         DefaultValue(
-            value,
+            default=default,
+            default_factory=default_factory,
             env=env,
-            factory=factory,
         ),
     )

@@ -1,18 +1,32 @@
-try:
-    import fcntl
-
-except ModuleNotFoundError:  # Windows does not supprt fcntl
-    fcntl = None
-
 import os
+import sys
 from asyncio import Lock
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol, overload, runtime_checkable
+from typing import Final, Protocol, overload, runtime_checkable
 
 from haiway.attributes import State
 from haiway.helpers.asynchrony import asynchronous
 from haiway.helpers.statemethods import statemethod
+
+if sys.platform != "win32":
+    from fcntl import LOCK_EX as _LOCK_EX
+    from fcntl import LOCK_UN as _LOCK_UN
+    from fcntl import flock as _fcntl_flock
+
+    LOCK_EX: Final[int] = _LOCK_EX
+    LOCK_UN: Final[int] = _LOCK_UN
+
+    def fcntl_flock(fd: int, operation: int, /) -> None:
+        _fcntl_flock(fd, operation)
+
+else:
+    LOCK_EX: Final[int] = 0
+    LOCK_UN: Final[int] = 0
+
+    def fcntl_flock(fd: int, operation: int, /) -> None:
+        return None
+
 
 __all__ = (
     "File",
@@ -240,8 +254,8 @@ def _open_file_handle(
     else:
         raise FileException(f"File does not exist: {path}")
 
-    if exclusive and fcntl is not None:
-        fcntl.flock(file_handle, fcntl.LOCK_EX)  # pyright: ignore[reportAttributeAccessIssue] # windows
+    if exclusive:
+        fcntl_flock(file_handle, LOCK_EX)
 
     return file_handle
 
@@ -295,8 +309,8 @@ def _close_file_handle(
     *,
     exclusive: bool,
 ) -> None:
-    if exclusive and fcntl is not None:
-        fcntl.flock(file_handle, fcntl.LOCK_UN)  # pyright: ignore[reportAttributeAccessIssue] # windows
+    if exclusive:
+        fcntl_flock(file_handle, LOCK_UN)
 
     os.close(file_handle)
 
