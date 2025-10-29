@@ -1,6 +1,6 @@
 """AsyncPG-backed connection pooling for the Postgres state integration."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from types import TracebackType
 from typing import Self
 from urllib.parse import ParseResult, parse_qs, urlparse
@@ -38,6 +38,10 @@ from haiway.types import Immutable
 __all__ = ("PostgresConnectionPool",)
 
 
+async def _noop_initialize(connection: Connection) -> None:
+    pass
+
+
 class PostgresConnectionPool(Immutable):
     """Disposable that instantiates a connection pool."""
 
@@ -48,6 +52,7 @@ class PostgresConnectionPool(Immutable):
         *,
         ssl: str = POSTGRES_SSLMODE,
         connection_limit: int = POSTGRES_CONNECTIONS,
+        initialize: Callable[[Connection], Coroutine[None, None, None]] = _noop_initialize,
     ) -> Self:
         parsed: ParseResult = urlparse(dsn)
         if parsed.scheme not in {"postgres", "postgresql"}:
@@ -87,6 +92,7 @@ class PostgresConnectionPool(Immutable):
             password=password,
             ssl=resolved_ssl,
             connection_limit=connection_limit,
+            _initialize=initialize,
         )
 
     host: str = POSTGRES_HOST
@@ -96,6 +102,7 @@ class PostgresConnectionPool(Immutable):
     password: str = POSTGRES_PASSWORD
     ssl: str = POSTGRES_SSLMODE
     connection_limit: int = POSTGRES_CONNECTIONS
+    _initialize: Callable[[Connection], Coroutine[None, None, None]]
     _pool: Pool | None = None  # initialized on demand
 
     async def __aenter__(self) -> Postgres:
@@ -111,6 +118,7 @@ class PostgresConnectionPool(Immutable):
                 ssl=self.ssl,
                 min_size=1,
                 max_size=self.connection_limit,
+                init=self._initialize,
             ),
         )
 
@@ -125,6 +133,7 @@ class PostgresConnectionPool(Immutable):
         assert self._pool is not None, "Postgres connection pool is not initialized"  # nosec: B101
         try:
             await self._pool.close()
+
         except Exception:
             pass  # nosec: B110
 
