@@ -3,7 +3,7 @@ from collections.abc import Callable, Generator
 
 from pytest import fixture, mark, raises
 
-from haiway import cache
+from haiway import cache, cache_externally, ctx
 
 
 class FakeException(Exception):
@@ -16,6 +16,14 @@ def fake_random() -> Callable[[], Generator[int]]:
         yield from range(0, 65536)
 
     return random_next
+
+
+async def _wait_for(condition: Callable[[], bool], attempts: int = 20) -> None:
+    for _ in range(attempts):
+        if condition():
+            return
+        await sleep(0)
+    raise AssertionError("condition was not met")
 
 
 @mark.asyncio
@@ -129,3 +137,85 @@ async def test_async_clear_cache_returns_fresh_value(fake_random: Callable[[], i
     expected: int = await randomized("expected")
     await randomized.clear_cache()
     assert await randomized("expected") != expected
+
+
+@mark.asyncio
+async def test_external_cache_persists_results_once() -> None:
+    backend: dict[str, int] = {}
+    call_count: int = 0
+
+    async def read_from_store(key: str) -> int | None:
+        return backend.get(key)
+
+    async def write_to_store(key: str, value: int) -> None:
+        backend[key] = value
+
+    async def clear_from_store(key: str | None) -> None:
+        if key is None:
+            backend.clear()
+            return
+        backend.pop(key, None)
+
+    @cache_externally(
+        make_key=lambda value: f"cache:{value}",
+        read=read_from_store,
+        write=write_to_store,
+        clear=clear_from_store,
+    )
+    async def compute(value: str) -> int:
+        nonlocal call_count
+        call_count += 1
+        return call_count
+
+    async with ctx.scope("external-cache"):
+        first: int = await compute("alpha")
+        await _wait_for(lambda: "cache:alpha" in backend)
+        second: int = await compute("alpha")
+
+    assert first == 1
+    assert second == 1
+    assert call_count == 1
+
+
+@mark.asyncio
+async def test_external_cache_clear_supports_key_and_global_flush() -> None:
+    backend: dict[str, int] = {}
+    cleared_keys: list[str | None] = []
+
+    async def read_from_store(key: str) -> int | None:
+        return backend.get(key)
+
+    async def write_to_store(key: str, value: int) -> None:
+        backend[key] = value
+
+    async def clear_from_store(key: str | None) -> None:
+        cleared_keys.append(key)
+        if key is None:
+            backend.clear()
+            return
+        backend.pop(key, None)
+
+    @cache_externally(
+        make_key=lambda value: f"cache:{value}",
+        read=read_from_store,
+        write=write_to_store,
+        clear=clear_from_store,
+    )
+    async def compute(value: str) -> str:
+        return value
+
+    async with ctx.scope("external-cache-clear"):
+        await compute("alpha")
+        await _wait_for(lambda: "cache:alpha" in backend)
+        await compute.clear_cache("cache:alpha")
+        assert "cache:alpha" not in backend
+        assert cleared_keys[-1] == "cache:alpha"
+
+        await compute("alpha")
+        await _wait_for(lambda: "cache:alpha" in backend)
+        await compute("beta")
+        await _wait_for(lambda: "cache:beta" in backend)
+        await compute.clear_cache()
+
+    assert backend == {}
+    assert cleared_keys[-1] is None

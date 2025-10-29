@@ -3,7 +3,7 @@ import typing
 from collections.abc import Iterable, Mapping, MutableMapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import fields, is_dataclass
-from types import EllipsisType, GenericAlias
+from types import GenericAlias
 from typing import (
     Any,
     ClassVar,
@@ -18,10 +18,10 @@ from typing import (
 from weakref import WeakValueDictionary
 
 from haiway.attributes.annotations import (
-    AttributeAnnotation,
     ObjectAttribute,
     resolve_self_attribute,
 )
+from haiway.attributes.attribute import Attribute
 from haiway.attributes.coding import AttributesJSONEncoder
 from haiway.attributes.path import AttributePath
 from haiway.attributes.specification import type_specification
@@ -30,59 +30,12 @@ from haiway.types import (
     MISSING,
     Default,
     DefaultValue,
-    Immutable,
     Missing,
     TypeSpecification,
     not_missing,
 )
 
-__all__ = (
-    "Attribute",
-    "State",
-)
-
-
-class Attribute(Immutable):
-    name: str
-    alias: str | None
-    annotation: AttributeAnnotation
-    required: bool
-    default: DefaultValue
-    specification: TypeSpecification | None
-
-    def validate(
-        self,
-        value: Any,
-        /,
-    ) -> Any:
-        if value is MISSING:
-            return self.annotation.validate(self.default())
-
-        else:
-            return self.annotation.validate(value)
-
-    def validate_from(
-        self,
-        mapping: Mapping[str, Any],
-        /,
-    ) -> Any:
-        value: Any
-        if self.alias is None:
-            value = mapping.get(
-                self.name,
-                self.default(),
-            )
-
-        else:
-            value = mapping.get(
-                self.alias,
-                mapping.get(
-                    self.name,
-                    self.default(),
-                ),
-            )
-
-        return self.annotation.validate(value)
+__all__ = ("State",)
 
 
 @dataclass_transform(
@@ -106,7 +59,6 @@ class StateMeta(type):
     and validation logic.
     """
 
-    __IMMUTABLE__: EllipsisType = ...
     __SELF_ATTRIBUTE__: ObjectAttribute
     __TYPE_PARAMETERS__: Mapping[str, Any] | None
     __SPECIFICATION__: TypeSpecification | None
@@ -175,8 +127,8 @@ class StateMeta(type):
 
         cls.__SELF_ATTRIBUTE__ = self_attribute  # pyright: ignore[reportConstantRedefinition]
         cls.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportConstantRedefinition]
-        cls.__SPECIFICATION__ = (  # pyright: ignore[reportConstantRedefinition]
-            {  # pyright: ignore[reportAttributeAccessIssue]
+        cls.__SPECIFICATION__ = (  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
+            {
                 "type": "object",
                 "properties": specification_fields,
                 "required": required_fields,

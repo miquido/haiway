@@ -1,5 +1,5 @@
 from haiway.helpers.asynchrony import asynchronous
-from haiway.helpers.caching import CacheMakeKey, CacheRead, CacheWrite, cache
+from haiway.helpers.caching import CacheMakeKey, CacheRead, CacheWrite, cache, cache_externally
 from haiway.helpers.concurrent import (
     concurrently,
     execute_concurrently,
@@ -48,6 +48,7 @@ __all__ = (
     "LoggerObservability",
     "asynchronous",
     "cache",
+    "cache_externally",
     "concurrently",
     "execute_concurrently",
     "process_concurrently",

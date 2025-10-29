@@ -3,7 +3,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Coroutine, Hashable
 from functools import _make_key  # pyright: ignore[reportPrivateUsage]
 from time import monotonic
-from typing import Any, NamedTuple, Protocol, cast, overload
+from typing import Any, NamedTuple, Protocol, overload
 
 from haiway.context.access import ctx
 from haiway.utils.mimic import mimic_function
@@ -14,6 +14,7 @@ __all__ = (
     "CacheRead",
     "CacheWrite",
     "cache",
+    "cache_externally",
 )
 
 
@@ -88,16 +89,20 @@ class CacheClear[Key](Protocol):
     ) -> None: ...
 
 
-class Cached[**Args, Result, Key: Hashable](Protocol):
-    async def clear_cache(
-        self,
-        key: Key | None = None,
-    ) -> None: ...
+class Cached[**Args, Result](Protocol):
+    async def clear_cache(self) -> None: ...
 
-    async def clear_call_cache(
+    async def __call__(
         self,
         *args: Args.args,
         **kwargs: Args.kwargs,
+    ) -> Result: ...
+
+
+class CachedExternally[**Args, Result, Key: Hashable](Protocol):
+    async def clear_cache(
+        self,
+        key: Key | None = None,
     ) -> None: ...
 
     async def __call__(
@@ -111,48 +116,34 @@ class Cached[**Args, Result, Key: Hashable](Protocol):
 def cache[**Args, Result](
     function: Callable[Args, Coroutine[Any, Any, Result]],
     /,
-) -> Cached[Args, Result, Hashable]: ...
+) -> Cached[Args, Result]: ...
 
 
 @overload
-def cache[**Args, Result, Key: Hashable](
+def cache[**Args, Result](
     *,
     limit: int | None = None,
     expiration: float | None = None,
-    make_key: CacheMakeKey[Args, Key] | None = None,
-) -> Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result, Key]]: ...
+) -> Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result]]: ...
 
 
-@overload
-def cache[**Args, Result, Key: Hashable](
-    *,
-    make_key: CacheMakeKey[Args, Key],
-    read: CacheRead[Key, Result],
-    write: CacheWrite[Key, Result],
-    clear: CacheClear[Key] | None = None,
-) -> Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result, Key]]: ...
-
-
-def cache[**Args, Result, Key: Hashable](
+def cache[**Args, Result](
     function: Callable[Args, Coroutine[Any, Any, Result]] | None = None,
     *,
     limit: int | None = None,
     expiration: float | None = None,
-    make_key: CacheMakeKey[Args, Key] | None = None,
-    read: CacheRead[Key, Result] | None = None,
-    write: CacheWrite[Key, Result] | None = None,
-    clear: CacheClear[Key] | None = None,
 ) -> (
-    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result, Key]]
-    | Cached[Args, Result, Key]
+    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result]]
+    | Cached[Args, Result]
 ):
     """
-    Memoize coroutine results using an in-memory LRU cache or a custom backend.
+    Memoize coroutine results using an in-memory LRU cache.
 
     The decorator must wrap an `async def` function. When used without arguments
-    (``@cache``) the wrapped coroutine is cached in-process with an LRU cache whose
+    (``@cache``) the wrapped coroutine is cached in-process with an LRU store whose
     default size is one entry. Providing configuration arguments returns a decorator
-    that can be applied later and enables custom cache behaviour.
+    that can be applied later and enables custom cache behaviour in-process.
+    For external caches that rely on custom read/write logic, use ``cache_externally``.
 
     Parameters
     ----------
@@ -161,39 +152,23 @@ def cache[**Args, Result, Key: Hashable](
         Omit this parameter when supplying configuration options so that ``cache``
         returns a decorator.
     limit : int | None
-        Maximum number of entries kept by the default in-memory cache. Defaults to ``1``.
-        Ignored when a custom ``read``/``write`` pair is supplied.
+        Maximum number of entries kept by the in-memory cache. Defaults to ``1``.
     expiration : float | None
         Monotonic seconds after which an in-memory entry is considered stale and recomputed.
-        ``None`` (the default) disables time-based eviction. Ignored for custom caches.
-    make_key : CacheMakeKey[Args, Key] | None
-        Callable that converts invocation arguments into a cache key. A default that mirrors
-        ``functools.lru_cache`` behaviour is used when omitted. Required when ``read`` and
-        ``write`` are provided.
-    read : CacheRead[Key, Result] | None
-        Async callable used to fetch values from an external cache. Must be provided together
-        with ``write`` and ``make_key``.
-    write : CacheWrite[Key, Result] | None
-        Async callable used to persist values to an external cache. Must be provided together
-        with ``read`` and ``make_key``. Writes are scheduled via ``ctx.spawn`` so the call
-        returns without awaiting the persistence step.
-    clear : CacheClear[Key] | None
-        Async callable used to evict entries from a custom cache. Provide this if you plan to
-        call ``clear_cache``/``clear_call_cache`` on the returned wrapper.
+        ``None`` (the default) disables time-based eviction.
 
     Returns
     -------
-    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result, Key]]
-        When used with configuration arguments, returns a decorator that will memoize the
-        target coroutine. When ``function`` is supplied positionally, the memoized coroutine is
-        returned immediately.
+    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result]]
+        When used with configuration arguments, returns a decorator that will memoize
+        the target coroutine. When ``function`` is supplied positionally, the memoized
+        coroutine is returned immediately.
 
     Notes
     -----
     - Only coroutine functions are supported; synchronous functions will trigger an assertion.
     - The default cache keeps state per decorated function and is not thread-safe.
-    - Custom backends are responsible for persistence semantics; ``write`` is invoked in the
-      background via ``ctx.spawn``.
+    - For custom cache backends (e.g., Redis), use :func:`cache_externally`.
 
     Examples
     --------
@@ -224,29 +199,13 @@ def cache[**Args, Result, Key: Hashable](
 
     def _wrap(
         function: Callable[Args, Coroutine[Any, Any, Result]],
-    ) -> Cached[Args, Result, Key]:
+    ) -> Cached[Args, Result]:
         assert iscoroutinefunction(function)  # nosec: B101
-        if read is not None and write is not None and make_key is not None:
-            assert limit is None and expiration is None  # nosec: B101
-            return _CustomCache(
-                function,
-                make_key=make_key,
-                read=read,
-                write=write,
-                clear=clear,
-            )
-
-        else:
-            assert read is None and write is None  # nosec: B101
-            return _AsyncCache(
-                function,
-                limit=limit if limit is not None else 1,
-                expiration=expiration,
-                make_key=cast(
-                    CacheMakeKey[Args, Hashable],
-                    make_key if make_key is not None else _default_make_key,
-                ),
-            )
+        return _LocalCache(
+            function,
+            limit=limit if limit is not None else 1,
+            expiration=expiration,
+        )
 
     if function is not None:
         return _wrap(function)
@@ -260,7 +219,18 @@ class _CacheEntry[Entry](NamedTuple):
     expire: float | None
 
 
-class _AsyncCache[**Args, Result]:
+def _default_make_key[**Args](
+    *args: Args.args,
+    **kwargs: Args.kwargs,
+) -> Hashable:
+    return _make_key(
+        args=args,
+        kwds=kwargs,
+        typed=True,
+    )
+
+
+class _LocalCache[**Args, Result]:
     __slots__ = (
         "__annotations__",
         "__defaults__",
@@ -273,7 +243,6 @@ class _AsyncCache[**Args, Result]:
         "_cached",
         "_function",
         "_limit",
-        "_make_key",
         "_next_expire_time",
     )
 
@@ -283,12 +252,10 @@ class _AsyncCache[**Args, Result]:
         /,
         limit: int,
         expiration: float | None,
-        make_key: CacheMakeKey[Args, Hashable],
     ) -> None:
         self._function: Callable[Args, Coroutine[Any, Any, Result]] = function
         self._cached: OrderedDict[Hashable, _CacheEntry[Result]] = OrderedDict()
         self._limit: int = limit
-        self._make_key: CacheMakeKey[Args, Hashable] = make_key
 
         if expiration := expiration:
 
@@ -314,31 +281,15 @@ class _AsyncCache[**Args, Result]:
         assert instance is None, "cache does not work for classes"  # nosec: B101
         return self
 
-    async def clear_cache(
-        self,
-        key: Hashable | None = None,
-    ) -> None:
-        if key is None:
-            self._cached.clear()
-
-        elif key in self._cached:
-            del self._cached[key]
-
-    async def clear_call_cache(
-        self,
-        *args: Args.args,
-        **kwargs: Args.kwargs,
-    ) -> None:
-        key: Hashable = self._make_key(*args, **kwargs)
-        if key in self._cached:
-            del self._cached[key]
+    async def clear_cache(self) -> None:
+        self._cached.clear()
 
     async def __call__(
         self,
         *args: Args.args,
         **kwargs: Args.kwargs,
     ) -> Result:
-        key: Hashable = self._make_key(
+        key: Hashable = _default_make_key(
             *args,
             **kwargs,
         )
@@ -367,7 +318,63 @@ class _AsyncCache[**Args, Result]:
         return result
 
 
-class _CustomCache[**Args, Result, Key]:
+def cache_externally[**Args, Result, Key: Hashable](
+    *,
+    make_key: CacheMakeKey[Args, Key],
+    read: CacheRead[Key, Result],
+    write: CacheWrite[Key, Result],
+    clear: CacheClear[Key] | None = None,
+) -> Callable[[Callable[Args, Coroutine[Any, Any, Result]]], CachedExternally[Args, Result, Key]]:
+    """
+    Memoize coroutine results using a caller-supplied cache backend.
+
+    Provide async callables that implement your cache behaviour. The decorator returns
+    a wrapper that preserves the original coroutine signature, reads through the backend
+    before executing, and schedules writes via ``ctx.spawn`` to avoid blocking callers.
+
+    Parameters
+    ----------
+    function : Callable[Args, Coroutine[Any, Any, Result]] | None
+        Coroutine to memoize when ``cache_externally`` is used directly as ``@cache_externally``.
+        Leave ``None`` to receive a decorator that can be applied later.
+    make_key : CacheMakeKey[Args, Key]
+        Callable that converts invocation arguments into a hashable key understood by the backend.
+    read : CacheRead[Key, Result]
+        Async callable that fetches cached values. Return ``None`` to signal a miss.
+    write : CacheWrite[Key, Result]
+        Async callable that persists values. Invoked in the background via ``ctx.spawn`` after the
+        coroutine body resolves.
+    clear : CacheClear[Key] | None
+        Optional async callable invoked by ``clear_cache`` to evict entries. Omit to disable
+        invalidation.
+
+    Returns
+    -------
+    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], CachedExternally[Args, Result, Key]]
+        Decorator that wraps coroutine functions with external cache integration.
+
+    Notes
+    -----
+    - Only coroutine functions are supported; synchronous callables raise an assertion.
+    - Writes are detached tasks; ensure your context stays alive so persistence can finish.
+    """
+
+    def _wrap(
+        function: Callable[Args, Coroutine[Any, Any, Result]],
+    ) -> CachedExternally[Args, Result, Key]:
+        assert iscoroutinefunction(function)  # nosec: B101
+        return _ExternalCache(
+            function,
+            make_key=make_key,
+            read=read,
+            write=write,
+            clear=clear,
+        )
+
+    return _wrap
+
+
+class _ExternalCache[**Args, Result, Key: Hashable]:
     __slots__ = (
         "__annotations__",
         "__defaults__",
@@ -410,14 +417,6 @@ class _CustomCache[**Args, Result, Key]:
         assert self._clear is not None  # nosec: B101
         await self._clear(key)
 
-    async def clear_call_cache(
-        self,
-        *args: Args.args,
-        **kwargs: Args.kwargs,
-    ) -> None:
-        assert self._clear is not None  # nosec: B101
-        await self._clear(self._make_key(*args, **kwargs))
-
     async def __call__(
         self,
         *args: Args.args,
@@ -441,14 +440,3 @@ class _CustomCache[**Args, Result, Key]:
 
             case entry:
                 return entry
-
-
-def _default_make_key[**Args](
-    *args: Args.args,
-    **kwargs: Args.kwargs,
-) -> Hashable:
-    return _make_key(
-        args=args,
-        kwds=kwargs,
-        typed=True,
-    )
