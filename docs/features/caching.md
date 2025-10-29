@@ -1,8 +1,12 @@
 # Caching Helper
 
-Haiway's `haiway.helpers.caching.cache` decorator memoizes coroutine results. It is designed for
-async-first services where work is driven through `async def` calls and relies on the current
-context for background execution via `ctx.spawn`.
+Haiway ships two memoization helpers under `haiway.helpers.caching`:
+
+- `cache` keeps coroutine results in-process with an LRU store.
+- `cache_externally` coordinates reads and writes against a user-provided backend while preserving
+  the coroutine signature.
+
+Both decorators require `async def` targets and lean on `ctx.spawn` for background persistence work.
 
 ## Default In-Memory Cache
 
@@ -22,18 +26,17 @@ async def handler(user_id: str) -> dict[str, str]:
 Key characteristics of the built-in cache:
 
 - Only coroutine functions are supported. Decorating a synchronous callable raises an assertion.
-- The cache keeps entries per decorated function and stores them in process memory.
-- LRU eviction is applied with a default limit of a single entry; pass `limit` to increase it.
-- Set `expiration` to a number of monotonic seconds to recompute stale entries automatically.
+- Entries are stored per decorated function inside the process.
+- The store evicts using LRU with a default limit of one entry; pass `limit` to increase it.
+- Provide `expiration` in monotonic seconds to automatically recompute stale entries.
 
-## Custom Cache Backends
+## External Cache Backends
 
-When in-memory storage is not enough, supply a trio of async functions that operate on your cache
-backend. The decorator returns a wrapper that still looks like the original coroutine while
-retrieval and persistence are delegated to the custom backend.
+`cache_externally` binds a coroutine to custom read/write logic. You supply the backend operations,
+and the decorator mirrors the coroutine's interface while delegating persistence.
 
 ```python
-from haiway.helpers.caching import cache
+from haiway.helpers.caching import cache_externally
 
 async def read_from_store(cache_key: str) -> dict[str, str] | None:
     if raw := await redis.get(cache_key):
@@ -49,7 +52,7 @@ async def clear_from_store(cache_key: str | None) -> None:
         return
     await redis.delete(cache_key)
 
-@cache(
+@cache_externally(
     make_key=lambda user_id: f"profile:{user_id}",
     read=read_from_store,
     write=write_to_store,
@@ -61,29 +64,28 @@ async def resolve_profile(user_id: str) -> dict[str, str]:
 
 `redis` denotes an async client instance and `json` comes from the standard library.
 
-Guidelines for custom caches:
+Guidelines for external caches:
 
-- `make_key` must convert arguments into a hashable key; provide one explicitly when using
-  `read`/`write`.
-- `write` is scheduled via `ctx.spawn`, so the call returns without waiting for persistence. Ensure
-  your backend can handle eventual consistency or add your own synchronization.
-- Provide a `clear` callable to make `clear_cache` and `clear_call_cache` work with the backend.
+- `make_key` must deterministically transform call arguments into a hashable key.
+- `read` returns `None` for cache misses; any other value is treated as a hit and returned.
+- `write` runs via `ctx.spawn`, so the call returns before persistence completes. Make sure your
+  backend tolerates eventual consistency or layer your own synchronization.
+- Provide a `clear` callable if you need cache invalidation; omit it to disable `clear_cache`.
 
 ## Cache Invalidation
 
-Every wrapped coroutine exposes two helpers:
+- `await cached_fn.clear_cache()` clears all entries for the in-memory decorator.
+- `await cached_fn.clear_cache(key)` clears a specific entry when using `cache_externally`; omit
+  `key` to flush the backend entirely. Calling `clear_cache` requires that `clear` was provided to
+  `cache_externally`.
 
-- `await cached_fn.clear_cache()` removes every cached result when supported by the backend.
-- `await cached_fn.clear_call_cache(*args, **kwargs)` recomputes the next call for a specific key.
-
-The default in-memory cache clears entries immediately. Custom caches must include a `clear`
-function that performs the removal.
+The default in-memory cache clears entries immediately, while external backends delegate to the
+`clear` coroutine you supply.
 
 ## Operational Notes
 
-- The decorator is per-process. Use an external cache backend if multiple workers must share
-  results.
-- Because writes happen asynchronously, ensure your context stays alive long enough for `ctx.spawn`
-  tasks to complete.
-- Combine cache metrics with `ctx.record_event` to instrument cache hits and misses when reporting
+- Decorated functions are per-process. Use `cache_externally` to share results across workers.
+- Because writes happen asynchronously, ensure the current context stays alive long enough for
+  spawned write tasks to complete.
+- Combine cache metrics with `ctx.record_event` to instrument cache hits and misses before reporting
   to observability backends such as OpenTelemetry.
