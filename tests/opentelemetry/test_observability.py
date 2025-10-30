@@ -9,7 +9,7 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from haiway.context.identifier import ScopeIdentifier
 from haiway.context.observability import ObservabilityLevel
-from haiway.opentelemetry.observability import OpenTelemetry, ScopeStore
+from haiway.opentelemetry.observability import OpenTelemetry, ScopeStore, _sanitized_attributes
 from haiway.types import MISSING
 
 
@@ -164,3 +164,40 @@ def test_metric_recording_gauge_reuses_instrument(monkeypatch: pytest.MonkeyPatc
         (5, {"kept": "value"}),
         (7, {"kept": "next"}),
     ]
+
+
+def test_scope_store_sanitizes_sequence_attributes() -> None:
+    sanitized = _sanitized_attributes(
+        {
+            "tags": ["a", "b"],
+            "ints": (1, 2, 3),
+            "booleans": [True, True, False],
+            "skip_none": [None, "ok"],
+            "skip_missing": [MISSING, "kept"],
+            "skip_all": [None, MISSING],
+            "scalar": "value",
+        }
+    )
+
+    assert sanitized is not None
+    assert sanitized == {
+        "tags": ("a", "b"),
+        "ints": (1, 2, 3),
+        "booleans": (True, True, False),
+        "skip_none": ("ok",),
+        "skip_missing": ("kept",),
+        "scalar": "value",
+    }
+    assert frozenset(sanitized.items())
+
+
+def test_scope_store_sanitization_returns_empty_for_empty_mapping() -> None:
+    sanitized = _sanitized_attributes(
+        {
+            "none": None,
+            "missing": MISSING,
+            "empty_sequence": [None, MISSING],
+        }
+    )
+
+    assert sanitized == {}

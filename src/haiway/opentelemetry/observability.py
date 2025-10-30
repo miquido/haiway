@@ -1,6 +1,6 @@
 import os
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, Self, final
+from typing import Any, ClassVar, Self, cast, final
 from uuid import UUID
 
 from grpc import ChannelCredentials
@@ -234,7 +234,7 @@ class ScopeStore:
 
         self.span.add_event(
             event,
-            attributes=self._sanitize_attributes(attributes),
+            attributes=_sanitized_attributes(attributes),
         )
 
     def record_metric(
@@ -276,7 +276,7 @@ class ScopeStore:
 
                 self._counters[name].add(
                     value,
-                    attributes=self._sanitize_attributes(attributes),
+                    attributes=_sanitized_attributes(attributes),
                 )
 
             case "histogram":
@@ -288,7 +288,7 @@ class ScopeStore:
 
                 self._histograms[name].record(
                     value,
-                    attributes=self._sanitize_attributes(attributes),
+                    attributes=_sanitized_attributes(attributes),
                 )
 
             case "gauge":
@@ -300,7 +300,7 @@ class ScopeStore:
 
                 self._gauges[name].set(
                     value,
-                    attributes=self._sanitize_attributes(attributes),
+                    attributes=_sanitized_attributes(attributes),
                 )
 
     def record_attributes(
@@ -318,29 +318,50 @@ class ScopeStore:
         attributes : Mapping[str, ObservabilityAttribute]
             Attributes to set on the span
         """
-        sanitized_attributes: Mapping[str, Any] | None = self._sanitize_attributes(attributes)
-        if sanitized_attributes is None:
-            return
 
-        for name, value in sanitized_attributes.items():
+        for name, value in _sanitized_attributes(attributes).items():
             self.span.set_attribute(
                 name,
                 value=value,
             )
 
-    @staticmethod
-    def _sanitize_attributes(
-        attributes: Mapping[str, ObservabilityAttribute],
-        /,
-    ) -> Mapping[str, Any] | None:
-        if not attributes:
-            return None
 
-        return {
-            key: value
-            for key, value in attributes.items()
-            if value is not None and value is not MISSING
-        }
+def _sanitized_attributes(
+    attributes: Mapping[str, Any],
+    /,
+) -> Mapping[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in attributes.items():
+        if value is None or value is MISSING:
+            continue  # skip missing/empty
+
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            elements: list[Any] = []
+            for item in cast(Sequence[Any], value):
+                if item is None or item is MISSING:
+                    continue  # skip missing/empty
+
+                assert isinstance(item, str | float | int | bool)  # nosec: B101
+                elements.append(item)
+
+            if not elements:
+                continue  # skip missing/empty
+
+            sanitized[key] = tuple(elements)
+
+        elif isinstance(value, Mapping):
+            for name, item in cast(Mapping[str, Any], value).items():
+                if item is None or item is MISSING:
+                    continue  # skip missing/empty
+
+                assert isinstance(item, str | float | int | bool)  # nosec: B101
+                sanitized[f"{key}.{name}"] = item
+
+        else:
+            assert isinstance(value, str | float | int | bool)  # nosec: B101
+            sanitized[key] = value
+
+    return sanitized
 
 
 @final
