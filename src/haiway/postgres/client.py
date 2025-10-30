@@ -102,7 +102,7 @@ class PostgresConnectionPool(Immutable):
     password: str = POSTGRES_PASSWORD
     ssl: str = POSTGRES_SSLMODE
     connection_limit: int = POSTGRES_CONNECTIONS
-    _initialize: Callable[[Connection], Coroutine[None, None, None]]
+    _initialize: Callable[[Connection], Coroutine[None, None, None]] = _noop_initialize
     _pool: Pool | None = None  # initialized on demand
 
     async def __aenter__(self) -> Postgres:
