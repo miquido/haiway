@@ -64,7 +64,7 @@ class AttributeRequirement[Root]:
         )
 
     @classmethod
-    def text_match[Parameter](
+    def text_match(
         cls,
         value: str,
         /,
@@ -515,3 +515,10 @@ class AttributeRequirement[Root]:
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
         )
+
+    def __str__(self) -> str:
+        if self.operator in ("and", "or"):
+            return f"({self.lhs} {self.operator} {self.rhs})"
+
+        else:
+            return f"{self.lhs} {self.operator} {self.rhs}"
