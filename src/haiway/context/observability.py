@@ -492,16 +492,8 @@ class ObservabilityContext(Immutable):
         exception: BaseException | None
             Optional exception to associate with the log
         """
-        try:  # catch exceptions - we don't wan't to blow up on observability
+        try:
             context: Self = cls._context.get()
-
-            context.observability.log_recording(
-                context._scope,
-                level,
-                message,
-                *args,
-                exception=exception,
-            )
 
         except LookupError:
             getLogger().log(
@@ -510,6 +502,31 @@ class ObservabilityContext(Immutable):
                 *args,
                 exc_info=exception,
             )
+
+        else:
+            try:
+                context.observability.log_recording(
+                    context._scope,
+                    level,
+                    message,
+                    *args,
+                    exception=exception,
+                )
+
+            # catch exceptions - we don't wan't to blow up on observability
+            except BaseException as exc:
+                logger: Logger = getLogger()
+                logger.log(
+                    ObservabilityLevel.ERROR,
+                    "Failed to properly log a message within observability system",
+                    exc_info=exc,
+                )
+                logger.log(
+                    level,
+                    message,
+                    *args,
+                    exc_info=exception,
+                )
 
     @classmethod
     def record_event(
@@ -545,7 +562,7 @@ class ObservabilityContext(Immutable):
                 attributes=attributes,
             )
 
-        except Exception as exc:
+        except BaseException as exc:
             cls.record_log(
                 ObservabilityLevel.ERROR,
                 f"Failed to record event: {event}",
@@ -598,7 +615,7 @@ class ObservabilityContext(Immutable):
                 attributes=attributes,
             )
 
-        except Exception as exc:
+        except BaseException as exc:
             cls.record_log(
                 ObservabilityLevel.ERROR,
                 f"Failed to record metric: {metric}",
@@ -708,7 +725,16 @@ class ObservabilityContext(Immutable):
             "_token",
             None,
         )
-        self.observability.scope_exiting(
-            self._scope,
-            exception=exc_val,
-        )
+        try:
+            self.observability.scope_exiting(
+                self._scope,
+                exception=exc_val,
+            )
+
+        except BaseException as exc:
+            ObservabilityContext.record_log(
+                ObservabilityLevel.ERROR,
+                "Failed to properly exit observability scope",
+                exception=exc,
+            )
+            raise exc

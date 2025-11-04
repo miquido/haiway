@@ -26,7 +26,6 @@ from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExpo
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SpanExporter
-from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.trace import Link, Span, SpanContext, StatusCode, TraceFlags, Tracer
 
 from haiway.context import (
@@ -504,11 +503,44 @@ class OpenTelemetry:
         return cls
 
     @classmethod
+    def traceparent(
+        cls,
+        version: int = 0,
+    ) -> str | None:
+        """
+        Get the active span encoded as a W3C traceparent string.
+
+        Parameters
+        ----------
+        version: int, default=0
+            Traceparent version to encode in the header.
+
+        Returns
+        -------
+        str | None
+            Encoded traceparent value when a valid span context exists, otherwise None.
+        """
+        try:
+            span_context: trace.SpanContext = trace.get_current_span().get_span_context()
+            if not span_context.is_valid:
+                return None
+
+            return (
+                f"{version:02x}-"
+                f"{span_context.trace_id:032x}-"
+                f"{span_context.span_id:016x}-"
+                f"{int(span_context.trace_flags):02x}"
+            )
+
+        except BaseException:
+            return None
+
+    @classmethod
     def observability(  # noqa: C901, PLR0915
         cls,
         level: ObservabilityLevel = ObservabilityLevel.INFO,
         *,
-        external_trace_id: str | None = None,
+        traceparent: str | None = None,
     ) -> Observability:
         """
         Create an Observability implementation using OpenTelemetry.
@@ -521,8 +553,8 @@ class OpenTelemetry:
         ----------
         level : ObservabilityLevel, default=ObservabilityLevel.INFO
             The minimum observability level to record
-        external_trace_id : str | None, optional
-            External trace ID for distributed tracing context propagation.
+        traceparent : str | None, optional
+            Standardized traceparent allowing to link the otel scope with external systems.
             If provided, the root span will be linked to this external trace.
 
         Returns
@@ -766,28 +798,28 @@ class OpenTelemetry:
 
                 # Handle distributed tracing with external trace ID
                 links: Sequence[Link] | None = None
-                if external_trace_id is not None:
-                    # Convert external trace ID to OpenTelemetry trace ID format
+                if traceparent is not None:
                     try:
-                        # Generate a proper span ID for the external trace link
-                        id_generator = RandomIdGenerator()
+                        assert len(traceparent.split("-")) == 4  # nosec: B101 # noqa: PLR2004
+                        # Assume correct traceparent format
+                        _, trace_id, span_id, trace_flags = traceparent.split("-")
 
                         # Create a link to the external trace
                         links = (
                             Link(
                                 SpanContext(
-                                    # Assume external_trace_id is a hex string, convert to int
-                                    int(external_trace_id, 16),
-                                    id_generator.generate_span_id(),  # Generate proper span ID
-                                    True,  # is_remote=True
-                                    TraceFlags.SAMPLED,  # pyright: ignore[reportArgumentType]
+                                    int(trace_id, 16),
+                                    int(span_id, 16),
+                                    True,  # is_remote
+                                    TraceFlags(int(trace_flags, 16)),
                                 )
                             ),
                         )
 
-                    except (ValueError, TypeError):
-                        ctx.log_warning(
-                            "Failed to convert external trace ID to OpenTelemetry format"
+                    except Exception as exc:
+                        ctx.log_error(
+                            f"Failed to link using provided traceparent: {traceparent}",
+                            exception=exc,
                         )
 
                 scope_store = ScopeStore(

@@ -5,6 +5,7 @@ from inspect import iscoroutine
 from types import TracebackType
 from typing import ClassVar, cast
 
+from haiway.context.observability import ObservabilityContext, ObservabilityLevel
 from haiway.context.variables import VariablesContext
 from haiway.types import Immutable
 
@@ -164,16 +165,20 @@ class TaskGroupContext(Immutable):
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         assert self._group is not None  # nosec: B101
 
+        TaskGroupContext._context.reset(self._token)
         try:
-            TaskGroupContext._context.reset(self._token)
             await self._group.__aexit__(
                 exc_type,
                 exc_val,
                 exc_tb,
             )
 
-        except ExceptionGroup:
-            pass  # skip task group exceptions
+        except BaseExceptionGroup as exc:  # do not propagate group errors
+            ObservabilityContext.record_log(
+                ObservabilityLevel.ERROR,
+                "Scope task group exit failed",
+                exception=exc,
+            )
 
         finally:
             object.__setattr__(

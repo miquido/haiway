@@ -653,14 +653,16 @@ class ConfigurationRepository(State):
 
         except Exception as exc:
             ctx.log_error(
-                f"Failed to load configuration '{config_identifier}', using None...",
+                f"Failed to load configuration '{config_identifier}', attempting fallback...",
                 exception=exc,
             )
             loaded = None
 
         if loaded is not None:
             try:
-                return config.from_mapping(loaded)
+                loaded_config: Config = config.from_mapping(loaded)
+                ctx.record(attributes={f"config.{config.__qualname__}": config_identifier})
+                return loaded_config
 
             except Exception as exc:
                 raise ConfigurationInvalid(
@@ -669,12 +671,15 @@ class ConfigurationRepository(State):
                 ) from exc
 
         elif default is not None:
+            ctx.record(attributes={f"config.{config.__qualname__}": "default"})
             return default
 
         elif required:
             try:
                 # try to use default value from implementation
-                return config()
+                initialized: Config = config()
+                ctx.record(attributes={f"config.{config.__qualname__}": "__init__"})
+                return initialized
 
             except Exception:
                 raise ConfigurationMissing(identifier=config_identifier) from None

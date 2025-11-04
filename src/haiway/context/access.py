@@ -170,7 +170,8 @@ class ScopeContext(Immutable):
 
         return str(self._observability_context.observability.trace_identifying(self._identifier))
 
-    async def __aexit__(
+    # TODO: we need to refactor this...
+    async def __aexit__(  # noqa: C901, PLR0912, PLR0915
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
@@ -178,65 +179,151 @@ class ScopeContext(Immutable):
     ) -> None:
         assert self._state_context is not None  # nosec: B101
 
+        disposables_exception: BaseException | None = None
         if self._disposables is not None:
-            await self._disposables.dispose(
+            try:
+                await self._disposables.dispose(
+                    exc_type=exc_type,
+                    exc_val=exc_val,
+                    exc_tb=exc_tb,
+                )
+
+            except BaseException as exc:
+                ObservabilityContext.record_log(
+                    ObservabilityLevel.ERROR,
+                    "Disposables context exit failed",
+                    exception=exc,
+                )
+                disposables_exception = exc
+
+        if self._preset_disposables is not None:
+            try:
+                await self._preset_disposables.dispose(
+                    exc_type=exc_type,
+                    exc_val=exc_val,
+                    exc_tb=exc_tb,
+                )
+
+            except Exception as exc:
+                ObservabilityContext.record_log(
+                    ObservabilityLevel.ERROR,
+                    "Disposables context exit failed",
+                    exception=exc,
+                )
+                if disposables_exception is None:
+                    disposables_exception = exc
+
+                elif isinstance(disposables_exception, Exception):
+                    disposables_exception = ExceptionGroup(
+                        "Disposables context exit failed",
+                        (disposables_exception, exc),
+                    )
+
+                else:
+                    disposables_exception = BaseExceptionGroup(
+                        "Disposables context exit failed",
+                        (disposables_exception, exc),
+                    )
+
+            except BaseException as exc:
+                ObservabilityContext.record_log(
+                    ObservabilityLevel.ERROR,
+                    "Disposables context exit failed",
+                    exception=exc,
+                )
+                if disposables_exception is None:
+                    disposables_exception = exc
+
+                else:
+                    disposables_exception = BaseExceptionGroup(
+                        "Disposables context exit failed",
+                        (disposables_exception, exc),
+                    )
+
+            finally:
+                object.__setattr__(
+                    self,
+                    "_preset_disposables",
+                    None,
+                )
+
+        try:
+            if self._task_group_context is not None:
+                await self._task_group_context.__aexit__(
+                    exc_type=exc_type,
+                    exc_val=exc_val,
+                    exc_tb=exc_tb,
+                )
+
+        except BaseException as exc:
+            ObservabilityContext.record_log(
+                ObservabilityLevel.ERROR,
+                "Task group context exit failed",
+                exception=exc,
+            )
+            raise
+
+        finally:
+            if self._events_context is not None:
+                try:
+                    await self._events_context.__aexit__(
+                        exc_type=exc_type,
+                        exc_val=exc_val,
+                        exc_tb=exc_tb,
+                    )
+
+                except BaseException as exc:
+                    ObservabilityContext.record_log(
+                        ObservabilityLevel.ERROR,
+                        "Events context exit failed",
+                        exception=exc,
+                    )
+
+            self._variables_context.__exit__(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
             )
 
-        if self._preset_disposables is not None:
-            await self._preset_disposables.dispose(
+            self._state_context.__exit__(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
             )
             object.__setattr__(
                 self,
-                "_preset_disposables",
+                "_state_context",
                 None,
             )
 
-        if self._task_group_context is not None:
-            await self._task_group_context.__aexit__(
+            self._observability_context.__exit__(
+                exc_type=exc_type,
+                exc_val=exc_val,
+                exc_tb=exc_tb,
+            )
+            self._identifier.__exit__(
                 exc_type=exc_type,
                 exc_val=exc_val,
                 exc_tb=exc_tb,
             )
 
-        if self._events_context is not None:
-            await self._events_context.__aexit__(
-                exc_type=exc_type,
-                exc_val=exc_val,
-                exc_tb=exc_tb,
+        if disposables_exception is None:
+            return  # no additional excptions
+
+        if exc_val is None:
+            raise disposables_exception
+
+        if isinstance(exc_val, Exception) and isinstance(disposables_exception, Exception):
+            raise ExceptionGroup(
+                "Scope context exit failed",
+                (disposables_exception, exc_val),
             )
 
-        self._variables_context.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-
-        self._state_context.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-        object.__setattr__(
-            self,
-            "_state_context",
-            None,
-        )
-        self._observability_context.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-        self._identifier.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
+        else:
+            raise BaseExceptionGroup(
+                "Scope context exit failed",
+                (disposables_exception, exc_val),
+            )
 
 
 class DisposablesContext(Immutable):
