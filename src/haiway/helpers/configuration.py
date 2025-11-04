@@ -2,7 +2,7 @@ from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Any, Literal, Protocol, Self, overload, runtime_checkable
 
 from haiway.attributes import State
-from haiway.context import ctx
+from haiway.context import ObservabilityLevel, ctx
 from haiway.helpers.statemethods import statemethod
 from haiway.types import META_EMPTY, BasicValue, Meta
 
@@ -661,7 +661,10 @@ class ConfigurationRepository(State):
         if loaded is not None:
             try:
                 loaded_config: Config = config.from_mapping(loaded)
-                ctx.record(attributes={f"config.{config.__qualname__}": config_identifier})
+                ctx.record(
+                    ObservabilityLevel.INFO,
+                    attributes={f"config.{config.__qualname__}": config_identifier},
+                )
                 return loaded_config
 
             except Exception as exc:
@@ -671,14 +674,20 @@ class ConfigurationRepository(State):
                 ) from exc
 
         elif default is not None:
-            ctx.record(attributes={f"config.{config.__qualname__}": "default"})
+            ctx.record(
+                ObservabilityLevel.INFO,
+                attributes={f"config.{config.__qualname__}": "default"},
+            )
             return default
 
         elif required:
             try:
                 # try to use default value from implementation
                 initialized: Config = config()
-                ctx.record(attributes={f"config.{config.__qualname__}": "__init__"})
+                ctx.record(
+                    ObservabilityLevel.INFO,
+                    attributes={f"config.{config.__qualname__}": "__init__"},
+                )
                 return initialized
 
             except Exception:
