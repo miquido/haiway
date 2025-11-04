@@ -3,7 +3,7 @@ from asyncio import (
     gather,
     get_running_loop,
 )
-from collections.abc import Collection, Generator, Iterable
+from collections.abc import Collection, Generator, Iterable, Sequence
 from contextlib import AbstractAsyncContextManager
 from types import TracebackType
 from typing import Self
@@ -251,12 +251,27 @@ class Disposables(Immutable):
             exc_tb,
         )
 
-        match [exc for exc in results if isinstance(exc, BaseException)]:
-            case []:
-                return None
+        exceptions: list[Exception] = []
+        base_exceptions: list[BaseException] = []
 
-            case [exception]:
-                raise exception
+        for result in results:
+            if isinstance(result, Exception):
+                exceptions.append(result)
 
-            case [*exceptions]:
-                raise BaseExceptionGroup("Disposables cleanup errors", exceptions)
+            elif isinstance(result, BaseException):
+                base_exceptions.append(result)
+
+        if base_exceptions:
+            combined_exceptions: Sequence[BaseException] = (*base_exceptions, *exceptions)
+            if len(combined_exceptions) == 1:
+                raise combined_exceptions[0]
+
+            else:
+                raise BaseExceptionGroup("Disposables cleanup errors", combined_exceptions)
+
+        elif exceptions:
+            if len(exceptions) == 1:
+                raise exceptions[0]
+
+            else:
+                raise ExceptionGroup("Disposables cleanup errors", exceptions)

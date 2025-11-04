@@ -106,6 +106,7 @@ class VariablesContext(Immutable):
             "_token",
             None,
         )
+
         if not self.isolated:
             self._variables.propagate()
 

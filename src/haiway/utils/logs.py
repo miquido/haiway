@@ -9,6 +9,7 @@ def setup_logging(
     *loggers: str,
     time: bool = True,
     debug: bool = getenv_bool("DEBUG_LOGGING", __debug__),
+    disable_existing_loggers: bool = True,
 ) -> None:
     """\
     Setup logging configuration and prepare specified loggers.
@@ -21,6 +22,8 @@ def setup_logging(
         include timestamps in logs.
     debug: bool = __debug__
         include debug logs.
+    disable_existing_loggers: bool = True
+        disable other loggers which were created before calling the setup.
 
     NOTE: this function should be run only once on application start
     """
@@ -28,7 +31,7 @@ def setup_logging(
     dictConfig(
         config={
             "version": 1,
-            "disable_existing_loggers": True,
+            "disable_existing_loggers": disable_existing_loggers,
             "formatters": {
                 "standard": {
                     "format": "%(asctime)s [%(levelname)-4s] [%(name)s] %(message)s",

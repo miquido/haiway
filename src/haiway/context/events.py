@@ -291,15 +291,18 @@ class EventsContext(Immutable):
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         assert self._events is not None  # nosec: B101
 
-        self._events.close()
         EventsContext._context.reset(self._token)
-        object.__setattr__(
-            self,
-            "_token",
-            None,
-        )
-        object.__setattr__(
-            self,
-            "_events",
-            None,
-        )
+        try:
+            self._events.close()
+
+        finally:
+            object.__setattr__(
+                self,
+                "_token",
+                None,
+            )
+            object.__setattr__(
+                self,
+                "_events",
+                None,
+            )
