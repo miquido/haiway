@@ -189,8 +189,8 @@ def _wrap_sync[**Args, Result](
         while True:
             try:
                 return function(*args, **kwargs)
-            except CancelledError as exc:
-                raise exc
+            except CancelledError:
+                raise
 
             except Exception as exc:
                 if attempt < limit and catching(exc):
@@ -212,7 +212,7 @@ def _wrap_sync[**Args, Result](
                             sleep_sync(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
 
                 else:
-                    raise exc
+                    raise
 
     return wrapped
 
@@ -235,8 +235,8 @@ def _wrap_async[**Args, Result](
         while True:
             try:
                 return await function(*args, **kwargs)
-            except CancelledError as exc:
-                raise exc
+            except CancelledError:
+                raise
 
             except Exception as exc:
                 if attempt < limit and catching(exc):
@@ -258,6 +258,6 @@ def _wrap_async[**Args, Result](
                             await sleep(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
 
                 else:
-                    raise exc
+                    raise
 
     return wrapped

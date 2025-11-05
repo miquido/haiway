@@ -238,7 +238,7 @@ class Postgres(State):
                         f"...migration  {current_version + idx} failed...",
                         exception=exc,
                     )
-                    raise exc
+                    raise
 
                 else:
                     ctx.log_info(f"...migration  {current_version + idx} completed...")

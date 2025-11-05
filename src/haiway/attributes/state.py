@@ -25,7 +25,7 @@ from haiway.attributes.attribute import Attribute
 from haiway.attributes.coding import AttributesJSONEncoder
 from haiway.attributes.path import AttributePath
 from haiway.attributes.specification import type_specification
-from haiway.attributes.validation import ValidationContext, ValidationError
+from haiway.attributes.validation import ValidationContext
 from haiway.types import (
     MISSING,
     Default,
@@ -158,11 +158,9 @@ class StateMeta(type):
             return False
 
         if hasattr(self, "__origin__") or hasattr(instance_type, "__origin__"):
-            try:  # TODO: find a better way to validate partially typed instances
-                self(**vars(instance))
-
-            except ValidationError:
-                return False
+            return all(
+                field.annotation.check(getattr(instance, field.name)) for field in self.__FIELDS__
+            )
 
         return True
 

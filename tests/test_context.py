@@ -282,11 +282,7 @@ async def test_spawned_task_error_is_recorded_on_task():
 
 @mark.asyncio
 async def test_scope_disposables_error_is_propagated():
-    disposables = Disposables(
-        (
-            disposable_that_raises(lambda: RuntimeError("dispose failed")),
-        )
-    )
+    disposables = Disposables((disposable_that_raises(lambda: RuntimeError("dispose failed")),))
 
     with raises(RuntimeError, match="dispose failed"):
         async with ctx.scope("disposable-error", disposables=disposables):

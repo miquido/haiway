@@ -12,6 +12,10 @@ class Description:
     ----------
     description : str
     A non-empty description string
+
+    Examples
+    --------
+    >>> described: Annotated[str, Description("Lorem ipsum...")]
     """
 
     __slots__ = ("description",)

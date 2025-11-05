@@ -138,6 +138,11 @@ class AttributeAnnotation(Protocol):
         value: Any,
     ) -> Any: ...
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool: ...
+
 
 def _no_verify[Type](value: Type) -> Type:
     return value
@@ -220,6 +225,12 @@ class AnyAttribute(Immutable):
         value: Any,
     ) -> Any:
         return self.verifying(value)  # Any is always valid
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return True  # Any is always valid
 
 
 class AliasAttribute(Immutable):
@@ -335,6 +346,12 @@ class AliasAttribute(Immutable):
     ) -> Any:
         return self.resolved.validate(value)
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return self.resolved.check(value)
+
 
 class MissingAttribute(Immutable):
     name: Final[Literal["Missing"]] = "Missing"
@@ -418,6 +435,12 @@ class MissingAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'Missing'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return value is MISSING
+
 
 class NoneAttribute(Immutable):
     name: Final[Literal["None"]] = "None"
@@ -500,6 +523,12 @@ class NoneAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'None'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return value is None
 
 
 class LiteralAttribute(Immutable):
@@ -590,6 +619,12 @@ class LiteralAttribute(Immutable):
             f"'{value}' is not matching any of expected literal values"
             f" [{', '.join(repr(literal) for literal in self.values)}]"
         )
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return value in self.values
 
 
 class BoolAttribute(Immutable):
@@ -686,6 +721,12 @@ class BoolAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'bool'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, bool)
+
 
 class IntegerAttribute(Immutable):
     name: Final[Literal["int"]] = "int"
@@ -771,6 +812,12 @@ class IntegerAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'int'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, int)
 
 
 class FloatAttribute(Immutable):
@@ -858,6 +905,12 @@ class FloatAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'float'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, float)
+
 
 class BytesAttribute(Immutable):
     name: Final[Literal["bytes"]] = "bytes"
@@ -940,6 +993,12 @@ class BytesAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'bytes'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, bytes)
 
 
 class UUIDAttribute(Immutable):
@@ -1031,6 +1090,12 @@ class UUIDAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'UUID'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, uuid.UUID)
+
 
 class StringAttribute(Immutable):
     name: Final[Literal["str"]] = "str"
@@ -1113,6 +1178,12 @@ class StringAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'str'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, str)
 
 
 class DatetimeAttribute(Immutable):
@@ -1206,6 +1277,12 @@ class DatetimeAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'datetime'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, datetime.datetime)
+
 
 class DateAttribute(Immutable):
     name: Final[Literal["date"]] = "date"
@@ -1297,6 +1374,12 @@ class DateAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'date'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, datetime.date)
 
 
 class TimeAttribute(Immutable):
@@ -1390,6 +1473,12 @@ class TimeAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'time'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, datetime.time)
+
 
 class PathAttribute(Immutable):
     name: Final[Literal["Path"]] = "Path"
@@ -1479,6 +1568,12 @@ class PathAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'Path'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, pathlib.Path)
 
 
 class TupleAttribute(Immutable):
@@ -1578,6 +1673,16 @@ class TupleAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'tuple'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return (
+            isinstance(value, tuple)
+            and len(value) == len(self.values)  # pyright: ignore[reportUnknownArgumentType]
+            and all(element.check(value[idx]) for idx, element in enumerate(self.values))
+        )
+
 
 class SequenceAttribute(Immutable):
     name: Literal["Sequence"] = "Sequence"
@@ -1671,6 +1776,15 @@ class SequenceAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'Sequence'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        if isinstance(value, str | bytes | bytearray | memoryview):
+            return False
+
+        return isinstance(value, Sequence) and all(self.values.check(element) for element in value)  # pyright: ignore[reportUnknownVariableType]
 
 
 class SetAttribute(Immutable):
@@ -1766,6 +1880,12 @@ class SetAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'Set'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, Set) and all(self.values.check(element) for element in value)  # pyright: ignore[reportUnknownVariableType]
+
 
 class MappingAttribute(Immutable):
     name: Literal["Mapping"] = "Mapping"
@@ -1860,6 +1980,15 @@ class MappingAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'Mapping'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, Mapping) and all(
+            self.keys.check(key) and self.values.check(element)
+            for key, element in value.items()  # pyright: ignore[reportUnknownVariableType]
+        )
+
 
 class MetaAttribute(Immutable):
     name: Literal["Meta"] = "Meta"
@@ -1948,6 +2077,12 @@ class MetaAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of 'Meta'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, Meta)
+
 
 class ValidableAttribute(Immutable):
     attribute: AttributeAnnotation
@@ -1998,6 +2133,12 @@ class ValidableAttribute(Immutable):
         value: Any,
     ) -> Any:
         return self.attribute.validate(self.validating(value))
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return self.attribute.check(value)
 
 
 class ObjectAttribute(Immutable):
@@ -2094,6 +2235,12 @@ class ObjectAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, self.base)
 
 
 class TypedDictAttribute(Immutable):
@@ -2196,6 +2343,15 @@ class TypedDictAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, Mapping) and all(
+            (key in value and attribute.check(value[key])) or not attribute.required
+            for key, attribute in self.attributes.items()
+        )
+
 
 class FunctionAttribute(Immutable):
     base: Any
@@ -2285,6 +2441,12 @@ class FunctionAttribute(Immutable):
         else:
             raise TypeError(f"'{value}' is not matching expected function type")
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return callable(value)
+
 
 class ProtocolAttribute(Immutable):
     base: Any
@@ -2369,6 +2531,12 @@ class ProtocolAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, self.base)
 
 
 class UnionAttribute(Immutable):
@@ -2465,6 +2633,12 @@ class UnionAttribute(Immutable):
             errors,
         )
 
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return any(alternative.check(value) for alternative in self.alternatives)
+
 
 class CustomAttribute(Immutable):
     base: Any
@@ -2552,6 +2726,12 @@ class CustomAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, self.base)
 
 
 class StrEnumAttribute(Immutable):
@@ -2651,6 +2831,12 @@ class StrEnumAttribute(Immutable):
                     ) from exc
 
         raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, self.base)
 
 
 class IntEnumAttribute(Immutable):
@@ -2762,6 +2948,12 @@ class IntEnumAttribute(Immutable):
 
         else:
             raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, self.base)
 
 
 def resolve_self_attribute(

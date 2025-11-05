@@ -234,7 +234,7 @@ Events integrate with Haiway's observability:
 ```python
 async def monitored_processor():
     async for event in ctx.subscribe(ImportantEvent):
-        ctx.record(
+        ctx.record_info(
             event="event_received",
             attributes={"event_type": type(event).__name__}
         )
@@ -242,7 +242,7 @@ async def monitored_processor():
         start = time.time()
         await process_event(event)
 
-        ctx.record(
+        ctx.record_info(
             metric="event_processing_time",
             value=time.time() - start,
             unit="seconds",

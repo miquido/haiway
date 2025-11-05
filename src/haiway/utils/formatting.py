@@ -44,6 +44,9 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
     if value is None:
         return "None"
 
+    elif value is MISSING:
+        return ""
+
     elif isinstance(value, str):
         if "\n" in value:
             indent_str = " " * (indent + 2)
@@ -79,9 +82,6 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
             value,  # pyright: ignore[reportUnknownArgumentType]
             indent=indent,
         )
-
-    elif value is MISSING:
-        return ""
 
     elif isinstance(value, UUID):
         return str(value)

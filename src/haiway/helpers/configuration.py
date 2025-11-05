@@ -2,7 +2,7 @@ from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Any, Literal, Protocol, Self, overload, runtime_checkable
 
 from haiway.attributes import State
-from haiway.context import ObservabilityLevel, ctx
+from haiway.context import ctx
 from haiway.helpers.statemethods import statemethod
 from haiway.types import META_EMPTY, BasicValue, Meta
 
@@ -184,9 +184,11 @@ class Configuration(State):
             ConfigurationInvalid: If configuration data fails validation.
 
         Note:
-            If the configuration is not found in the repository, this method will attempt
-            to create a default instance by calling the configuration class constructor
-            with no arguments. Only if this also fails will ConfigurationMissing be raised.
+            If the configuration is not found in the repository, this method first attempts
+            to resolve a contextual instance bound via ctx.state(config). If no contextual
+            state is available, it will try to create a default instance by calling the
+            configuration class constructor with no arguments. Only if both strategies
+            fail will ConfigurationMissing be raised.
         """
         ...
 
@@ -219,10 +221,11 @@ class Configuration(State):
             ConfigurationInvalid: If configuration data fails validation.
 
         Note:
-            When required=True and no configuration is found, this method will attempt
-            to create a default instance by calling the configuration class constructor
-            with no arguments. This allows configurations with default values to work
-            even when not explicitly stored in the repository.
+            When required=True and no configuration is found, this method first tries to
+            resolve a contextual instance via ctx.state(cls). If no contextual override
+            exists, it attempts to create a default instance by calling the configuration
+            class constructor with no arguments. This allows contextual overrides to win
+            while still honoring configuration classes that provide defaults.
         """
         return await ConfigurationRepository.load(
             cls,
@@ -421,6 +424,7 @@ class ConfigurationRepository(State):
             loading=loading,
             defining=defining,
             removing=removing,
+            meta=Meta.of({"source": "volatile"}),
         )
 
     @overload
@@ -567,9 +571,11 @@ class ConfigurationRepository(State):
             ConfigurationInvalid: If configuration data fails validation.
 
         Note:
-            If the configuration is not found in the repository, this method will attempt
-            to create a default instance by calling the configuration class constructor
-            with no arguments. Only if this also fails will ConfigurationMissing be raised.
+            If the configuration is not found in the repository, this method first attempts
+            to resolve a contextual instance bound via ctx.state(config). If that also fails,
+            it will try to create a default instance by calling the configuration class
+            constructor with no arguments. Only if both strategies fail will
+            ConfigurationMissing be raised.
         """
         ...
 
@@ -618,10 +624,11 @@ class ConfigurationRepository(State):
             ConfigurationInvalid: If configuration data fails validation.
 
         Note:
-            When required=True and no configuration is found, this method will attempt
-            to create a default instance by calling the configuration class constructor
-            with no arguments. This allows configurations with default values to work
-            even when not explicitly stored in the repository.
+            When required=True and no configuration is found, this method first attempts
+            to resolve a contextual instance via ctx.state(config). If no contextual state
+            is available, it tries to create a default instance by calling the configuration
+            class constructor with no arguments. This allows contextual overrides to win
+            while still honoring configuration classes that provide defaults.
 
         Example:
             ```python
@@ -636,7 +643,7 @@ class ConfigurationRepository(State):
                 default=DatabaseConfig(host="localhost")
             )
 
-            # This will try class defaults if not found in repository
+            # This will try contextual state, then class defaults if not found in repository
             config = await ConfigurationRepository.load(
                 DatabaseConfig,
                 required=True
@@ -644,92 +651,119 @@ class ConfigurationRepository(State):
             ```
         """
         config_identifier: str = config.__qualname__ if identifier is None else identifier
+        ctx.log_info(f"Loading configuration '{config_identifier}'...")
         loaded: Mapping[str, BasicValue] | None
         try:
             loaded = await self.loading(
                 identifier=config_identifier,
                 **extra,
             )
+            if loaded is None:
+                ctx.log_info("...configuration missing...")
+
+            else:
+                ctx.log_info("...configuration loaded, attempting to decode...")
 
         except Exception as exc:
             ctx.log_error(
-                f"Failed to load configuration '{config_identifier}', attempting fallback...",
+                f"...failed to load configuration '{config_identifier}'!",
                 exception=exc,
             )
-            loaded = None
+            ctx.record_error(
+                event="configuration.load",
+                attributes={
+                    "configuration": config.__qualname__,
+                    "identifier": config_identifier,
+                    "status": "error",
+                },
+            )
+            raise ConfigurationInvalid(
+                identifier=config_identifier,
+                reason=str(exc),
+            ) from exc
 
         if loaded is not None:
             try:
                 loaded_config: Config = config.from_mapping(loaded)
-                ctx.record(
-                    ObservabilityLevel.INFO,
-                    attributes={f"config.{config.__qualname__}": config_identifier},
+                ctx.log_info("...configuration loaded and decoded!")
+                ctx.record_info(
+                    event="configuration.load",
+                    attributes={
+                        "configuration": config.__qualname__,
+                        "identifier": config_identifier,
+                        "status": "success",
+                    },
                 )
                 return loaded_config
 
             except Exception as exc:
+                ctx.log_error(
+                    f"...invalid configuration '{config_identifier}'!",
+                    exception=exc,
+                )
+                ctx.record_error(
+                    event="configuration.load",
+                    attributes={
+                        "configuration": config.__qualname__,
+                        "identifier": config_identifier,
+                        "status": "error",
+                    },
+                )
                 raise ConfigurationInvalid(
                     identifier=config_identifier,
                     reason=str(exc),
                 ) from exc
 
-        elif default is not None:
-            ctx.record(
-                ObservabilityLevel.INFO,
-                attributes={f"config.{config.__qualname__}": "default"},
+        if default is not None:
+            ctx.log_info("...using default!")
+            ctx.record_info(
+                event="configuration.load",
+                attributes={
+                    "configuration": config.__qualname__,
+                    "identifier": config_identifier,
+                    "status": "fallback",
+                    "fallback": "default",
+                },
             )
             return default
 
         elif required:
+            ctx.log_info("...attempting to use context state...")
             try:
-                # try to use default value from implementation
-                initialized: Config = config()
-                ctx.record(
-                    ObservabilityLevel.INFO,
-                    attributes={f"config.{config.__qualname__}": "__init__"},
+                contextual: Config = ctx.state(config)
+                ctx.log_info("...using contextual configuration!")
+                ctx.record_info(
+                    event="configuration.load",
+                    attributes={
+                        "configuration": config.__qualname__,
+                        "identifier": config_identifier,
+                        "status": "fallback",
+                        "fallback": "contextual",
+                    },
                 )
-                return initialized
+                return contextual
 
             except Exception:
+                ctx.log_error(f"...unavailable configuration '{config_identifier}'!")
+                ctx.record_error(
+                    event="configuration.load",
+                    attributes={
+                        "configuration": config.__qualname__,
+                        "identifier": config_identifier,
+                        "status": "error",
+                    },
+                )
                 raise ConfigurationMissing(identifier=config_identifier) from None
 
         else:
-            return None
-
-    @overload
-    @classmethod
-    async def load_raw(
-        cls,
-        identifier: str,
-        /,
-        **extra: Any,
-    ) -> Mapping[str, BasicValue] | None: ...
-
-    @overload
-    async def load_raw(
-        self,
-        identifier: str,
-        /,
-        **extra: Any,
-    ) -> Mapping[str, BasicValue] | None: ...
-
-    @statemethod
-    async def load_raw(
-        self,
-        identifier: str,
-        /,
-        **extra: Any,
-    ) -> Mapping[str, BasicValue] | None:
-        try:
-            return await self.loading(
-                identifier=identifier,
-                **extra,
-            )
-
-        except Exception as exc:
-            ctx.log_error(
-                f"Failed to load raw configuration '{identifier}', using None...",
-                exception=exc,
+            ctx.log_warning("...configuration missing!")
+            ctx.record_warning(
+                event="configuration.load",
+                attributes={
+                    "configuration": config.__qualname__,
+                    "identifier": config_identifier,
+                    "status": "missing",
+                },
             )
             return None
 
@@ -763,7 +797,7 @@ class ConfigurationRepository(State):
         cls,
         config: str,
         /,
-        value: Configuration | Mapping[str, BasicValue],
+        value: Configuration,
         **extra: Any,
     ) -> None: ...
 
@@ -772,7 +806,7 @@ class ConfigurationRepository(State):
         self,
         config: str,
         /,
-        value: Configuration | Mapping[str, BasicValue],
+        value: Configuration,
         **extra: Any,
     ) -> None:
         """Store configuration data under a custom identifier.
@@ -789,7 +823,7 @@ class ConfigurationRepository(State):
         self,
         config: Configuration | str,
         /,
-        value: Configuration | Mapping[str, BasicValue] | None = None,
+        value: Configuration | None = None,
         **extra: Any,
     ) -> None:
         """Store configuration data in the repository.
@@ -815,13 +849,7 @@ class ConfigurationRepository(State):
             # Store using custom identifier
             await ConfigurationRepository.define(
                 "production_db",
-                DatabaseConfig(host="prod.db.com", database="prod")
-            )
-
-            # Store raw data
-            await ConfigurationRepository.define(
-                "api_settings",
-                {"base_url": "https://api.example.com", "timeout": 30}
+                DatabaseConfig(host="prod.db.com", database="prod"),
             )
             ```
         """
@@ -829,24 +857,47 @@ class ConfigurationRepository(State):
         config_value: Mapping[str, BasicValue]
         if isinstance(config, str):
             config_identifier = config
+            ctx.log_info(f"Defining configuration '{config_identifier}'...")
 
             assert value is not None  # nosec: B101
-            if isinstance(value, Configuration):
-                config_value = value.to_mapping(recursive=True)
-
-            else:
-                config_value = value
+            config_value = value.to_mapping(recursive=True)
 
         else:
             assert value is None  # nosec: B101
             config_identifier = config.__class__.__qualname__
+            ctx.log_info(f"Defining configuration '{config_identifier}'...")
             config_value = config.to_mapping(recursive=True)
 
-        return await self.defining(
-            identifier=config_identifier,
-            value=config_value,
-            **extra,
-        )
+        try:
+            await self.defining(
+                identifier=config_identifier,
+                value=config_value,
+                **extra,
+            )
+
+        except Exception as exc:
+            ctx.log_error(
+                f"...failed to define configuration '{config_identifier}'!",
+                exception=exc,
+            )
+            ctx.record_error(
+                event="configuration.define",
+                attributes={
+                    "identifier": config_identifier,
+                    "status": "error",
+                },
+            )
+            raise
+
+        else:
+            ctx.log_info("...configuration defined!")
+            ctx.record_info(
+                event="configuration.define",
+                attributes={
+                    "identifier": config_identifier,
+                    "status": "success",
+                },
+            )
 
     @overload
     @classmethod
@@ -897,34 +948,39 @@ class ConfigurationRepository(State):
         else:
             config_identifier = identifier.__qualname__
 
-        return await self.removing(
-            identifier=config_identifier,
-            **extra,
-        )
+        ctx.log_info(f"Removing configuration '{config_identifier}'...")
+        try:
+            await self.removing(
+                identifier=config_identifier,
+                **extra,
+            )
+
+        except Exception as exc:
+            ctx.log_error(
+                f"...failed to remove configuration '{config_identifier}'!",
+                exception=exc,
+            )
+            ctx.record_error(
+                event="configuration.remove",
+                attributes={
+                    "identifier": config_identifier,
+                    "status": "error",
+                },
+            )
+            raise
+
+        else:
+            ctx.log_info("...configuration removed!")
+            ctx.record_info(
+                event="configuration.remove",
+                attributes={
+                    "identifier": config_identifier,
+                    "status": "success",
+                },
+            )
 
     listing: ConfigurationListing = _empty_listing
-    """Protocol implementation for listing configuration identifiers.
-
-    Defaults to _empty_listing which returns an empty sequence.
-    """
-
     loading: ConfigurationLoading = _none_loading
-    """Protocol implementation for loading configuration data.
-
-    Defaults to _none_loading which returns None for all identifiers.
-    """
-
     defining: ConfigurationDefining = _noop_defining
-    """Protocol implementation for storing configuration data.
-
-    Defaults to _noop_defining which ignores all define operations.
-    """
-
     removing: ConfigurationRemoving = _noop_removing
-    """Protocol implementation for removing configuration data.
-
-    Defaults to _noop_removing which ignores all remove operations.
-    """
-
     meta: Meta = META_EMPTY
-    """Metadata for the repository instance."""

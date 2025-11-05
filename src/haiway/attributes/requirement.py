@@ -471,9 +471,9 @@ class AttributeRequirement[Root]:
             self._check(root)
             return True
 
-        except Exception as exc:
+        except Exception:
             if raise_exception:
-                raise exc
+                raise
 
             else:
                 return False

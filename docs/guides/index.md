@@ -39,7 +39,7 @@ Simple type-safe configuration with automatic defaults:
 
 - Define configuration classes with State
 - Load configurations from various backends
-- Automatic fallback to class defaults
+- Automatic fallback to contextual state and class defaults
 
 ### [Concurrent Processing](concurrent.md)
 

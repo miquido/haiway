@@ -15,9 +15,7 @@ class Alias:
 
     Examples
     --------
-    >>> alias = Alias("customer_id")
-    >>> alias.alias
-    'customer_id'
+    >>> aliased: Annotated[str, Alias("customer_id")]
     """
 
     __slots__ = ("alias",)
