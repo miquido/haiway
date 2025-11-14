@@ -135,7 +135,7 @@ async def process_concurrently[Element](  # noqa: C901, PLR0912
         for task in tasks:
             task.cancel()
 
-        raise exc
+        raise
 
     else:
         if tasks:
@@ -262,7 +262,7 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
                 return exc
 
             else:
-                raise exc
+                raise
 
     try:
         if isinstance(elements, AsyncIterable):
@@ -303,7 +303,7 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
         for task in tasks:
             task.cancel()
 
-        raise exc
+        raise
 
     else:
         if tasks:
@@ -435,7 +435,7 @@ async def concurrently[Result](  # noqa: C901, PLR0912
                 return exc
 
             else:
-                raise exc
+                raise
 
     try:
         if isinstance(coroutines, AsyncIterable):
@@ -484,7 +484,7 @@ async def concurrently[Result](  # noqa: C901, PLR0912
         for task in tasks:
             task.cancel()
 
-        raise exc
+        raise
 
     else:
         if tasks:

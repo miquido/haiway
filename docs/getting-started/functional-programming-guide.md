@@ -230,7 +230,7 @@ Guidelines:
 - Priority: explicit > disposables > presets > parent context
 - Methods: use `@statemethod` for helpers that may be called from class or instance
 - Concurrency: use `ctx.spawn(...)` inside an active `ctx.scope(...)`
-- Observability: `ctx.record(event=..., attributes={...})` or `ctx.log_info(...)`
+- Observability: `ctx.record_info(event=..., attributes={...})` or `ctx.log_info(...)`
 
 This functional, immutable, and context‑driven approach yields predictable, testable, and
 concurrent‑safe systems with minimal ceremony.

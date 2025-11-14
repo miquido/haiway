@@ -209,8 +209,8 @@ class HTTPClient(State):
                 follow_redirects=follow_redirects,
             )
 
-        except HTTPClientError as exc:
-            raise exc
+        except HTTPClientError:
+            raise
 
         except Exception as exc:
             raise HTTPClientError(
@@ -291,8 +291,8 @@ class HTTPClient(State):
                 follow_redirects=follow_redirects,
             )
 
-        except HTTPClientError as exc:
-            raise exc
+        except HTTPClientError:
+            raise
 
         except Exception as exc:
             raise HTTPClientError(
@@ -373,8 +373,8 @@ class HTTPClient(State):
                 follow_redirects=follow_redirects,
             )
 
-        except HTTPClientError as exc:
-            raise exc
+        except HTTPClientError:
+            raise
 
         except Exception as exc:
             raise HTTPClientError(
@@ -476,8 +476,8 @@ class HTTPClient(State):
                 follow_redirects=follow_redirects,
             )
 
-        except HTTPClientError as exc:
-            raise exc
+        except HTTPClientError:
+            raise
 
         except Exception as exc:
             raise HTTPClientError(

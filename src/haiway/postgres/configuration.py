@@ -1,0 +1,165 @@
+from collections.abc import Mapping, Sequence
+from typing import Any, cast
+
+from haiway.context import ctx
+from haiway.helpers import ConfigurationRepository, cache
+from haiway.postgres.state import Postgres
+from haiway.postgres.types import PostgresRow
+from haiway.types import BasicValue, Meta
+
+__all__ = ("PostgresConfigurationRepository",)
+
+
+def PostgresConfigurationRepository(
+    cache_limit: int = 32,
+    cache_expiration: float = 600.0,  # 10 min
+) -> ConfigurationRepository:
+    """Return a repository storing configuration snapshots in Postgres.
+
+    Parameters
+    ----------
+    cache_limit: int = 32
+        Maximum number of configuration documents kept in the in-memory cache.
+    cache_expiration: float = 600.0
+        Lifetime in seconds for cached entries before a fresh query is issued.
+
+    Notes
+    -----
+    Requires the ``configurations`` table to exist; see the schema comment
+    below or apply the appropriate Postgres migration before using this repository.
+
+    Example schema:
+    ```
+    CREATE TABLE configurations (
+        identifier TEXT NOT NULL,
+        content JSONB NOT NULL,
+        created TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (identifier, created)
+    );
+
+    CREATE INDEX IF NOT EXISTS
+        configurations_idx
+
+    ON
+        configurations (identifier, created DESC);
+    ```
+    """
+
+    @cache(
+        limit=1,
+        expiration=cache_expiration,
+    )
+    async def listing(
+        **extra: Any,
+    ) -> Sequence[str]:
+        ctx.log_info("Listing configurations...")
+        results: Sequence[PostgresRow] = await Postgres.fetch(
+            """
+            SELECT DISTINCT ON (identifier)
+                identifier::TEXT
+
+            FROM
+                configurations
+
+            ORDER BY
+                identifier,
+                created
+            DESC;
+            """
+        )
+        ctx.log_info(f"...{len(results)} configurations found!")
+        return tuple(cast(str, record["identifier"]) for record in results)
+
+    @cache(
+        limit=cache_limit,
+        expiration=cache_expiration,
+    )
+    async def loading(
+        identifier: str,
+        **extra: Any,
+    ) -> Mapping[str, BasicValue] | None:
+        ctx.log_info(f"Loading configuration for {identifier}...")
+        loaded: PostgresRow | None = await Postgres.fetch_one(
+            """
+            SELECT DISTINCT ON (identifier)
+                identifier::TEXT,
+                content::JSONB
+
+            FROM
+                configurations
+
+            WHERE
+                identifier = $1
+
+            ORDER BY
+                identifier,
+                created
+            DESC
+
+            LIMIT 1;
+            """,
+            identifier,
+        )
+
+        if loaded is None:
+            ctx.log_info("...configuration not found!")
+            return None
+
+        assert isinstance(loaded["content"], Mapping)  # nosec: B101
+        ctx.log_info("...configuration loaded!")
+        return cast(Mapping[str, BasicValue], loaded["content"])
+
+    async def define(
+        identifier: str,
+        value: Mapping[str, BasicValue],
+        **extra: Any,
+    ) -> None:
+        ctx.log_info(f"Defining configuration {identifier}...")
+        await Postgres.execute(
+            """
+            INSERT INTO
+                configurations (
+                    identifier,
+                    content
+                )
+
+            VALUES (
+                $1::TEXT,
+                $2::JSONB
+            );
+            """,
+            identifier,
+            value,
+        )
+        ctx.log_info("...clearing cache...")
+        await loading.clear_cache()
+        await listing.clear_cache()
+        ctx.log_info("...configuration definition completed!")
+
+    async def removing(
+        identifier: str,
+        **extra: Any,
+    ) -> None:
+        ctx.log_info(f"Removing configuration {identifier}...")
+        await Postgres.execute(
+            """
+            DELETE FROM
+                configurations
+
+            WHERE
+                identifier = $1;
+            """,
+            identifier,
+        )
+        ctx.log_info("...clearing cache...")
+        await loading.clear_cache()
+        await listing.clear_cache()
+        ctx.log_info("...configuration removal completed!")
+
+    return ConfigurationRepository(
+        listing=listing,
+        loading=loading,
+        defining=define,
+        removing=removing,
+        meta=Meta.of({"source": "postgres"}),
+    )

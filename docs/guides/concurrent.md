@@ -39,7 +39,7 @@ async def process_item(item_id: str) -> dict:
     # Access context state within spawned task
     config = ctx.state(ProcessingConfig)
     ctx.log_info(f"Processing item {item_id}")
-    
+
     # Simulate async work
     await asyncio.sleep(1)
     return {"id": item_id, "status": "completed"}
@@ -50,7 +50,7 @@ async def main():
         task1 = ctx.spawn(process_item, "item-1")
         task2 = ctx.spawn(process_item, "item-2")
         task3 = ctx.spawn(process_item, "item-3")
-        
+
         # Tasks run concurrently
         results = await asyncio.gather(task1, task2, task3)
         ctx.log_info(f"Processed {len(results)} items")
@@ -71,10 +71,10 @@ async def main():
     async with ctx.scope("app"):
         # Spawn background task
         ctx.spawn(background_task)
-        
+
         # Do other work
         await handle_requests()
-        
+
         # Background task automatically cancelled when scope exits
 ```
 
@@ -91,7 +91,7 @@ async def long_running_task():
 async def main():
     async with ctx.scope("batch"):
         task = ctx.spawn(long_running_task)
-        
+
         # Cancel after timeout
         await asyncio.sleep(10)
         ctx.cancel()  # Cancels current task
@@ -136,7 +136,7 @@ async def send_notification(user_id: str) -> None:
 
 async def notify_users():
     user_ids = ["user-1", "user-2", "user-3", "user-4", "user-5"]
-    
+
     # Process with concurrency limit
     await process_concurrently(
         user_ids,
@@ -174,14 +174,14 @@ async def fetch_user_data(user_id: str) -> dict:
 
 async def fetch_all_users():
     user_ids = ["user-1", "user-2", "user-3"]
-    
+
     # Execute concurrently and collect results
     results = await execute_concurrently(
         fetch_user_data,
         user_ids,
         concurrent_tasks=5
     )
-    
+
     # Results maintain order: results[0] is for user_ids[0]
     for user_id, data in zip(user_ids, results):
         ctx.log_info(f"User {user_id}: {data}")
@@ -217,15 +217,15 @@ async def fetch_different_endpoints():
     # Create coroutines with different parameters
     coroutines = [
         fetch_with_timeout("https://api.example.com/fast", 3.0),
-        fetch_with_timeout("https://api.example.com/slow", 10.0), 
+        fetch_with_timeout("https://api.example.com/slow", 10.0),
         fetch_with_timeout("https://api.example.com/medium", 5.0),
     ]
-    
+
     results = await concurrently(
         coroutines,
         concurrent_tasks=2
     )
-    
+
     # Results maintain order: results[0] from first coroutine, etc.
     return results
 ```
@@ -256,7 +256,7 @@ async def sensor_readings() -> AsyncIterator[float]:
         await asyncio.sleep(0.1)
         yield random.uniform(20.0, 25.0)
 
-async def status_updates() -> AsyncIterator[str]:  
+async def status_updates() -> AsyncIterator[str]:
     while True:
         await asyncio.sleep(0.5)
         yield "System OK"
@@ -264,7 +264,7 @@ async def status_updates() -> AsyncIterator[str]:
 async def process_events():
     # Merge streams - yields events as they arrive from either source
     async for item in stream_concurrently(
-        sensor_readings(), 
+        sensor_readings(),
         status_updates()
     ):
         if isinstance(item, float):
@@ -337,7 +337,7 @@ Handle exceptions gracefully in batch operations:
 ```python
 async def resilient_batch_processing():
     urls = ["http://api1.com", "http://invalid", "http://api2.com"]
-    
+
     # Collect exceptions as results
     results = await execute_concurrently(
         fetch_data,
@@ -345,7 +345,7 @@ async def resilient_batch_processing():
         concurrent_tasks=10,
         return_exceptions=True
     )
-    
+
     for url, result in zip(urls, results):
         if isinstance(result, BaseException):
             ctx.log_error(f"Failed to fetch {url}", exception=result)
@@ -359,7 +359,7 @@ async def handle_mixed_coroutines():
         concurrent_tasks=3,
         return_exceptions=True
     )
-    
+
     successes = [r for r in results if not isinstance(r, BaseException)]
     failures = [r for r in results if isinstance(r, BaseException)]
     ctx.log_info(f"Processed: {len(successes)} successes, {len(failures)} failures")
@@ -374,17 +374,17 @@ Process large datasets in chunks:
 ```python
 async def process_large_dataset(items: list[str]):
     chunk_size = 100
-    
+
     for i in range(0, len(items), chunk_size):
         chunk = items[i:i + chunk_size]
-        
+
         # Process chunk concurrently
         await process_concurrently(
             chunk,
             process_item,
             concurrent_tasks=10
         )
-        
+
         # Optional: Add delay between chunks
         await asyncio.sleep(1)
 ```
@@ -396,20 +396,20 @@ Adjust concurrency based on system load:
 ```python
 async def adaptive_processing():
     items = await get_items()
-    
+
     # Determine concurrency based on system resources
     cpu_count = os.cpu_count() or 1
     memory_available = get_available_memory_gb()
-    
+
     # Scale concurrency with available resources
     concurrent_tasks = min(
         cpu_count * 2,  # 2x CPU cores
         int(memory_available / 0.5),  # 500MB per task
         50  # Hard limit
     )
-    
+
     ctx.log_info(f"Processing with {concurrent_tasks} concurrent tasks")
-    
+
     await process_concurrently(
         items,
         heavy_processing,
@@ -436,7 +436,7 @@ async def resource_aware_processing():
     # Limit based on external resources
     db_pool_size = ctx.state(DatabaseConfig).pool_size
     concurrent_tasks = min(db_pool_size // 2, 20)
-    
+
     await process_concurrently(
         items,
         database_operation,
@@ -456,13 +456,13 @@ async def resilient_processing():
         except Exception as e:
             ctx.log_error(f"Failed processing {item}", exception=e)
             return None
-    
+
     results = await execute_concurrently(
         safe_process,
         items,
         concurrent_tasks=10
     )
-    
+
     # Filter out failures
     successful = [r for r in results if r is not None]
 ```
@@ -474,29 +474,29 @@ Track concurrent operations:
 ```python
 async def monitored_processing():
     start_time = time.time()
-    
-    ctx.record(
+
+    ctx.record_info(
         event="batch_processing_started",
         attributes={"item_count": len(items)}
     )
-    
+
     try:
         results = await execute_concurrently(
             process_item,
             items,
             concurrent_tasks=20
         )
-        
+
         duration = time.time() - start_time
-        ctx.record(
+        ctx.record_info(
             metric="batch_processing_duration",
             value=duration,
             kind=ObservabilityMetricKind.HISTOGRAM,
             attributes={"status": "success"}
         )
-        
+
     except Exception as e:
-        ctx.record(
+        ctx.record_info(
             event="batch_processing_failed",
             attributes={"error": str(e)}
         )
@@ -511,16 +511,16 @@ Remember that spawned tasks have isolated variable contexts:
 async def context_isolation_example():
     # Set variable in parent
     ctx.variable(RequestID("parent-123"))
-    
+
     async def child_task():
         # Variable is NOT inherited
         request_id = ctx.variable(RequestID)  # None
-        
+
         # Set new variable in child
         ctx.variable(RequestID("child-456"))
-    
+
     await ctx.spawn(child_task)
-    
+
     # Parent variable unchanged
     assert ctx.variable(RequestID).value == "parent-123"
 ```
@@ -544,7 +544,7 @@ from concurrent.futures import ProcessPoolExecutor
 async def parallel_cpu_processing():
     executor = ProcessPoolExecutor(max_workers=4)
     loop = asyncio.get_event_loop()
-    
+
     # Run CPU-bound task in process pool
     results = await loop.run_in_executor(
         executor,
@@ -562,7 +562,7 @@ async def memory_efficient_processing():
     # Process in batches to control memory usage
     batch_size = 1000
     concurrent_tasks = 20
-    
+
     async with ctx.scope("batch_processor"):
         for batch in iterate_batches(large_dataset, batch_size):
             await process_concurrently(
@@ -570,7 +570,7 @@ async def memory_efficient_processing():
                 process_item,
                 concurrent_tasks=concurrent_tasks
             )
-            
+
             # Allow garbage collection between batches
             await asyncio.sleep(0)
 ```

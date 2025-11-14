@@ -737,4 +737,4 @@ class ObservabilityContext(Immutable):
                 "Failed to properly exit observability scope",
                 exception=exc,
             )
-            raise exc
+            raise

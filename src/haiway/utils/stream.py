@@ -183,9 +183,9 @@ class AsyncStream[Element](AsyncIterator[Element]):
                 # and wait for the result
                 return await self._waiting
 
-        except CancelledError as exc:
+        except CancelledError:
             self.cancel()  # when consumer is cancelled, signal producers to stop waiting
-            raise exc
+            raise
 
         finally:
             # cleanup waiting future

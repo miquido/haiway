@@ -109,6 +109,35 @@ def Default[Value](
     default_factory: Callable[[], Value] | Missing = MISSING,
     env: str | Missing = MISSING,
 ) -> Value:
+    """Create an immutable provider for a default value.
+
+    Exactly one source must be provided: either a literal ``default``, a
+    ``default_factory`` callable, or the name of an environment variable via
+    ``env``. When the returned object is invoked it yields the configured
+    default or ``MISSING`` if the resolver has no value.
+
+    Parameters
+    ----------
+    default
+        Literal value used when neither ``default_factory`` nor ``env`` are
+        supplied.
+    default_factory
+        Callable that is executed on demand to produce the default value.
+    env
+        Name of the environment variable queried for the default value when no
+        other source is set.
+
+    Returns
+    -------
+    Value
+        An immutable ``DefaultValue`` wrapper that can be called to retrieve
+        the resolved default.
+
+    Raises
+    ------
+    AssertionError
+        If multiple sources are provided simultaneously.
+    """
     return cast(
         Value,
         DefaultValue(

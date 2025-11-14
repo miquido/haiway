@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Any
 
 from haiway import State
@@ -64,3 +65,29 @@ def test_state_typing_subclass_and_instance_checks() -> None:
     assert isinstance(unparametrized_instance_child, GenericState[Child])
     assert isinstance(unparametrized_instance_child, GenericState[Parent])
     assert not isinstance(unparametrized_instance_child, GenericState[str])
+
+
+def test_instance_check_handles_sequence_type_parameters() -> None:
+    class SequenceState[T](State):
+        values: Sequence[T]
+
+    instance = SequenceState[str](values=("a", "b"))
+
+    assert isinstance(instance, SequenceState[str])
+    assert isinstance(instance, SequenceState[Any])
+    assert not isinstance(instance, SequenceState[int])
+
+
+def test_instance_check_handles_nested_state_parameters() -> None:
+    class InnerState[T](State):
+        value: T
+
+    class OuterState[T](State):
+        inner: InnerState[T]
+
+    instance = OuterState[str](inner=InnerState[str](value="ok"))
+
+    assert isinstance(instance, OuterState[str])
+    assert isinstance(instance, OuterState[Any])
+    assert isinstance(instance, OuterState[object])
+    assert not isinstance(instance, OuterState[int])

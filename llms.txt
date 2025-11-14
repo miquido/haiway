@@ -411,7 +411,7 @@ async def setup_app():
     # Optional loading
     config = await DatabaseConfig.load()
 
-    # Required loading - uses class defaults if not found in repository
+    # Required loading - prefers contextual state, then class defaults if not found in repository
     config = await DatabaseConfig.load(required=True)
 
     # With explicit default
@@ -723,9 +723,9 @@ ctx.log_error("Error occurred", exception=exc, context="api_call")
 ctx.log_debug("Debug details", query_params=params)
 
 # Observability recording
-ctx.record(attributes={"user_id": "123", "action": "login"})
-ctx.record(event="user_login", attributes={"method": "oauth"})
-ctx.record(
+ctx.record_info(attributes={"user_id": "123", "action": "login"})
+ctx.record_info(event="user_login", attributes={"method": "oauth"})
+ctx.record_info(
     metric="response_time",
     value=0.5,
     kind=ObservabilityMetricKind.GAUGE,

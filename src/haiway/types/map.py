@@ -1,7 +1,6 @@
 """Utilities for working with immutable mapping-like objects."""
 
 import json
-from collections.abc import Mapping
 from typing import Any, Self, final
 
 __all__ = ("Map",)
@@ -12,15 +11,6 @@ class Map[Key, Element](dict[Key, Element]):
     """An immutable ``dict`` wrapper with convenience conversion helpers."""
 
     __slots__ = ()
-
-    @classmethod
-    def from_mapping(
-        cls,
-        mapping: Mapping[Key, Element],
-        /,
-    ) -> Self:
-        """Build a ``Map`` directly from an existing mapping instance."""
-        return cls(mapping)
 
     @classmethod
     def from_json(
@@ -51,7 +41,6 @@ class Map[Key, Element](dict[Key, Element]):
         name: str,
         value: object,
     ) -> None:
-        """Prevent attribute mutation, enforcing immutability."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -61,7 +50,6 @@ class Map[Key, Element](dict[Key, Element]):
         self,
         name: str,
     ) -> None:
-        """Prevent attribute deletion, enforcing immutability."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
@@ -72,7 +60,6 @@ class Map[Key, Element](dict[Key, Element]):
         key: Key,
         value: Element,
     ) -> None:
-        """Prevent item mutation, enforcing immutability."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be modified"
@@ -82,14 +69,12 @@ class Map[Key, Element](dict[Key, Element]):
         self,
         key: Key,
     ) -> None:
-        """Prevent item deletion, enforcing immutability."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be deleted"
         )
 
     def clear(self) -> None:
-        """Prevent removing all elements via ``clear``."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, clear is not supported"
         )
@@ -100,13 +85,11 @@ class Map[Key, Element](dict[Key, Element]):
         default: Any | None = None,
         /,
     ) -> Element:
-        """Prevent removing elements via ``pop``."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, pop is not supported"
         )
 
     def popitem(self) -> tuple[Key, Element]:
-        """Prevent removing elements via ``popitem``."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, popitem is not supported"
         )
@@ -117,7 +100,6 @@ class Map[Key, Element](dict[Key, Element]):
         default: Element | None = None,
         /,
     ) -> Element:
-        """Prevent mutation via ``setdefault``."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, setdefault is not supported"
         )
@@ -127,7 +109,6 @@ class Map[Key, Element](dict[Key, Element]):
         *updates: object,
         **kwargs: Element,
     ) -> None:
-        """Prevent mutation via ``update``."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, update is not supported"
         )
@@ -136,22 +117,18 @@ class Map[Key, Element](dict[Key, Element]):
         self,
         other: object,
     ) -> Self:
-        """Prevent in-place union operations from mutating the map."""
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, |= is not supported"
         )
 
     def copy(self) -> Self:
-        """Return ``self`` instead of a shallow copy since the map is immutable."""
-        return self
+        return self  # Map is immutable, no need to provide an actual copy
 
     def __copy__(self) -> Self:
-        """Return ``self`` because the structure is immutable."""
         return self  # Map is immutable, no need to provide an actual copy
 
     def __deepcopy__(
         self,
         memo: dict[int, Any] | None,
     ) -> Self:
-        """Return ``self`` because the structure is immutable."""
         return self  # Map is immutable, no need to provide an actual copy

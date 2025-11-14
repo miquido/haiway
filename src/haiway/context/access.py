@@ -1345,47 +1345,23 @@ class ctx:
         """
 
         ObservabilityContext.record_log(
-            ObservabilityLevel.DEBUG, message, *args, exception=exception, **extra
+            ObservabilityLevel.DEBUG,
+            message,
+            *args,
+            exception=exception,
+            **extra,
         )
 
     @overload
     @staticmethod
-    def record(
-        level: ObservabilityLevel = ObservabilityLevel.DEBUG,
-        /,
+    def record_error(
         *,
         attributes: Mapping[str, ObservabilityAttribute],
-    ) -> None:
-        """
-        Record observability data within the current scope context.
-
-        This method has three different forms:
-        1. Record standalone attributes
-        2. Record a named event with optional attributes
-        3. Record a metric with a value and optional unit and attributes
-
-        Parameters
-        ----------
-        level: ObservabilityLevel
-            Severity level for the recording (default: DEBUG)
-        attributes: Mapping[str, ObservabilityAttribute]
-            Key-value attributes to record
-        event: str
-            Name of the event to record
-        metric: str
-            Name of the metric to record
-        value: float | int
-            Numeric value of the metric
-        unit: str | None
-            Optional unit for the metric
-        """
-        ...
+    ) -> None: ...
 
     @overload
     @staticmethod
-    def record(
-        level: ObservabilityLevel = ObservabilityLevel.DEBUG,
-        /,
+    def record_error(
         *,
         event: str,
         attributes: Mapping[str, ObservabilityAttribute] | None = None,
@@ -1393,9 +1369,7 @@ class ctx:
 
     @overload
     @staticmethod
-    def record(
-        level: ObservabilityLevel = ObservabilityLevel.DEBUG,
-        /,
+    def record_error(
         *,
         metric: str,
         value: float | int,
@@ -1405,9 +1379,7 @@ class ctx:
     ) -> None: ...
 
     @staticmethod
-    def record(
-        level: ObservabilityLevel = ObservabilityLevel.DEBUG,
-        /,
+    def record_error(
         *,
         event: str | None = None,
         metric: str | None = None,
@@ -1419,7 +1391,7 @@ class ctx:
         if event is not None:
             assert metric is None  # nosec: B101
             ObservabilityContext.record_event(
-                level,
+                ObservabilityLevel.ERROR,
                 event,
                 attributes=attributes or {},
             )
@@ -1429,7 +1401,7 @@ class ctx:
             assert value is not None  # nosec: B101
             assert kind is not None  # nosec: B101
             ObservabilityContext.record_metric(
-                level,
+                ObservabilityLevel.ERROR,
                 metric,
                 value=value,
                 unit=unit,
@@ -1439,6 +1411,195 @@ class ctx:
 
         else:
             ObservabilityContext.record_attributes(
-                level,
+                ObservabilityLevel.ERROR,
+                attributes=attributes or {},
+            )
+
+    @overload
+    @staticmethod
+    def record_warning(
+        *,
+        attributes: Mapping[str, ObservabilityAttribute],
+    ) -> None: ...
+
+    @overload
+    @staticmethod
+    def record_warning(
+        *,
+        event: str,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None: ...
+
+    @overload
+    @staticmethod
+    def record_warning(
+        *,
+        metric: str,
+        value: float | int,
+        unit: str | None = None,
+        kind: ObservabilityMetricKind,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None: ...
+
+    @staticmethod
+    def record_warning(
+        *,
+        event: str | None = None,
+        metric: str | None = None,
+        value: float | int | None = None,
+        unit: str | None = None,
+        kind: ObservabilityMetricKind | None = None,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None:
+        if event is not None:
+            assert metric is None  # nosec: B101
+            ObservabilityContext.record_event(
+                ObservabilityLevel.WARNING,
+                event,
+                attributes=attributes or {},
+            )
+
+        elif metric is not None:
+            assert event is None  # nosec: B101
+            assert value is not None  # nosec: B101
+            assert kind is not None  # nosec: B101
+            ObservabilityContext.record_metric(
+                ObservabilityLevel.WARNING,
+                metric,
+                value=value,
+                unit=unit,
+                kind=kind,
+                attributes=attributes or {},
+            )
+
+        else:
+            ObservabilityContext.record_attributes(
+                ObservabilityLevel.WARNING,
+                attributes=attributes or {},
+            )
+
+    @overload
+    @staticmethod
+    def record_info(
+        *,
+        attributes: Mapping[str, ObservabilityAttribute],
+    ) -> None: ...
+
+    @overload
+    @staticmethod
+    def record_info(
+        *,
+        event: str,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None: ...
+
+    @overload
+    @staticmethod
+    def record_info(
+        *,
+        metric: str,
+        value: float | int,
+        unit: str | None = None,
+        kind: ObservabilityMetricKind,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None: ...
+
+    @staticmethod
+    def record_info(
+        *,
+        event: str | None = None,
+        metric: str | None = None,
+        value: float | int | None = None,
+        unit: str | None = None,
+        kind: ObservabilityMetricKind | None = None,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None:
+        if event is not None:
+            assert metric is None  # nosec: B101
+            ObservabilityContext.record_event(
+                ObservabilityLevel.INFO,
+                event,
+                attributes=attributes or {},
+            )
+
+        elif metric is not None:
+            assert event is None  # nosec: B101
+            assert value is not None  # nosec: B101
+            assert kind is not None  # nosec: B101
+            ObservabilityContext.record_metric(
+                ObservabilityLevel.INFO,
+                metric,
+                value=value,
+                unit=unit,
+                kind=kind,
+                attributes=attributes or {},
+            )
+
+        else:
+            ObservabilityContext.record_attributes(
+                ObservabilityLevel.INFO,
+                attributes=attributes or {},
+            )
+
+    @overload
+    @staticmethod
+    def record_debug(
+        *,
+        attributes: Mapping[str, ObservabilityAttribute],
+    ) -> None: ...
+
+    @overload
+    @staticmethod
+    def record_debug(
+        *,
+        event: str,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None: ...
+
+    @overload
+    @staticmethod
+    def record_debug(
+        *,
+        metric: str,
+        value: float | int,
+        unit: str | None = None,
+        kind: ObservabilityMetricKind,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None: ...
+
+    @staticmethod
+    def record_debug(
+        *,
+        event: str | None = None,
+        metric: str | None = None,
+        value: float | int | None = None,
+        unit: str | None = None,
+        kind: ObservabilityMetricKind | None = None,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None:
+        if event is not None:
+            assert metric is None  # nosec: B101
+            ObservabilityContext.record_event(
+                ObservabilityLevel.DEBUG,
+                event,
+                attributes=attributes or {},
+            )
+
+        elif metric is not None:
+            assert event is None  # nosec: B101
+            assert value is not None  # nosec: B101
+            assert kind is not None  # nosec: B101
+            ObservabilityContext.record_metric(
+                ObservabilityLevel.DEBUG,
+                metric,
+                value=value,
+                unit=unit,
+                kind=kind,
+                attributes=attributes or {},
+            )
+
+        else:
+            ObservabilityContext.record_attributes(
+                ObservabilityLevel.DEBUG,
                 attributes=attributes or {},
             )

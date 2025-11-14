@@ -29,7 +29,7 @@ All attributes must have type annotations. Provide default values where appropri
 # Optional loading - returns None if not found
 config = await DatabaseConfig.load()
 
-# Required loading - tries class defaults if not found in repository
+# Required loading - tries contextual state then class defaults if not found in repository
 config = await DatabaseConfig.load(required=True)
 
 # Loading with explicit default
@@ -41,20 +41,29 @@ config = await DatabaseConfig.load(default=DatabaseConfig(
 config = await DatabaseConfig.load(identifier="production_db")
 ```
 
-### Automatic Default Fallback
+### Contextual and Default Fallback
 
-When using `required=True`, the system will automatically try to create a configuration instance
-using class defaults if no data is found in the repository:
+When using `required=True`, the system first looks for a contextual instance bound via
+`ctx.scope(..., config_instance)`. This allows you to override repository values for the current
+scope (handy in tests or temporary overrides). If no contextual instance is available, Haiway
+automatically instantiates the configuration using its class defaults:
 
 ```python
+from haiway import ctx
+
 class ServerConfig(Configuration):
     host: str = "0.0.0.0"
     port: int = 8000
     workers: int = 4
 
-# This succeeds even if no configuration is stored,
-# using the default values from the class
+# Uses contextual override when present
+async with ctx.scope("server", ServerConfig(port=9001)):
+    config = await ServerConfig.load(required=True)
+    assert config.port == 9001
+
+# Falls back to default values when no repository/context data exists
 config = await ServerConfig.load(required=True)
+assert config.port == 8000
 ```
 
 ## Storage and Repository
