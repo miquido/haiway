@@ -1,10 +1,10 @@
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import MutableMapping, Sequence
 from typing import Any, Literal, Protocol, Self, overload, runtime_checkable
 
 from haiway.attributes import State
 from haiway.context import ctx
 from haiway.helpers.statemethods import statemethod
-from haiway.types import META_EMPTY, BasicValue, Meta
+from haiway.types import META_EMPTY, Meta
 
 __all__ = (
     "Configuration",
@@ -246,11 +246,12 @@ class ConfigurationListing(Protocol):
 
 @runtime_checkable
 class ConfigurationLoading(Protocol):
-    async def __call__(
+    async def __call__[Config: Configuration](
         self,
+        config: type[Config],
         identifier: str,
         **extra: Any,
-    ) -> Mapping[str, BasicValue] | None: ...
+    ) -> Config | None: ...
 
 
 @runtime_checkable
@@ -258,7 +259,7 @@ class ConfigurationDefining(Protocol):
     async def __call__(
         self,
         identifier: str,
-        value: Mapping[str, BasicValue],
+        value: Configuration,
         **extra: Any,
     ) -> None: ...
 
@@ -278,16 +279,17 @@ async def _empty_listing(
     return ()
 
 
-async def _none_loading(
+async def _none_loading[Config: Configuration](
+    config: type[Config],
     identifier: str,
     **extra: Any,
-) -> Mapping[str, BasicValue] | None:
+) -> Config | None:
     return None
 
 
 async def _noop_defining(
     identifier: str,
-    value: Mapping[str, BasicValue],
+    value: Configuration,
     **extra: Any,
 ) -> None:
     pass
@@ -388,27 +390,37 @@ class ConfigurationRepository(State):
                 prod_db = await DatabaseConfig.load(identifier="production_db")
             ```
         """
-        storage: MutableMapping[str, Mapping[str, BasicValue]] = {}
+        storage: MutableMapping[str, Configuration] = {}
         for element in configs:
             assert isinstance(element, Configuration)  # nosec: B101
-            storage[type(element).__qualname__] = element.to_mapping(recursive=True)
+            storage[type(element).__qualname__] = element
 
         for key, element in named_configs.items():
             assert isinstance(element, Configuration)  # nosec: B101
-            storage[key] = element.to_mapping(recursive=True)
+            storage[key] = element
 
         async def listing(**extra: Any) -> Sequence[str]:
             return tuple(storage.keys())
 
-        async def loading(
+        async def loading[Config: Configuration](
+            config: type[Config],
             identifier: str,
             **extra: Any,
-        ) -> Mapping[str, BasicValue] | None:
-            return storage.get(identifier, None)
+        ) -> Config | None:
+            stored: Configuration | None = storage.get(identifier, None)
+            if stored is None:
+                return None
+
+            if isinstance(stored, config):
+                return stored
+
+            raise TypeError(
+                f"Type of configuration '{identifier}' is {type(stored)}, expected {config}"
+            )
 
         async def defining(
             identifier: str,
-            value: Mapping[str, BasicValue],
+            value: Configuration,
             **extra: Any,
         ) -> None:
             storage[identifier] = value
@@ -652,9 +664,10 @@ class ConfigurationRepository(State):
         """
         config_identifier: str = config.__qualname__ if identifier is None else identifier
         ctx.log_info(f"Loading configuration '{config_identifier}'...")
-        loaded: Mapping[str, BasicValue] | None
+        loaded: Config | None
         try:
             loaded = await self.loading(
+                config,
                 identifier=config_identifier,
                 **extra,
             )
@@ -662,7 +675,16 @@ class ConfigurationRepository(State):
                 ctx.log_info("...configuration missing...")
 
             else:
-                ctx.log_info("...configuration loaded, attempting to decode...")
+                ctx.log_info("...configuration loaded!")
+                ctx.record_info(
+                    event="configuration.load",
+                    attributes={
+                        "configuration": config.__qualname__,
+                        "identifier": config_identifier,
+                        "status": "success",
+                    },
+                )
+                return loaded
 
         except Exception as exc:
             ctx.log_error(
@@ -681,38 +703,6 @@ class ConfigurationRepository(State):
                 identifier=config_identifier,
                 reason=str(exc),
             ) from exc
-
-        if loaded is not None:
-            try:
-                loaded_config: Config = config.from_mapping(loaded)
-                ctx.log_info("...configuration loaded and decoded!")
-                ctx.record_info(
-                    event="configuration.load",
-                    attributes={
-                        "configuration": config.__qualname__,
-                        "identifier": config_identifier,
-                        "status": "success",
-                    },
-                )
-                return loaded_config
-
-            except Exception as exc:
-                ctx.log_error(
-                    f"...invalid configuration '{config_identifier}'!",
-                    exception=exc,
-                )
-                ctx.record_error(
-                    event="configuration.load",
-                    attributes={
-                        "configuration": config.__qualname__,
-                        "identifier": config_identifier,
-                        "status": "error",
-                    },
-                )
-                raise ConfigurationInvalid(
-                    identifier=config_identifier,
-                    reason=str(exc),
-                ) from exc
 
         if default is not None:
             ctx.log_info("...using default!")
@@ -854,19 +844,19 @@ class ConfigurationRepository(State):
             ```
         """
         config_identifier: str
-        config_value: Mapping[str, BasicValue]
+        config_value: Configuration
         if isinstance(config, str):
             config_identifier = config
             ctx.log_info(f"Defining configuration '{config_identifier}'...")
 
             assert value is not None  # nosec: B101
-            config_value = value.to_mapping(recursive=True)
+            config_value = value
 
         else:
             assert value is None  # nosec: B101
             config_identifier = config.__class__.__qualname__
             ctx.log_info(f"Defining configuration '{config_identifier}'...")
-            config_value = config.to_mapping(recursive=True)
+            config_value = config
 
         try:
             await self.defining(

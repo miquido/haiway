@@ -1,11 +1,12 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any, cast
 
 from haiway.context import ctx
 from haiway.helpers import ConfigurationRepository, cache
+from haiway.helpers.configuration import Configuration
 from haiway.postgres.state import Postgres
 from haiway.postgres.types import PostgresRow
-from haiway.types import BasicValue, Meta
+from haiway.types import Meta
 
 __all__ = ("PostgresConfigurationRepository",)
 
@@ -74,10 +75,11 @@ def PostgresConfigurationRepository(
         limit=cache_limit,
         expiration=cache_expiration,
     )
-    async def loading(
+    async def loading[Config: Configuration](
+        config: type[Config],
         identifier: str,
         **extra: Any,
-    ) -> Mapping[str, BasicValue] | None:
+    ) -> Config | None:
         ctx.log_info(f"Loading configuration for {identifier}...")
         loaded: PostgresRow | None = await Postgres.fetch_one(
             """
@@ -105,13 +107,13 @@ def PostgresConfigurationRepository(
             ctx.log_info("...configuration not found!")
             return None
 
-        assert isinstance(loaded["content"], Mapping)  # nosec: B101
+        assert isinstance(loaded["content"], str | bytes)  # nosec: B101
         ctx.log_info("...configuration loaded!")
-        return cast(Mapping[str, BasicValue], loaded["content"])
+        return config.from_json(cast(str, loaded["content"]))
 
     async def define(
         identifier: str,
-        value: Mapping[str, BasicValue],
+        value: Configuration,
         **extra: Any,
     ) -> None:
         ctx.log_info(f"Defining configuration {identifier}...")
@@ -129,7 +131,7 @@ def PostgresConfigurationRepository(
             );
             """,
             identifier,
-            value,
+            value.to_json(),
         )
         ctx.log_info("...clearing cache...")
         await loading.clear_cache()

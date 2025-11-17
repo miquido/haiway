@@ -30,10 +30,11 @@ class DefaultedConfiguration(Configuration):
 @pytest.mark.asyncio
 async def test_invalid_data_raises_configuration_invalid() -> None:
     async def load_invalid(
+        config: type[MissingRequiredConfiguration],
         identifier: str,
         **extra: Any,
-    ) -> Mapping[str, BasicValue] | None:
-        return {"required": 123}
+    ) -> MissingRequiredConfiguration | None:
+        raise ConfigurationInvalid(identifier=identifier, reason="required")
 
     repo = ConfigurationRepository(loading=load_invalid)
 
@@ -48,6 +49,7 @@ async def test_invalid_data_raises_configuration_invalid() -> None:
 @pytest.mark.asyncio
 async def test_required_load_prefers_contextual_state() -> None:
     async def missing(
+        config: type[ContextualConfiguration],
         identifier: str,
         **extra: Any,
     ) -> Mapping[str, BasicValue] | None:
@@ -66,6 +68,7 @@ async def test_required_load_prefers_contextual_state() -> None:
 @pytest.mark.asyncio
 async def test_required_load_instantiates_defaults_when_context_missing() -> None:
     async def missing(
+        config: type[DefaultedConfiguration],
         identifier: str,
         **extra: Any,
     ) -> Mapping[str, BasicValue] | None:
