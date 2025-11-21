@@ -17,6 +17,10 @@ class DefaultValue:
     modified after initialization.
 
     The value can be retrieved by calling the instance like a function.
+
+    Examples
+    --------
+    >>> with_default: UUID = Default(default_factory=uuid4)
     """
 
     __slots__ = ("_value",)

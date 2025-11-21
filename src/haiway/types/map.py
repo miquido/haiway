@@ -1,6 +1,7 @@
 """Utilities for working with immutable mapping-like objects."""
 
 import json
+from collections.abc import Mapping
 from typing import Any, Self, final
 
 __all__ = ("Map",)
@@ -112,6 +113,24 @@ class Map[Key, Element](dict[Key, Element]):
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, update is not supported"
         )
+
+    def __or__(
+        self,
+        other: Any,
+    ) -> Any:
+        if not isinstance(other, Mapping):
+            raise NotImplementedError()
+
+        return self.__class__({**self, **other})  # pyright: ignore[reportUnknownArgumentType]
+
+    def __ror__(
+        self,
+        other: Any,
+    ) -> Any:
+        if not isinstance(other, Mapping):
+            raise NotImplementedError()
+
+        return self.__class__({**other, **self})  # pyright: ignore[reportUnknownArgumentType]
 
     def __ior__(
         self,

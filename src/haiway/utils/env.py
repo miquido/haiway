@@ -476,6 +476,7 @@ def load_env(
                     if element[1] == "=":
                         idx = element[0]
                         break
+
                 else:  # ignore keys without assignment
                     continue
 

@@ -6,10 +6,9 @@ from asyncio import (
 from collections import deque
 from collections.abc import Callable, Coroutine
 from datetime import timedelta
+from functools import wraps
 from time import monotonic
 from typing import Any, overload
-
-from haiway.utils.mimic import mimic_function
 
 __all__ = ("throttle",)
 
@@ -107,6 +106,7 @@ def throttle[**Args, Result](
             case period_seconds:
                 throttle_period = period_seconds
 
+        @wraps(function)
         async def throttle(
             *args: Args.args,
             **kwargs: Args.kwargs,
@@ -127,8 +127,7 @@ def throttle[**Args, Result](
 
             return await function(*args, **kwargs)
 
-        # mimic function attributes if able
-        return mimic_function(function, within=throttle)
+        return throttle
 
     if function is not None:
         return _wrap(function)

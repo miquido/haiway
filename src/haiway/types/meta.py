@@ -40,6 +40,7 @@ class Meta(dict[str, BasicValue]):
     >>> meta = meta.with_tags(["active", "verified"])
     >>> print(meta.kind)  # "user"
     >>> print(meta.tags)  # ("active", "verified")
+    >>> with_meta: Annotated[str, Meta.of(...)]
     """
 
     __slots__ = ()
@@ -648,6 +649,40 @@ class Meta(dict[str, BasicValue]):
             f"Can't modify immutable {self.__class__.__qualname__}, update is not supported"
         )
 
+    def __or__(
+        self,
+        other: Any,
+    ) -> Any:
+        if not isinstance(other, Mapping):
+            raise NotImplementedError()
+
+        return self.__class__(
+            {
+                **self,  # already validated
+                **{
+                    _validated_meta_key(key): _validated_meta_value(value)
+                    for key, value in other.items()  # pyright: ignore[reportUnknownVariableType]
+                },
+            }
+        )
+
+    def __ror__(
+        self,
+        other: Any,
+    ) -> Any:
+        if not isinstance(other, Mapping):
+            raise NotImplementedError()
+
+        return self.__class__(
+            {
+                **{
+                    _validated_meta_key(key): _validated_meta_value(value)
+                    for key, value in other.items()  # pyright: ignore[reportUnknownVariableType]
+                },
+                **self,  # already validated
+            }
+        )
+
     def __ior__(
         self,
         other: Any,
@@ -669,6 +704,14 @@ class Meta(dict[str, BasicValue]):
         return self  # Meta is immutable, no need to provide an actual copy
 
 
+def _validated_meta_key(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+
+    else:
+        raise TypeError(f"Invalid Meta key: '{type(value).__name__}'")
+
+
 def _validated_meta_value(value: Any) -> BasicValue:  # noqa: PLR0911
     match value:
         case None:
@@ -677,13 +720,13 @@ def _validated_meta_value(value: Any) -> BasicValue:  # noqa: PLR0911
         case str():
             return value
 
+        case bool():
+            return value
+
         case int():
             return value
 
         case float():
-            return value
-
-        case bool():
             return value
 
         case [*values]:

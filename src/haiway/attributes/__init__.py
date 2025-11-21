@@ -1,6 +1,7 @@
 from haiway.attributes.annotations import AttributeAnnotation
 from haiway.attributes.attribute import Attribute
 from haiway.attributes.coding import AttributesJSONEncoder
+from haiway.attributes.function import Function
 from haiway.attributes.path import AttributePath
 from haiway.attributes.requirement import AttributeRequirement
 from haiway.attributes.state import State
@@ -19,6 +20,7 @@ __all__ = (
     "AttributePath",
     "AttributeRequirement",
     "AttributesJSONEncoder",
+    "Function",
     "State",
     "Validating",
     "ValidationContext",

@@ -168,10 +168,10 @@ class Specification:
     specification : TypeSpecification
         Underlying type specification describing the accepted structure.
 
-    Returns
-    -------
-    None
-        The constructor returns ``None``.
+
+    Examples
+    --------
+    >>> with_specification: Annotated[str, Specification(...)]
     """
 
     __slots__ = ("specification",)

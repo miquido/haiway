@@ -10,7 +10,6 @@ from haiway.utils.env import (
 )
 from haiway.utils.formatting import format_str
 from haiway.utils.logs import setup_logging
-from haiway.utils.mimic import mimic_function
 from haiway.utils.queue import AsyncQueue
 from haiway.utils.stream import AsyncStream
 
@@ -29,7 +28,6 @@ __all__ = (
     "getenv_int",
     "getenv_str",
     "load_env",
-    "mimic_function",
     "setup_logging",
     "without_missing",
 )

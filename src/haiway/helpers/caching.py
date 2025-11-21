@@ -1,12 +1,14 @@
 from asyncio import iscoroutinefunction
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine, Hashable
-from functools import _make_key  # pyright: ignore[reportPrivateUsage]
+from functools import (
+    _make_key,  # pyright: ignore[reportPrivateUsage]
+    update_wrapper,
+)
 from time import monotonic
 from typing import Any, NamedTuple, Protocol, overload
 
 from haiway.context.access import ctx
-from haiway.utils.mimic import mimic_function
 
 __all__ = (
     "CacheClear",
@@ -201,11 +203,13 @@ def cache[**Args, Result](
         function: Callable[Args, Coroutine[Any, Any, Result]],
     ) -> Cached[Args, Result]:
         assert iscoroutinefunction(function)  # nosec: B101
-        return _LocalCache(
+        cached = _LocalCache(
             function,
             limit=limit if limit is not None else 1,
             expiration=expiration,
         )
+        update_wrapper(cached, function)
+        return cached
 
     if function is not None:
         return _wrap(function)
@@ -231,21 +235,6 @@ def _default_make_key[**Args](
 
 
 class _LocalCache[**Args, Result]:
-    __slots__ = (
-        "__annotations__",
-        "__defaults__",
-        "__doc__",
-        "__globals__",
-        "__kwdefaults__",
-        "__name__",
-        "__qualname__",
-        "__wrapped__",
-        "_cached",
-        "_function",
-        "_limit",
-        "_next_expire_time",
-    )
-
     def __init__(
         self,
         function: Callable[Args, Coroutine[Any, Any, Result]],
@@ -268,9 +257,6 @@ class _LocalCache[**Args, Result]:
                 return None
 
         self._next_expire_time: Callable[[], float | None] = next_expire_time
-
-        # mimic function attributes if able
-        mimic_function(function, within=self)
 
     def __get__(
         self,
@@ -363,35 +349,20 @@ def cache_externally[**Args, Result, Key: Hashable](
         function: Callable[Args, Coroutine[Any, Any, Result]],
     ) -> CachedExternally[Args, Result, Key]:
         assert iscoroutinefunction(function)  # nosec: B101
-        return _ExternalCache(
+        cached = _ExternalCache(
             function,
             make_key=make_key,
             read=read,
             write=write,
             clear=clear,
         )
+        update_wrapper(cached, function)
+        return cached
 
     return _wrap
 
 
 class _ExternalCache[**Args, Result, Key: Hashable]:
-    __slots__ = (
-        "__annotations__",
-        "__defaults__",
-        "__doc__",
-        "__globals__",
-        "__kwdefaults__",
-        "__name__",
-        "__qualname__",
-        "__wrapped__",
-        "_clear",
-        "_expiration",
-        "_function",
-        "_make_key",
-        "_read",
-        "_write",
-    )
-
     def __init__(
         self,
         function: Callable[Args, Coroutine[Any, Any, Result]],
@@ -406,9 +377,6 @@ class _ExternalCache[**Args, Result, Key: Hashable]:
         self._read: CacheRead[Key, Result] = read
         self._write: CacheWrite[Key, Result] = write
         self._clear: CacheClear[Key] | None = clear
-
-        # mimic function attributes if able
-        mimic_function(function, within=self)
 
     async def clear_cache(
         self,
