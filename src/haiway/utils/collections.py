@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping, Set
+from collections.abc import Iterable, Mapping
 from typing import Any, cast, overload
 
 from haiway.types.missing import MISSING
@@ -104,28 +104,28 @@ def as_tuple[T](
 
 @overload
 def as_set[T](
-    collection: Set[T],
+    collection: Iterable[T],
     /,
 ) -> set[T]: ...
 
 
 @overload
 def as_set[T](
-    collection: Set[T] | None,
+    collection: Iterable[T] | None,
     /,
 ) -> set[T] | None: ...
 
 
 def as_set[T](
-    collection: Set[T] | None,
+    collection: Iterable[T] | None,
     /,
 ) -> set[T] | None:
     """
-    Converts any given Set into a set.
+    Converts any given Iterable into a set.
 
     Parameters
     ----------
-    collection : Set[T] | None
+    collection : Iterable[T] | None
         The input collection to be converted to a set.
         If None is provided, None is returned.
 

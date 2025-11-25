@@ -1,8 +1,7 @@
 from asyncio import AbstractEventLoop, Future, Task, TimerHandle, get_running_loop
 from collections.abc import Callable, Coroutine
+from functools import wraps
 from typing import Any
-
-from haiway.utils.mimic import mimic_function
 
 __all__ = ("timeout",)
 
@@ -50,9 +49,11 @@ def timeout[**Args, Result](
     def _wrap(
         function: Callable[Args, Coroutine[Any, Any, Result]],
     ) -> Callable[Args, Coroutine[Any, Any, Result]]:
-        return _AsyncTimeout(
-            function,
-            timeout=timeout,
+        return wraps(function)(
+            _AsyncTimeout(
+                function,
+                timeout=timeout,
+            )
         )
 
     return _wrap
@@ -62,6 +63,7 @@ class _AsyncTimeout[**Args, Result]:
     __slots__ = (
         "__annotations__",
         "__defaults__",
+        "__dict__",
         "__doc__",
         "__globals__",
         "__kwdefaults__",
@@ -80,9 +82,6 @@ class _AsyncTimeout[**Args, Result]:
     ) -> None:
         self._function: Callable[Args, Coroutine[Any, Any, Result]] = function
         self._timeout: float = timeout
-
-        # mimic function attributes if able
-        mimic_function(function, within=self)
 
     async def __call__(
         self,

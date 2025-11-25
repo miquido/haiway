@@ -11,7 +11,7 @@ class Description:
     Parameters
     ----------
     description : str
-    A non-empty description string
+    A description string
 
     Examples
     --------

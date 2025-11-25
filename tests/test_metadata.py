@@ -443,3 +443,17 @@ def test_meta_get_bool_with_wrong_type():
         meta.get_bool("count")
     with raises(TypeError, match="Unexpected value 'float' for ratio, expected 'bool'"):
         meta.get_bool("ratio")
+
+
+def test_meta_or_preserves_type_and_validates() -> None:
+    base = Meta({"name": "base"})
+
+    merged = base | {"description": "desc"}
+
+    assert isinstance(merged, Meta)
+    assert merged["name"] == "base"
+    assert merged["description"] == "desc"
+    assert base is not merged
+
+    with raises(TypeError, match="Invalid Meta value"):
+        _ = base | {"invalid": object()}

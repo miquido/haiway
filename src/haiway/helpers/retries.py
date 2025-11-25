@@ -1,10 +1,10 @@
 from asyncio import CancelledError, iscoroutinefunction, sleep
 from collections.abc import Callable, Coroutine
+from functools import wraps
 from time import sleep as sleep_sync
 from typing import Any, cast, overload
 
 from haiway.context import ctx
-from haiway.utils import mimic_function
 
 __all__ = ("retry",)
 
@@ -180,7 +180,7 @@ def _wrap_sync[**Args, Result](
 ) -> Callable[Args, Result]:
     assert limit > 0, "Limit has to be greater than zero"  # nosec: B101
 
-    @mimic_function(function)
+    @wraps(function)
     def wrapped(
         *args: Args.args,
         **kwargs: Args.kwargs,
@@ -226,7 +226,7 @@ def _wrap_async[**Args, Result](
 ) -> Callable[Args, Coroutine[Any, Any, Result]]:
     assert limit > 0, "Limit has to be greater than zero"  # nosec: B101
 
-    @mimic_function(function)
+    @wraps(function)
     async def wrapped(
         *args: Args.args,
         **kwargs: Args.kwargs,
