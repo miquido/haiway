@@ -35,7 +35,7 @@ def retry[**Args, Result](
 def retry[**Args, Result](
     *,
     limit: int = 1,
-    delay: Callable[[int, Exception], float] | float | None = None,
+    delay: Callable[[int, Exception], float] | float | int | None = None,
     catching: Callable[[Exception], bool] | type[Exception] = Exception,
 ) -> Callable[[Callable[Args, Result]], Callable[Args, Result]]:
     """
@@ -46,7 +46,7 @@ def retry[**Args, Result](
     limit: int, default=1
         Maximum number of retry attempts after the initial call. Must be greater than
         zero.
-    delay: Callable[[int, Exception], float] | float | None, default=None
+    delay: Callable[[int, Exception], float] | float | int | None, default=None
         Delay between attempts in seconds. ``Callable`` receives the retry attempt
         number (starting at 1) and the raised exception.
     catching: Callable[[Exception], bool] | type[Exception], default=Exception
@@ -64,7 +64,7 @@ def retry[**Args, Result](
     function: Callable[Args, Result] | None = None,
     *,
     limit: int = 1,
-    delay: Callable[[int, Exception], float] | float | None = None,
+    delay: Callable[[int, Exception], float] | float | int | None = None,
     catching: Callable[[Exception], bool] | type[Exception] = Exception,
 ) -> Callable[[Callable[Args, Result]], Callable[Args, Result]] | Callable[Args, Result]:
     """
@@ -82,10 +82,10 @@ def retry[**Args, Result](
     limit: int, default=1
         Maximum number of retry attempts after the initial call. The function can be
         executed at most ``limit + 1`` times.
-    delay: Callable[[int, Exception], float] | float | None, default=None
+    delay: Callable[[int, Exception], float] | float | int | None, default=None
         Delay between retry attempts in seconds. May be:
           - ``None``: retries occur immediately.
-          - ``float``: fixed delay applied before every retry.
+          - ``float`` or ``int``: fixed delay applied before every retry.
           - ``Callable``: invoked with the retry attempt number (starting at 1) and the
             most recent exception to compute a delay.
     catching: Callable[[Exception], bool] | type[Exception]
@@ -175,7 +175,7 @@ def _wrap_sync[**Args, Result](
     function: Callable[Args, Result],
     *,
     limit: int,
-    delay: Callable[[int, Exception], float] | float | None,
+    delay: Callable[[int, Exception], float] | float | int | None,
     catching: Callable[[Exception], bool],
 ) -> Callable[Args, Result]:
     assert limit > 0, "Limit has to be greater than zero"  # nosec: B101
@@ -205,8 +205,8 @@ def _wrap_sync[**Args, Result](
                         case None:
                             continue
 
-                        case float(strict):
-                            sleep_sync(strict)
+                        case float(strict) | int(strict):
+                            sleep_sync(float(strict))
 
                         case make_delay:
                             sleep_sync(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
@@ -221,7 +221,7 @@ def _wrap_async[**Args, Result](
     function: Callable[Args, Coroutine[Any, Any, Result]],
     *,
     limit: int,
-    delay: Callable[[int, Exception], float] | float | None,
+    delay: Callable[[int, Exception], float] | float | int | None,
     catching: Callable[[Exception], bool],
 ) -> Callable[Args, Coroutine[Any, Any, Result]]:
     assert limit > 0, "Limit has to be greater than zero"  # nosec: B101
@@ -251,8 +251,8 @@ def _wrap_async[**Args, Result](
                         case None:
                             continue
 
-                        case float(strict):
-                            await sleep(strict)
+                        case float(strict) | int(strict):
+                            await sleep(float(strict))
 
                         case make_delay:
                             await sleep(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]

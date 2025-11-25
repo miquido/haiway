@@ -23,7 +23,10 @@ class DefaultValue:
     >>> with_default: UUID = Default(default_factory=uuid4)
     """
 
-    __slots__ = ("_value",)
+    __slots__ = (
+        "_value",
+        "available",
+    )
 
     @overload
     def __init__(
@@ -67,12 +70,18 @@ class DefaultValue:
         env: str | Missing = MISSING,
     ) -> None:
         self._value: Callable[[], Any | Missing]
+        self.available: bool
         if not_missing(default_factory):
             assert default is MISSING and env is MISSING  # nosec: B101
             object.__setattr__(
                 self,
                 "_value",
                 default_factory,
+            )
+            object.__setattr__(
+                self,
+                "available",
+                True,
             )
 
         elif not_missing(env):
@@ -82,12 +91,22 @@ class DefaultValue:
                 "_value",
                 lambda: os_getenv(key=env, default=MISSING),
             )
+            object.__setattr__(
+                self,
+                "available",
+                True,
+            )
 
         else:
             object.__setattr__(
                 self,
                 "_value",
                 lambda: default,
+            )
+            object.__setattr__(
+                self,
+                "available",
+                default is not MISSING,
             )
 
     def __call__(self) -> Any | Missing:

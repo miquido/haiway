@@ -36,7 +36,7 @@ opentelemetry = [
   "opentelemetry-exporter-otlp-proto-grpc~=1.37",
 ]
 httpx = ["httpx~=0.28"]
-postgres = ["asyncpg~=0.30"]
+postgres = ["asyncpg~=0.31.0"]
 dev = [
   "bandit~=1.9",
   "pyright~=1.1",

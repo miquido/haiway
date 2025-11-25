@@ -7,6 +7,13 @@ from haiway.attributes.path import AttributePath
 
 __all__ = ("AttributeRequirement",)
 
+_WORD_TOKEN_PATTERN = re.compile(r"\b\w+\b", re.UNICODE)
+
+
+def _tokenize_text(value: str) -> Sequence[str]:
+    normalized = unicodedata.normalize("NFC", value).casefold()
+    return _WORD_TOKEN_PATTERN.findall(normalized)
+
 
 @final
 class AttributeRequirement[Root]:
@@ -97,30 +104,10 @@ class AttributeRequirement[Root]:
                     f" for '{path.__repr__()}'"
                 )
 
-            # Perform full text search with proper Unicode support and word boundaries
-            def tokenize_text(text: str) -> Sequence[str]:
-                # Normalize and case-fold the text
-                normalized = unicodedata.normalize("NFC", text).casefold()
-                # Split on word boundaries and filter out empty strings
-                # re.UNICODE handles international characters, multiline text works by default
-                tokens = re.findall(r"\b\w+\b", normalized, re.UNICODE)
-                return tokens
+            search_tokens: Sequence[str] = _tokenize_text(value)
+            target_tokens_set: Set[str] = set(_tokenize_text(checked))
 
-            # Tokenize both search terms and target text
-            search_tokens: Sequence[str] = tokenize_text(value)
-            target_tokens: Sequence[str] = tokenize_text(checked)
-            target_tokens_set: Set[str] = set(target_tokens)
-
-            # Check if all search tokens are found as complete words in target text
-            missing_terms = [
-                original_term
-                for original_term, token in zip(
-                    value.split(),
-                    search_tokens,
-                    strict=False,
-                )
-                if token not in target_tokens_set
-            ]
+            missing_terms = [token for token in search_tokens if token not in target_tokens_set]
 
             if missing_terms:
                 raise ValueError(

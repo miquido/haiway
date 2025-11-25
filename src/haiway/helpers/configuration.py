@@ -240,6 +240,7 @@ class Configuration(State):
 class ConfigurationListing(Protocol):
     async def __call__(
         self,
+        config: type[Configuration] | None,
         **extra: Any,
     ) -> Sequence[str]: ...
 
@@ -274,6 +275,7 @@ class ConfigurationRemoving(Protocol):
 
 
 async def _empty_listing(
+    config: type[Configuration] | None,
     **extra: Any,
 ) -> Sequence[str]:
     return ()
@@ -350,7 +352,7 @@ class ConfigurationRepository(State):
     """
 
     @classmethod
-    def volatile(
+    def volatile(  # noqa: C901
         cls,
         *configs: Configuration,
         **named_configs: Configuration,
@@ -399,8 +401,21 @@ class ConfigurationRepository(State):
             assert isinstance(element, Configuration)  # nosec: B101
             storage[key] = element
 
-        async def listing(**extra: Any) -> Sequence[str]:
-            return tuple(storage.keys())
+        async def listing(
+            config: type[Configuration] | None,
+            **extra: Any,
+        ) -> Sequence[str]:
+            if config is None:
+                return tuple(storage.keys())
+
+            configs: list[str] = []
+            for key, value in storage.items():
+                if type(value).__name__ != config.__name__:
+                    continue
+
+                configs.append(key)
+
+            return tuple(configs)
 
         async def loading[Config: Configuration](
             config: type[Config],
@@ -443,18 +458,21 @@ class ConfigurationRepository(State):
     @classmethod
     async def configurations(
         cls,
+        config: type[Configuration] | None = None,
         **extra: Any,
     ) -> Sequence[str]: ...
 
     @overload
     async def configurations(
         self,
+        config: type[Configuration] | None = None,
         **extra: Any,
     ) -> Sequence[str]: ...
 
     @statemethod
     async def configurations(
         self,
+        config: type[Configuration] | None = None,
         **extra: Any,
     ) -> Sequence[str]:
         """List all available configuration identifiers.
@@ -463,6 +481,7 @@ class ConfigurationRepository(State):
         configuration identifiers.
 
         Args:
+            config: type[Configuration] | None = None - configuration type to choose
             **extra: Additional parameters passed to the listing protocol.
 
         Returns:
@@ -475,7 +494,7 @@ class ConfigurationRepository(State):
                 print(f"Available configurations: {', '.join(identifiers)}")
             ```
         """
-        return await self.listing(**extra)
+        return await self.listing(config=config, **extra)
 
     @overload
     @classmethod

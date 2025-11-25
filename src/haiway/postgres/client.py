@@ -10,7 +10,10 @@ from asyncpg import (  # pyright: ignore[reportMissingTypeStubs]
     Pool,
     create_pool,  # pyright: ignore [reportUnknownVariableType]
 )
-from asyncpg.pool import PoolAcquireContext  # pyright: ignore[reportMissingTypeStubs]
+from asyncpg.pool import (  # pyright: ignore[reportMissingTypeStubs]
+    PoolAcquireContext,
+    PoolConnectionProxy,
+)
 from asyncpg.transaction import Transaction  # pyright: ignore[reportMissingTypeStubs]
 
 from haiway.postgres.config import (
@@ -167,7 +170,7 @@ class _ConnectionContext(Immutable):
     _pool_context: PoolAcquireContext
 
     async def __aenter__(self) -> PostgresConnection:
-        acquired_connection: Connection = await self._pool_context.__aenter__()  # pyright: ignore[reportUnknownVariableType]
+        acquired_connection: PoolConnectionProxy = await self._pool_context.__aenter__()  # pyright: ignore[reportUnknownVariableType]
 
         async def execute(
             statement: str,
