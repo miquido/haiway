@@ -45,7 +45,7 @@ async def fetch_user_data():
         # Access response data
         print(f"Status: {response.status_code}")
         print(f"Headers: {response.headers}")
-        print(f"Body: {response.body.decode()}")
+        print(f"Body: {(await response.body()).decode()}")
 ```
 
 ### 2. Making Different Request Types
@@ -132,7 +132,7 @@ from haiway.helpers import HTTPClientError
 async def safe_request():
     try:
         response = await HTTPClient.get(url="https://api.example.com/data")
-        return json.loads(response.body)
+        return json.loads(await response.body())
     except HTTPClientError as e:
         print(f"HTTP request failed: {e}")
         # Original exception available as e.__cause__
@@ -176,12 +176,12 @@ response = await HTTPClient.get(
 ```python
 # Parse JSON response
 response = await HTTPClient.get(url="/api/data")
-data = json.loads(response.body)
+data = json.loads(await response.body())
 
 # Check status codes
 if response.status_code == 200:
     # Success
-    process_data(response.body)
+    process_data(await response.body())
 elif response.status_code == 404:
     # Not found
     return None
@@ -241,7 +241,7 @@ async def test_user_fetching():
     async with ctx.scope("test", HTTPClient(requesting=mock_request)):
         response = await HTTPClient.get(url="/users/123")
         assert response.status_code == 200
-        data = json.loads(response.body)
+        data = json.loads(await response.body())
         assert data["name"] == "Test User"
 ```
 

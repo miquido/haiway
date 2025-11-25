@@ -246,7 +246,7 @@ class HTTPXClient(Immutable):
             return HTTPResponse(
                 status_code=response.status_code,
                 headers=response.headers,
-                body=await response.aread(),
+                body=response.aiter_bytes(),
             )
 
         except Exception as exc:
