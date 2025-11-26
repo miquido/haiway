@@ -33,6 +33,7 @@ def PostgresConfigurationRepository(
     ```
     CREATE TABLE configurations (
         identifier TEXT NOT NULL,
+        name TEXT NOT NULL,
         content JSONB NOT NULL,
         created TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (identifier, created)
@@ -47,28 +48,54 @@ def PostgresConfigurationRepository(
     """
 
     @cache(
-        limit=1,
+        limit=64,
         expiration=cache_expiration,
     )
     async def listing(
+        config: type[Configuration] | None,
         **extra: Any,
     ) -> Sequence[str]:
         ctx.log_info("Listing configurations...")
-        results: Sequence[PostgresRow] = await Postgres.fetch(
-            """
-            SELECT DISTINCT ON (identifier)
-                identifier::TEXT
+        results: Sequence[PostgresRow]
+        if config is None:
+            results = await Postgres.fetch(
+                """
+                SELECT DISTINCT ON (identifier)
+                    identifier::TEXT
 
-            FROM
-                configurations
+                FROM
+                    configurations
 
-            ORDER BY
-                identifier,
-                created
-            DESC;
-            """
-        )
-        ctx.log_info(f"...{len(results)} configurations found!")
+                ORDER BY
+                    identifier,
+                    created
+                DESC;
+                """
+            )
+            ctx.log_info(f"...{len(results)} configurations found!")
+
+        else:
+            results = await Postgres.fetch(
+                """
+                SELECT DISTINCT ON (identifier)
+                    identifier::TEXT
+
+                FROM
+                    configurations
+
+                WHERE
+                    name = $1
+
+                ORDER BY
+                    identifier,
+                    created
+                DESC;
+                """,
+                config.__name__,
+            )
+
+            ctx.log_info(f"...{len(results)} {config.__name__} configurations found!")
+
         return tuple(cast(str, record["identifier"]) for record in results)
 
     @cache(
@@ -85,6 +112,7 @@ def PostgresConfigurationRepository(
             """
             SELECT DISTINCT ON (identifier)
                 identifier::TEXT,
+                name::TEXT,
                 content::JSONB
 
             FROM
@@ -107,6 +135,7 @@ def PostgresConfigurationRepository(
             ctx.log_info("...configuration not found!")
             return None
 
+        assert loaded["name"] == config.__name__  # nosec: B101
         assert isinstance(loaded["content"], str | bytes)  # nosec: B101
         ctx.log_info("...configuration loaded!")
         return config.from_json(cast(str, loaded["content"]))
@@ -122,15 +151,18 @@ def PostgresConfigurationRepository(
             INSERT INTO
                 configurations (
                     identifier,
+                    name,
                     content
                 )
 
             VALUES (
                 $1::TEXT,
-                $2::JSONB
+                $2::TEXT,
+                $3::JSONB
             );
             """,
             identifier,
+            value.__class__.__name__,
             value.to_json(),
         )
         ctx.log_info("...clearing cache...")

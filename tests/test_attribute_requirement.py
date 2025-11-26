@@ -11,7 +11,12 @@ class Example(State):
     ys: Sequence[int]
 
 
+class TextExample(State):
+    text: str
+
+
 example = Example(x=1, ys=[1, 2, 3])
+text_example = TextExample(text="Alpha beta, gamma - delta.")
 
 
 def test_equal_requirement() -> None:
@@ -77,6 +82,20 @@ def test_contained_in_requirement() -> None:
     with pytest.raises(ValueError):
         req.check(Example(x=3, ys=[1, 2, 3]))
     assert not req.check(Example(x=3, ys=[1, 2, 3]), raise_exception=False)
+
+
+def test_text_match_handles_punctuation() -> None:
+    path = TextExample._.text
+    req = AttributeRequirement.text_match("beta gamma", path)
+    assert req.check(text_example)
+    assert req.check(text_example, raise_exception=False)
+
+
+def test_text_match_reports_missing_tokens_consistently() -> None:
+    path = TextExample._.text
+    req = AttributeRequirement.text_match("gamma epsilon", path)
+    with pytest.raises(ValueError, match=r"Missing tokens: .*epsilon.*"):
+        req.check(text_example)
 
 
 def test_logical_and_or_requirements() -> None:

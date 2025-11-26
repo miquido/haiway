@@ -246,7 +246,7 @@ class _LocalCache[**Args, Result]:
         self._cached: OrderedDict[Hashable, _CacheEntry[Result]] = OrderedDict()
         self._limit: int = limit
 
-        if expiration := expiration:
+        if expiration is not None:
 
             def next_expire_time() -> float | None:
                 return monotonic() + expiration
@@ -382,7 +382,9 @@ class _ExternalCache[**Args, Result, Key: Hashable]:
         self,
         key: Key | None = None,
     ) -> None:
-        assert self._clear is not None  # nosec: B101
+        if self._clear is None:
+            return
+
         await self._clear(key)
 
     async def __call__(

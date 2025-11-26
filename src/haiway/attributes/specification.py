@@ -38,7 +38,6 @@ __all__ = ("type_specification",)
 def type_specification(
     annotation: AttributeAnnotation,
     /,
-    description: str | None,
 ) -> TypeSpecification | None:
     specification: TypeSpecification | None = _specification(
         annotation,
@@ -50,7 +49,7 @@ def type_specification(
 
     return _with_description(
         specification,
-        description=description,
+        description=annotation.description,
     )
 
 

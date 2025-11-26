@@ -121,7 +121,9 @@ def throttle[**Args, Result](
                         break
 
                 if len(entries) >= limit:
-                    await sleep(entries[0] - time_now)
+                    wait_for: float = entries[0] + throttle_period - time_now
+                    if wait_for > 0:
+                        await sleep(wait_for)
 
                 entries.append(monotonic())
 

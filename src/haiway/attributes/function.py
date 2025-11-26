@@ -7,7 +7,6 @@ from typing import Any, get_type_hints
 
 from haiway.attributes.annotations import AttributeAnnotation, resolve_attribute
 from haiway.attributes.attribute import Attribute
-from haiway.attributes.specification import type_specification
 from haiway.attributes.validation import ValidationContext
 from haiway.types import MISSING, DefaultValue
 
@@ -144,20 +143,14 @@ def _resolve_parameter(
         return Attribute(
             name=parameter.name,
             annotation=attribute,
-            alias=attribute.alias,
             default=parameter.default,
-            specification=type_specification(attribute, None),
-            required=False,
         )
 
     else:
         return Attribute(
             name=parameter.name,
             annotation=attribute,
-            alias=attribute.alias,
             default=DefaultValue(
                 default=MISSING if parameter.default is INSPECT_EMPTY else parameter.default,
             ),
-            specification=type_specification(attribute, None),
-            required=parameter.default is INSPECT_EMPTY and attribute.required,
         )

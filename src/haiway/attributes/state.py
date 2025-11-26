@@ -24,7 +24,6 @@ from haiway.attributes.annotations import (
 from haiway.attributes.attribute import Attribute
 from haiway.attributes.coding import AttributesJSONEncoder
 from haiway.attributes.path import AttributePath
-from haiway.attributes.specification import type_specification
 from haiway.attributes.validation import ValidationContext
 from haiway.types import (
     MISSING,
@@ -89,28 +88,14 @@ class StateMeta(type):
         required_fields: MutableSequence[str] = []
         fields: MutableSequence[Attribute] = []
         for key, attribute in self_attribute.attributes.items():
-            default: Any = getattr(cls, key, MISSING)
-            alias: str | None = attribute.alias
-            description: str | None = attribute.description
-            required: bool = attribute.required
-
-            specification: TypeSpecification | None = attribute.specification
-            if specification is None:
-                specification = type_specification(
-                    attribute,
-                    description=description,
-                )
-
             field: Attribute = Attribute(
                 name=key,
-                alias=alias,
                 annotation=attribute,
-                required=required,
-                default=_resolve_default(default),
-                specification=specification,
+                default=_resolve_default(getattr(cls, key, MISSING)),
             )
             fields.append(field)
             if specification_fields is not None:
+                specification: TypeSpecification | None = field.specification
                 if specification is None:
                     # there will be no specification at all
                     specification_fields = None
