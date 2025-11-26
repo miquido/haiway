@@ -25,6 +25,7 @@ class Function[**Args, Result]:
         self._positional_arguments: Sequence[Attribute] = []
         self._variadic_positional_arguments: Attribute | None = None
         self._keyword_arguments: Mapping[str, Attribute] = {}
+        self._aliased_keyword_arguments: Mapping[str, Attribute] = {}
         self._variadic_keyword_arguments: Attribute | None = None
         type_hints: Mapping[str, Any] = get_type_hints(
             function,
@@ -49,13 +50,18 @@ class Function[**Args, Result]:
                     )
                     self._positional_arguments.append(resolved)
                     self._keyword_arguments[parameter.name] = resolved
+                    if resolved.alias:
+                        self._aliased_keyword_arguments[resolved.alias] = resolved
 
                 case InspectParameter.KEYWORD_ONLY:
-                    self._keyword_arguments[parameter.name] = _resolve_parameter(
+                    resolved: Attribute = _resolve_parameter(
                         parameter,
                         module=function.__module__,
                         type_hint=type_hints.get(parameter.name),
                     )
+                    self._keyword_arguments[parameter.name] = resolved
+                    if resolved.alias:
+                        self._aliased_keyword_arguments[resolved.alias] = resolved
 
                 case InspectParameter.VAR_POSITIONAL:
                     assert self._variadic_positional_arguments is None  # nosec: B101
@@ -75,41 +81,63 @@ class Function[**Args, Result]:
 
         update_wrapper(self, function)
 
-    def validate_arguments(
+    def validate_arguments(  # noqa: C901
         self,
         *args: Args.args,
         **kwargs: Args.kwargs,
     ) -> tuple[list[Any], dict[str, Any]]:
         validated_args: list[Any] = []
         validated_kwargs: dict[str, Any] = {}
+        consumed_args: set[str] = set()
 
         for idx, value in enumerate(args):
             attribute: Attribute
             if idx < len(self._positional_arguments):
                 attribute = self._positional_arguments[idx]
+                with ValidationContext.scope(f".{attribute.name}"):
+                    validated_args.append(attribute.validate(value))
+
+                consumed_args.add(attribute.name)
+                if attribute.alias is not None:
+                    consumed_args.add(attribute.alias)
 
             elif self._variadic_positional_arguments is not None:
                 attribute = self._variadic_positional_arguments
+                with ValidationContext.scope(f".{attribute.name}"):
+                    validated_args.append(attribute.validate(value))
 
             else:
                 raise TypeError(f"Unexpected positional argument at index {idx}") from None
 
-            with ValidationContext.scope(f".{attribute.name}"):
-                validated_args.append(attribute.validate(value))
-
         for key, value in kwargs.items():
-            attribute: Attribute
+            if key in consumed_args:
+                raise TypeError(f"Duplicate argument '{key}' for {self.__class__.__name__}")
+
             if key in self._keyword_arguments:
-                attribute = self._keyword_arguments[key]
+                attribute: Attribute = self._keyword_arguments[key]
+                with ValidationContext.scope(f".{key}"):
+                    validated_kwargs[attribute.name] = attribute.validate(value)
+
+                consumed_args.add(attribute.name)
+                if attribute.alias is not None:
+                    consumed_args.add(attribute.alias)
+
+            elif key in self._aliased_keyword_arguments:
+                attribute: Attribute = self._aliased_keyword_arguments[key]
+                assert attribute.alias is not None  # nosec: B101
+                with ValidationContext.scope(f".{attribute.name}"):
+                    validated_kwargs[attribute.name] = attribute.validate(value)
+
+                consumed_args.add(attribute.name)
+                consumed_args.add(attribute.alias)
 
             elif self._variadic_keyword_arguments is not None:
                 attribute = self._variadic_keyword_arguments
+                with ValidationContext.scope(f".{key}"):
+                    validated_kwargs[key] = attribute.validate(value)
 
             else:
                 raise TypeError(f"Unexpected keyword argument '{key}'") from None
-
-            with ValidationContext.scope(f".{key}"):
-                validated_kwargs[key] = attribute.validate(value)
 
         return validated_args, validated_kwargs
 

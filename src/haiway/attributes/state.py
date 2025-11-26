@@ -1,6 +1,14 @@
 import json
 import typing
-from collections.abc import Iterable, Mapping, MutableMapping, MutableSequence, Sequence
+from collections.abc import (
+    Iterable,
+    Mapping,
+    MutableMapping,
+    MutableSequence,
+    MutableSet,
+    Sequence,
+    Set,
+)
 from copy import deepcopy
 from dataclasses import fields, is_dataclass
 from types import GenericAlias
@@ -62,6 +70,7 @@ class StateMeta(type):
     __TYPE_PARAMETERS__: Mapping[str, Any] | None
     __SPECIFICATION__: TypeSpecification | None
     __FIELDS__: Sequence[Attribute]
+    __ALLOWED_FIELDS__: Set[str]
     __slots__: tuple[str, ...]
 
     def __new__(
@@ -86,6 +95,7 @@ class StateMeta(type):
         )
         specification_fields: MutableMapping[str, TypeSpecification] | None = {}
         required_fields: MutableSequence[str] = []
+        allowed_fields: MutableSet[str] = set()
         fields: MutableSequence[Attribute] = []
         for key, attribute in self_attribute.attributes.items():
             field: Attribute = Attribute(
@@ -93,6 +103,12 @@ class StateMeta(type):
                 annotation=attribute,
                 default=_resolve_default(getattr(cls, key, MISSING)),
             )
+            assert key not in allowed_fields  # nosec: B101
+            allowed_fields.add(key)
+            if attribute.alias:
+                assert attribute.alias not in allowed_fields  # nosec: B101
+                allowed_fields.add(attribute.alias)
+
             fields.append(field)
             if specification_fields is not None:
                 specification: TypeSpecification | None = field.specification
@@ -123,6 +139,7 @@ class StateMeta(type):
             else None
         )
         cls.__FIELDS__ = tuple(fields)  # pyright: ignore[reportConstantRedefinition]
+        cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
         cls.__slots__ = tuple(field.name for field in fields)  # pyright: ignore[reportAttributeAccessIssue]
         cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
         cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
@@ -377,6 +394,20 @@ class State(metaclass=StateMeta):
             return value
 
         elif isinstance(value, Mapping | typing.Mapping):
+            for key in cast(Mapping[Any, Any], value.keys()):
+                if key not in cls.__ALLOWED_FIELDS__:
+                    raise TypeError(f"Unexpected attribute '{key}' for {cls.__name__}")
+
+            for field in cls.__FIELDS__:
+                if field.alias is None:
+                    continue
+
+                if field.alias in value and field.name in value:
+                    raise TypeError(
+                        f"Duplicate attribute '{field.name}'"
+                        f" with alias '{field.alias}' for {cls.__name__}"
+                    )
+
             return cls(**value)
 
         else:
@@ -401,7 +432,7 @@ class State(metaclass=StateMeta):
         Self
             New instance constructed from the provided mapping.
         """
-        return cls(**value)
+        return cls.validate(value)
 
     @overload
     @classmethod
@@ -488,8 +519,8 @@ class State(metaclass=StateMeta):
             If the payload cannot be decoded or does not match the schema.
         """
         try:
-            return cls(
-                **json.loads(
+            return cls.validate(
+                json.loads(
                     value,
                     cls=decoder,
                 )
@@ -538,7 +569,7 @@ class State(metaclass=StateMeta):
         match payload:
             case [*elements]:
                 try:
-                    return tuple(cls(**element) for element in elements)
+                    return tuple(cls.validate(element) for element in elements)
 
                 except Exception as exc:
                     raise ValueError(
@@ -607,6 +638,7 @@ class State(metaclass=StateMeta):
         Exception
             If validation fails for any attribute
         """
+
         for field in self.__FIELDS__:
             with ValidationContext.scope(f".{field.name}"):
                 object.__setattr__(
