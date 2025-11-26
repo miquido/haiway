@@ -1,8 +1,9 @@
-from collections.abc import Mapping, Sequence
-from typing import Protocol, final, overload, runtime_checkable
+from collections.abc import AsyncIterable, Mapping, Sequence
+from typing import Protocol, cast, final, overload, runtime_checkable
 
 from haiway.attributes import State
 from haiway.helpers.statemethods import statemethod
+from haiway.types import Immutable
 
 __all__ = (
     "HTTPClient",
@@ -23,7 +24,7 @@ type HTTPQueryParams = Mapping[
 ]
 
 
-class HTTPResponse(State):
+class HTTPResponse(Immutable):
     """Immutable HTTP response container.
 
     Encapsulates the response from an HTTP request including status code,
@@ -35,8 +36,11 @@ class HTTPResponse(State):
         HTTP status code (e.g., 200, 404, 500).
     headers : Mapping[str, str]
         Response headers as an immutable mapping.
-    body : bytes
-        Raw response body content.
+
+    Methods
+    -------
+    body() -> bytes
+        Asynchronously read and cache the raw response body content.
 
     Examples
     --------
@@ -45,12 +49,36 @@ class HTTPResponse(State):
     ...     headers={"Content-Type": "application/json"},
     ...     body=b'{"status": "ok"}'
     ... )
-    >>> data = json.loads(response.body)
+    >>> data = json.loads(await response.body())
     """
 
     status_code: HTTPStatusCode
     headers: HTTPHeaders
-    body: bytes
+    _body: AsyncIterable[bytes] | bytes
+
+    def __init__(
+        self,
+        status_code: HTTPStatusCode,
+        headers: HTTPHeaders,
+        body: AsyncIterable[bytes] | bytes,
+    ) -> None:
+        super().__init__(
+            status_code=status_code,
+            headers=headers,
+            _body=body,
+        )
+
+    async def body(self) -> bytes:
+        if isinstance(self._body, bytes):
+            return self._body
+
+        object.__setattr__(
+            self,
+            "_body",
+            b"".join([part async for part in self._body]),
+        )
+
+        return cast(bytes, self._body)
 
 
 @runtime_checkable
@@ -130,7 +158,7 @@ class HTTPClient(State):
     >>> async with HTTPXClient() as http_client:
     ...     async with ctx.scope("api_calls", http_client):
     ...         response = await HTTPClient.get(url="https://api.example.com/data")
-    ...         data = json.loads(response.body)
+    ...         data = json.loads(await response.body())
     ...
     >>> # Making a POST request
     >>> response = await HTTPClient.post(
