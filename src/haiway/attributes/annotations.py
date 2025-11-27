@@ -108,7 +108,7 @@ Annotation = (
 
 class AttributeAnnotation(Protocol):
     @property
-    def name(self) -> str: ...
+    def type_name(self) -> str: ...
 
     @property
     def base(self) -> Any: ...
@@ -149,7 +149,7 @@ def _no_verify[Type](value: Type) -> Type:
 
 
 class AnyAttribute(Immutable):
-    name: Final[Literal["Any"]] = "Any"
+    type_name: Final[Literal["Any"]] = "Any"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -240,7 +240,7 @@ class AliasAttribute(Immutable):
     _resolved: AttributeAnnotation | None = None
 
     @property
-    def name(self) -> str:
+    def type_name(self) -> str:
         return f"{self.module}.{self.type_alias}"
 
     @property
@@ -354,7 +354,7 @@ class AliasAttribute(Immutable):
 
 
 class MissingAttribute(Immutable):
-    name: Final[Literal["Missing"]] = "Missing"
+    type_name: Final[Literal["Missing"]] = "Missing"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -443,7 +443,7 @@ class MissingAttribute(Immutable):
 
 
 class NoneAttribute(Immutable):
-    name: Final[Literal["None"]] = "None"
+    type_name: Final[Literal["None"]] = "None"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -542,7 +542,7 @@ class LiteralAttribute(Immutable):
     meta: Meta = META_EMPTY
 
     @property
-    def name(self) -> str:
+    def type_name(self) -> str:
         return f"Literal[{', '.join(repr(value) for value in self.values)}]"
 
     def annotated(  # noqa: C901
@@ -628,7 +628,7 @@ class LiteralAttribute(Immutable):
 
 
 class BoolAttribute(Immutable):
-    name: Final[Literal["bool"]] = "bool"
+    type_name: Final[Literal["bool"]] = "bool"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -729,7 +729,7 @@ class BoolAttribute(Immutable):
 
 
 class IntegerAttribute(Immutable):
-    name: Final[Literal["int"]] = "int"
+    type_name: Final[Literal["int"]] = "int"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -821,7 +821,7 @@ class IntegerAttribute(Immutable):
 
 
 class FloatAttribute(Immutable):
-    name: Final[Literal["float"]] = "float"
+    type_name: Final[Literal["float"]] = "float"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -913,7 +913,7 @@ class FloatAttribute(Immutable):
 
 
 class BytesAttribute(Immutable):
-    name: Final[Literal["bytes"]] = "bytes"
+    type_name: Final[Literal["bytes"]] = "bytes"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -1002,7 +1002,7 @@ class BytesAttribute(Immutable):
 
 
 class UUIDAttribute(Immutable):
-    name: Literal["UUID"] = "UUID"
+    type_name: Final[Literal["UUID"]] = "UUID"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -1098,7 +1098,7 @@ class UUIDAttribute(Immutable):
 
 
 class StringAttribute(Immutable):
-    name: Final[Literal["str"]] = "str"
+    type_name: Final[Literal["str"]] = "str"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -1187,7 +1187,7 @@ class StringAttribute(Immutable):
 
 
 class DatetimeAttribute(Immutable):
-    name: Final[Literal["datetime"]] = "datetime"
+    type_name: Final[Literal["datetime"]] = "datetime"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -1285,7 +1285,7 @@ class DatetimeAttribute(Immutable):
 
 
 class DateAttribute(Immutable):
-    name: Final[Literal["date"]] = "date"
+    type_name: Final[Literal["date"]] = "date"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -1383,7 +1383,7 @@ class DateAttribute(Immutable):
 
 
 class TimeAttribute(Immutable):
-    name: Final[Literal["time"]] = "time"
+    type_name: Final[Literal["time"]] = "time"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -1481,7 +1481,7 @@ class TimeAttribute(Immutable):
 
 
 class PathAttribute(Immutable):
-    name: Final[Literal["Path"]] = "Path"
+    type_name: Final[Literal["Path"]] = "Path"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -1577,7 +1577,7 @@ class PathAttribute(Immutable):
 
 
 class TupleAttribute(Immutable):
-    name: Final[Literal["tuple"]] = "tuple"
+    type_name: Final[Literal["tuple"]] = "tuple"
     base: type[Sequence[Any]]
     values: Sequence[AttributeAnnotation]
     alias: str | None = None
@@ -1685,7 +1685,7 @@ class TupleAttribute(Immutable):
 
 
 class SequenceAttribute(Immutable):
-    name: Literal["Sequence"] = "Sequence"
+    type_name: Final[Literal["Sequence"]] = "Sequence"
     base: type[Sequence[Any]]
     values: AttributeAnnotation
     alias: str | None = None
@@ -1788,7 +1788,7 @@ class SequenceAttribute(Immutable):
 
 
 class SetAttribute(Immutable):
-    name: Literal["Set"] = "Set"
+    type_name: Final[Literal["Set"]] = "Set"
     base: type[Set[Any]]
     values: AttributeAnnotation
     alias: str | None = None
@@ -1888,7 +1888,7 @@ class SetAttribute(Immutable):
 
 
 class MappingAttribute(Immutable):
-    name: Literal["Mapping"] = "Mapping"
+    type_name: Final[Literal["Mapping"]] = "Mapping"
     base: type[Mapping[Any, Any]]
     keys: AttributeAnnotation
     values: AttributeAnnotation
@@ -1991,7 +1991,7 @@ class MappingAttribute(Immutable):
 
 
 class MetaAttribute(Immutable):
-    name: Literal["Meta"] = "Meta"
+    type_name: Final[Literal["Meta"]] = "Meta"
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -2089,8 +2089,8 @@ class ValidableAttribute(Immutable):
     validating: Validating[Any]
 
     @property
-    def name(self) -> str:
-        return self.attribute.name
+    def type_name(self) -> str:
+        return self.attribute.type_name
 
     @property
     def base(self) -> Any:
@@ -2153,7 +2153,7 @@ class ObjectAttribute(Immutable):
     meta: Meta = META_EMPTY
 
     @property
-    def name(self) -> str:
+    def type_name(self) -> str:
         return self.base.__qualname__
 
     def annotated(  # noqa: C901
@@ -2255,7 +2255,7 @@ class TypedDictAttribute(Immutable):
     meta: Meta = META_EMPTY
 
     @property
-    def name(self) -> str:
+    def type_name(self) -> str:
         return self.base.__qualname__
 
     def annotated(  # noqa: C901
@@ -2364,7 +2364,7 @@ class FunctionAttribute(Immutable):
     meta: Meta = META_EMPTY
 
     @property
-    def name(self) -> str:
+    def type_name(self) -> str:
         return self.base.__name__
 
     def annotated(  # noqa: C901
@@ -2458,7 +2458,7 @@ class ProtocolAttribute(Immutable):
     meta: Meta = META_EMPTY
 
     @property
-    def name(self) -> str:
+    def type_name(self) -> str:
         return self.base.__qualname__
 
     def annotated(  # noqa: C901
@@ -2550,8 +2550,8 @@ class UnionAttribute(Immutable):
     meta: Meta = META_EMPTY
 
     @property
-    def name(self) -> str:
-        return "|".join(alt.name for alt in self.alternatives)
+    def type_name(self) -> str:
+        return "|".join(alt.type_name for alt in self.alternatives)
 
     def annotated(  # noqa: C901
         self,
@@ -2651,7 +2651,7 @@ class CustomAttribute(Immutable):
     meta: Meta = META_EMPTY
 
     @property
-    def name(self) -> str:
+    def type_name(self) -> str:
         return self.base.__qualname__
 
     def annotated(  # noqa: C901
@@ -2744,7 +2744,7 @@ class StrEnumAttribute(Immutable):
     meta: Meta = META_EMPTY
 
     @property
-    def name(self) -> str:
+    def type_name(self) -> str:
         return self.base.__qualname__
 
     def annotated(  # noqa: C901
@@ -2849,7 +2849,7 @@ class IntEnumAttribute(Immutable):
     meta: Meta = META_EMPTY
 
     @property
-    def name(self) -> str:
+    def type_name(self) -> str:
         return self.base.__qualname__
 
     def annotated(  # noqa: C901

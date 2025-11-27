@@ -68,7 +68,7 @@ class _RecursionGuard:
 
     @property
     def name(self) -> str:
-        return self.annotation.name
+        return self.annotation.type_name
 
 
 def _specification(  # noqa: C901, PLR0911, PLR0912
@@ -94,7 +94,7 @@ def _specification(  # noqa: C901, PLR0911, PLR0912
         if recursion_guard[key].referenced:
             return _with_identifier(
                 specification,
-                identifier=annotation.name,
+                identifier=annotation.type_name,
             )
 
         return specification
@@ -112,7 +112,7 @@ def _specification(  # noqa: C901, PLR0911, PLR0912
         if recursion_guard[key].referenced:
             return _with_identifier(
                 specification,
-                identifier=annotation.name,
+                identifier=annotation.type_name,
             )
 
         return specification

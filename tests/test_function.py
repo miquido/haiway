@@ -1,7 +1,10 @@
+from typing import Annotated
+
 import pytest
 
 from haiway.attributes.function import Function
 from haiway.attributes.validation import ValidationError
+from haiway.types import Alias
 
 
 def test_validate_arguments_skip_consumed_kwargs_in_variadic() -> None:
@@ -116,3 +119,62 @@ def test_validate_arguments_extra_positional_without_variadic_raises_type_error(
 
     with pytest.raises(TypeError):
         parametrized(1, 2, 3)
+
+
+def test_validate_arguments_supports_aliases_for_keywords() -> None:
+    def foo(
+        user_id: Annotated[int, Alias("user")],
+        *,
+        tag: Annotated[str, Alias("label")],
+    ) -> tuple[int, str]:
+        return (user_id, tag)
+
+    parametrized = Function(foo)
+
+    assert parametrized(user=7, label="green") == (7, "green")
+    assert parametrized(user_id=8, tag="blue") == (8, "blue")
+
+
+def test_validate_arguments_accepts_alias_and_canonical_for_different_params() -> None:
+    def foo(
+        user_id: Annotated[int, Alias("user")],
+        *,
+        tag: Annotated[str, Alias("label")],
+    ) -> tuple[int, str]:
+        return (user_id, tag)
+
+    parametrized = Function(foo)
+
+    assert parametrized(user=7, tag="blue") == (7, "blue")
+
+
+def test_validate_arguments_fails_with_conflicting_alias_and_keyword() -> None:
+    def foo(
+        user_id: Annotated[int, Alias("user")],
+    ) -> int:
+        return user_id
+
+    parametrized = Function(foo)
+
+    with pytest.raises(TypeError):
+        assert parametrized(user_id=1, user=2) == 2
+
+    with pytest.raises(TypeError):
+        assert parametrized(user=2, user_id=1) == 1
+
+
+def test_validate_arguments_fails_with_alias_and_canonical_for_same_param() -> None:
+    def foo(
+        user_id: Annotated[int, Alias("user")],
+        *,
+        tag: Annotated[str, Alias("label")],
+    ) -> tuple[int, str]:
+        return (user_id, tag)
+
+    parametrized = Function(foo)
+
+    with pytest.raises(TypeError):
+        assert parametrized(user=7, user_id=8, tag="blue") == (8, "blue")
+
+    with pytest.raises(TypeError):
+        assert parametrized(7, tag="blue", label="green") == (7, "green")

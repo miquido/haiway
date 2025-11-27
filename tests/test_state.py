@@ -241,6 +241,14 @@ def test_updated_honors_aliases() -> None:
     assert updated != example
 
 
+def test_initialization_handles_conflicting_alias_and_field() -> None:
+    class Example(State):
+        value: Annotated[int, Alias("external")]
+
+    assert Example(value=1, external=2).value == 2
+    assert Example(external=2, value=1).value == 2
+
+
 def test_initialization_allows_missing_properties() -> None:
     class Basics(State):
         string: str
