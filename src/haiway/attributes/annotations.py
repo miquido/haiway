@@ -34,9 +34,9 @@ from typing import (
     get_type_hints,
     is_typeddict,
 )
+from typing import is_typeddict as is_typeddict_ext
 
 import typing_extensions
-from typing_extensions import is_typeddict as is_typeddict_ext
 
 from haiway import types as haiway_types
 from haiway.attributes.validation import (
@@ -102,7 +102,7 @@ class NotRequired(Immutable):
 NOT_REQUIRED: Final[NotRequired] = NotRequired()
 
 Annotation = (
-    Alias | Description | Specification | Validator[Any] | Verifier[Any] | Meta | NotRequired
+    Alias | Description | Specification | Validator[Any] | Verifier[Any] | Meta | NotRequired | str
 )
 
 
@@ -175,7 +175,10 @@ class AnyAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -267,7 +270,10 @@ class AliasAttribute(Immutable):
     def description(self) -> str | None:
         if self._resolved is None:
             for annotation in self.annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    return annotation
+
+                elif isinstance(annotation, Description):
                     return annotation.description
 
             return None
@@ -380,7 +386,10 @@ class MissingAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -469,7 +478,10 @@ class NoneAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -559,7 +571,10 @@ class LiteralAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -654,7 +669,10 @@ class BoolAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -755,7 +773,10 @@ class IntegerAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -847,7 +868,10 @@ class FloatAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -939,7 +963,10 @@ class BytesAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1028,7 +1055,10 @@ class UUIDAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1124,7 +1154,10 @@ class StringAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1213,7 +1246,10 @@ class DatetimeAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1311,7 +1347,10 @@ class DateAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1409,7 +1448,10 @@ class TimeAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1507,7 +1549,10 @@ class PathAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1601,7 +1646,10 @@ class TupleAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1709,7 +1757,10 @@ class SequenceAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1812,7 +1863,10 @@ class SetAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -1913,7 +1967,10 @@ class MappingAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -2017,7 +2074,10 @@ class MetaAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -2170,7 +2230,10 @@ class ObjectAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -2272,7 +2335,10 @@ class TypedDictAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -2381,7 +2447,10 @@ class FunctionAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -2475,7 +2544,10 @@ class ProtocolAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -2567,7 +2639,10 @@ class UnionAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -2668,7 +2743,10 @@ class CustomAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -2761,7 +2839,10 @@ class StrEnumAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
@@ -2866,7 +2947,10 @@ class IntEnumAttribute(Immutable):
             meta: Meta = self.meta
 
             for annotation in annotations:
-                if isinstance(annotation, Description):
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):

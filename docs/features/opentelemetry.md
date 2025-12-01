@@ -5,8 +5,8 @@ tracing, metrics collection, and structured logging. This integration allows you
 applications with industry-standard tooling while maintaining Haiway's functional programming
 principles.
 
-**Note:** OpenTelemetry is supported in Haiway **ONLY through GRPC**. We do not support HTTP. You
-need to make sure you use the GRPC port in your collector (for example port 4317 in OtelCollector).
+**Note:** OpenTelemetry is supported in Haiway **ONLY through GRPC**. We do not support HTTP. Use
+the gRPC port in your collector (for example port 4317 in OtelCollector).
 
 ## Overview
 
@@ -32,8 +32,8 @@ pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
 
 ### 2. Configuration
 
-Configure OpenTelemetry once at application startup (configuring more than once will cause an
-errror):
+Configure OpenTelemetry once at application startup (calling `configure` again will rebuild the
+exporters with new settings; it is allowed but reinitializes providers):
 
 ```python
 from haiway.opentelemetry import OpenTelemetry
@@ -128,8 +128,7 @@ async def process_individual_requests():
 
 ### Console vs OTLP Export
 
-**Console Export**: When no otlp endpoint was specified all metrics and logs will be utilizing
-python logging system.
+**Console Export**: When no OTLP endpoint is specified, OpenTelemetry console exporters are used.
 
 ```python
 OpenTelemetry.configure(
@@ -140,8 +139,8 @@ OpenTelemetry.configure(
 )
 ```
 
-**OTLP Export**: With otlp endpoint provided there will be no logs mirroring, all metrics and logs
-will be sent to the specified endpoint.
+**OTLP Export**: With an OTLP endpoint provided, telemetry is sent to that endpoint and not mirrored
+to the console.
 
 ```python
 OpenTelemetry.configure(
@@ -177,7 +176,7 @@ Connect to existing distributed traces from other services:
 external_trace_id = request.headers.get("x-trace-id")
 
 observability = OpenTelemetry.observability(
-    external_trace_id=external_trace_id
+    traceparent=external_trace_id  # expects a W3C traceparent string
 )
 
 async with ctx.scope("service-handler", observability=observability):

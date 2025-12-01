@@ -19,7 +19,7 @@ def setup_logging(
     *loggers: str
         names of additional loggers to configure.
     time: bool = True
-        include timestamps in logs.
+        include timestamps in logs (emits local timezone offset).
     debug: bool = __debug__
         include debug logs.
     disable_existing_loggers: bool = True
@@ -35,7 +35,7 @@ def setup_logging(
             "formatters": {
                 "standard": {
                     "format": "%(asctime)s [%(levelname)-4s] [%(name)s] %(message)s",
-                    "datefmt": "%d/%b/%Y:%H:%M:%S +0000",
+                    "datefmt": "%d/%b/%Y:%H:%M:%S %z",
                 }
                 if time
                 else {

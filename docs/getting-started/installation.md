@@ -12,7 +12,7 @@ pip install haiway
 
 ## Optional Dependencies
 
-You may choose to install haiway including optional support for OpenTelemetry.
+You may choose to install haiway including optional support for OpenTelemetry, httpx, and Postgres.
 
 ### OpenTelemetry Support
 
@@ -26,6 +26,12 @@ For httpx implementation of http client:
 
 ```bash
 pip install "haiway[httpx]"
+```
+
+For Postgres (`asyncpg`) support:
+
+```bash
+pip install "haiway[postgres]"
 ```
 
 Now you're ready to continue with the [Quick Start](quickstart.md) guide!

@@ -25,6 +25,9 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
     ----------
     value : Any
         The value to format as a string
+    indent : int, default 0
+        Left padding (in spaces) applied to the produced representation; used
+        internally when formatting nested structures.
 
     Returns
     -------
@@ -37,7 +40,9 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
     - Bytes are noted with its size
     - Mappings (like dictionaries) are formatted with keys and values
     - Sequences (like lists) are formatted with indices and values
-    - Objects are formatted with their attribute names and values
+    - Objects with ``__dict__`` are formatted with their attribute names and values;
+      other objects fall back to ``str(obj)`` while preserving caller-managed
+      indentation
     - MISSING values are converted to empty strings
     - Nested structures maintain proper indentation
     """
@@ -49,9 +54,10 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
 
     elif isinstance(value, str):
         if "\n" in value:
-            indent_str = " " * (indent + 2)
-            indented_value = value.replace("\n", f"\n{indent_str}")
-            return f'"""\n{indent_str}{indented_value}\n{" " * indent}"""'
+            outer_indent = " " * indent
+            inner_indent = " " * (indent + 2)
+            indented_value = value.replace("\n", f"\n{inner_indent}")
+            return f'{outer_indent}"""\n{inner_indent}{indented_value}\n{outer_indent}"""'
 
         else:
             return f'"{value}"'
@@ -134,7 +140,14 @@ def _object_str(
 ) -> str:
     indent_str: str = " " * indent
     if not hasattr(other, "__dict__"):
-        return f"{indent_str}{other}"
+        # Preserve caller indentation across multiline string representations
+        raw = str(other)
+        lines = raw.splitlines(keepends=True)
+        if not lines:
+            return raw
+
+        head, *tail = lines
+        return head + "".join(f"{indent_str}{line}" for line in tail)
 
     variables: ItemsView[str, Any] = vars(other).items()
     header = f"{indent_str}┍━ {type(other).__name__}:"

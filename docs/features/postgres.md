@@ -7,10 +7,12 @@ framework's functional style while handling connection pooling and transactions 
 ## Overview
 
 - **Context Managed**: Acquire connections through Haiway scopes to ensure cleanup
-- **Typed Accessors**: `PostgresRow` exposes helpers for UUIDs, datetimes, and primitive types
+- **Typed Accessors**: `PostgresRow` (an immutable mapping) exposes helpers for UUIDs, datetimes,
+  and primitive types
 - **Protocol Driven**: Backends plug in via protocols, enabling custom clients in tests
 - **Migrations Included**: Built-in runner discovers and executes ordered migration modules
-- **Immutable State**: Connections and rows are immutable `State` objects with strict typing
+- **Immutable State**: Connections are exposed as `State`; rows are immutable `Mapping` wrappers
+  with strict typing helpers
 
 ## Quick Start
 

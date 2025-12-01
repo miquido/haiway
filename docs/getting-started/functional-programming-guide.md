@@ -125,7 +125,7 @@ Key rules:
   that instance
 - Prefer `@statemethod` over `@classmethod` for helpers that need contextual state
 
-### State Resolution Priority
+### State Resolution & Variables
 
 When multiple states of the same type exist, Haiway resolves using:
 
@@ -133,6 +133,9 @@ When multiple states of the same type exist, Haiway resolves using:
 1. Disposables (resources yielded into the scope)
 1. Presets
 1. Parent context (lowest)
+
+Context variables are always isolated per spawned task (`ctx.spawn` wraps tasks with isolated
+`VariablesContext`), so variables set in the parent are not visible inside spawned tasks.
 
 ## 4) Structured Concurrency (Scoped Tasks)
 

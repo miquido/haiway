@@ -1,926 +1,113 @@
-# Haiway Framework Reference for AI Models
+# Haiway Framework
 
-Haiway is a functional programming framework for Python 3.12+ designed to facilitate development using functional programming paradigms combined with structured concurrency concepts. Unlike traditional object-oriented frameworks, Haiway emphasizes immutability, pure functions, and context-based state management, enabling developers to build scalable and maintainable applications.
+Haiway is a functional/async framework built around immutable `State`, context-scoped dependency injection (`ctx`), and structured concurrency. Keep typing strict and behavior explicit.
 
-## Why Haiway's Design Matters
+## Core Ideas
+- Immutable data: every domain/config object subclasses `State`; instances cannot be mutated, updates are done via `.updated(...)` or `.updating(path, value)`.
+- Context-first DI: `async with ctx.scope(name_or_preset, *state, disposables=(...)):` installs state for the lifetime of the scope. `ctx.state(Type)` resolves by type. Priority: explicit state > disposables > preset state > parent scope.
+- Protocol-driven logic: define contracts as `Protocol` and inject implementations as state. Expose public API via `@statemethod` on service `State` containers.
+- Structured concurrency: tasks live inside the current scope task group via `ctx.spawn`. Logging, cancellation, and state all propagate automatically.
+- Observability: never `print`. Use `ctx.log_*` and `ctx.record_*`; tracing hooks live in `haiway.context.observability` and can be bridged with OpenTelemetry via `LoggerObservability` or `opentelemetry` adapters.
 
-**Problem**: Traditional Python applications often struggle with:
-- Race conditions from mutable shared state
-- Complex dependency injection frameworks
-- Difficult-to-test tightly coupled code
-- Manual resource cleanup and lifecycle management
-
-**Solution**: Haiway addresses these through functional programming principles:
-- **Immutability prevents race conditions** - State objects cannot be modified after creation
-- **Context-based DI is simple** - No decorators or complex containers, just scoped state propagation
-- **Protocol separation enables testability** - Clear contracts between interfaces and implementations
-- **Structured concurrency handles lifecycle** - Automatic task management and resource cleanup
-
-## Core Architectural Principles
-
-### 1. Immutable State Management
-**Reasoning**: Immutable data structures eliminate race conditions and ensure predictable behavior in concurrent environments. All data structures use the `State` base class with runtime type validation and automatic collection conversion to immutable types.
-
-### 2. Context-Based Dependency Injection
-**Reasoning**: Instead of complex DI frameworks, Haiway uses execution contexts to propagate state and functionality. This provides safe state propagation in concurrent environments and simplifies dependency management through natural Python context managers.
-
-### 3. Protocol-Based Functionality
-**Reasoning**: Business logic is organized using Protocol interfaces that define clear contracts separate from implementations. This promotes modularity, testability, and allows easy swapping of implementations without changing calling code.
-
-### 4. Structured Concurrency
-**Reasoning**: Manual task and resource management is error-prone. Haiway provides automatic task lifecycle management with guaranteed resource cleanup, ensuring resources are properly disposed of even in error cases.
-
-## ⚠️  CRITICAL TYPING REQUIREMENTS ⚠️
-
-**Haiway REQUIRES complete, strict type annotations throughout all code. This is NOT optional:**
-
-- **Every State attribute** MUST have a type annotation
-- **Every function parameter and return type** MUST be typed
-- **Every Protocol method** MUST have complete signatures
-- **Abstract collection types ONLY** - never `list`, `dict`, `set`
-- **Union syntax ONLY** - use `str | None`, never `Optional[str]`
-- **Runtime validation enforces types** - incorrect types cause immediate failures
-
-## Essential Imports
-
+## Minimal Skeleton
 ```python
 from haiway import State, ctx, statemethod
-from typing import Protocol, runtime_checkable, Any
-from collections.abc import Sequence, Mapping, Set  # NEVER use list, dict, set
-from contextlib import asynccontextmanager
-```
-
-## State System
-
-### Basic State Definition
-
-```python
-from haiway import State
-from typing import Any
-from collections.abc import Sequence, Mapping, Set
-from datetime import datetime
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 class User(State):
     id: UUID
     name: str
-    email: str | None = None
-    active: bool = True
-    created_at: datetime
-
-    # CRITICAL: Use abstract collection types for immutability
-    roles: Sequence[str] = ()        # Becomes tuple (not list)
-    metadata: Mapping[str, Any] = {} # Becomes haiway.types.Map (immutable mapping)
-    tags: Set[str] = frozenset()     # Becomes frozenset (not set)
-```
-
-**Why this pattern works:**
-- **Type annotations are MANDATORY**: Every State attribute MUST have a type annotation - Haiway validates all values at runtime
-- **Abstract collection types ensure immutability**: `Sequence[T]` becomes `tuple`, `Set[T]` becomes `frozenset`, `Mapping[K, V]` becomes `haiway.types.Map`
-- **Optional fields use union syntax**: `str | None` follows Python 3.10+ union syntax - NEVER use `Optional[T]`
-- **Defaults prevent constructor errors**: Provide sensible defaults for optional attributes
-- **NO missing type hints allowed**: State classes without complete type annotations will fail at runtime
-
-### Generic State Classes
-
-```python
-class Container[Element](State):
-    items: Sequence[Element]
-    metadata: Mapping[str, Any] = {}
-    created_at: datetime
-
-# Usage with type specialization
-UserContainer = Container[User]
-users = UserContainer(items=[user1, user2], created_at=datetime.now())
-```
-
-**Why generics are powerful:**
-- **Type safety with flexibility**: Generic State classes provide type safety while remaining reusable
-- **Runtime validation**: Type parameters are validated at runtime - `Container[str]` only accepts strings
-- **Specialization caching**: `Container[User]` creates a cached specialized type for performance
-
-### State Updates (Immutable)
-
-```python
-# Create updated copies (original unchanged)
-user = User(id=uuid4(), name="Alice", created_at=datetime.now())
-
-# Simple updates
-updated_user = user.updated(name="Alice Smith", active=False)
-```
-
-**Why immutable updates work:**
-- **Original data is preserved**: `user.updated()` creates a new instance, original remains unchanged
-- **Path-based updates for precision**: `User._.metadata` syntax provides type-safe nested updates
-- **Chaining enables composition**: Multiple updates can be chained together fluently
-- **Thread-safe by design**: Immutable objects eliminate race conditions in concurrent code
-
-## Protocol-Based Functionality
-
-### Function Protocols
-
-```python
-from typing import Protocol, runtime_checkable
 
 @runtime_checkable
 class UserFetching(Protocol):
-    async def __call__(self, id: UUID) -> User: ...
+    async def __call__(self, user_id: UUID) -> User: ...
 
-@runtime_checkable
-class UserCreating(Protocol):
-    async def __call__(self, name: str, email: str) -> User: ...
-
-@runtime_checkable
-class UserUpdating(Protocol):
-    async def __call__(self, user: User, **changes: Any) -> User: ...
-```
-
-**Why protocols are essential:**
-- **Clear contracts**: Protocols define what functions must do without specifying how
-- **Runtime checking**: `@runtime_checkable` enables isinstance() checks for better error messages
-- **STRICT type signatures**: Every protocol method MUST have complete type annotations for parameters and return types
-- **Easy testing**: Mock implementations can be swapped in without complex setup
-- **Implementation flexibility**: Database, API, file system - any implementation that matches the protocol works
-- **Type safety enforcement**: Protocol implementations are validated at runtime against their type signatures
-
-### Service Container Pattern
-
-```python
 class UserService(State):
-    # Protocol implementations
-    fetching: UserFetching
-    creating: UserCreating
-    updating: UserUpdating
-
-    # Clean API through state methods
-    @statemethod
-    async def get_user(self, id: UUID) -> User:
-        return await self.fetching(id)
+    fetch: UserFetching
 
     @statemethod
-    async def create_user(self, name: str, email: str) -> User:
-        return await self.creating(name, email)
+    async def get(self, user_id: UUID) -> User:
+        return await self.fetch(user_id)
 
-    @statemethod
-    async def update_user(self, user: User, **changes: Any) -> User:
-        return await self.updating(user, **changes)
+async def handler(user_id: UUID) -> User:
+    async with ctx.scope("request", UserService(fetch=my_impl)):
+        return await UserService.get(user_id)
 ```
 
-**Why service containers work:**
-- **Dependency injection without frameworks**: State-based containers hold implementations
-- **Clean public API**: State methods hide instance resolution and context access
-- **Type safety**: Calls are made through a strongly-typed instance (resolved via context when called on the class)
-- **Composable**: Multiple services can be combined in a single context scope
-
-### Implementation Functions
-
+## State Essentials
+- Declare **all attributes with types**. Use `Sequence`/`Mapping`/`Set` (from `collections.abc`), not concrete `list`/`dict`/`set`. Use `| None` instead of `Optional`.
+- Immutability is enforced; collection fields are converted to immutable forms (`tuple`, `haiway.types.Map`, `frozenset`). Mutations raise.
+- Metadata via `typing.Annotated` with `Alias`, `Description`, `Specification`, `Meta`, `Validator`. Example:
 ```python
-# Concrete implementations access context state
-async def database_user_fetching(id: UUID) -> User:
-    db_config = ctx.state(DatabaseConfig)
-    # Database logic using db_config...
-    return User(id=id, name="Database User", created_at=datetime.now())
+from typing import Annotated
+from haiway import Alias, Description, Meta, Specification, State, Validator
 
-async def api_user_creating(name: str, email: str) -> User:
-    api_config = ctx.state(APIConfig)
-    # API call using api_config...
-    return User(
-        id=uuid4(),
-        name=name,
-        email=email,
-        created_at=datetime.now()
-    )
-
-# Factory function
-def DatabaseUserService() -> UserService:
-    return UserService(
-        fetching=database_user_fetching,
-        creating=api_user_creating,
-        updating=database_user_updating
-    )
+class Invoice(State):
+    total_cents: Annotated[int, Specification({"minimum": 0}), Validator(lambda v: v if v >= 0 else (_ for _ in ()).throw(ValueError(">=0")))]
+    customer: Annotated[str, Alias("customer_id"), Description("External ID")]
+    meta: Meta = Meta.of(kind="invoice")
 ```
+- Lazy/default values: wrap in `Default(...)` or `Default(default_factory=...)`; env helpers integrate (`Default(env="API_KEY")`).
+- Conversions: `to_mapping(recursive=True, include_missing=False)` returns JSON-ready structures honoring aliases and metadata.
+- Generics: `class Box[T](State): value: T`; specialization is validated (`Box[int](value=1)` ok, `Box[int](value="x")` raises).
 
-**Why this pattern enables flexibility:**
-- **Context access for configuration**: Implementation functions can access any needed config via `ctx.state()`
-- **Pure functions when possible**: Functions rely on context and inputs, avoiding hidden state
-- **Mix implementations freely**: Database fetching + API creating + file updating - any combination works
-- **Factory functions for wiring**: Simple functions create service instances with implementations wired up
-
-## Context System
-
-### Basic Context Usage
-
+## Context & Scopes
+- Enter scopes with a name string or `ContextPreset`. Provide state instances and/or `disposables` (async context managers yielding state). Example:
 ```python
-async def main():
-    # Create service and config
-    user_service = DatabaseUserService()
-    db_config = DatabaseConfig(host="localhost", port=5432)
-
-    # Establish context with state
-    async with ctx.scope("app", user_service, db_config):
-        # All code in this scope has access to state
-        user = await UserService.get_user(some_id)
-        new_user = await UserService.create_user("Alice", "alice@example.com")
-```
-
-**Why context scopes solve dependency injection:**
-- **No global state**: State is scoped to execution contexts, preventing global state pollution
-- **Automatic propagation**: All code within the scope (including nested function calls) has access to state
-- **Type-based lookup**: `ctx.state(DatabaseConfig)` retrieves config by type, no string keys needed
-- **Hierarchical scoping**: Nested scopes inherit and can override parent state
-
-### State Priority System
-
-```python
-# Context resolution follows priority order (highest to lowest):
 async with ctx.scope(
-    context_preset,                      # Use preset as first parameter
-    ExplicitState(value="explicit"),     # 1. Explicit state (highest)
-    disposables=[resource_factory()],    # 2. Disposable resources
-    # 3. Context presets (from preset parameter)
-    # 4. Parent context state (lowest)
+    ContextPreset(name="dev", state=[AppConfig(...)]),
+    RuntimeConfig(debug=True),
+    disposables=(HTTPXClient(base_url="https://api"),),
 ):
-    # ExplicitState overrides any lower priority sources
-    state = ctx.state(ExplicitState)  # Gets "explicit" value
+    config = ctx.state(RuntimeConfig)
 ```
+- State lookup: `ctx.state(Type, default=...)`; `ctx.check_state(Type)` -> bool. Missing raises `MissingState`.
+- Presets compose reusable bundles of state + disposables; explicit parameters override preset contents.
+- Variables: `ctx.variable(StateInstance)` sets a mutable, scope-local value; `ctx.variable(Type, default=...)` reads. Child scopes start empty; on exit, child variables overwrite parent values. Variables never cross tasks.
+- Events: `ctx.send(EventState)` publishes to subscribers; `async for e in ctx.subscribe(EventType): ...` consumes. Events are scoped to the root context; unsubscribed events are dropped.
 
-**Why priority matters:**
-- **Predictable resolution**: Clear rules determine which state is used when multiple sources exist
-- **Override capability**: Higher priority sources can override lower ones for customization
-- **Composition friendly**: Different layers can contribute state without conflicts
-- **Testing support**: Test code can easily override production state with higher priority
-
-### Nested Contexts
-
-```python
-async def process_users():
-    # Parent context
-    async with ctx.scope("main", main_config):
-
-        # Child context with additional/override state
-        async with ctx.scope("processing", processing_config):
-            # Has access to both main_config and processing_config
-            # processing_config takes priority if same type
-
-            user = await UserService.get_user(user_id)
-```
-
-### Context Variables (Mutable)
-
-```python
-class Counter(State):
-    value: int = 0
-
-async def track_operations():
-    # Set mutable context variable
-    ctx.variable(Counter(value=0))
-
-    # Read and update
-    counter = ctx.variable(Counter, default=Counter())
-    ctx.variable(counter.updated(value=counter.value + 1))
-
-    # Variables don't inherit - each scope starts fresh
-    async with ctx.scope("nested"):
-        # No counter here unless explicitly set
-        nested_counter = ctx.variable(Counter)  # Returns None
-```
+## Concurrency Toolkit
+- `ctx.spawn(callable, *args, **kwargs)` spawns in the current scope task group with context propagation. Cancel via `task.cancel()` or cooperative `ctx.check_cancellation()`.
+- Streaming: `async for item in ctx.stream(async_generator_fn, *args): ...` preserves context for generator work.
+- Concurrent helpers (all async-aware, preserve context):
+  - `process_concurrently(source, handler, concurrent_tasks=2, ignore_exceptions=False)` – fire-and-forget per item, no result collection.
+  - `execute_concurrently(handler, elements, concurrent_tasks=2, return_exceptions=False)` – gather ordered results.
+  - `concurrently(*coros)` – lightweight gather wrapper; `stream_concurrently` for generator pipelines.
+  - Rate control: `throttle(limit, interval)`, `timeout(seconds)`, `retry(...)` decorators; `asynchronous` converts sync callables to threads when absolutely needed.
 
 ## Resource Management
-
-### Disposable Resources
-
-```python
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def database_connection():
-    # Setup resource
-    conn = await create_database_connection()
-    try:
-        # Yield state that will be available in context
-        yield DatabaseService(connection=conn)
-    finally:
-        # Cleanup happens automatically
-        await conn.close()
-
-@asynccontextmanager
-async def http_client():
-    client = HTTPClient()
-    try:
-        yield HTTPService(client=client)
-    finally:
-        await client.close()
-
-# Use multiple disposable resources
-async def main():
-    async with ctx.scope(
-        "app",
-        disposables=[database_connection(), http_client()]
-    ):
-        # Both DatabaseService and HTTPService available
-        db_service = ctx.state(DatabaseService)
-        http_service = ctx.state(HTTPService)
-```
-
-**Why disposable resources prevent leaks:**
-- **Guaranteed cleanup**: Resources are cleaned up even if exceptions occur
-- **State integration**: Yielded state objects become available in the context automatically
-- **Composition**: Multiple disposables can be used together without interference
-- **Lifecycle management**: Setup and teardown are clearly separated and automatic
-
-### HTTP Client Integration
-
-```python
-from haiway.httpx import HTTPXClient
-from haiway.helpers import HTTPClient
-import json
-
-async def api_operations():
-    async with ctx.scope(
-        "api",
-        disposables=[HTTPXClient(base_url="https://api.example.com")]
-    ):
-        # GET request
-        response = await HTTPClient.get(
-            url="/users",
-            query={"page": 1, "limit": 10}
-        )
-
-        # POST request
-        new_user_response = await HTTPClient.post(
-            url="/users",
-            body=json.dumps({"name": "Alice"}),
-            headers={"Content-Type": "application/json"}
-        )
-
-        # Handle response
-        if response.status_code == 200:
-            users_data = json.loads(response.body)
-```
-
-## Event System
-
-### Event Publishing and Subscription
-
-```python
-class UserCreated(State):
-    user_id: UUID
-    timestamp: datetime
-
-class UserDeleted(State):
-    user_id: UUID
-    timestamp: datetime
-
-async def event_processing():
-    async with ctx.scope("events"):  # Root scope has event bus
-
-        # Subscribe to events (returns async iterator)
-        async def handle_user_events():
-            async for event in ctx.subscribe(UserCreated):
-                ctx.log_info("user_created", user_id=event.user_id)
-
-        # Start event handler
-        ctx.spawn(handle_user_events)
-
-        # Send events
-        ctx.send(UserCreated(user_id=user.id, timestamp=datetime.now()))
-        ctx.send(UserDeleted(user_id=old_user.id, timestamp=datetime.now()))
-```
-
-## Advanced Patterns
-
-### Configuration Management
-
-```python
-from haiway.helpers import Configuration, ConfigurationRepository
-
-class DatabaseConfig(Configuration):
-    host: str = "localhost"
-    port: int = 5432
-    database: str = "app"
-    username: str = "user"
-    password: str = "password"
-
-class APIConfig(Configuration):
-    base_url: str = "https://api.example.com"
-    timeout: int = 30
-    api_key: str = ""
-
-# Loading configurations
-async def setup_app():
-    # Optional loading
-    config = await DatabaseConfig.load()
-
-    # Required loading - prefers contextual state, then class defaults if not found in repository
-    config = await DatabaseConfig.load(required=True)
-
-    # With explicit default
-    config = await DatabaseConfig.load(default=DatabaseConfig(database="fallback"))
-
-    # Volatile repository for testing
-    repo = ConfigurationRepository.volatile(
-        DatabaseConfig(database="test_db", username="test"),
-        APIConfig(api_key="test-key")
-    )
-
-    async with ctx.scope("app", repo):
-        db_config = await DatabaseConfig.load(required=True)
-        api_config = await APIConfig.load(required=True)
-```
-
-### Testing Patterns
-
-```python
-import pytest
-from haiway import ctx
-
-# Mock implementations for testing
-async def mock_user_fetching(id: UUID) -> User:
-    return User(id=id, name="Test User", created_at=datetime.now())
-
-async def mock_user_creating(name: str, email: str) -> User:
-    return User(id=uuid4(), name=name, email=email, created_at=datetime.now())
-
-def MockUserService() -> UserService:
-    return UserService(
-        fetching=mock_user_fetching,
-        creating=mock_user_creating,
-        updating=lambda user, **changes: user.updated(**changes)
-    )
-
-@pytest.mark.asyncio
-async def test_user_operations():
-    async with ctx.scope("test", MockUserService()):
-        # Test user creation
-        user = await UserService.create_user("Alice", "alice@test.com")
-        assert user.name == "Alice"
-        assert user.email == "alice@test.com"
-
-        # Test user fetching
-        fetched_user = await UserService.get_user(user.id)
-        assert fetched_user.name == "Test User"
-```
-
-**Why testing is straightforward:**
-- **No complex mocking frameworks**: Simple functions implementing protocols work as mocks
-- **Context isolation**: Each test gets a clean context scope with only its state
-- **Protocol compliance**: Mock implementations must match protocol signatures exactly
-- **Pure function testing**: Most logic is in pure functions that are easy to test independently
-
-### Error Handling
-
-```python
-from haiway.helpers import HTTPClientError
-
-class UserNotFoundError(Exception):
-    def __init__(self, user_id: UUID):
-        self.user_id = user_id
-        super().__init__(f"User not found: {user_id}")
-
-async def safe_user_fetching(id: UUID) -> User:
-    try:
-        response = await HTTPClient.get(url=f"/users/{id}")
-        if response.status_code == 404:
-            raise UserNotFoundError(id)
-        elif response.status_code != 200:
-            raise HTTPClientError(f"HTTP {response.status_code}")
-
-        user_data = json.loads(response.body)
-        return User(**user_data)
-
-    except HTTPClientError as e:
-        ctx.log_error("HTTP request failed", exception=e)
-        raise
-```
-
-## Complete Application Example
-
-**This example demonstrates all key Haiway patterns working together**: immutable state, protocol-based functionality, context dependency injection, structured concurrency, and observability.
-
-```python
-from typing import Protocol, runtime_checkable
-from collections.abc import Sequence
-from uuid import UUID, uuid4
-from datetime import datetime
-from haiway import State, ctx, statemethod
-import json
-
-# Domain Types
-class Article(State):
-    id: UUID
-    title: str
-    content: str
-    author_id: UUID
-    created_at: datetime
-    updated_at: datetime
-    tags: Sequence[str] = ()
-
-# Function Protocols
-@runtime_checkable
-class ArticleFinding(Protocol):
-    async def __call__(self, id: UUID) -> Article | None: ...
-
-@runtime_checkable
-class ArticleCreating(Protocol):
-    async def __call__(self, title: str, content: str, author_id: UUID) -> Article: ...
-
-@runtime_checkable
-class ArticleListing(Protocol):
-    async def __call__(self, author_id: UUID | None = None) -> Sequence[Article]: ...
-
-# Configuration
-class BlogConfig(State):
-    storage_path: str = "./articles"
-    max_content_length: int = 10000
-
-# Service Container
-class BlogService(State):
-    finding: ArticleFinding
-    creating: ArticleCreating
-    listing: ArticleListing
-
-    @statemethod
-    async def find_article(self, id: UUID) -> Article | None:
-        return await self.finding(id)
-
-    @statemethod
-    async def create_article(self, title: str, content: str, author_id: UUID) -> Article:
-        config = ctx.state(BlogConfig)
-        if len(content) > config.max_content_length:
-            raise ValueError(f"Content too long: {len(content)} > {config.max_content_length}")
-        return await self.creating(title, content, author_id)
-
-    @statemethod
-    async def list_articles(self, author_id: UUID | None = None) -> Sequence[Article]:
-        return await self.listing(author_id)
-
-# Implementation
-async def file_article_finding(id: UUID) -> Article | None:
-    config = ctx.state(BlogConfig)
-    # File system logic using config.storage_path
-    # Mock implementation:
-    return Article(
-        id=id,
-        title="Sample Article",
-        content="Sample content",
-        author_id=uuid4(),
-        created_at=datetime.now(),
-        updated_at=datetime.now()
-    )
-
-async def file_article_creating(title: str, content: str, author_id: UUID) -> Article:
-    config = ctx.state(BlogConfig)
-    now = datetime.now()
-    article = Article(
-        id=uuid4(),
-        title=title,
-        content=content,
-        author_id=author_id,
-        created_at=now,
-        updated_at=now
-    )
-    # Save to file system using config.storage_path
-    ctx.log_info(f"Created article: {article.title}")
-    return article
-
-async def file_article_listing(author_id: UUID | None = None) -> Sequence[Article]:
-    config = ctx.state(BlogConfig)
-    # List files from config.storage_path
-    # Mock implementation:
-    return (
-        Article(
-            id=uuid4(),
-            title="First Article",
-            content="Content 1",
-            author_id=author_id or uuid4(),
-            created_at=datetime.now(),
-            updated_at=datetime.now()
-        ),
-    )
-
-def FileBlogService() -> BlogService:
-    return BlogService(
-        finding=file_article_finding,
-        creating=file_article_creating,
-        listing=file_article_listing
-    )
-
-# Application
-async def run_blog_app():
-    blog_service = FileBlogService()
-    blog_config = BlogConfig(storage_path="./my_blog", max_content_length=5000)
-
-    async with ctx.scope("blog-app", blog_service, blog_config):
-        # Create article
-        author_id = uuid4()
-        article = await BlogService.create_article(
-            "My First Post",
-            "This is the content of my first blog post.",
-            author_id
-        )
-        ctx.log_info(f"Created article with ID: {article.id}")
-
-        # List articles
-        articles = await BlogService.list_articles(author_id)
-        ctx.log_info(f"Found {len(articles)} articles")
-
-        # Find specific article
-        found_article = await BlogService.find_article(article.id)
-        if found_article:
-            ctx.log_info(f"Found article: {found_article.title}")
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(run_blog_app())
-```
-
-## Complete ctx API Reference
-
-### State Management
-```python
-# State access and type checking
-user = ctx.state(UserData)                         # Get state by type (required)
-user = ctx.state(UserData, default=default_user)   # Get state with fallback
-has_user = ctx.check_state(UserData)               # Check if state exists (boolean)
-
-# Nested context with updated state
-with ctx.updated(new_config, updated_service):
-    # Temporary context with additional/overridden state
-    pass
-```
-
-### Context Variables (Mutable)
-```python
-# Set and get mutable scope-local variables
-ctx.variable(Counter(value=0))                     # Set variable
-counter = ctx.variable(Counter)                    # Get variable (may be None)
-counter = ctx.variable(Counter, default=Counter()) # Get with default
-
-# Variables are isolated per scope - no inheritance
-async with ctx.scope("nested"):
-    nested_counter = ctx.variable(Counter)  # Returns None (not inherited)
-```
-
-### Task Management and Concurrency
-```python
-# Spawn tasks in current scope's task group
-task = ctx.spawn(async_function, arg1, keyword=arg2)
-
-# Cancellation handling
-ctx.check_cancellation()  # Raises CancelledError if task cancelled
-ctx.cancel()              # Cancel current task
-
-# Stream processing with context
-async for result in ctx.stream(async_generator_func, args):
-    process_result(result)  # Each result maintains context
-```
-
-### Concurrent Processing Helpers
-```python
-from haiway.helpers.concurrent import process_concurrently, execute_concurrently
-
-# Process items without collecting results
-await process_concurrently(
-    items,
-    process_function,
-    concurrent_tasks=10,
-    ignore_exceptions=True
-)
-
-# Execute with results collection (maintains order)
-results = await execute_concurrently(
-    fetch_function,
-    items,
-    concurrent_tasks=5,
-    return_exceptions=True  # Include exceptions as results
-)
-
-# Multiple concurrent tasks with gather
-task1 = ctx.spawn(process_item, "item-1")
-task2 = ctx.spawn(process_item, "item-2")
-results = await asyncio.gather(task1, task2)
-```
-
-### Event System (Root Scopes Only)
-```python
-# Send and subscribe to typed events
-ctx.send(UserCreated(user_id=user.id, timestamp=datetime.now()))
-
-# Subscribe returns async iterator
-async for event in ctx.subscribe(UserCreated):
-    ctx.log_info(f"User created: {event.user_id}")
-
-# Multiple subscribers for same event type
-ctx.spawn(handle_user_events)  # Background event handler
-```
-
-### Logging and Observability
-```python
-# Structured logging with context
-ctx.log_info("Operation completed", user_id=user.id)
-ctx.log_warning("Potential issue", retries=3)
-ctx.log_error("Error occurred", exception=exc, context="api_call")
-ctx.log_debug("Debug details", query_params=params)
-
-# Observability recording
-ctx.record_info(attributes={"user_id": "123", "action": "login"})
-ctx.record_info(event="user_login", attributes={"method": "oauth"})
-ctx.record_info(
-    metric="response_time",
-    value=0.5,
-    kind=ObservabilityMetricKind.GAUGE,
-    unit="seconds"
-)
-
-# Distributed tracing
-trace_id = ctx.trace_id()  # Get current trace identifier
-```
-
-### Resource Management
-```python
-# Multiple disposable resources
-async with ctx.disposables(db_connection(), http_client(), cache_manager()):
-    # All resources available as state objects
-    db = ctx.state(DatabaseService)
-    http = ctx.state(HTTPService)
-    cache = ctx.state(CacheService)
-
-# Context presets for reusable configurations
-with ctx.presets(dev_preset, test_preset):
-    async with ctx.scope("development"):  # Uses dev_preset
-        config = ctx.state(AppConfig)
-```
-
-## Complete State Type Validation
-
-### CRITICAL: Haiway enforces STRICT type checking at runtime. Every State attribute MUST have a complete, accurate type annotation or validation will fail.
-
-### All Supported Types
-```python
-from typing import Literal, Any
-from enum import Enum, StrEnum
-from pathlib import Path
-import re
-
-class Priority(Enum):
-    LOW = 1
-    NORMAL = 2
-    HIGH = 3
-
-class Status(StrEnum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-
-class CompleteStateExample(State):
-    # Basic types - ALL MUST HAVE TYPE ANNOTATIONS
-    text: str = "default"
-    number: int = 0
-    flag: bool = True
-    decimal: float = 0.0
-    raw_bytes: bytes = b""
-    nothing: None = None
-
-    # Union and optional types - USE | SYNTAX, NEVER Optional[T]
-    optional_text: str | None = None
-    number_or_text: int | str = 0
-    multi_union: str | int | float | None = None
-
-    # Collections (CRITICAL: ONLY abstract types, NEVER concrete types)
-    items: Sequence[str] = ()              # NEVER list[str] → becomes tuple (immutable)
-    key_values: Mapping[str, int] = {}     # NEVER dict[str, int] → validated dict
-    unique_items: Set[str] = frozenset()   # NEVER set[str] → becomes frozenset (immutable)
-    coordinates: tuple[float, float] = (0.0, 0.0)  # Fixed tuple - exact length required
-    variable_tuple: tuple[str, ...] = ()   # Variable length tuple - ... required
-
-    # Nested State classes
-    user: UserData | None = None
-    users: Sequence[UserData] = ()
-
-    # Generic State classes
-    container: Container[UserData] | None = None
-    containers: Sequence[Container[str]] = ()
-
-    # Special Python types
-    identifier: UUID = uuid4()
-    created_at: datetime = datetime.now()
-    birth_date: date = date.today()
-    start_time: time = time(9, 0)
-    duration: timedelta = timedelta(hours=1)
-    timezone_info: timezone = timezone.utc
-    file_path: Path = Path(".")
-    regex_pattern: re.Pattern[str] = re.compile(r".*")
-
-    # Enums and literals
-    priority: Priority = Priority.NORMAL
-    status: Status = Status.ACTIVE
-    mode: Literal["read", "write", "append"] = "read"
-
-    # Callable types and protocols
-    processor: DataProcessing | None = None
-    callback: Callable[[str], int] | None = None
-
-    # TypedDict structures
-    metadata: UserMetadata = {}  # TypedDict with Required/NotRequired
-
-    # Any type (bypasses validation)
-    raw_data: Any = None
-
-# Generic validation with type parameters
-class TypedContainer[T](State):
-    items: Sequence[T]
-    metadata: Mapping[str, Any] = {}
-
-    @classmethod
-    def validator(cls, value: Any) -> Self:
-        # Custom validation logic for specialized types
-        return super().validator(value)
-
-# Usage with runtime type checking
-StringContainer = TypedContainer[str]
-container = StringContainer(items=["a", "b"])  # ✓ Valid
-# container = StringContainer(items=[1, 2])    # ✗ TypeError at runtime
-```
-
-### Immutability Enforcement
-```python
-# Collections are automatically converted for immutability
-user_data = UserData(
-    roles=["admin", "user"],        # Becomes ("admin", "user") - tuple
-    tags={"vip", "premium"},        # Becomes frozenset({"vip", "premium"})
-    metadata={"role": "admin"}      # Validated into haiway.types.Map (immutable)
-)
-
-# Attempting mutation raises AttributeError
-# user_data.roles = ["new_role"]              # ✗ AttributeError
-# user_data.roles.append("new")               # ✗ AttributeError (tuple)
-# user_data.tags.add("new")                   # ✗ AttributeError (frozenset)
-
-# Proper updates create new instances
-updated_user = user_data.updated(
-    roles=user_data.roles + ("moderator",),    # Tuple concatenation
-    tags=user_data.tags | {"gold"}             # Frozenset union
-)
-```
-
-
-## Key Rules for AI Models
-
-### 1. State Class Rules (CRITICAL - STRICT TYPING REQUIRED)
-- **MANDATORY type annotations**: Every single State attribute MUST have a type annotation - no exceptions
-- **ALWAYS** use abstract collection types: `Sequence[T]` not `list[T]`, `Mapping[K,V]` not `dict[K,V]`, `Set[T]` not `set[T]`
-- **NO concrete collection types**: Never use `list`, `dict`, `set` in State classes - only abstract types
-- **Union syntax required**: Use `str | None` never `Optional[str]` - Python 3.10+ syntax only
-- **Complete type coverage**: Every parameter, return type, and variable must be fully typed
-- Lists automatically become tuples, sets become frozensets for immutability
-- Use `State` for all data structures and configuration classes
-- Never mutate State instances - use `.updated()` or `.updating()` methods
-
-### 2. Protocol Rules (STRICT TYPE SIGNATURES REQUIRED)
-- **Complete method signatures**: Give every protocol method full parameter and return annotations; omit nothing.
-- **Runtime checks when needed**: Add `@runtime_checkable` only if you plan to call `isinstance` / `issubclass` on the protocol; skip it for purely static contracts like the caching and file helpers.
-- **Multiple methods allowed**: Protocols can expose rich method sets (e.g., read/write/clear). Keep names descriptive and respect async/await semantics.
-- Name protocols with continuous tense (e.g., `UserFetching`, `DataProcessing`).
-- Protocols define contracts, not implementations.
-- **Type parameters must be explicit**: Declare generic arguments (`Protocol[T_co]`, etc.) so implementers stay precise.
-
-### 3. Service Pattern
-- Create service container classes inheriting from `State`
-- Hold protocol implementations as attributes
-- Provide clean API through `@statemethod` methods
-- Access implementations via `ctx.state(ServiceClass).protocol_attribute()`
-
-### 4. Context Rules
-- Always use `async with ctx.scope()` to establish execution contexts
-- State priority: explicit > disposables > presets > parent context
-- Use descriptive scope names for debugging and observability
-- Access state via `ctx.state(StateClass)` with optional defaults
-
-### 5. Implementation Rules (COMPLETE TYPE ANNOTATIONS REQUIRED)
-- **Full function signatures**: Every implementation function MUST have complete type annotations for parameters and return types
-- **NO untyped functions**: Implementation functions without complete typing will fail at runtime validation
-- Implementation functions access context via `ctx.state(ConfigClass)`
-- **Typed factory functions**: Factory functions must have explicit return type annotations
-- Keep functions pure when possible - avoid side effects
-- Use structured logging via `ctx.log_info()`, `ctx.log_error()` with context
-- **Type-safe context access**: Always specify exact types when accessing `ctx.state(SpecificType)`
-
-### 6. Resource Management
-- Use `@asynccontextmanager` for disposable resources
-- Always yield State instances from resource context managers
-- Resources are automatically cleaned up on scope exit
-- Use `ctx.disposables()` for multiple resources
-
-### 7. Testing
-- Mock services by providing alternative protocol implementations
-- Use `ctx.scope()` with mock state for isolated tests
-- Test async functions with `@pytest.mark.asyncio`
-- Verify state access with `ctx.check_state()` in tests
-
-### 8. Type Safety (ABSOLUTE REQUIREMENT)
-- **ZERO tolerance for missing types**: Every variable, parameter, return type, and attribute MUST be typed
-- **Runtime validation is strict**: All State attributes are validated against their exact type annotations
-- **Generic types must be specific**: Use `Container[User]` not `Container[Any]` whenever possible
-- **Union syntax mandatory**: Always use `str | None` never `Optional[str]` or missing annotations
-- **NO `Any` except when absolutely necessary**: Prefer specific types - `Any` bypasses all type safety
-- **Complete generic constraints**: Generic type parameters must have proper bounds when needed
-- **Callable types must be explicit**: Function types must specify exact parameter and return types
+- Disposables are async context managers yielding `State` instances. They are started when entering the scope and always cleaned up. Use `ctx.disposables(disposable1(), disposable2())` as a helper inside an existing scope.
+- Common disposables: `haiway.httpx.HTTPXClient` (HTTP backend), custom DB connections, etc.
+
+## Functionalities & Services
+- Expose contracts as `Protocol` objects (runtime-checkable only when you need `isinstance`). Name with gerund (`UserFetching`). Every method fully typed; async where I/O occurs.
+- Services are `State` containers bundling protocol implementations. Public methods are `@statemethod` so you call `Service.method(...)` with context lookup, while keeping the instance available inside for multi-method orchestration.
+- Implementations are plain functions operating on context state (`ctx.state(ConfigType)`); keep them pure where possible and translate external errors into typed exceptions.
+
+## I/O Helpers
+- **HTTP**: Use `haiway.helpers.HTTPClient` static methods (`get/post/put/delete/request`). Provide an implementation via state, typically `haiway.httpx.HTTPXClient` disposable. Responses are `HTTPResponse` (immutable; `await response.body()` returns bytes). Errors raise `HTTPClientError` (original cause in `__cause__`).
+- **File access**: `haiway.helpers.File` is a typed async file helper backed by context-managed resources; respect `FileAccess` flags when opening.
+- **Postgres**: the `haiway.postgres` package offers async client/state helpers aligned with `asyncpg` patterns; configure via state and keep operations async-only.
+
+## Caching & Resilience
+- Memoization: `cache` (LRU, in-process, async-only) and `cache_externally(make_key, read, write, clear?)` for custom backends. `clear_cache()` available when supported.
+- Retries/timeouts/throttling: decorators from `haiway.helpers` integrate with `ctx.spawn` and preserve typing.
+
+## Observability
+- Logging: `ctx.log_debug/info/warning/error/critical(message_or_event, **fields)`; structured fields are encouraged. Never log secrets.
+- Metrics/events: `ctx.record_info(...)/record_warning/record_error` or generic `ctx.record(event=?, attributes=?, metric=?, value=?, kind=?, unit=?)` depending on level. `ctx.trace_id()` surfaces the current trace identifier.
+- To mirror logs to OTLP or similar, wire `LoggerObservability` or dedicated exporters under `haiway.opentelemetry` into the context.
+
+## Configuration & Environment
+- `Configuration`/`ConfigurationRepository` provide typed configs with repository-backed `load(required: bool = False, default: Configuration | None = None)` helpers. `ConfigurationMissing/ConfigurationInvalid` signal failures. `ConfigurationRepository.volatile(...)` is handy for tests.
+- Env helpers: `getenv_*` (str/int/float/bool/base64) and `load_env` convert environment variables into typed values; prefer these instead of `os.getenv`.
+
+## Non-Negotiable Rules for Contributions
+- Full typing everywhere (params, returns, attributes). Avoid `Any`; if unavoidable, keep scope narrow.
+- Use abstract collection types in public APIs; prefer `Mapping/Sequence/Set` over concrete mutables.
+- Stay async throughout; never block the event loop. Use `asynchronous` only for legacy sync bridges.
+- Never mutate `State`; always create new instances.
+- No `print`; use context logging/observability. Do not leak secrets in logs or errors.
+- Translate external exceptions at the boundary into typed, contextual errors (include provider/operation identifiers, redact sensitive payloads).
+- Keep public symbols exported via `src/haiway/__init__.py` when adding new APIs, and add docstrings for public classes/functions in NumPy style.
