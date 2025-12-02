@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Iterator, Sequence
+from decimal import Decimal
 from typing import Any
 
 from pytest import fail, fixture
@@ -114,3 +115,25 @@ def test_postgres_row_supports_mapping_pattern_matching() -> None:
             assert email == "user@example.com"
         case _:
             fail("PostgresRow should match mapping patterns using column names")
+
+
+def test_postgres_row_get_float_accepts_decimal() -> None:
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord(
+        (
+            ("amount", Decimal("12.5")),
+        )
+    )
+    row: PostgresRow = PostgresRow(record)
+
+    assert row.get_float("amount") == 12.5
+
+
+def test_postgres_row_get_float_accepts_int_as_numeric() -> None:
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord(
+        (
+            ("amount", 7),
+        )
+    )
+    row: PostgresRow = PostgresRow(record)
+
+    assert row.get_float("amount") == 7.0

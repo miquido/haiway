@@ -41,12 +41,13 @@ config = await DatabaseConfig.load(default=DatabaseConfig(
 config = await DatabaseConfig.load(identifier="production_db")
 ```
 
-### Contextual and Default Fallback
+### Contextual Fallback (no implicit defaults)
 
 When using `required=True`, the system first looks for a contextual instance bound via
 `ctx.scope(..., config_instance)`. This allows you to override repository values for the current
-scope (handy in tests or temporary overrides). If no contextual instance is available, Haiway
-automatically instantiates the configuration using its class defaults:
+scope (handy in tests or temporary overrides). If no contextual instance is available and nothing is
+found in the repository, `ConfigurationMissing` is raised—classes are **not** auto-instantiated with
+defaults.
 
 ```python
 from haiway import ctx
@@ -61,9 +62,10 @@ async with ctx.scope("server", ServerConfig(port=9001)):
     config = await ServerConfig.load(required=True)
     assert config.port == 9001
 
-# Falls back to default values when no repository/context data exists
-config = await ServerConfig.load(required=True)
-assert config.port == 8000
+try:
+    await ServerConfig.load(required=True)
+except ConfigurationMissing:
+    ...
 ```
 
 ## Storage and Repository

@@ -85,14 +85,14 @@ def test_type_none_attribute_resolves_to_none_attribute() -> None:
         annotation.validate("not-none")
 
 
-def test_attribute_annotations_skip_additional_annotated_metadata() -> None:
+def test_attribute_annotations_handle_string_metadata_as_description() -> None:
     class Example(State):
         value: Annotated[Annotated[int, "inner"], "outer"]
 
     annotation = attribute_of(Example, "value")
     assert isinstance(annotation, IntegerAttribute)
     assert annotation.alias is None
-    assert annotation.description is None
+    assert annotation.description == "outer"
     assert annotation.specification is None
     assert annotation.required is True
 
@@ -245,7 +245,7 @@ def test_typed_dict_annotations_converts() -> None:
     annotated_attribute = attributes["annotated"]
     assert isinstance(annotated_attribute, IntegerAttribute)
     assert annotated_attribute.alias is None
-    assert annotated_attribute.description is None
+    assert annotated_attribute.description == "meta"
     assert annotated_attribute.specification is None
     assert annotated_attribute.required is True
 
@@ -272,7 +272,7 @@ def test_typed_dict_required_preserves_inner_annotations() -> None:
     required_value = annotation.attributes["required_value"]
     assert isinstance(required_value, IntegerAttribute)
     assert required_value.alias is None
-    assert required_value.description is None
+    assert required_value.description == "inner"
     assert required_value.specification is None
 
     required_attribute = annotation.attributes["required"]

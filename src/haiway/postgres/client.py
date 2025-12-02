@@ -1,5 +1,3 @@
-"""AsyncPG-backed connection pooling for the Postgres state integration."""
-
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from types import TracebackType
 from typing import Self

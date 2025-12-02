@@ -1,5 +1,3 @@
-"""Environment-driven configuration defaults for the Postgres integration."""
-
 from typing import Final
 
 from haiway.utils import getenv_int, getenv_str

@@ -9,13 +9,13 @@ explains how to effectively use these tools to build high-performance concurrent
 
 ### Structured Concurrency
 
-Haiway follows the structured concurrency paradigm where all spawned tasks are tied to their parent
-scope:
+Haiway follows structured concurrency where tasks are managed through scope task groups:
 
-- Tasks spawned within a scope are automatically cancelled when the scope exits
-- Exceptions in child tasks can propagate to parent scopes
-- Resources are properly cleaned up through the scope lifecycle
-- Task isolation ensures independent execution contexts
+- Tasks spawned within a scope run in its task group; they keep running until they finish or are
+  cancelled.
+- Exceptions in child tasks can propagate to parent scopes.
+- Resources are properly cleaned up through the scope lifecycle.
+- Task isolation ensures independent execution contexts.
 
 ### Context Propagation
 
@@ -75,7 +75,8 @@ async def main():
         # Do other work
         await handle_requests()
 
-        # Background task automatically cancelled when scope exits
+        # Background task is cancelled only if you cancel it or the task group raises;
+        # otherwise it runs to completion before scope exit
 ```
 
 ### Task Cancellation

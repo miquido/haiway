@@ -1,5 +1,3 @@
-"""State objects wiring Postgres connectivity into the Haiway context."""
-
 import pkgutil
 from collections.abc import Sequence
 from importlib import import_module

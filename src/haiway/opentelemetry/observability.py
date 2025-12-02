@@ -928,4 +928,3 @@ SEVERITY_MAPPING = {
     ObservabilityLevel.WARNING: SeverityNumber.WARN,
     ObservabilityLevel.ERROR: SeverityNumber.ERROR,
 }
-"""Mapping from Haiway ObservabilityLevel to OpenTelemetry SeverityNumber."""

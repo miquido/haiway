@@ -101,7 +101,8 @@ FileAccess.open(
 
 ## Error Handling
 
-All file errors are raised as `FileException`:
+Most errors raised by the helper come directly from the OS (`OSError`). `FileException` is raised
+only in a few guarded cases (e.g., missing file when `create=False`, unexpected EOF, failed write).
 
 ```python
 from haiway.helpers import FileException
@@ -197,7 +198,8 @@ async def manage_config():
 
 ### Atomic File Updates
 
-The file system ensures atomic writes with fsync:
+Writes are in-place with `os.write` followed by `fsync`; they are **not** copy-on-write or rename
+atomic. Use exclusive locks plus your own temp-file strategy if you need atomic replacement.
 
 ```python
 async def atomic_update():
@@ -263,7 +265,8 @@ async def test_file_processing():
 1. **Handle exceptions**: Wrap file operations in try/except blocks
 1. **Use exclusive locking**: For critical updates that must be atomic
 1. **Create parent directories**: Use `create=True` when writing to new locations
-1. **One file per context**: The design enforces single file access per context scope
+1. **Avoid multiple concurrent opens**: You can open more than one file in a scope; the newest
+   `File` state shadows earlier ones. Prefer one file per scope to avoid surprises.
 
 ## Platform Considerations
 

@@ -1,7 +1,6 @@
-"""Structured types shared across the Postgres integration."""
-
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import date, datetime, time
+from decimal import Decimal
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Protocol, Self, overload, runtime_checkable
 from uuid import UUID
@@ -219,18 +218,23 @@ class PostgresRow(Mapping[str, PostgresValue]):
         *,
         default: float | None = None,
     ) -> float | None:
-        """Return the column as ``float`` when present."""
+        """Return the column as ``float`` when present.
+
+        Accepts native ``float`` values as well as numeric ``int`` or ``Decimal`` instances
+        returned by asyncpg for ``numeric``/``decimal`` columns.
+        """
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:
             return default
 
-        if not isinstance(value, float):
-            raise TypeError(
-                f"Unexpected value '{type(value).__name__}' for {key}, expected 'float'"
-            )
+        if isinstance(value, float):
+            return value
 
-        return value
+        if isinstance(value, int | Decimal):
+            return float(value)
+
+        raise TypeError(f"Unexpected value '{type(value).__name__}' for {key}, expected 'float'")
 
     @overload
     def get_bool(

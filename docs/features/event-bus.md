@@ -162,11 +162,11 @@ async def make_request(query: str) -> Any:
 
 ### Memory Management
 
-The event bus is designed for memory efficiency:
-
-- Events without subscribers are never stored and dropped immediately
-- Events are garbage collected as soon as all subscribers consume them
-- Abandoned subscriptions automatically clean up
+- Events without subscribers are never stored and are dropped immediately.
+- Events are garbage collected as soon as all subscribers consume them.
+- Subscriptions are lightweight but currently keep an internal future alive; if you abandon a
+  subscription without iterating it, the head entry stays in memory. Call `break`/`return` after the
+  `async for` loop or drop the subscription only after finishing iteration.
 
 ### Error Handling
 

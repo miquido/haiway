@@ -1,14 +1,12 @@
-# AGENTS.md
-
-Rules for coding agents to contribute correctly and safely.
+Haiway is a python framework helping to build high-quality codebases. Focuses on strict typing and functional programming principles extended with structured concurrency concepts. Delivers opinionated, strict rules and patterns resulting in modular, safe and highly maintainable applications.
 
 ## Development Toolchain
 
-- Python: 3.12+
+- Python: 3.13+
 - Virtualenv: managed by uv, available at `./.venv`, assume already set up and working within venv
 - Formatting: Ruff formatter (`make format`), no other formatter
 - Linters/Type-checkers: Ruff, Bandit, Pyright (strict). Run via `make lint`
-- Tests: `make test` or targeted `pytest tests/test_...::test_...`
+- Tests: using pytest, run using `make test` or targeted `pytest tests/test_...::test_...`
 
 ## Project Layout
 
@@ -23,26 +21,16 @@ Rules for coding agents to contribute correctly and safely.
   - `utils/`: Generic async utilities (queues, streams, env helpers, logging bootstrap, metadata helpers).
 - `tests/`: Pytest suite mirroring package structure; keep new tests alongside the code they cover.
 - `docs/`: MkDocs content, author guides, and API references; update navigation in `mkdocs.yml` when adding pages.
-- `config/pre-push`: Git hook script that mirrors CI checks; run manually if the hook is not installed.
 - `Makefile`: Entry point for common dev tasks (`format`, `lint`, `test`, `docs`).
-- `pyproject.toml` & `uv.lock`: Project metadata, dependencies, and pinned lockfile for `uv` environments.
+- `pyproject.toml`: Project metadata, dependencies, and configuration.
 
 Public exports are centralized in `src/haiway/__init__.py`.
-
-## Core Framework Concepts
-
-- `State` objects are immutable data carriers that surface through contexts; use keyword-only constructors and NumPy-style docstrings when they are public.
-- `Immutable` (see `src/haiway/utils/queue.py`) disallows attribute mutation—set internal state with `object.__setattr__` and avoid mutating collections in place.
-- `ctx` provides structured dependency injection; use `ctx.scope("name", state_instance)` to bind dependencies and `ctx.spawn(coro)` for detached async work.
-- Observability flows through `Observability*` types; emit attributes and metrics inside scopes instead of calling logging APIs directly.
-- Configuration/state lifecycles rely on `Disposable`/`Disposables`; register clean-up via context managers rather than relying on `__del__`.
-- Async adapters (HTTP, Postgres, streaming) wrap external SDKs—prefer extending the existing helper modules instead of introducing new third-party usage sites.
 
 ## Style & Patterns
 
 ### Typing & Immutability
 
-- Ensure latest, most strict typing syntax available from python 3.12+
+- Ensure latest, most strict typing syntax available from python 3.13+
 - Strict typing only: no untyped public APIs, no loose `Any` unless required by third-party boundaries
 - Prefer explicit attribute access with static types. Avoid dynamic `getattr` except at narrow boundaries.
 - Prefer abstract immutable protocols: `Mapping`, `Sequence`, `Iterable` over `dict`/`list`/`set` in public types
@@ -57,7 +45,6 @@ Public exports are centralized in `src/haiway/__init__.py`.
 - Ensure structured concurrency concepts and valid coroutine usage
 - Rely on haiway and asyncio packages with coroutines, avoid custom threading
 - Await long-running operations directly; never block the event loop with sync calls.
-- Prefer async iterators/streams (`AsyncStream`, `AsyncQueue`) and context managers to coordinate backpressure.
 
 ### Exceptions & Error Translation
 
@@ -67,8 +54,7 @@ Public exports are centralized in `src/haiway/__init__.py`.
 
 ### Logging & Observability
 
-- Use observability hooks (`ObservabilityLogRecording`, metrics, traces) instead of `print`/`logging`—tests assert on emitted events.
-- Always include scope identifiers when emitting events so records thread through async boundaries.
+- Use observability hooks (logs, metrics, traces) from `ctx` helper (`ctx.log_*`, `ctx.record`) instead of `print`/`logging`—tests assert on emitted events.
 - Surface user-facing errors via structured events before raising typed exceptions.
 
 ## Testing & CI
@@ -79,27 +65,19 @@ Public exports are centralized in `src/haiway/__init__.py`.
 - Linting/type gates must be clean: `make format` then `make lint`
 - Mirror package layout in `tests/`; colocate new tests alongside features and prefer `pytest` parametrization over loops.
 - Test async flows with `pytest.mark.asyncio`; use `ctx.scope` in tests to isolate state and avoid leaking globals.
-- Use `mypy`/`pyright`-style type assertions (e.g., `reveal_type`) only locally and delete them before committing.
-- Run `uv sync` if dependencies change; never edit `.venv` manually.
+- Use `pyright`-style type assertions (e.g., `reveal_type`) only locally and delete them before committing.
 
-### Async tests
-
-- Use `pytest-asyncio` for coroutine tests (`@pytest.mark.asyncio`).
-- Avoid real I/O and network; stub provider calls and HTTP.
-- Reuse existing pytest fixtures when available or add focused ones next to the tests that use them.
-
-### Self verification
+### Self-verification
 
 - Ensure type checking soundness as a part of the workflow
-- Do not mute or ignore errors, double check correctness and seek for solutions
+- Do not mute or ignore errors, double-check correctness and seek for solutions
 - Verify code correctness with unit tests or by running ad-hoc scripts
-- Ask for additional guidance and confirmation when uncertain or about to modify additional elements
 - Capture tricky edge cases in regression tests before fixing them to prevent silent behaviour changes.
 
 ## Documentation
 
-- Public symbols: add NumPy-style docstrings. Include Parameters/Returns/Raises sections and rationale when not obvious
-- Internal helpers: avoid docstrings, keep names self-explanatory
+- Public symbols: add NumPy-style docstrings. Include Parameters/Returns/Raises sections and rationale
+- Internal and private helpers: avoid docstrings, keep names self-explanatory
 - If behavior/API changes, update relevant docs under `docs/` and examples if applicable
 - Skip module docstrings
 - Add usage snippets that exercise async scopes; readers should see how to wire states through `ctx`.
@@ -108,20 +86,9 @@ Public exports are centralized in `src/haiway/__init__.py`.
 
 - Site is built with MkDocs + Material and `mkdocstrings` for API docs.
 - Author pages under `docs/` and register navigation in `mkdocs.yml` (`nav:` section).
-- Preview locally: `make docs-server` (serves at http://127.0.0.1:8000).
 - Lint `make docs-lint` and format `make docs-format` after editing.
-- Build static site: `make docs` (outputs to `site/`).
 - Keep docstrings high‑quality; `mkdocstrings` pulls them into reference pages.
 - When adding public APIs, update examples/guides as needed and ensure cross-links render.
-
-## Preferred Workflow
-
-1. Sync dependencies with `uv sync` before running tools; never modify `.venv` directly.
-2. Implement changes in small commits; use feature branches when possible.
-3. Format with `make format` and run `make lint`; fix lint/type issues before running tests.
-4. Execute targeted `pytest` first, then finish with `make test` before requesting code review.
-5. Update `src/haiway/__init__.py` exports and docs when altering public APIs so mkdocstrings stays accurate.
-6. Capture behavioural changes in tests and observability expectations so regressions are obvious.
 
 ## Security & Secrets
 
