@@ -5,7 +5,7 @@ from asyncio import (
 )
 from collections.abc import (
     AsyncGenerator,
-    AsyncIterator,
+    AsyncIterable,
     Callable,
     Collection,
     Coroutine,
@@ -800,7 +800,7 @@ class ctx:
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
-    ) -> AsyncIterator[Element]:
+    ) -> AsyncIterable[Element]:
         """
         Stream results produced by a generator within the proper context state.
 
@@ -817,7 +817,7 @@ class ctx:
 
         Returns
         -------
-        AsyncIterator[Result]
+        AsyncIterable[Result]
             iterator for accessing generated results
         """
 

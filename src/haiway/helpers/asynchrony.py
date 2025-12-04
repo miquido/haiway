@@ -21,7 +21,7 @@ def asynchronous[**Args, Result]() -> Callable[
 def asynchronous[**Args, Result](
     *,
     loop: AbstractEventLoop | None = None,
-    executor: Executor,
+    executor: Executor | Missing = MISSING,
 ) -> Callable[
     [Callable[Args, Result]],
     Callable[Args, Coroutine[Any, Any, Result]],

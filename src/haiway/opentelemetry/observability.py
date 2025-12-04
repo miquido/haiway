@@ -17,8 +17,8 @@ from opentelemetry.metrics._internal.instrument import Counter, Gauge, Histogram
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import (
     BatchLogRecordProcessor,
-    ConsoleLogExporter,
-    LogExporter,
+    ConsoleLogRecordExporter,
+    LogRecordExporter,
 )
 from opentelemetry.sdk.metrics import MeterProvider as SdkMeterProvider
 from opentelemetry.sdk.metrics._internal.export import MetricExporter
@@ -441,7 +441,7 @@ class OpenTelemetry:
         cls.version = version
         cls.environment = environment
 
-        logs_exporter: LogExporter
+        logs_exporter: LogRecordExporter
         span_exporter: SpanExporter
         metric_exporter: MetricExporter
 
@@ -464,7 +464,7 @@ class OpenTelemetry:
             )
 
         else:
-            logs_exporter = ConsoleLogExporter()
+            logs_exporter = ConsoleLogRecordExporter()
             span_exporter = ConsoleSpanExporter()
             metric_exporter = ConsoleMetricExporter()
 
