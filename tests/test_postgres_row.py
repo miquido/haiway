@@ -118,22 +118,14 @@ def test_postgres_row_supports_mapping_pattern_matching() -> None:
 
 
 def test_postgres_row_get_float_accepts_decimal() -> None:
-    record: FakeAsyncpgRecord = FakeAsyncpgRecord(
-        (
-            ("amount", Decimal("12.5")),
-        )
-    )
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", Decimal("12.5")),))
     row: PostgresRow = PostgresRow(record)
 
     assert row.get_float("amount") == 12.5
 
 
 def test_postgres_row_get_float_accepts_int_as_numeric() -> None:
-    record: FakeAsyncpgRecord = FakeAsyncpgRecord(
-        (
-            ("amount", 7),
-        )
-    )
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", 7),))
     row: PostgresRow = PostgresRow(record)
 
     assert row.get_float("amount") == 7.0

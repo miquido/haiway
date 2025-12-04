@@ -22,6 +22,7 @@ from haiway.helpers.http_client import (
     HTTPResponse,
     HTTPStatusCode,
 )
+from haiway.helpers.message_queue import MQMessage, MQQueue
 from haiway.helpers.observability import LoggerObservability
 from haiway.helpers.retries import retry
 from haiway.helpers.statemethods import statemethod
@@ -46,6 +47,8 @@ __all__ = (
     "HTTPResponse",
     "HTTPStatusCode",
     "LoggerObservability",
+    "MQMessage",
+    "MQQueue",
     "asynchronous",
     "cache",
     "cache_externally",
