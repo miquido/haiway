@@ -42,8 +42,8 @@ class RabbitMQ(State):
         self,
         queue: str,
         /,
-        content_encoder: Callable[[Content], BasicObject],
-        content_decoder: Callable[[BasicObject], Content],
+        content_encoder: Callable[[Content], bytes],
+        content_decoder: Callable[[bytes], Content],
         **extra: Any,
     ) -> AbstractAsyncContextManager[MQQueue[Content]]:
         """

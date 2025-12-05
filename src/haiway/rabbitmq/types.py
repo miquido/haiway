@@ -3,7 +3,6 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol, runtime_checkable
 
 from haiway.helpers import MQQueue
-from haiway.types import BasicObject
 
 __all__ = (
     "RabbitMQException",
@@ -23,8 +22,8 @@ class RabbitMQQueueAccessing(Protocol):
     async def __call__[Content](
         self,
         queue: str,
-        content_encoder: Callable[[Content], BasicObject],
-        content_decoder: Callable[[BasicObject], Content],
+        content_encoder: Callable[[Content], bytes],
+        content_decoder: Callable[[bytes], Content],
         **extra: Any,
     ) -> AbstractAsyncContextManager[MQQueue[Content]]: ...
 

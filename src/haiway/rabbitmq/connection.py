@@ -1,4 +1,3 @@
-import json
 from asyncio import AbstractEventLoop, Future, Lock, get_running_loop, timeout
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -13,7 +12,7 @@ from pika.spec import Basic
 from haiway.context import ctx
 from haiway.helpers import MQMessage, MQQueue
 from haiway.rabbitmq.config import RABBITMQ_URL
-from haiway.types import BasicObject, FlatObject, Meta
+from haiway.types import FlatObject, Meta
 from haiway.utils import AsyncQueue
 
 __all__ = ("RabbitMQConnection",)
@@ -39,8 +38,8 @@ class RabbitMQConnection:
     async def _queue_access[Content](  # noqa: C901
         self,
         queue: str,
-        content_encoder: Callable[[Content], BasicObject],
-        content_decoder: Callable[[BasicObject], Content],
+        content_encoder: Callable[[Content], bytes],
+        content_decoder: Callable[[bytes], Content],
         **extra: Any,
     ) -> AbstractAsyncContextManager[MQQueue[Content]]:
         @asynccontextmanager
@@ -66,7 +65,7 @@ class RabbitMQConnection:
                 channel.basic_publish(
                     exchange=exchange if exchange is not None else "",
                     routing_key=queue,
-                    body=json.dumps(content_encoder(message)),
+                    body=content_encoder(message),
                 )
 
             async def consume_messages(
@@ -83,7 +82,7 @@ class RabbitMQConnection:
                 ) -> None:
                     if tag := method.delivery_tag:
                         try:
-                            content: Content = content_decoder(json.loads(body))
+                            content: Content = content_decoder(body)
 
                         except Exception as exc:
                             channel.basic_reject(
