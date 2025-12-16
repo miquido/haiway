@@ -20,6 +20,8 @@ from haiway.postgres.types import (
 __all__ = (
     "Postgres",
     "PostgresConnection",
+    "PostgresConnectionContext",
+    "PostgresTransactionContext",
 )
 
 
