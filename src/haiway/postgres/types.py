@@ -2,7 +2,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Protocol, Self, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, overload, runtime_checkable
 from uuid import UUID
 
 from asyncpg import Record
@@ -66,11 +66,20 @@ class PostgresRow(Mapping[str, PostgresValue]):
         default: UUID,
     ) -> UUID: ...
 
+    @overload
+    def get_uuid(
+        self,
+        key: str,
+        *,
+        required: Literal[True],
+    ) -> UUID: ...
+
     def get_uuid(
         self,
         key: str,
         *,
         default: UUID | None = None,
+        required: bool = False,
     ) -> UUID | None:
         """Return the column as ``UUID`` when present.
 
@@ -80,6 +89,9 @@ class PostgresRow(Mapping[str, PostgresValue]):
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:
+            if required and default is None:
+                raise ValueError(f"Missing required value for '{key}'")
+
             return default
 
         if isinstance(value, UUID):
@@ -108,11 +120,20 @@ class PostgresRow(Mapping[str, PostgresValue]):
         default: datetime,
     ) -> datetime: ...
 
+    @overload
+    def get_datetime(
+        self,
+        key: str,
+        *,
+        required: Literal[True],
+    ) -> datetime: ...
+
     def get_datetime(
         self,
         key: str,
         *,
         default: datetime | None = None,
+        required: bool = False,
     ) -> datetime | None:
         """Return the column as ``datetime`` when present.
 
@@ -122,6 +143,9 @@ class PostgresRow(Mapping[str, PostgresValue]):
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:
+            if required and default is None:
+                raise ValueError(f"Missing required value for '{key}'")
+
             return default
 
         if isinstance(value, datetime):
@@ -150,16 +174,28 @@ class PostgresRow(Mapping[str, PostgresValue]):
         default: str,
     ) -> str: ...
 
+    @overload
+    def get_str(
+        self,
+        key: str,
+        *,
+        required: Literal[True],
+    ) -> str: ...
+
     def get_str(
         self,
         key: str,
         *,
         default: str | None = None,
+        required: bool = False,
     ) -> str | None:
         """Return the column as ``str`` when present."""
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:
+            if required and default is None:
+                raise ValueError(f"Missing required value for '{key}'")
+
             return default
 
         if not isinstance(value, str):
@@ -181,16 +217,28 @@ class PostgresRow(Mapping[str, PostgresValue]):
         default: int,
     ) -> int: ...
 
+    @overload
+    def get_int(
+        self,
+        key: str,
+        *,
+        required: Literal[True],
+    ) -> int: ...
+
     def get_int(
         self,
         key: str,
         *,
         default: int | None = None,
+        required: bool = False,
     ) -> int | None:
         """Return the column as ``int`` when present."""
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:
+            if required and default is None:
+                raise ValueError(f"Missing required value for '{key}'")
+
             return default
 
         if not isinstance(value, int):
@@ -212,11 +260,20 @@ class PostgresRow(Mapping[str, PostgresValue]):
         default: float,
     ) -> float: ...
 
+    @overload
+    def get_float(
+        self,
+        key: str,
+        *,
+        required: Literal[True],
+    ) -> float: ...
+
     def get_float(
         self,
         key: str,
         *,
         default: float | None = None,
+        required: bool = False,
     ) -> float | None:
         """Return the column as ``float`` when present.
 
@@ -226,6 +283,9 @@ class PostgresRow(Mapping[str, PostgresValue]):
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:
+            if required and default is None:
+                raise ValueError(f"Missing required value for '{key}'")
+
             return default
 
         if isinstance(value, float):
@@ -250,16 +310,28 @@ class PostgresRow(Mapping[str, PostgresValue]):
         default: bool,
     ) -> bool: ...
 
+    @overload
+    def get_bool(
+        self,
+        key: str,
+        *,
+        required: Literal[True],
+    ) -> bool: ...
+
     def get_bool(
         self,
         key: str,
         *,
         default: bool | None = None,
+        required: bool = False,
     ) -> bool | None:
         """Return the column as ``bool`` when present."""
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:
+            if required and default is None:
+                raise ValueError(f"Missing required value for '{key}'")
+
             return default
 
         if not isinstance(value, bool):
