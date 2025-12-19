@@ -17,6 +17,7 @@ from typing import (
     ClassVar,
     Generic,
     Literal,
+    NoReturn,
     Self,
     TypeVar,
     cast,
@@ -25,10 +26,7 @@ from typing import (
 )
 from weakref import WeakValueDictionary
 
-from haiway.attributes.annotations import (
-    ObjectAttribute,
-    resolve_self_attribute,
-)
+from haiway.attributes.annotations import ObjectAttribute, resolve_self_attribute
 from haiway.attributes.attribute import Attribute
 from haiway.attributes.coding import AttributesJSONEncoder
 from haiway.attributes.path import AttributePath
@@ -93,6 +91,24 @@ class StateMeta(type):
             cls,
             parameters=type_parameters or {},
         )
+
+        cls.__SELF_ATTRIBUTE__ = self_attribute  # pyright: ignore[reportConstantRedefinition]
+        cls.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportConstantRedefinition]
+        cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
+
+        if not bases:  # handle base class - no fields specified
+            assert not type_parameters  # nosec: B101
+            cls.__SPECIFICATION__ = {  # pyright: ignore[reportConstantRedefinition]
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+            cls.__FIELDS__ = ()  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
+            cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
+
+            return cls  # early exit - base class
+
         specification_fields: MutableMapping[str, TypeSpecification] | None = {}
         required_fields: MutableSequence[str] = []
         allowed_fields: MutableSet[str] = set()
@@ -110,24 +126,27 @@ class StateMeta(type):
                 allowed_fields.add(attribute.alias)
 
             fields.append(field)
-            if specification_fields is not None:
-                specification: TypeSpecification | None = field.specification
-                if specification is None:
-                    # there will be no specification at all
+
+            if specification_fields is None:
+                continue  # skip specification if it already failed
+
+            if field.specification is None:
+                # there will be no specification at all
+                if field.required:
                     specification_fields = None
 
-                elif field.alias is not None:
-                    specification_fields[field.alias] = specification
-                    if field.required:
-                        required_fields.append(field.alias)
+                # else continue skipping this field
 
-                else:
-                    specification_fields[field.name] = specification
-                    if field.required:
-                        required_fields.append(field.name)
+            elif field.alias is not None:
+                specification_fields[field.alias] = field.specification
+                if field.required:
+                    required_fields.append(field.alias)
 
-        cls.__SELF_ATTRIBUTE__ = self_attribute  # pyright: ignore[reportConstantRedefinition]
-        cls.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportConstantRedefinition]
+            else:
+                specification_fields[field.name] = field.specification
+                if field.required:
+                    required_fields.append(field.name)
+
         cls.__SPECIFICATION__ = (  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
             {
                 "type": "object",
@@ -136,13 +155,12 @@ class StateMeta(type):
                 "additionalProperties": False,
             }
             if specification_fields is not None
-            else None
+            else None  # it is technically not serializable at all
         )
         cls.__FIELDS__ = tuple(fields)  # pyright: ignore[reportConstantRedefinition]
         cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
         cls.__slots__ = tuple(field.name for field in fields)  # pyright: ignore[reportAttributeAccessIssue]
         cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
-        cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
 
         return cls
 
@@ -440,7 +458,7 @@ class State(metaclass=StateMeta):
         cls,
         *,
         indent: int | None = None,
-        required: Literal[True],
+        required: Literal[True] = True,
     ) -> str: ...
 
     @overload
@@ -449,7 +467,7 @@ class State(metaclass=StateMeta):
         cls,
         *,
         indent: int | None = None,
-        required: Literal[False] = False,
+        required: Literal[False],
     ) -> str | None: ...
 
     @classmethod
@@ -457,7 +475,7 @@ class State(metaclass=StateMeta):
         cls,
         *,
         indent: int | None = None,
-        required: bool = False,
+        required: bool = True,
     ) -> str | None:
         """
         Render this State's JSON Schema definition.
@@ -802,7 +820,7 @@ class State(metaclass=StateMeta):
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         """
         Disallow attribute assignment to preserve immutability.
 
@@ -826,7 +844,7 @@ class State(metaclass=StateMeta):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         """
         Disallow attribute deletion to preserve immutability.
 

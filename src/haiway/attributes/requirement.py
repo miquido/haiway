@@ -1,7 +1,7 @@
 import re
 import unicodedata
 from collections.abc import Callable, Collection, Iterable, Sequence, Set
-from typing import Any, Literal, Self, cast, final
+from typing import Any, Literal, NoReturn, Self, cast, final
 
 from haiway.attributes.path import AttributePath
 
@@ -488,7 +488,7 @@ class AttributeRequirement[Root]:
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -497,7 +497,7 @@ class AttributeRequirement[Root]:
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"

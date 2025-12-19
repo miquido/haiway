@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Mapping
-from typing import Any, Self, final
+from typing import Any, NoReturn, Self, final
 
 __all__ = ("Map",)
 
@@ -41,7 +41,7 @@ class Map[Key, Element](dict[Key, Element]):
         self,
         name: str,
         value: object,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -50,7 +50,7 @@ class Map[Key, Element](dict[Key, Element]):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
@@ -60,7 +60,7 @@ class Map[Key, Element](dict[Key, Element]):
         self,
         key: Key,
         value: Element,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be modified"
@@ -69,7 +69,7 @@ class Map[Key, Element](dict[Key, Element]):
     def __delitem__(
         self,
         key: Key,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be deleted"
@@ -85,12 +85,12 @@ class Map[Key, Element](dict[Key, Element]):
         key: Key,
         default: Any | None = None,
         /,
-    ) -> Element:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, pop is not supported"
         )
 
-    def popitem(self) -> tuple[Key, Element]:
+    def popitem(self) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, popitem is not supported"
         )
@@ -100,7 +100,7 @@ class Map[Key, Element](dict[Key, Element]):
         key: Key,
         default: Element | None = None,
         /,
-    ) -> Element:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, setdefault is not supported"
         )
@@ -109,7 +109,7 @@ class Map[Key, Element](dict[Key, Element]):
         self,
         *updates: object,
         **kwargs: Element,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, update is not supported"
         )
@@ -135,7 +135,7 @@ class Map[Key, Element](dict[Key, Element]):
     def __ior__(
         self,
         other: object,
-    ) -> Self:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, |= is not supported"
         )
