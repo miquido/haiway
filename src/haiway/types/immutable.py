@@ -1,6 +1,15 @@
 import inspect
 from collections.abc import Mapping, MutableMapping
-from typing import Any, ClassVar, Self, dataclass_transform, final, get_origin, get_type_hints
+from typing import (
+    Any,
+    ClassVar,
+    NoReturn,
+    Self,
+    dataclass_transform,
+    final,
+    get_origin,
+    get_type_hints,
+)
 
 from haiway.types.default import Default, DefaultValue
 
@@ -98,7 +107,7 @@ class Immutable(metaclass=ImmutableMeta):
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -107,7 +116,7 @@ class Immutable(metaclass=ImmutableMeta):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"

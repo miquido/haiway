@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Mapping
-from typing import Any, Self, final
+from typing import Any, NoReturn, Self, final
 
 __all__ = ("Map",)
 
@@ -41,7 +41,7 @@ class Map[Key, Element](dict[Key, Element]):
         self,
         name: str,
         value: object,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -50,7 +50,7 @@ class Map[Key, Element](dict[Key, Element]):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"

@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import (
     Any,
     Literal,
+    NoReturn,
     NotRequired,
     Required,
     TypedDict,
@@ -194,11 +195,11 @@ class Specification:
         self,
         __name: str,
         __value: Any,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Specification can't be modified")
 
     def __delattr__(
         self,
         __name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Specification can't be modified")
