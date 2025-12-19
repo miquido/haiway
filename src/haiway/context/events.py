@@ -2,7 +2,7 @@ from asyncio import AbstractEventLoop, Future, get_running_loop
 from collections.abc import AsyncIterator, MutableMapping
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Any, ClassVar, Self, final
+from typing import Any, ClassVar, NoReturn, Self, final
 
 from haiway.attributes import State
 from haiway.context.types import MissingContext
@@ -71,7 +71,7 @@ class EventSubscription[Payload: State](AsyncIterator[Payload]):
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -80,7 +80,7 @@ class EventSubscription[Payload: State](AsyncIterator[Payload]):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"

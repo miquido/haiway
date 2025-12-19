@@ -6,7 +6,7 @@ from collections import abc as collections_abc
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from copy import copy
-from typing import Any, TypeAliasType, final, get_args, get_origin, overload
+from typing import Any, NoReturn, TypeAliasType, final, get_args, get_origin, overload
 
 from haiway.types import MISSING, Missing, not_missing
 
@@ -191,7 +191,7 @@ class PropertyAttributePathComponent(AttributePathComponent):
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -200,7 +200,7 @@ class PropertyAttributePathComponent(AttributePathComponent):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
@@ -362,7 +362,7 @@ class SequenceItemAttributePathComponent[Owner, Value](AttributePathComponent):
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -371,7 +371,7 @@ class SequenceItemAttributePathComponent[Owner, Value](AttributePathComponent):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
@@ -527,7 +527,7 @@ class MappingItemAttributePathComponent(AttributePathComponent):
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -536,7 +536,7 @@ class MappingItemAttributePathComponent(AttributePathComponent):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
@@ -724,7 +724,7 @@ class AttributePath[Root, Attribute]:
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -733,7 +733,7 @@ class AttributePath[Root, Attribute]:
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"

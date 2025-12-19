@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from os import getenv as os_getenv
-from typing import Any, cast, final, overload
+from typing import Any, NoReturn, cast, final, overload
 
 from haiway.types.missing import MISSING, Missing, not_missing
 
@@ -89,10 +89,11 @@ class DefaultValue:
 
         elif not_missing(env):
             assert default is MISSING  # nosec: B101
+
             object.__setattr__(
                 self,
                 "_value",
-                lambda: os_getenv(key=env, default=MISSING),
+                lambda: os_getenv(env, default=default),
             )
             object.__setattr__(
                 self,
@@ -119,13 +120,13 @@ class DefaultValue:
         self,
         __name: str,
         __value: Any,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("DefaultValue can't be modified")
 
     def __delattr__(
         self,
         __name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("DefaultValue can't be modified")
 
 

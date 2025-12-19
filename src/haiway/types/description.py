@@ -1,4 +1,4 @@
-from typing import Any, final
+from typing import Any, NoReturn, final
 
 __all__ = ("Description",)
 
@@ -36,11 +36,11 @@ class Description:
         self,
         __name: str,
         __value: Any,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Description can't be modified")
 
     def __delattr__(
         self,
         __name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Description can't be modified")

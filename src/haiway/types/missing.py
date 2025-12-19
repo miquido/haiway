@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import Any, Final, TypeGuard, cast, final, overload
+from typing import Any, Final, NoReturn, TypeGuard, cast, final, overload
 
 __all__ = (
     "MISSING",
@@ -73,13 +73,13 @@ class Missing(metaclass=MissingType):
         self,
         __name: str,
         __value: Any,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Missing can't be modified")
 
     def __delattr__(
         self,
         __name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Missing can't be modified")
 
 
