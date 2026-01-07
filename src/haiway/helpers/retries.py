@@ -1,6 +1,7 @@
-from asyncio import CancelledError, iscoroutinefunction, sleep
+from asyncio import CancelledError, sleep
 from collections.abc import Callable, Coroutine
 from functools import wraps
+from inspect import iscoroutinefunction
 from time import sleep as sleep_sync
 from typing import Any, cast, overload
 

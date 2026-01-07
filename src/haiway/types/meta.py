@@ -578,7 +578,7 @@ class Meta(dict[str, BasicValue]):
         value: Any,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be modified"
         )
 
@@ -587,7 +587,7 @@ class Meta(dict[str, BasicValue]):
         name: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be deleted"
         )
 
@@ -597,7 +597,7 @@ class Meta(dict[str, BasicValue]):
         value: Any,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" item - '{key}' cannot be modified"
         )
 
@@ -606,8 +606,7 @@ class Meta(dict[str, BasicValue]):
         key: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" item - '{key}' cannot be deleted"
+            f"Can't modify immutable {self.__class__.__qualname__} item - '{key}' cannot be deleted"
         )
 
     def clear(self) -> None:

@@ -23,7 +23,7 @@ Define presets by combining state objects and disposables:
 
 ```python
 from haiway import State, ctx
-from haiway.context import ContextPreset
+from haiway.context import ContextPresets
 
 class DatabaseConfig(State):
     host: str
@@ -36,29 +36,25 @@ class ApiConfig(State):
     api_key: str
 
 # Create a preset for development environment
-dev_preset = ContextPreset(
-    name="development",
-    state=[
-        DatabaseConfig(host="localhost", database="app_dev"),
-        ApiConfig(
-            base_url="https://dev-api.example.com",
-            timeout=60,
-            api_key="dev-key-123"
-        )
-    ]
+dev_preset = ContextPresets.of(
+    "development",
+    DatabaseConfig(host="localhost", database="app_dev"),
+    ApiConfig(
+        base_url="https://dev-api.example.com",
+        timeout=60,
+        api_key="dev-key-123",
+    ),
 )
 
 # Create a preset for production environment
-prod_preset = ContextPreset(
-    name="production",
-    state=[
-        DatabaseConfig(host="prod-db.example.com", database="app_prod"),
-        ApiConfig(
-            base_url="https://api.example.com",
-            timeout=30,
-            api_key="prod-key-456"
-        )
-    ]
+prod_preset = ContextPresets.of(
+    "production",
+    DatabaseConfig(host="prod-db.example.com", database="app_prod"),
+    ApiConfig(
+        base_url="https://api.example.com",
+        timeout=30,
+        api_key="prod-key-456",
+    ),
 )
 ```
 
@@ -98,8 +94,8 @@ async def run_with_custom_timeout():
         ApiConfig(
             base_url="https://dev-api.example.com",
             timeout=60,
-            api_key="dev-key-123"
-        )
+            api_key="dev-key-123",
+        ),
     ):
         db_config = ctx.state(DatabaseConfig)  # From preset
         api_config = ctx.state(ApiConfig)      # Overridden
@@ -113,7 +109,8 @@ async def run_with_custom_timeout():
 
 ### Presets with Disposables
 
-Include disposable resources in presets for complete environment setup:
+Include disposable resources in presets for complete environment setup. Pass disposable factories
+(callables returning async context managers) so each scope gets fresh resources:
 
 ```python
 from contextlib import asynccontextmanager
@@ -132,14 +129,10 @@ class DatabaseConnection(State):
     pool: Any
 
 # Preset with both state and disposables
-full_dev_preset = ContextPreset(
-    name="development_full",
-    state=[
-        DatabaseConfig(host="localhost", database="app_dev"),
-    ],
-    disposables=[
-        database_connection(),
-    ]
+full_dev_preset = ContextPresets.of(
+    "development_full",
+    DatabaseConfig(host="localhost", database="app_dev"),
+    disposables=(database_connection,),
 )
 
 async def run_with_resources():
@@ -160,21 +153,17 @@ Compose complex configurations by combining presets:
 
 ```python
 # Base configuration preset
-base_preset = ContextPreset(
-    name="base",
-    state=[
-        LoggingConfig(level="INFO", format="json"),
-        MetricsConfig(enabled=True, interval=60)
-    ]
+base_preset = ContextPresets.of(
+    "base",
+    LoggingConfig(level="INFO", format="json"),
+    MetricsConfig(enabled=True, interval=60),
 )
 
 # Database-specific preset
-database_preset = ContextPreset(
-    name="database",
-    state=[
-        DatabaseConfig(host="localhost", port=5432),
-        ConnectionPoolConfig(min_size=5, max_size=20)
-    ]
+database_preset = ContextPresets.of(
+    "database",
+    DatabaseConfig(host="localhost", port=5432),
+    ConnectionPoolConfig(min_size=5, max_size=20),
 )
 
 async def run_composed_setup():
@@ -195,24 +184,20 @@ async def run_composed_setup():
 Create presets dynamically based on runtime conditions:
 
 ```python
-def create_environment_preset(env: str) -> ContextPreset:
+def create_environment_preset(env: str) -> ContextPresets:
     if env == "development":
-        return ContextPreset(
-            name=f"dynamic_{env}",
-            state=[
-                DatabaseConfig(host="localhost", database="app_dev"),
-                ApiConfig(base_url="https://dev-api.example.com", timeout=60),
-                DebugConfig(enabled=True, verbose=True)
-            ]
+        return ContextPresets.of(
+            f"dynamic_{env}",
+            DatabaseConfig(host="localhost", database="app_dev"),
+            ApiConfig(base_url="https://dev-api.example.com", timeout=60),
+            DebugConfig(enabled=True, verbose=True),
         )
     elif env == "production":
-        return ContextPreset(
-            name=f"dynamic_{env}",
-            state=[
-                DatabaseConfig(host="prod-db.example.com", database="app_prod"),
-                ApiConfig(base_url="https://api.example.com", timeout=30),
-                DebugConfig(enabled=False, verbose=False)
-            ]
+        return ContextPresets.of(
+            f"dynamic_{env}",
+            DatabaseConfig(host="prod-db.example.com", database="app_prod"),
+            ApiConfig(base_url="https://api.example.com", timeout=30),
+            DebugConfig(enabled=False, verbose=False),
         )
     else:
         raise ValueError(f"Unknown environment: {env}")
@@ -265,12 +250,12 @@ Use clear, descriptive names that indicate the preset's purpose:
 
 ```python
 # Good: Clear purpose
-api_client_preset = ContextPreset(name="api_client", ...)
-database_readonly_preset = ContextPreset(name="database_readonly", ...)
+api_client_preset = ContextPresets.of("api_client", ...)
+database_readonly_preset = ContextPresets.of("database_readonly", ...)
 
 # Avoid: Generic names
-config_preset = ContextPreset(name="config", ...)
-preset1 = ContextPreset(name="preset1", ...)
+config_preset = ContextPresets.of("config", ...)
+preset1 = ContextPresets.of("preset1", ...)
 ```
 
 ### 2. Environment-Specific Presets
@@ -278,14 +263,20 @@ preset1 = ContextPreset(name="preset1", ...)
 Create separate presets for different environments:
 
 ```python
-dev_api_preset = ContextPreset(
-    name="api_development",
-    state=[ApiConfig(base_url="https://dev-api.example.com", debug=True)]
+dev_api_preset = ContextPresets.of(
+    "api_development",
+    ApiConfig(
+        api_key="dev-api-key",
+        base_url="https://dev-api.example.com",
+    ),
 )
 
-prod_api_preset = ContextPreset(
-    name="api_production",
-    state=[ApiConfig(base_url="https://api.example.com", debug=False)]
+prod_api_preset = ContextPresets.of(
+    "api_production",
+    ApiConfig(
+        api_key="prod-api-key",
+        base_url="https://api.example.com",
+    ),
 )
 ```
 
@@ -295,21 +286,25 @@ Keep presets focused on specific concerns:
 
 ```python
 # Good: Focused on database concerns
-db_preset = ContextPreset(
-    name="database",
-    state=[DatabaseConfig(...), ConnectionPoolConfig(...)]
+db_preset = ContextPresets.of(
+    "database",
+    DatabaseConfig(...),
+    ConnectionPoolConfig(...),
 )
 
 # Good: Focused on API concerns
-api_preset = ContextPreset(
-    name="api_client",
-    state=[ApiConfig(...), RetryConfig(...)]
+api_preset = ContextPresets.of(
+    "api_client",
+    ApiConfig(...),
+    RetryConfig(...),
 )
 
 # Avoid: Mixed concerns
-everything_preset = ContextPreset(
-    name="everything",
-    state=[DatabaseConfig(...), ApiConfig(...), LoggingConfig(...)]
+everything_preset = ContextPresets.of(
+    "everything",
+    DatabaseConfig(...),
+    ApiConfig(...),
+    LoggingConfig(...),
 )
 ```
 
@@ -325,9 +320,9 @@ class DatabaseConfig(State):
     ssl: bool = True        # Secure by default
 
 # Preset can rely on defaults
-minimal_db_preset = ContextPreset(
-    name="minimal_database",
-    state=[DatabaseConfig(host="localhost")]  # Other fields use defaults
+minimal_db_preset = ContextPresets.of(
+    "minimal_database",
+    DatabaseConfig(host="localhost"),  # Other fields use defaults
 )
 ```
 
@@ -336,13 +331,11 @@ minimal_db_preset = ContextPreset(
 Create test-specific presets for consistent testing:
 
 ```python
-test_preset = ContextPreset(
-    name="testing",
-    state=[
-        DatabaseConfig(host="localhost", database="test_db"),
-        ApiConfig(base_url="https://mock-api.test", timeout=5),
-        LoggingConfig(level="DEBUG")
-    ]
+test_preset = ContextPresets.of(
+    "testing",
+    DatabaseConfig(host="localhost", database="test_db"),
+    ApiConfig(base_url="https://mock-api.test", timeout=5),
+    LoggingConfig(level="DEBUG"),
 )
 
 async def test_user_service():

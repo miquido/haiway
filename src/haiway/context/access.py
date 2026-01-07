@@ -7,425 +7,62 @@ from collections.abc import (
     AsyncGenerator,
     AsyncIterable,
     Callable,
-    Collection,
     Coroutine,
+    Iterable,
     Mapping,
 )
 from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from logging import Logger
-from types import TracebackType
-from typing import Any, final, overload
+from typing import Any, NoReturn, final, overload
 
 from haiway.attributes import State
-from haiway.context.disposables import Disposable, Disposables
-from haiway.context.events import EventsContext, EventSubscription
-from haiway.context.identifier import ScopeIdentifier
+from haiway.context.disposables import ContextDisposables, Disposable, Disposables, DisposableState
+from haiway.context.events import ContextEvents, EventsSubscription
 from haiway.context.observability import (
+    ContextObservability,
     Observability,
     ObservabilityAttribute,
-    ObservabilityContext,
     ObservabilityLevel,
     ObservabilityMetricKind,
 )
 
 # Import after other imports to avoid circular dependencies
-from haiway.context.presets import (
-    ContextPreset,
-    ContextPresetRegistryContext,
-)
-from haiway.context.state import ScopeState, StateContext
-from haiway.context.tasks import TaskGroupContext
-from haiway.context.variables import VariablesContext
-from haiway.types import Immutable
-from haiway.utils.collections import as_list
+from haiway.context.presets import ContextPresets, ContextPresetsRegistry
+from haiway.context.scope import ContextScope
+from haiway.context.state import ContextState
+from haiway.context.tasks import ContextTaskGroup
 from haiway.utils.stream import AsyncStream
 
 __all__ = ("ctx",)
 
 
-class ScopeContext(Immutable):
-    _identifier: ScopeIdentifier
-    _state: Collection[State]
-    _state_context: StateContext | None
-    _disposables: Disposables | None
-    _preset: ContextPreset | None
-    _preset_disposables: Disposables | None
-    _observability_context: ObservabilityContext
-    _task_group_context: TaskGroupContext | None
-    _events_context: EventsContext | None
-    _variables_context: VariablesContext
-
-    def __init__(
-        self,
-        name: str,
-        state: tuple[State, ...],
-        preset: ContextPreset | None,
-        disposables: Disposables | None,
-        observability: Observability | Logger | None,
-        isolated: bool,
-    ) -> None:
-        object.__setattr__(
-            self,
-            "_identifier",
-            ScopeIdentifier.scope(name),
-        )
-        # store explicit state separately for priority control
-        object.__setattr__(
-            self,
-            "_state",
-            state,
-        )
-        # placeholder for temporary, resolved state context
-        object.__setattr__(
-            self,
-            "_state_context",
-            None,
-        )
-        object.__setattr__(
-            self,
-            "_disposables",
-            disposables,
-        )
-        object.__setattr__(
-            self,
-            "_preset",
-            preset if preset is not None else ContextPresetRegistryContext.select(name),
-        )
-        object.__setattr__(
-            self,
-            "_preset_disposables",
-            None,
-        )
-        object.__setattr__(
-            self,
-            "_observability_context",
-            # pre-building observability context to ensure nested context registering
-            ObservabilityContext.scope(
-                self._identifier,
-                observability=observability,
-            ),
-        )
-        object.__setattr__(
-            self,
-            "_task_group_context",
-            TaskGroupContext() if self._identifier.is_root or isolated else None,
-        )
-        object.__setattr__(
-            self,
-            "_events_context",
-            EventsContext() if self._identifier.is_root else None,
-        )
-        object.__setattr__(
-            self,
-            "_variables_context",
-            VariablesContext(isolated=self._identifier.is_root or isolated),
-        )
-
-    async def __aenter__(self) -> str:
-        assert self._preset_disposables is None  # nosec: B101
-        assert self._state_context is None  # nosec: B101
-
-        self._identifier.__enter__()
-        self._observability_context.__enter__()
-
-        if self._task_group_context is not None:
-            await self._task_group_context.__aenter__()
-
-        if self._events_context is not None:
-            await self._events_context.__aenter__()
-
-        self._variables_context.__enter__()
-
-        # Collect all state sources in priority order (lowest to highest priority)
-        # 1. Add contextual state first (lowest priority)
-        collected_state: list[State] = as_list(StateContext.current_state())
-
-        # 2. Add preset state (low priority, overrides contextual)
-        if self._preset is not None:
-            preset_disposables: Disposables = await self._preset.prepare()
-            object.__setattr__(
-                self,
-                "_preset_disposables",
-                preset_disposables,
-            )
-            collected_state.extend(await preset_disposables.prepare())
-
-        # 3. Add explicit disposables state (medium priority)
-        if self._disposables is not None:
-            collected_state.extend(await self._disposables.prepare())
-
-        # 4. Add explicit state last (highest priority)
-        collected_state.extend(self._state)
-        # Create resolved state context with all collected state
-        resolved_state_context: StateContext = StateContext(
-            _state=ScopeState(tuple(collected_state))
-        )
-
-        resolved_state_context.__enter__()
-        object.__setattr__(
-            self,
-            "_state_context",
-            resolved_state_context,
-        )
-
-        return str(self._observability_context.observability.trace_identifying(self._identifier))
-
-    # TODO: we need to refactor this...
-    async def __aexit__(  # noqa: C901, PLR0912, PLR0915
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        assert self._state_context is not None  # nosec: B101
-
-        disposables_exception: BaseException | None = None
-        if self._disposables is not None:
-            try:
-                await self._disposables.dispose(
-                    exc_type=exc_type,
-                    exc_val=exc_val,
-                    exc_tb=exc_tb,
-                )
-
-            except BaseException as exc:
-                ObservabilityContext.record_log(
-                    ObservabilityLevel.ERROR,
-                    "Disposables context exit failed",
-                    exception=exc,
-                )
-                disposables_exception = exc
-
-        if self._preset_disposables is not None:
-            try:
-                await self._preset_disposables.dispose(
-                    exc_type=exc_type,
-                    exc_val=exc_val,
-                    exc_tb=exc_tb,
-                )
-
-            except Exception as exc:
-                ObservabilityContext.record_log(
-                    ObservabilityLevel.ERROR,
-                    "Disposables context exit failed",
-                    exception=exc,
-                )
-                if disposables_exception is None:
-                    disposables_exception = exc
-
-                elif isinstance(disposables_exception, Exception):
-                    disposables_exception = ExceptionGroup(
-                        "Disposables context exit failed",
-                        (disposables_exception, exc),
-                    )
-
-                else:
-                    disposables_exception = BaseExceptionGroup(
-                        "Disposables context exit failed",
-                        (disposables_exception, exc),
-                    )
-
-            except BaseException as exc:
-                ObservabilityContext.record_log(
-                    ObservabilityLevel.ERROR,
-                    "Disposables context exit failed",
-                    exception=exc,
-                )
-                if disposables_exception is None:
-                    disposables_exception = exc
-
-                else:
-                    disposables_exception = BaseExceptionGroup(
-                        "Disposables context exit failed",
-                        (disposables_exception, exc),
-                    )
-
-            finally:
-                object.__setattr__(
-                    self,
-                    "_preset_disposables",
-                    None,
-                )
-
-        try:
-            if self._task_group_context is not None:
-                await self._task_group_context.__aexit__(
-                    exc_type=exc_type,
-                    exc_val=exc_val,
-                    exc_tb=exc_tb,
-                )
-
-        except BaseException as exc:
-            ObservabilityContext.record_log(
-                ObservabilityLevel.ERROR,
-                "Task group context exit failed",
-                exception=exc,
-            )
-            raise
-
-        finally:
-            if self._events_context is not None:
-                try:
-                    await self._events_context.__aexit__(
-                        exc_type=exc_type,
-                        exc_val=exc_val,
-                        exc_tb=exc_tb,
-                    )
-
-                except BaseException as exc:
-                    ObservabilityContext.record_log(
-                        ObservabilityLevel.ERROR,
-                        "Events context exit failed",
-                        exception=exc,
-                    )
-
-            self._variables_context.__exit__(
-                exc_type=exc_type,
-                exc_val=exc_val,
-                exc_tb=exc_tb,
-            )
-
-            self._state_context.__exit__(
-                exc_type=exc_type,
-                exc_val=exc_val,
-                exc_tb=exc_tb,
-            )
-            object.__setattr__(
-                self,
-                "_state_context",
-                None,
-            )
-
-            self._observability_context.__exit__(
-                exc_type=exc_type,
-                exc_val=exc_val,
-                exc_tb=exc_tb,
-            )
-            self._identifier.__exit__(
-                exc_type=exc_type,
-                exc_val=exc_val,
-                exc_tb=exc_tb,
-            )
-
-        if disposables_exception is None:
-            return  # no additional excptions
-
-        if exc_val is None:
-            raise disposables_exception
-
-        if isinstance(exc_val, Exception) and isinstance(disposables_exception, Exception):
-            raise ExceptionGroup(
-                "Scope context exit failed",
-                (disposables_exception, exc_val),
-            )
-
-        else:
-            raise BaseExceptionGroup(
-                "Scope context exit failed",
-                (disposables_exception, exc_val),
-            )
-
-
-class DisposablesContext(Immutable):
-    _disposables: Disposables
-    _state_context: StateContext | None
-
-    def __init__(
-        self,
-        disposables: Disposables,
-    ) -> None:
-        object.__setattr__(
-            self,
-            "_disposables",
-            disposables,
-        )
-        object.__setattr__(
-            self,
-            "_state_context",
-            None,
-        )
-
-    async def __aenter__(self) -> None:
-        assert self._state_context is None  # nosec: B101
-        state_context: StateContext = StateContext.updated(await self._disposables.prepare())
-        state_context.__enter__()
-        object.__setattr__(
-            self,
-            "_state_context",
-            state_context,
-        )
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        assert self._state_context is not None  # nosec: B101
-        await self._disposables.dispose(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-        self._state_context.__exit__(
-            exc_type=exc_type,
-            exc_val=exc_val,
-            exc_tb=exc_tb,
-        )
-        object.__setattr__(
-            self,
-            "_state_context",
-            None,
-        )
-
-
-@final
+@final  # static methods namespace
 class ctx:
     """
     Static access to the current scope context.
-
-    Provides static methods for accessing and manipulating the current scope context,
-    including creating scopes, accessing state, logging, and task management.
-
-    This class is not meant to be instantiated; all methods are static.
     """
 
-    __slots__ = ()
-
     @staticmethod
-    def trace_id(
-        scope_identifier: ScopeIdentifier | None = None,
-    ) -> str:
+    def trace_id() -> str:
         """
-        Get the trace identifier for the specified scope or current scope.
+        Get the trace identifier of the current scope.
 
         The trace identifier is a unique identifier that can be used to correlate
         logs, events, and metrics across different components and services.
 
-        Parameters
-        ----------
-        scope_identifier: ScopeIdentifier | None, default=None
-            The scope identifier to get the trace ID for. If None, the current scope's
-            trace ID is returned.
-
         Returns
         -------
         str
-            The hexadecimal representation of the trace ID
-
-        Raises
-        ------
-        RuntimeError
-            If called outside of any scope context
+            The string representation of the current trace ID
         """
-        return ObservabilityContext.trace_id(scope_identifier)
+        return ContextObservability.trace_id()
 
     @staticmethod
     def presets(
-        *presets: ContextPreset,
+        *presets: ContextPresets,
     ) -> AbstractContextManager[None]:
         """
-        Create a context manager for a preset registry.
+        Create a context manager for the presets registry.
 
         This method creates a registry of context presets that can be used within
         nested scopes. Presets allow you to define reusable combinations of state
@@ -436,12 +73,11 @@ class ctx:
         creating scopes.
 
         Note: For single preset usage, consider passing the preset directly to
-        ctx.scope() using the preset parameter instead of using this registry.
-        Presets only work with async contexts.
+        ctx.scope() instead of using this registry.
 
         Parameters
         ----------
-        *presets: ContextPreset
+        *presets: ContextPresets
             Variable number of preset configurations to register. Each preset
             must have a unique name within the registry.
 
@@ -454,22 +90,21 @@ class ctx:
         --------
         Basic preset usage:
 
-        >>> from haiway import ctx, State
-        >>> from haiway.context import ContextPreset
+        >>> from haiway import ctx, State, ContextPresets
         >>>
         >>> class ApiConfig(State):
         ...     base_url: str
         ...     timeout: int = 30
         >>>
         >>> # Define presets
-        >>> dev_preset = ContextPreset(
-        ...     name="development",
-        ...     _state=[ApiConfig(base_url="https://dev-api.example.com")]
+        >>> dev_preset = ContextPresets.of(
+        ...     "development",
+        ...     ApiConfig(base_url="https://dev-api.example.com")
         ... )
         >>>
-        >>> prod_preset = ContextPreset(
-        ...     name="production",
-        ...     _state=[ApiConfig(base_url="https://api.example.com", timeout=60)]
+        >>> prod_preset = ContextPresets.of(
+        ...     "production",
+        ...     ApiConfig(base_url="https://api.example.com", timeout=60)
         ... )
         >>>
         >>> # Use presets
@@ -477,36 +112,15 @@ class ctx:
         ...     async with ctx.scope("development"):
         ...         config = ctx.state(ApiConfig)
         ...         assert config.base_url == "https://dev-api.example.com"
-
-        Nested preset registries:
-
-        >>> base_presets = [dev_preset, prod_preset]
-        >>> override_preset = ContextPreset(
-        ...     name="development",
-        ...     _state=[ApiConfig(base_url="https://staging.example.com")]
-        ... )
-        >>>
-        >>> with ctx.presets(*base_presets):
-        ...     # Outer registry has dev and prod presets
-        ...     with ctx.presets(override_preset):
-        ...         # Inner registry overrides dev preset
-        ...         async with ctx.scope("development"):
-        ...             config = ctx.state(ApiConfig)
-        ...             assert config.base_url == "https://staging.example.com"
-
-        See Also
-        --------
-        ContextPreset : For creating individual preset configurations
-        ctx.scope : For creating scopes that can use presets
         """
-        return ContextPresetRegistryContext(presets=presets)
+        return ContextPresetsRegistry(presets=presets)
 
     @staticmethod
     def scope(
-        scope: ContextPreset | str,
+        scope: ContextPresets | str,
         /,
         *state: State | None,
-        disposables: Disposables | Collection[Disposable] | None = None,
+        disposables: Iterable[Disposable | None] | None = None,
         observability: Observability | Logger | None = None,
         isolated: bool = False,
     ) -> AbstractAsyncContextManager[str]:
@@ -515,9 +129,6 @@ class ctx:
 
         When called within an existing context, it becomes nested with current context
         as its parent.
-
-        Note: Presets can only be used with async contexts. Synchronous contexts
-        do not support preset functionality.
 
         State Priority System
         ---------------------
@@ -533,7 +144,7 @@ class ctx:
 
         Parameters
         ----------
-        scope: ContextPreset | str
+        scope: ContextPresets | str
             Either a name of the scope context (can be associated with state presets with
             matching name from preset registry), or a context preset to be used directly
             within the scope context. When a preset is provided directly, its state and
@@ -543,7 +154,7 @@ class ctx:
             state propagated within the scope context, will be merged with current state by
             replacing current with provided on conflict.
 
-        disposables: Disposables | Collection[Disposable] | None
+        disposables: Iterable[Disposable | None] | None
             disposables consumed within the context when entered. Produced state will automatically
             be added to the scope state. Using asynchronous context is required if any disposables
             were provided.
@@ -554,81 +165,44 @@ class ctx:
             When not provided, logger with the scope name will be requested and used.
 
         isolated: bool = False
-            control if scope variables and task groupd will be isolated from parent.
-            When set to True, context will use separate TaskGroup and not propagate its variables
-            to the parent scope. Isolation do not affect events propagation within the context.
-            Root scope is always isolated.
+            control if scope inheritance and task group will be isolated from parent.
+            When set to True, context will use a separate TaskGroup and will not propagate its
+            context/state to the parent scope. Isolation does not affect event propagation within
+            the context. Root scope is always isolated.
 
         Returns
         -------
         AbstractAsyncContextManager[str]
             context manager object intended to enter the scope with.
             context manager will provide trace_id of current scope.
-
-        Examples
-        --------
-        Using a preset directly (new approach):
-
-        >>> from haiway import ctx, State
-        >>> from haiway.context import ContextPreset
-        >>>
-        >>> class ApiConfig(State):
-        ...     base_url: str
-        ...     timeout: int = 30
-        >>>
-        >>> api_preset = ContextPreset(
-        ...     name="api",
-        ...     state=[ApiConfig(base_url="https://api.example.com")]
-        ... )
-        >>>
-        >>> # Direct preset usage - pass preset instead of name
-        >>> async with ctx.scope(api_preset):
-        ...     config = ctx.state(ApiConfig)
-        ...     # Uses preset configuration
-        >>>
-        >>> # Override preset state with explicit state
-        >>> async with ctx.scope(api_preset, ApiConfig(timeout=60)):
-        ...     config = ctx.state(ApiConfig)
-        ...     # base_url from preset, timeout overridden to 60
-
-        Using preset registry with name lookup:
-
-        >>> # Multiple presets registered
-        >>> with ctx.presets(dev_preset, prod_preset):
-        ...     async with ctx.scope("development"):  # Matches dev_preset by name
-        ...         config = ctx.state(ApiConfig)
-
-        See Also
-        --------
-        ctx.presets : For registering multiple presets by name
-        ContextPreset : For creating preset configurations
         """
 
         name: str
-        preset: ContextPreset | None
-        if isinstance(scope, ContextPreset):
+        presets: ContextPresets | None
+        if isinstance(scope, ContextPresets):
             name = scope.name
-            preset = scope
+            presets = scope
 
         else:
             name = scope
-            preset = None
+            presets = None
 
-        resolved_disposables: Disposables | None
+        context_disposables: ContextDisposables
         if disposables is None:
-            resolved_disposables = None
-
-        elif isinstance(disposables, Disposables):
-            resolved_disposables = disposables
+            context_disposables = ContextDisposables.of(
+                DisposableState.of(*(element for element in state if element is not None))
+            )
 
         else:
-            resolved_disposables = Disposables(disposables)
+            context_disposables = ContextDisposables.of(
+                *disposables,
+                DisposableState.of(*(element for element in state if element is not None)),
+            )
 
-        return ScopeContext(
+        return ContextScope(
             name=name,
-            state=tuple(element for element in state if element is not None),
-            preset=preset,
-            disposables=resolved_disposables,
+            presets=presets,
+            disposables=context_disposables,
             observability=observability,
             isolated=isolated,
         )
@@ -641,7 +215,7 @@ class ctx:
         Update scope context with given state.
 
         When called within an existing context, it becomes nested with current
-        context as its predecessor.
+        context as its parent.
 
         Parameters
         ----------
@@ -655,7 +229,7 @@ class ctx:
             context manager object intended to enter updated state context with it
         """
 
-        return StateContext.updated(element for element in state if element is not None)
+        return ContextState.updated(state)
 
     @staticmethod
     def disposables(
@@ -696,11 +270,7 @@ class ctx:
         ...         await conn_state.connection.execute("SELECT 1")
         """
 
-        return DisposablesContext(
-            disposables=Disposables(
-                tuple(disposable for disposable in disposables if disposable is not None)
-            )
-        )
+        return Disposables(disposables)
 
     @overload
     @staticmethod
@@ -747,7 +317,7 @@ class ctx:
             task for tracking function execution and result
         """
 
-        return TaskGroupContext.run(coro, *args, **kwargs)
+        return ContextTaskGroup.run(coro, *args, **kwargs)
 
     @overload
     @staticmethod
@@ -792,7 +362,7 @@ class ctx:
             task for tracking function execution and result
         """
 
-        return TaskGroupContext.background_run(coro, *args, **kwargs)
+        return ContextTaskGroup.background_run(coro, *args, **kwargs)
 
     @staticmethod
     def stream[Element, **Arguments](
@@ -806,8 +376,8 @@ class ctx:
 
         Parameters
         ----------
-        source: Callable[Arguments, AsyncGenerator[Result, None]]
-            generator streamed as the result
+        source: Callable[Arguments, AsyncGenerator[Element]]
+            async generator used as the stream source
 
         *args: Arguments.args
             positional arguments passed to generator call
@@ -817,8 +387,8 @@ class ctx:
 
         Returns
         -------
-        AsyncIterable[Result]
-            iterator for accessing generated results
+        AsyncIterable[Element]
+            iterator for accessing generated elements
         """
 
         output_stream = AsyncStream[Element]()
@@ -836,7 +406,7 @@ class ctx:
                 else:
                     output_stream.finish()
 
-        TaskGroupContext.run(stream)
+        ContextTaskGroup.run(stream)
         return output_stream
 
     @staticmethod
@@ -852,8 +422,9 @@ class ctx:
         CancelledError
             If the current task has been cancelled
         """
+        task: Task[Any] | None = current_task()
 
-        if (task := current_task()) and task.cancelled():
+        if task is not None and task.cancelling():
             raise CancelledError()
 
     @staticmethod
@@ -870,42 +441,34 @@ class ctx:
             If called outside of an asyncio task
         """
 
-        if task := current_task():
+        task: Task[Any] | None = current_task()
+        if task is not None:
             task.cancel()
 
         else:
             raise RuntimeError("Attempting to cancel context out of asyncio task")
 
     @staticmethod
-    def check_state[StateType: State](
+    def contains_state[StateType: State](
         state: type[StateType],
         /,
-        *,
-        instantiate_defaults: bool = False,
     ) -> bool:
         """
         Check if state object is available in the current context.
 
-        Verifies if state object of the specified type is available the current context.
-        Instantiates requested state if needed and possible.
+        Verifies if state object of the specified type is available in the current context.
 
         Parameters
         ----------
         state: type[StateType]
             The type of state to check
 
-        instantiate_defaults: bool = False
-            Control if default value should be instantiated during check.
-
         Returns
         -------
         bool
             True if state is available, otherwise False.
         """
-        return StateContext.check_state(
-            state,
-            instantiate_defaults=instantiate_defaults,
-        )
+        return ContextState.contains(state)
 
     @staticmethod
     def state[StateType: State](
@@ -935,9 +498,9 @@ class ctx:
 
         Raises
         ------
-        RuntimeError
+        ContextMissing
             If called outside of any scope context
-        TypeError
+        ContextStateMissing
             If no state is found and no default can be created
 
         Examples
@@ -969,14 +532,15 @@ class ctx:
         ...         config = ctx.state(DatabaseConfig)
         ...         # Use config to connect to database
         """
-        return StateContext.state(
+        return ContextState.state(
             state,
             default=default,
         )
 
     @staticmethod
     def send(
-        payload: State,
+        event: State,
+        /,
     ) -> None:
         """
         Send an event to all active subscribers within the current context.
@@ -986,13 +550,13 @@ class ctx:
 
         Parameters
         ----------
-        payload : State
+        event : State
             The event payload to send. Must be a State instance.
 
         Raises
         ------
-        MissingContext
-            If called outside of an EventsContext
+        ContextMissing
+            If called outside of an ContextEvents
 
         Examples
         --------
@@ -1007,17 +571,13 @@ class ctx:
         >>> async def process_order():
         ...     # Send event after order creation
         ...     ctx.send(OrderCreated(order_id="12345", amount=99.99))
-
-        See Also
-        --------
-        ctx.subscribe : For subscribing to events
         """
-        EventsContext.send(payload)
+        ContextEvents.send(event)
 
     @staticmethod
-    def subscribe[Payload: State](
-        payload_type: type[Payload],
-    ) -> EventSubscription[Payload]:
+    def subscribe[Event: State](
+        event: type[Event],
+    ) -> EventsSubscription[Event]:
         """
         Subscribe to events of a specific type within the current context.
 
@@ -1026,18 +586,13 @@ class ctx:
 
         Parameters
         ----------
-        payload_type : type[Payload]
+        event : type[Event]
             The State type to subscribe to. Must be a State class.
 
         Returns
         -------
-        EventSubscription[Payload]
+        EventsSubscription[Event]
             An async iterator that yields events of the specified type
-
-        Raises
-        ------
-        MissingContext
-            If called outside of an EventsContext
 
         Examples
         --------
@@ -1067,146 +622,9 @@ class ctx:
         See Also
         --------
         ctx.send : For sending events
-        EventSubscription : The subscription iterator
+        EventsSubscription : The subscription iterator
         """
-        return EventsContext.subscribe(payload_type)
-
-    @overload
-    @staticmethod
-    def variable(
-        variable: State,
-        /,
-    ) -> None: ...
-
-    @overload
-    @staticmethod
-    def variable[Variable: State](
-        variable: type[Variable],
-        /,
-    ) -> Variable | None: ...
-
-    @overload
-    @staticmethod
-    def variable[Variable: State](
-        variable: type[Variable],
-        /,
-        *,
-        default: Variable,
-    ) -> Variable: ...
-
-    @staticmethod
-    def variable[Variable: State](
-        variable: type[Variable] | State,
-        /,
-        *,
-        default: Variable | None = None,
-    ) -> Variable | None:
-        """
-        Get or set a mutable context-local variable in the current scope.
-
-        Context variables provide a way to store and retrieve mutable state that is
-        strictly local to the current execution context. Unlike regular state (accessed
-        via ctx.state()), context variables are mutable within their scope and propagate
-        changes to parent scopes when the current scope exits.
-
-        This method has two modes:
-        - **Set mode**: Pass a State instance to set/update a variable
-        - **Get mode**: Pass a State type to retrieve a variable
-
-        Important: Variables are NOT inherited from parent scopes. Each scope starts
-        with no variables unless explicitly set. This prevents issues with stale data
-        and ensures predictable behavior.
-
-        Parameters
-        ----------
-        variable : type[Variable] | State
-            Either a State type to retrieve a variable, or a State instance to set
-        default : Variable | None, optional
-            Default value to return if the variable is not set in the current scope.
-            Only used in get mode. If None (default), returns None when variable is not found.
-
-        Returns
-        -------
-        Variable | None
-            In get mode: The current value of the context variable or default/None if not set
-            In set mode: None (returns nothing)
-
-        Raises
-        ------
-        MissingContext
-            If called outside of any scope context
-
-        Examples
-        --------
-        Basic usage:
-
-        >>> from haiway import ctx, State
-        >>>
-        >>> class Counter(State):
-        ...     value: int = 0
-        >>>
-        >>> async def track_operations():
-        ...     # Set a variable (pass instance)
-        ...     ctx.variable(Counter(value=0))
-        ...
-        ...     # Get the variable (pass type)
-        ...     counter = ctx.variable(Counter)
-        ...     print(f"Current: {counter.value}")  # Current: 0
-        ...
-        ...     # Update the variable
-        ...     ctx.variable(counter.updated(value=counter.value + 1))
-
-        Using defaults:
-
-        >>> async def increment():
-        ...     # Get with default if not set
-        ...     counter = ctx.variable(Counter, default=Counter())
-        ...
-        ...     # Increment and update
-        ...     ctx.variable(counter.updated(value=counter.value + 1))
-
-        Scope isolation and propagation:
-
-        >>> async def outer():
-        ...     ctx.variable(Counter(value=10))  # Set in parent
-        ...
-        ...     async with ctx.scope("inner"):
-        ...         # Inner scope does NOT inherit parent's variable
-        ...         counter = ctx.variable(Counter)  # None - not set in inner
-        ...
-        ...         # Set variable in inner scope
-        ...         ctx.variable(Counter(value=20))
-        ...
-        ...     # After inner scope exits, inner's variables propagate to parent
-        ...     counter = ctx.variable(Counter)  # value = 20 (overwritten by inner)
-
-        Task isolation:
-
-        >>> async def worker():
-        ...     # Spawned tasks have isolated variable contexts
-        ...     counter = ctx.variable(Counter)  # Always None in spawned tasks
-        ...     ctx.variable(Counter(value=100))  # Won't affect parent
-        >>>
-        >>> async def main():
-        ...     ctx.variable(Counter(value=0))  # Set in main
-        ...     await ctx.spawn(worker)  # Task runs with isolated variables
-        ...     counter = ctx.variable(Counter)  # Still 0, unaffected by task
-
-        See Also
-        --------
-        ctx.state : For immutable state that doesn't propagate changes
-        """
-        if isinstance(variable, type):
-            current: Variable | None = VariablesContext.get(variable)
-            if current is None:
-                return default
-
-            else:
-                return current
-
-        else:
-            assert default is None  # nosec: B101
-            VariablesContext.set(variable)
+        return ContextEvents.subscribe(event)
 
     @staticmethod
     def log_error(
@@ -1214,7 +632,6 @@ class ctx:
         /,
         *args: Any,
         exception: BaseException | None = None,
-        **extra: Any,
     ) -> None:
         """
         Log using ERROR level within current scope context.
@@ -1237,12 +654,11 @@ class ctx:
         None
         """
 
-        ObservabilityContext.record_log(
+        ContextObservability.record_log(
             ObservabilityLevel.ERROR,
             message,
             *args,
             exception=exception,
-            **extra,
         )
 
     @staticmethod
@@ -1251,7 +667,6 @@ class ctx:
         /,
         *args: Any,
         exception: Exception | None = None,
-        **extra: Any,
     ) -> None:
         """
         Log using WARNING level within current scope context.
@@ -1266,7 +681,7 @@ class ctx:
         *args: Any
             message format arguments
 
-        exception: BaseException | None = None
+        exception: Exception | None = None
             exception associated with log, when provided full stack trace will be recorded
 
         Returns
@@ -1274,12 +689,11 @@ class ctx:
         None
         """
 
-        ObservabilityContext.record_log(
+        ContextObservability.record_log(
             ObservabilityLevel.WARNING,
             message,
             *args,
             exception=exception,
-            **extra,
         )
 
     @staticmethod
@@ -1287,7 +701,6 @@ class ctx:
         message: str,
         /,
         *args: Any,
-        **extra: Any,
     ) -> None:
         """
         Log using INFO level within current scope context.
@@ -1307,12 +720,11 @@ class ctx:
         None
         """
 
-        ObservabilityContext.record_log(
+        ContextObservability.record_log(
             ObservabilityLevel.INFO,
             message,
             *args,
             exception=None,
-            **extra,
         )
 
     @staticmethod
@@ -1321,7 +733,6 @@ class ctx:
         /,
         *args: Any,
         exception: Exception | None = None,
-        **extra: Any,
     ) -> None:
         """
         Log using DEBUG level within current scope context.
@@ -1336,7 +747,7 @@ class ctx:
         *args: Any
             message format arguments
 
-        exception: BaseException | None = None
+        exception: Exception | None = None
             exception associated with log, when provided full stack trace will be recorded
 
         Returns
@@ -1344,12 +755,11 @@ class ctx:
         None
         """
 
-        ObservabilityContext.record_log(
+        ContextObservability.record_log(
             ObservabilityLevel.DEBUG,
             message,
             *args,
             exception=exception,
-            **extra,
         )
 
     @overload
@@ -1390,7 +800,7 @@ class ctx:
     ) -> None:
         if event is not None:
             assert metric is None  # nosec: B101
-            ObservabilityContext.record_event(
+            ContextObservability.record_event(
                 ObservabilityLevel.ERROR,
                 event,
                 attributes=attributes or {},
@@ -1400,7 +810,7 @@ class ctx:
             assert event is None  # nosec: B101
             assert value is not None  # nosec: B101
             assert kind is not None  # nosec: B101
-            ObservabilityContext.record_metric(
+            ContextObservability.record_metric(
                 ObservabilityLevel.ERROR,
                 metric,
                 value=value,
@@ -1410,7 +820,7 @@ class ctx:
             )
 
         else:
-            ObservabilityContext.record_attributes(
+            ContextObservability.record_attributes(
                 ObservabilityLevel.ERROR,
                 attributes=attributes or {},
             )
@@ -1453,7 +863,7 @@ class ctx:
     ) -> None:
         if event is not None:
             assert metric is None  # nosec: B101
-            ObservabilityContext.record_event(
+            ContextObservability.record_event(
                 ObservabilityLevel.WARNING,
                 event,
                 attributes=attributes or {},
@@ -1463,7 +873,7 @@ class ctx:
             assert event is None  # nosec: B101
             assert value is not None  # nosec: B101
             assert kind is not None  # nosec: B101
-            ObservabilityContext.record_metric(
+            ContextObservability.record_metric(
                 ObservabilityLevel.WARNING,
                 metric,
                 value=value,
@@ -1473,7 +883,7 @@ class ctx:
             )
 
         else:
-            ObservabilityContext.record_attributes(
+            ContextObservability.record_attributes(
                 ObservabilityLevel.WARNING,
                 attributes=attributes or {},
             )
@@ -1516,7 +926,7 @@ class ctx:
     ) -> None:
         if event is not None:
             assert metric is None  # nosec: B101
-            ObservabilityContext.record_event(
+            ContextObservability.record_event(
                 ObservabilityLevel.INFO,
                 event,
                 attributes=attributes or {},
@@ -1526,7 +936,7 @@ class ctx:
             assert event is None  # nosec: B101
             assert value is not None  # nosec: B101
             assert kind is not None  # nosec: B101
-            ObservabilityContext.record_metric(
+            ContextObservability.record_metric(
                 ObservabilityLevel.INFO,
                 metric,
                 value=value,
@@ -1536,7 +946,7 @@ class ctx:
             )
 
         else:
-            ObservabilityContext.record_attributes(
+            ContextObservability.record_attributes(
                 ObservabilityLevel.INFO,
                 attributes=attributes or {},
             )
@@ -1579,7 +989,7 @@ class ctx:
     ) -> None:
         if event is not None:
             assert metric is None  # nosec: B101
-            ObservabilityContext.record_event(
+            ContextObservability.record_event(
                 ObservabilityLevel.DEBUG,
                 event,
                 attributes=attributes or {},
@@ -1589,7 +999,7 @@ class ctx:
             assert event is None  # nosec: B101
             assert value is not None  # nosec: B101
             assert kind is not None  # nosec: B101
-            ObservabilityContext.record_metric(
+            ContextObservability.record_metric(
                 ObservabilityLevel.DEBUG,
                 metric,
                 value=value,
@@ -1599,7 +1009,12 @@ class ctx:
             )
 
         else:
-            ObservabilityContext.record_attributes(
+            ContextObservability.record_attributes(
                 ObservabilityLevel.DEBUG,
                 attributes=attributes or {},
             )
+
+    __slots__ = ()
+
+    def __init__(self) -> NoReturn:
+        raise RuntimeError("ctx instantiation is forbidden")

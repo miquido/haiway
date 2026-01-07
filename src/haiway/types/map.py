@@ -43,7 +43,7 @@ class Map[Key, Element](dict[Key, Element]):
         value: object,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be modified"
         )
 
@@ -52,7 +52,7 @@ class Map[Key, Element](dict[Key, Element]):
         name: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be deleted"
         )
 
@@ -62,7 +62,7 @@ class Map[Key, Element](dict[Key, Element]):
         value: Element,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" item - '{key}' cannot be modified"
         )
 
@@ -71,8 +71,7 @@ class Map[Key, Element](dict[Key, Element]):
         key: Key,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" item - '{key}' cannot be deleted"
+            f"Can't modify immutable {self.__class__.__qualname__} item - '{key}' cannot be deleted"
         )
 
     def clear(self) -> None:

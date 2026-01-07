@@ -4,9 +4,8 @@ Haiway is a framework designed to facilitate the development of applications usi
 programming paradigm combined with structured concurrency concepts. Unlike traditional
 object-oriented frameworks, Haiway emphasizes immutability, pure functions, and context-based state
 management, enabling developers to build scalable and maintainable applications. By leveraging
-context managers combined with context variables, Haiway ensures safe state propagation in
-concurrent environments and simplifies dependency injection through function implementation
-propagation.
+context managers with scoped state, Haiway ensures safe state propagation in concurrent environments
+and simplifies dependency injection through function implementation propagation.
 
 ### Functional Basics
 
@@ -293,15 +292,13 @@ async with ctx.scope("example", file_notes(), NotesDirectory(path="./examples/no
 You can also package the implementation and state together using context presets:
 
 ```python
-from haiway.context import ContextPreset
+from haiway.context import ContextPresets
 
 # Create a preset that combines implementation and configuration
-notes_preset = ContextPreset(
-    name="file_notes",
-    state=[
-        file_notes(),
-        NotesDirectory(path="./examples/")
-    ]
+notes_preset = ContextPresets.of(
+    "file_notes",
+    file_notes(),
+    NotesDirectory(path="./examples/"),
 )
 
 # Use the preset directly

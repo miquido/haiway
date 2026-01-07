@@ -6,7 +6,7 @@ from pytest import mark, raises
 
 from haiway import State, ctx
 from haiway.context.disposables import Disposable
-from haiway.context.presets import ContextPreset, ContextPresetRegistryContext
+from haiway.context.presets import ContextPresets, ContextPresetsRegistry
 
 
 # Test state classes
@@ -48,15 +48,15 @@ def create_connection_disposable(name: str) -> Disposable:
 
 def test_preset_creation():
     """Test creating a preset with state."""
-    preset = ContextPreset(
-        name="test",
-        state=[ConfigState(api_url="https://api.test.com")],
+    preset = ContextPresets.of(
+        "test",
+        ConfigState(api_url="https://api.test.com"),
     )
     assert preset.name == "test"
 
 
 def test_preset_with_state():
-    preset = ContextPreset(name="test")
+    preset = ContextPresets.of("test")
     updated = preset.with_state(
         ConfigState(api_url="https://api.test.com"),
         DatabaseState(connection_string="sqlite:///:memory:"),
@@ -67,25 +67,25 @@ def test_preset_with_state():
 
 
 def test_preset_with_disposable():
-    preset = ContextPreset(name="test")
+    preset = ContextPresets.of("test")
 
-    async def connection_factory() -> Disposable:
+    def connection_factory() -> Disposable:
         return create_connection_disposable("test")
 
-    updated = preset.with_disposable(connection_factory)
+    updated = preset.with_disposables(connection_factory)
     assert updated.name == "test"
     assert preset is not updated  # Immutable
 
 
 def test_preset_extended():
-    base = ContextPreset(
-        name="base",
-        state=[ConfigState(api_url="https://api.test.com")],
+    base = ContextPresets.of(
+        "base",
+        ConfigState(api_url="https://api.test.com"),
     )
 
-    extension = ContextPreset(
-        name="extended",
-        state=[DatabaseState(connection_string="sqlite:///:memory:")],
+    extension = ContextPresets.of(
+        "extended",
+        DatabaseState(connection_string="sqlite:///:memory:"),
     )
 
     combined = base.extended(extension)
@@ -96,19 +96,18 @@ def test_preset_extended():
 
 @mark.asyncio
 async def test_preset_prepare_with_static_state():
-    preset = ContextPreset(
-        name="test",
-        state=[
-            ConfigState(api_url="https://api.test.com"),
-            DatabaseState(connection_string="sqlite:///:memory:"),
-        ],
+    preset = ContextPresets.of(
+        "test",
+        ConfigState(api_url="https://api.test.com"),
+        DatabaseState(connection_string="sqlite:///:memory:"),
     )
 
-    disposables = await preset.prepare()
-    states = await disposables.prepare()
+    disposables = preset.resolve()
+    async with disposables as states_iter:
+        states = list(states_iter)
 
     # Should have 2 states wrapped in DisposableState
-    assert len(list(states)) == 2
+    assert len(states) == 2
     state_types = {type(s) for s in states}
     assert ConfigState in state_types
     assert DatabaseState in state_types
@@ -123,22 +122,24 @@ async def test_preset_prepare_with_state_factory():
         call_count += 1
         return ConfigState(api_url=f"https://api{call_count}.test.com")
 
-    preset = ContextPreset(
-        name="test",
-        state=[state_factory],
+    preset = ContextPresets.of(
+        "test",
+        state_factory,
     )
 
     # First prepare
-    disposables1 = await preset.prepare()
-    states1 = list(await disposables1.prepare())
+    disposables1 = preset.resolve()
+    async with disposables1 as states1_iter:
+        states1 = list(states1_iter)
     assert len(states1) == 1
     assert states1[0].api_url == "https://api1.test.com"
 
     assert call_count == 1
 
     # Second prepare - should create new instance
-    disposables2 = await preset.prepare()
-    states2 = list(await disposables2.prepare())
+    disposables2 = preset.resolve()
+    async with disposables2 as states2_iter:
+        states2 = list(states2_iter)
     assert len(states2) == 1
     assert states2[0].api_url == "https://api2.test.com"
 
@@ -154,13 +155,14 @@ async def test_preset_prepare_with_multiple_states_factory():
             CacheState(ttl=7200),
         ]
 
-    preset = ContextPreset(
-        name="test",
-        state=[multistate_factory],
+    preset = ContextPresets.of(
+        "test",
+        multistate_factory,
     )
 
-    disposables = await preset.prepare()
-    states = list(await disposables.prepare())
+    disposables = preset.resolve()
+    async with disposables as states_iter:
+        states = list(states_iter)
 
     assert len(states) == 3
     state_types = {type(s) for s in states}
@@ -169,46 +171,51 @@ async def test_preset_prepare_with_multiple_states_factory():
 
 @mark.asyncio
 async def test_preset_prepare_with_disposables():
-    async def connection_factory() -> Disposable:
+    def connection_factory() -> Disposable:
         return create_connection_disposable("test")
 
-    preset = ContextPreset(
-        name="test",
-        disposables=[connection_factory],
+    preset = ContextPresets.of(
+        "test",
+        disposables=(connection_factory,),
     )
 
-    disposables = await preset.prepare()
-
     # Use the disposables in a scope to get state
-    async with ctx.scope("test_scope", disposables=disposables):
-        # Connection should be available in context
-        conn_state = ctx.state(ConnectionState)
-        assert conn_state.name == "test"
-        assert not conn_state.closed
+    disposables = preset.resolve()
+    async with disposables as states:
+        async with ctx.scope("test_scope", *states):
+            # Connection should be available in context
+            conn_state = ctx.state(ConnectionState)
+            assert conn_state.name == "test"
+            assert not conn_state.closed
 
 
 @mark.asyncio
 async def test_preset_prepare_with_multiple_disposables():
-    async def connection1_factory() -> Disposable:
+    def connection1_factory() -> Disposable:
         return create_connection_disposable("conn1")
 
-    async def connection2_factory() -> Disposable:
+    def connection2_factory() -> Disposable:
         return create_connection_disposable("conn2")
 
-    # Factory returning multiple disposables
-    async def multi_disposable_factory() -> Iterable[Disposable]:
-        return [
-            create_connection_disposable("conn3"),
-            create_connection_disposable("conn4"),
-        ]
+    def connection3_factory() -> Disposable:
+        return create_connection_disposable("conn3")
 
-    preset = ContextPreset(
-        name="test",
-        disposables=[connection1_factory, connection2_factory, multi_disposable_factory],
+    def connection4_factory() -> Disposable:
+        return create_connection_disposable("conn4")
+
+    preset = ContextPresets.of(
+        "test",
+        disposables=(
+            connection1_factory,
+            connection2_factory,
+            connection3_factory,
+            connection4_factory,
+        ),
     )
 
-    disposables = await preset.prepare()
-    states = list(await disposables.prepare())
+    disposables = preset.resolve()
+    async with disposables as states_iter:
+        states = list(states_iter)
 
     # Should have 4 ConnectionState instances
     assert len(states) == 4
@@ -220,40 +227,40 @@ async def test_preset_prepare_with_multiple_disposables():
 
 @mark.asyncio
 async def test_preset_prepare_mixed_state_and_disposables():
-    async def connection_factory() -> Disposable:
+    def connection_factory() -> Disposable:
         return create_connection_disposable("test")
 
-    preset = ContextPreset(
-        name="test",
-        state=[ConfigState(api_url="https://api.test.com")],
-        disposables=[connection_factory],
+    preset = ContextPresets.of(
+        "test",
+        ConfigState(api_url="https://api.test.com"),
+        disposables=(connection_factory,),
     )
-
-    disposables = await preset.prepare()
 
     # The preset should have wrapped state in DisposableState
     # plus the connection disposable
-    async with ctx.scope("test_scope", disposables=disposables):
-        # Both states should be available
-        config = ctx.state(ConfigState)
-        assert config.api_url == "https://api.test.com"
+    disposables = preset.resolve()
+    async with disposables as states:
+        async with ctx.scope("test_scope", *states):
+            # Both states should be available
+            config = ctx.state(ConfigState)
+            assert config.api_url == "https://api.test.com"
 
-        conn = ctx.state(ConnectionState)
-        assert conn.name == "test"
+            conn = ctx.state(ConnectionState)
+            assert conn.name == "test"
 
 
 def test_registry_creation():
-    preset1 = ContextPreset(name="db", state=[DatabaseState(connection_string="test")])
-    preset2 = ContextPreset(name="cache", state=[CacheState()])
+    preset1 = ContextPresets.of("db", DatabaseState(connection_string="test"))
+    preset2 = ContextPresets.of("cache", CacheState())
 
-    with ContextPresetRegistryContext([preset1, preset2]):
-        assert ContextPresetRegistryContext.select("db") is preset1
-        assert ContextPresetRegistryContext.select("cache") is preset2
-        assert ContextPresetRegistryContext.select("unknown") is None
+    with ContextPresetsRegistry([preset1, preset2]):
+        assert ContextPresetsRegistry.select("db") is preset1
+        assert ContextPresetsRegistry.select("cache") is preset2
+        assert ContextPresetsRegistry.select("unknown") is None
 
 
 def test_registry_immutable():
-    registry = ContextPresetRegistryContext([])
+    registry = ContextPresetsRegistry([])
 
     with raises(AttributeError):
         registry._presets = {}  # type: ignore
@@ -264,9 +271,9 @@ def test_registry_immutable():
 
 @mark.asyncio
 async def test_scope_with_preset():
-    preset = ContextPreset(
-        name="test",
-        state=[ConfigState(api_url="https://api.test.com")],
+    preset = ContextPresets.of(
+        "test",
+        ConfigState(api_url="https://api.test.com"),
     )
 
     with ctx.presets(preset):
@@ -277,9 +284,9 @@ async def test_scope_with_preset():
 
 @mark.asyncio
 async def test_scope_preset_with_override():
-    preset = ContextPreset(
-        name="test",
-        state=[ConfigState(api_url="https://api.test.com", timeout=30)],
+    preset = ContextPresets.of(
+        "test",
+        ConfigState(api_url="https://api.test.com", timeout=30),
     )
 
     with ctx.presets(preset):
@@ -297,6 +304,26 @@ async def test_scope_preset_not_found():
 
 
 @mark.asyncio
+async def test_scope_preset_overrides_parent_state():
+    parent = ConfigState(api_url="https://parent.com", timeout=10)
+    preset = ContextPresets.of(
+        "child",
+        ConfigState(api_url="https://preset.com", timeout=20),
+        CacheState(ttl=1200),
+    )
+
+    async with ctx.scope("parent", parent):
+        with ctx.presets(preset):
+            async with ctx.scope("child"):
+                config = ctx.state(ConfigState)
+                cache = ctx.state(CacheState)
+
+                assert config.api_url == "https://preset.com"
+                assert config.timeout == 20
+                assert cache.ttl == 1200
+
+
+@mark.asyncio
 async def test_preset_with_async_state_factory():
     fetch_count = 0
 
@@ -307,9 +334,9 @@ async def test_preset_with_async_state_factory():
         await asyncio.sleep(0.01)
         return ConfigState(api_url=f"https://api{fetch_count}.test.com")
 
-    preset = ContextPreset(
-        name="dynamic",
-        state=[fetch_config],
+    preset = ContextPresets.of(
+        "dynamic",
+        fetch_config,
     )
 
     with ctx.presets(preset):
@@ -330,7 +357,7 @@ async def test_preset_with_async_state_factory():
 async def test_preset_with_disposable_lifecycle():
     connections = []
 
-    async def tracked_connection_factory() -> Disposable:
+    def tracked_connection_factory() -> Disposable:
         @asynccontextmanager
         async def disposable():
             conn_name = f"conn{len(connections)}"
@@ -347,9 +374,9 @@ async def test_preset_with_disposable_lifecycle():
 
         return disposable()
 
-    preset = ContextPreset(
-        name="connections",
-        disposables=[tracked_connection_factory],
+    preset = ContextPresets.of(
+        "connections",
+        disposables=(tracked_connection_factory,),
     )
 
     with ctx.presets(preset):
@@ -371,19 +398,19 @@ async def test_preset_with_disposable_lifecycle():
 
 @mark.asyncio
 async def test_nested_preset_registries():
-    preset1 = ContextPreset(
-        name="outer",
-        state=[ConfigState(api_url="https://outer.com")],
+    preset1 = ContextPresets.of(
+        "outer",
+        ConfigState(api_url="https://outer.com"),
     )
 
-    preset2 = ContextPreset(
-        name="inner",
-        state=[ConfigState(api_url="https://inner.com")],
+    preset2 = ContextPresets.of(
+        "inner",
+        ConfigState(api_url="https://inner.com"),
     )
 
-    preset3 = ContextPreset(
-        name="outer",  # Same name as preset1
-        state=[ConfigState(api_url="https://inner-override.com")],
+    preset3 = ContextPresets.of(
+        "outer",  # Same name as preset1
+        ConfigState(api_url="https://inner-override.com"),
     )
 
     with ctx.presets(preset1):
@@ -420,17 +447,15 @@ async def test_preset_with_mixed_state_sources():
             CacheState(ttl=1800),
         ]
 
-    async def connection_factory() -> Disposable:
+    def connection_factory() -> Disposable:
         return create_connection_disposable("preset-conn")
 
-    preset = ContextPreset(
-        name="mixed",
-        state=[
-            ConfigState(api_url="https://static.com"),  # Static
-            dynamic_config,  # Async factory
-            multistate,  # Multi-state factory
-        ],
-        disposables=[connection_factory],
+    preset = ContextPresets.of(
+        "mixed",
+        ConfigState(api_url="https://static.com"),  # Static
+        dynamic_config,  # Async factory
+        multistate,  # Multi-state factory
+        disposables=(connection_factory,),
     )
 
     with ctx.presets(preset):
@@ -452,9 +477,9 @@ async def test_preset_with_mixed_state_sources():
 
 @mark.asyncio
 async def test_direct_preset_parameter():
-    preset = ContextPreset(
-        name="test",
-        state=[ConfigState(api_url="https://direct.com", timeout=45)],
+    preset = ContextPresets.of(
+        "test",
+        ConfigState(api_url="https://direct.com", timeout=45),
     )
 
     # Direct preset usage
@@ -466,12 +491,10 @@ async def test_direct_preset_parameter():
 
 @mark.asyncio
 async def test_direct_preset_with_explicit_state_override():
-    preset = ContextPreset(
-        name="test",
-        state=[
-            ConfigState(api_url="https://preset.com", timeout=30),
-            DatabaseState(connection_string="preset-db"),
-        ],
+    preset = ContextPresets.of(
+        "test",
+        ConfigState(api_url="https://preset.com", timeout=30),
+        DatabaseState(connection_string="preset-db"),
     )
 
     # Explicit state should override preset state
@@ -492,15 +515,15 @@ async def test_direct_preset_with_explicit_state_override():
 async def test_direct_preset_with_disposables():
     call_count = 0
 
-    async def create_disposable():
+    def create_disposable() -> Disposable:
         nonlocal call_count
         call_count += 1
         return create_connection_disposable(f"conn{call_count}")
 
-    preset = ContextPreset(
-        name="test",
-        state=[ConfigState(api_url="https://preset.com")],
-        disposables=[create_disposable],
+    preset = ContextPresets.of(
+        "test",
+        ConfigState(api_url="https://preset.com"),
+        disposables=(create_disposable,),
     )
 
     async with ctx.scope(preset):
@@ -517,14 +540,14 @@ async def test_direct_preset_with_disposables():
 
 @mark.asyncio
 async def test_direct_preset_vs_registry():
-    registry_preset = ContextPreset(
-        name="main",  # Same name as scope
-        state=[ConfigState(api_url="https://registry.com")],
+    registry_preset = ContextPresets.of(
+        "main",  # Same name as scope
+        ConfigState(api_url="https://registry.com"),
     )
 
-    direct_preset = ContextPreset(
-        name="different",
-        state=[ConfigState(api_url="https://direct.com")],
+    direct_preset = ContextPresets.of(
+        "different",
+        ConfigState(api_url="https://direct.com"),
     )
 
     # Registry preset would normally be selected by name
@@ -537,9 +560,9 @@ async def test_direct_preset_vs_registry():
 
 @mark.asyncio
 async def test_direct_preset_none_falls_back_to_registry():
-    registry_preset = ContextPreset(
-        name="fallback",
-        state=[ConfigState(api_url="https://registry.com")],
+    registry_preset = ContextPresets.of(
+        "fallback",
+        ConfigState(api_url="https://registry.com"),
     )
 
     with ctx.presets(registry_preset):

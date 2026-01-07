@@ -36,7 +36,7 @@ from typing import (
 )
 
 import typing_extensions
-from typing_extensions import is_typeddict as is_typeddict_ext
+from typing_extensions import is_typeddict as is_typeddict_ext  # keep this particular import
 
 from haiway import types as haiway_types
 from haiway.attributes.validation import (

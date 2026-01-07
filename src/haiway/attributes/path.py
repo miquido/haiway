@@ -193,7 +193,7 @@ class PropertyAttributePathComponent(AttributePathComponent):
         value: Any,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be modified"
         )
 
@@ -202,7 +202,7 @@ class PropertyAttributePathComponent(AttributePathComponent):
         name: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be deleted"
         )
 
@@ -364,7 +364,7 @@ class SequenceItemAttributePathComponent[Owner, Value](AttributePathComponent):
         value: Any,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be modified"
         )
 
@@ -373,7 +373,7 @@ class SequenceItemAttributePathComponent[Owner, Value](AttributePathComponent):
         name: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be deleted"
         )
 
@@ -529,7 +529,7 @@ class MappingItemAttributePathComponent(AttributePathComponent):
         value: Any,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be modified"
         )
 
@@ -538,7 +538,7 @@ class MappingItemAttributePathComponent(AttributePathComponent):
         name: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be deleted"
         )
 
@@ -726,7 +726,7 @@ class AttributePath[Root, Attribute]:
         value: Any,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be modified"
         )
 
@@ -735,7 +735,7 @@ class AttributePath[Root, Attribute]:
         name: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be deleted"
         )
 

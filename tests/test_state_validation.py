@@ -208,7 +208,7 @@ class NoneState(State):
     value: None
 
 
-class MissingState(State):
+class ContextStateMissingExc(State):
     value: Missing
 
 
@@ -263,9 +263,9 @@ def test_none_type_validation() -> None:
 
 
 def test_missing_type_validation() -> None:
-    assert MissingState(value=MISSING).value is MISSING
+    assert ContextStateMissingExc(value=MISSING).value is MISSING
     with pytest.raises(ValidationError) as exc:
-        MissingState(value=None)
+        ContextStateMissingExc(value=None)
     assert exc.value.path == (".value",)
 
 

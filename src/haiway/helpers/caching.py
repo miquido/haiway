@@ -1,10 +1,10 @@
-from asyncio import iscoroutinefunction
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine, Hashable
 from functools import (
     _make_key,  # pyright: ignore[reportPrivateUsage]
     update_wrapper,
 )
+from inspect import iscoroutinefunction
 from time import monotonic
 from typing import Any, NamedTuple, Protocol, overload
 
@@ -192,11 +192,7 @@ def cache[**Args, Result](
     ... async def my_function(x: int) -> int:
     ...     return x * 2
 
-    With custom cache for async functions:
-
-    >>> @cache(make_key=custom_key_maker, read=redis_read, write=redis_write)
-    ... async def fetch_data(user_id: str) -> dict:
-    ...     return await api_call(user_id)
+    For custom external caches, see the :func:`cache_externally` example below.
     """
 
     def _wrap(
@@ -400,7 +396,7 @@ class _ExternalCache[**Args, Result, Key: Hashable]:
         match await self._read(key):
             case None:
                 result: Result = await self._function(*args, **kwargs)
-                ctx.spawn(  # write the value asnychronously
+                ctx.spawn(  # write the value asynchronously
                     self._write,
                     key=key,
                     value=result,

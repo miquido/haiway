@@ -3,7 +3,7 @@
 Haiway is a functional/async framework built around immutable `State`, context-scoped dependency injection (`ctx`), and structured concurrency. Keep typing strict and behavior explicit.
 
 ## Core Ideas
-- Immutable data: every domain/config object subclasses `State`; instances cannot be mutated, updates are done via `.updated(...)` or `.updating(path, value)`.
+- Immutable data: every domain/config object subclasses `State`; instances cannot be mutated, updates are done via `.updated(...)`.
 - Context-first DI: `async with ctx.scope(name_or_preset, *state, disposables=(...)):` installs state for the lifetime of the scope. `ctx.state(Type)` resolves by type. Priority: explicit state > disposables > preset state > parent scope.
 - Protocol-driven logic: define contracts as `Protocol` and inject implementations as state. Expose public API via `@statemethod` on service `State` containers.
 - Structured concurrency: tasks live inside the current scope task group via `ctx.spawn`. Logging, cancellation, and state all propagate automatically.
@@ -49,26 +49,25 @@ class Invoice(State):
     meta: Meta = Meta.of(kind="invoice")
 ```
 - Lazy/default values: wrap in `Default(...)` or `Default(default_factory=...)`; env helpers integrate (`Default(env="API_KEY")`).
-- Conversions: `to_mapping(recursive=True, include_missing=False)` returns JSON-ready structures honoring aliases and metadata.
+- Conversions: `to_mapping(recursive=True)` returns JSON-ready structures honoring aliases and metadata.
 - Generics: `class Box[T](State): value: T`; specialization is validated (`Box[int](value=1)` ok, `Box[int](value="x")` raises).
 
 ## Context & Scopes
-- Enter scopes with a name string or `ContextPreset`. Provide state instances and/or `disposables` (async context managers yielding state). Example:
+- Enter scopes with a name string or a `ContextPresets` instance. Provide state instances and/or `disposables` (async context managers yielding state). Example:
 ```python
 async with ctx.scope(
-    ContextPreset(name="dev", state=[AppConfig(...)]),
+    ContextPresets.of("dev", AppConfig(...)),
     RuntimeConfig(debug=True),
     disposables=(HTTPXClient(base_url="https://api"),),
 ):
     config = ctx.state(RuntimeConfig)
 ```
-- State lookup: `ctx.state(Type, default=...)`; `ctx.check_state(Type)` -> bool. Missing raises `MissingState`.
-- Presets compose reusable bundles of state + disposables; explicit parameters override preset contents.
-- Variables: `ctx.variable(StateInstance)` sets a mutable, scope-local value; `ctx.variable(Type, default=...)` reads. Child scopes start empty; on exit, child variables overwrite parent values. Variables never cross tasks.
-- Events: `ctx.send(EventState)` publishes to subscribers; `async for e in ctx.subscribe(EventType): ...` consumes. Events are scoped to the root context; unsubscribed events are dropped.
+- State lookup: `ctx.state(Type, default=...)`; `ctx.contains_state(Type)` -> bool. Missing raises `ContextStateMissing` if no default or default construction is possible.
+- Presets compose reusable bundles of state + disposables; explicit parameters override preset contents. Use `ctx.presets(...)` to register multiple presets for name-based lookup.
+- Events: `ctx.send(EventState)` publishes to subscribers; `async for e in ctx.subscribe(EventType): ...` consumes. Events are available only in isolated scopes (root scope or `isolated=True`); unsubscribed events are dropped.
 
 ## Concurrency Toolkit
-- `ctx.spawn(callable, *args, **kwargs)` spawns in the current scope task group with context propagation. Cancel via `task.cancel()` or cooperative `ctx.check_cancellation()`.
+- `ctx.spawn(callable, *args, **kwargs)` spawns in the current scope task group with context propagation; outside a scope it uses the background task group. Use `ctx.spawn_background(...)` to force background tasks. Cancel via `task.cancel()` or cooperative `ctx.check_cancellation()`.
 - Streaming: `async for item in ctx.stream(async_generator_fn, *args): ...` preserves context for generator work.
 - Concurrent helpers (all async-aware, preserve context):
   - `process_concurrently(source, handler, concurrent_tasks=2, ignore_exceptions=False)` – fire-and-forget per item, no result collection.
