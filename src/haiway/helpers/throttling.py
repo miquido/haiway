@@ -1,12 +1,9 @@
-from asyncio import (
-    Lock,
-    iscoroutinefunction,
-    sleep,
-)
+from asyncio import Lock, sleep
 from collections import deque
 from collections.abc import Callable, Coroutine
 from datetime import timedelta
 from functools import wraps
+from inspect import iscoroutinefunction
 from time import monotonic
 from typing import Any, overload
 

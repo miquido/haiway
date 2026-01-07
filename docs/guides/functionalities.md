@@ -4,9 +4,8 @@ Haiway is a framework designed to facilitate the development of applications usi
 programming paradigm combined with structured concurrency concepts. Unlike traditional
 object-oriented frameworks, Haiway emphasizes immutability, pure functions, and context-based state
 management, enabling developers to build scalable and maintainable applications. By leveraging
-context managers combined with context variables, Haiway ensures safe state propagation in
-concurrent environments and simplifies dependency injection through function implementation
-propagation.
+context managers with scoped state, Haiway ensures safe state propagation in concurrent
+environments and simplifies dependency injection through function implementation propagation.
 
 ### Functional Basics
 

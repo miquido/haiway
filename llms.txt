@@ -62,7 +62,7 @@ async with ctx.scope(
 ):
     config = ctx.state(RuntimeConfig)
 ```
-- State lookup: `ctx.state(Type, default=...)`; `ctx.check_state(Type)` -> bool. Missing raises `MissingState`.
+- State lookup: `ctx.state(Type, default=...)`; `ctx.check_state(Type)` -> bool. Missing raises `ContextStateMissing`.
 - Presets compose reusable bundles of state + disposables; explicit parameters override preset contents.
 - Variables: `ctx.variable(StateInstance)` sets a mutable, scope-local value; `ctx.variable(Type, default=...)` reads. Child scopes start empty; on exit, child variables overwrite parent values. Variables never cross tasks.
 - Events: `ctx.send(EventState)` publishes to subscribers; `async for e in ctx.subscribe(EventType): ...` consumes. Events are scoped to the root context; unsubscribed events are dropped.

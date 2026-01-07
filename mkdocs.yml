@@ -104,4 +104,3 @@ nav:
       - Event Bus: features/event-bus.md
       - State Methods: features/state-methods.md
       - Context Presets: features/context-presets.md
-      - Context Variables: features/context-variables.md

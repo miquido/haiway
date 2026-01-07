@@ -5,11 +5,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from haiway.context import (
+    ContextIdentifier,
     Observability,
     ObservabilityAttribute,
     ObservabilityLevel,
     ObservabilityMetricKind,
-    ScopeIdentifier,
 )
 from haiway.utils.formatting import format_str
 
@@ -35,10 +35,10 @@ class ScopeStore:
 
     def __init__(
         self,
-        identifier: ScopeIdentifier,
+        identifier: ContextIdentifier,
         /,
     ) -> None:
-        self.identifier: ScopeIdentifier = identifier
+        self.identifier: ContextIdentifier = identifier
         self.nested: list[ScopeStore] = []
         self.entered: float = monotonic()
         self._exited: float | None = None
@@ -133,7 +133,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
     when the scope exits. When the root scope exits and debug_context is True,
     it produces a hierarchical summary of all recorded events, metrics, and attributes.
     """
-    root_scope: ScopeIdentifier | None = None
+    root_scope: ContextIdentifier | None = None
     root_logger: Logger | None = logger
     scopes: dict[UUID, ScopeStore] = {}
 
@@ -141,13 +141,13 @@ def LoggerObservability(  # noqa: C901, PLR0915
     trace_id_hex: str = trace_id.hex
 
     def trace_identifying(
-        scope: ScopeIdentifier,
+        scope: ContextIdentifier,
         /,
     ) -> UUID:
         return trace_id
 
     def log_recording(
-        scope: ScopeIdentifier,
+        scope: ContextIdentifier,
         /,
         level: ObservabilityLevel,
         message: str,
@@ -166,7 +166,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         )
 
     def event_recording(
-        scope: ScopeIdentifier,
+        scope: ContextIdentifier,
         /,
         level: ObservabilityLevel,
         *,
@@ -187,7 +187,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         )
 
     def metric_recording(
-        scope: ScopeIdentifier,
+        scope: ContextIdentifier,
         /,
         level: ObservabilityLevel,
         *,
@@ -217,7 +217,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         )
 
     def attributes_recording(
-        scope: ScopeIdentifier,
+        scope: ContextIdentifier,
         /,
         level: ObservabilityLevel,
         attributes: Mapping[str, ObservabilityAttribute],
@@ -238,9 +238,9 @@ def LoggerObservability(  # noqa: C901, PLR0915
         )
 
     def scope_entering(
-        scope: ScopeIdentifier,
+        scope: ContextIdentifier,
         /,
-    ) -> None:
+    ) -> str:
         assert scope.scope_id not in scopes  # nosec: B101
         scope_store: ScopeStore = ScopeStore(scope)
         scopes[scope.scope_id] = scope_store
@@ -260,8 +260,10 @@ def LoggerObservability(  # noqa: C901, PLR0915
             f"[{trace_id_hex}] {scope.unique_name} Entering scope: {scope.name}",
         )
 
+        return trace_id_hex
+
     def scope_exiting(
-        scope: ScopeIdentifier,
+        scope: ContextIdentifier,
         /,
         *,
         exception: BaseException | None,
