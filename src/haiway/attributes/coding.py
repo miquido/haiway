@@ -11,7 +11,7 @@ __all__ = ("AttributesJSONEncoder",)
 class AttributesJSONEncoder(json.JSONEncoder):
     def default(self, o: object) -> Any:
         if isinstance(o, UUID):
-            return o.hex
+            return str(o)
 
         elif isinstance(o, datetime):
             return o.isoformat()

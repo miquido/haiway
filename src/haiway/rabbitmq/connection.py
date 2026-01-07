@@ -19,15 +19,25 @@ __all__ = ("RabbitMQConnection",)
 
 
 class RabbitMQConnection:
+    __slots__ = (
+        "_connection",
+        "_connection_timeout",
+        "_lock",
+        "_loop",
+        "_parameters",
+    )
+
     def __init__(
         self,
         url: str = RABBITMQ_URL,
+        connection_timeout: float = 5.0,
         loop: AbstractEventLoop | None = None,
     ) -> None:
         self._lock: Lock = Lock()
         self._loop: AbstractEventLoop | None = loop
         self._parameters: Parameters = URLParameters(url)
-        self._connection: BaseConnection
+        self._connection: BaseConnection | None = None
+        self._connection_timeout: float = connection_timeout
 
     def _require_loop(self) -> AbstractEventLoop:
         if self._loop is None:
@@ -43,16 +53,22 @@ class RabbitMQConnection:
         **extra: Any,
     ) -> AbstractAsyncContextManager[MQQueue[Content]]:
         @asynccontextmanager
-        async def context() -> AsyncGenerator[MQQueue[Content]]:
+        async def context() -> AsyncGenerator[MQQueue[Content]]:  # noqa: C901
+            lock: Lock = Lock()
             channel: Channel = await self._open_channel()
             messages_queue = AsyncQueue[MQMessage[Content]]()
 
             async def ensure_open() -> None:
                 nonlocal channel
+
                 if channel.is_open:
                     return  # already open
 
-                channel = await self._open_channel()
+                async with lock:
+                    if channel.is_open:
+                        return  # reopened elsewhere
+
+                    channel = await self._open_channel()
 
             async def publish_message(
                 message: Content,
@@ -66,6 +82,7 @@ class RabbitMQConnection:
                     exchange=exchange if exchange is not None else "",
                     routing_key=queue,
                     body=content_encoder(message),
+                    **extra,
                 )
 
             async def consume_messages(
@@ -80,54 +97,60 @@ class RabbitMQConnection:
                     properties: BasicProperties,
                     body: bytes,
                 ) -> None:
-                    if tag := method.delivery_tag:
-                        try:
-                            content: Content = content_decoder(body)
+                    if not method.delivery_tag:
+                        ctx.log_error(
+                            "Received invalid message: Missing delivery tag",
+                            exception=Exception("Message delivery_tag is missing"),
+                        )
+                        return  # can't process
 
-                        except Exception as exc:
-                            channel.basic_reject(
-                                delivery_tag=tag,
-                                requeue=requeue_rejected,
-                            )
-                            ctx.log_error(
-                                f"Failed to decode message content: {exc}",
-                                exception=exc,
-                            )
-                            return  # can't process
+                    try:
+                        content: Content = content_decoder(body)
 
-                        async def acknowledge(
-                            **extra: Any,
-                        ) -> None:
-                            channel.basic_ack(
-                                delivery_tag=tag,
-                            )
+                    except Exception as exc:
+                        channel.basic_reject(
+                            delivery_tag=method.delivery_tag,
+                            requeue=requeue_rejected,
+                        )
+                        ctx.log_error(
+                            f"Failed to decode message content: {exc}",
+                            exception=exc,
+                        )
+                        return  # can't process
 
-                        async def reject(
-                            requeue: bool | None = None,
-                            **extra: Any,
-                        ) -> None:
-                            channel.basic_reject(
-                                delivery_tag=tag,
-                                requeue=requeue if requeue is not None else requeue_rejected,
-                            )
-
-                        headers: Mapping[str, Any] = properties.headers or {}
-
-                        messages_queue.enqueue(
-                            MQMessage(
-                                content=content,
-                                acknowledge=acknowledge,
-                                reject=reject,
-                                meta=Meta(attempt=headers.get("x-redelivery-count", 0)),
-                            ),
+                    async def acknowledge(
+                        **extra: Any,
+                    ) -> None:
+                        channel.basic_ack(
+                            delivery_tag=method.delivery_tag,
+                            **extra,
                         )
 
-                    else:
-                        ctx.log_error("delivery_tag is missing on received message")
+                    async def reject(
+                        requeue: bool | None = None,
+                        **extra: Any,
+                    ) -> None:
+                        channel.basic_reject(
+                            delivery_tag=method.delivery_tag,
+                            requeue=requeue if requeue is not None else requeue_rejected,
+                            **extra,
+                        )
+
+                    headers: Mapping[str, Any] = properties.headers or {}
+
+                    messages_queue.enqueue(
+                        MQMessage(
+                            content=content,
+                            acknowledge=acknowledge,
+                            reject=reject,
+                            meta=Meta(attempt=headers.get("x-redelivery-count", 0)),
+                        ),
+                    )
 
                 channel.basic_consume(
                     queue=queue,
                     on_message_callback=consume_message,
+                    **extra,
                 )
 
                 return messages_queue
@@ -150,8 +173,8 @@ class RabbitMQConnection:
         auto_delete: bool = False,
         **extra: Any,
     ) -> None:
-        loop = self._require_loop()
         channel: Channel = await self._open_channel()
+        loop: AbstractEventLoop = self._require_loop()
         declare_future: Future[Any] = loop.create_future()
         channel.queue_declare(
             queue=queue,
@@ -170,12 +193,13 @@ class RabbitMQConnection:
         queue: str,
         **extra: Any,
     ) -> None:
-        loop = self._require_loop()
+        loop: AbstractEventLoop = self._require_loop()
         channel: Channel = await self._open_channel()
         purge_future: Future[Any] = loop.create_future()
         channel.queue_purge(
             queue=queue,
             callback=purge_future.set_result,
+            **extra,
         )
         await purge_future
         channel.close()
@@ -185,37 +209,38 @@ class RabbitMQConnection:
         queue: str,
         **extra: Any,
     ) -> None:
-        loop = self._require_loop()
+        loop: AbstractEventLoop = self._require_loop()
         channel: Channel = await self._open_channel()
         delete_future: Future[Any] = loop.create_future()
         channel.queue_delete(
             queue=queue,
             callback=delete_future.set_result,
+            **extra,
         )
         await delete_future
         channel.close()
 
     async def _open_channel(self) -> Channel:
-        loop = self._require_loop()
-        await self._ensure_connection()
+        connection: BaseConnection = await self._ensure_connection()
 
+        loop: AbstractEventLoop = self._require_loop()
         ready: Future[Any] = loop.create_future()
 
         def channel_ready(channel: Channel) -> None:
             channel.basic_qos(callback=ready.set_result)
 
-        channel: Channel = self._connection.channel(on_open_callback=channel_ready)
+        channel: Channel = connection.channel(on_open_callback=channel_ready)
 
         await ready
 
         return channel
 
-    async def _ensure_connection(self) -> None:
-        loop = self._require_loop()
-        async with timeout(delay=15):
+    async def _ensure_connection(self) -> BaseConnection:
+        loop: AbstractEventLoop = self._require_loop()
+        async with timeout(delay=self._connection_timeout):
             async with self._lock:
-                if hasattr(self, "_connection") and self._connection.is_open:
-                    return  # connection already available
+                if self._connection is not None and self._connection.is_open:
+                    return self._connection  # connection already available
 
                 ctx.log_info("Opening rabbitmq connection...")
                 connected: Future[Any] = loop.create_future()
@@ -229,10 +254,12 @@ class RabbitMQConnection:
 
                 ctx.log_info("...rabbitmq connection open!")
 
+                return self._connection
+
     async def _disconnect(self) -> None:
         async with self._lock:
-            if not hasattr(self, "_connection"):
+            if self._connection is None:
                 return  # no connection available
 
             self._connection.close()
-            del self._connection
+            self._connection = None
