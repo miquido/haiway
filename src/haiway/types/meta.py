@@ -1,7 +1,7 @@
 import json
 from collections.abc import Collection, Mapping
 from datetime import datetime
-from typing import Any, Final, Self, TypeGuard, cast, final, overload
+from typing import Any, Final, NoReturn, Self, TypeGuard, cast, final, overload
 from uuid import UUID
 
 from haiway.types.basic import BasicValue
@@ -576,7 +576,7 @@ class Meta(dict[str, BasicValue]):
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -585,7 +585,7 @@ class Meta(dict[str, BasicValue]):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
@@ -595,7 +595,7 @@ class Meta(dict[str, BasicValue]):
         self,
         key: str,
         value: Any,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be modified"
@@ -604,7 +604,7 @@ class Meta(dict[str, BasicValue]):
     def __delitem__(
         self,
         key: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be deleted"

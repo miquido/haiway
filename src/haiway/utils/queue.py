@@ -1,7 +1,7 @@
 from asyncio import AbstractEventLoop, CancelledError, Future, get_running_loop
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 __all__ = ("AsyncQueue",)
 
@@ -71,7 +71,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -80,7 +80,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"

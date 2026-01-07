@@ -2,7 +2,16 @@ from collections.abc import Iterator, Mapping, Sequence
 from datetime import date, datetime, time
 from decimal import Decimal
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, overload, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    NoReturn,
+    Protocol,
+    Self,
+    overload,
+    runtime_checkable,
+)
 from uuid import UUID
 
 from asyncpg import Record
@@ -356,7 +365,7 @@ class PostgresRow(Mapping[str, PostgresValue]):
         self,
         name: str,
         value: Any,
-    ) -> Any:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be modified"
@@ -365,7 +374,7 @@ class PostgresRow(Mapping[str, PostgresValue]):
     def __delattr__(
         self,
         name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
@@ -375,7 +384,7 @@ class PostgresRow(Mapping[str, PostgresValue]):
         self,
         key: str,
         value: PostgresValue,
-    ) -> PostgresValue:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be modified"
@@ -384,7 +393,7 @@ class PostgresRow(Mapping[str, PostgresValue]):
     def __delitem__(
         self,
         key: str,
-    ) -> PostgresValue:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__},"
             f" item - '{key}' cannot be deleted"

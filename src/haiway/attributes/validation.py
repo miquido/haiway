@@ -4,6 +4,7 @@ from types import TracebackType
 from typing import (
     Any,
     ClassVar,
+    NoReturn,
     Protocol,
     Self,
     final,
@@ -150,13 +151,13 @@ class Validator[Type]:
         self,
         __name: str,
         __value: Any,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Validator can't be modified")
 
     def __delattr__(
         self,
         __name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Validator can't be modified")
 
 
@@ -182,7 +183,7 @@ class Verifier[Type]:
         self,
         __name: str,
         __value: Any,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Verifier can't be modified")
 
     def __delattr__(
