@@ -73,18 +73,15 @@ automatically:
 from haiway import ctx
 import asyncio
 
-from haiway import ctx
-
-
 async def main():
     # Contexts can be nested
     async with ctx.scope("database"):
         print("database context")
-        
+
         async with ctx.scope("transaction"):
             print("Nested context")
             # Work happens here
-            
+
         print(f"back to database context")
 
 asyncio.run(main())
@@ -95,7 +92,7 @@ asyncio.run(main())
 - **Context Stack**: Each `ctx.scope()` creates a new context that inherits from its parent
 - **Automatic Cleanup**: When a scope exits, all resources and tasks are automatically cleaned up
 - **State Isolation**: Each context can contain its own state objects, accessed by type
-- **Context Variables**: Uses Python's `contextvars` under the hood for async-safe state propagation
+- **Scope Propagation**: Child scopes inherit state and observability from parent scopes
 - **Nested Scopes**: Inner scopes can access outer scope state, but not vice versa
 
 ## Dependency Injection Pattern
@@ -135,7 +132,7 @@ def SMTPNotificationService() -> NotificationService:
 
 async def main():
     service = SMTPNotificationService()
-    
+
     async with ctx.scope("app", service):
         success = await NotificationService.notify_user("123", "Welcome!")
         print(f"Email sent: {success}")

@@ -143,7 +143,7 @@ class Postgres(State):
     def acquire_connection(self) -> PostgresConnectionContext:
         """Provide a disposable that yields a ``PostgresConnection``."""
 
-        if ctx.check_state(PostgresConnection):
+        if ctx.contains_state(PostgresConnection):
             raise RuntimeError("Recursive Postgres connection acquiring is forbidden")
 
         return self.connection_acquiring()
@@ -271,7 +271,7 @@ class Postgres(State):
     ) -> PostgresRow | None:
         """Fetch a single row using contextual or ad-hoc connection."""
 
-        if ctx.check_state(PostgresConnection):
+        if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.fetch_one(statement, *args)
 
         async with ctx.disposables(self.acquire_connection()):
@@ -286,7 +286,7 @@ class Postgres(State):
     ) -> Sequence[PostgresRow]:
         """Fetch all rows using contextual or ad-hoc connection."""
 
-        if ctx.check_state(PostgresConnection):
+        if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.fetch(statement, *args)
 
         async with ctx.disposables(self.acquire_connection()):
@@ -301,7 +301,7 @@ class Postgres(State):
     ) -> None:
         """Execute a statement using contextual or ad-hoc connection."""
 
-        if ctx.check_state(PostgresConnection):
+        if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.execute(statement, *args)
 
         async with ctx.disposables(self.acquire_connection()):

@@ -29,11 +29,11 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExport
 from opentelemetry.trace import Link, Span, SpanContext, StatusCode, TraceFlags, Tracer
 
 from haiway.context import (
+    ContextIdentifier,
     Observability,
     ObservabilityAttribute,
     ObservabilityLevel,
     ObservabilityMetricKind,
-    ScopeIdentifier,
     ctx,
 )
 from haiway.types import MISSING
@@ -67,7 +67,7 @@ class ScopeStore:
 
     def __init__(
         self,
-        identifier: ScopeIdentifier,
+        identifier: ContextIdentifier,
         /,
         context: Context,
         span: Span,
@@ -79,7 +79,7 @@ class ScopeStore:
 
         Parameters
         ----------
-        identifier : ScopeIdentifier
+        identifier : ContextIdentifier
             The identifier for this scope
         context : Context
             The OpenTelemetry context for this scope
@@ -90,7 +90,7 @@ class ScopeStore:
         logger : Logger
             The OpenTelemetry logger for recording logs
         """
-        self.identifier: ScopeIdentifier = identifier
+        self.identifier: ContextIdentifier = identifier
         self.nested: list[ScopeStore] = []
         self._counters: dict[str, Counter] = {}
         self._histograms: dict[str, Histogram] = {}
@@ -334,7 +334,7 @@ def _sanitized_attributes(
         if value is None or value is MISSING:
             continue  # skip missing/empty
 
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
             elements: list[Any] = []
             for item in cast(Sequence[Any], value):
                 if item is None or item is MISSING:
@@ -569,12 +569,12 @@ class OpenTelemetry:
         """
         tracer: Tracer = trace.get_tracer(cls.service)
         meter: Meter | None = None
-        root_scope: ScopeIdentifier | None = None
+        root_scope: ContextIdentifier | None = None
         scopes: dict[UUID, ScopeStore] = {}
         observed_level: ObservabilityLevel = level
 
         def trace_identifying(
-            scope: ScopeIdentifier,
+            scope: ContextIdentifier,
             /,
         ) -> UUID:
             """
@@ -585,7 +585,7 @@ class OpenTelemetry:
 
             Parameters
             ----------
-            scope: ScopeIdentifier
+            scope: ContextIdentifier
                 The scope identifier to get the trace ID for
 
             Returns
@@ -599,7 +599,7 @@ class OpenTelemetry:
             return UUID(int=scopes[scope.scope_id].span.get_span_context().trace_id)
 
         def log_recording(
-            scope: ScopeIdentifier,
+            scope: ContextIdentifier,
             /,
             level: ObservabilityLevel,
             message: str,
@@ -614,7 +614,7 @@ class OpenTelemetry:
 
             Parameters
             ----------
-            scope: ScopeIdentifier
+            scope: ContextIdentifier
                 The scope identifier the log is associated with
             level: ObservabilityLevel
                 The severity level for this log message
@@ -646,7 +646,7 @@ class OpenTelemetry:
                 scopes[scope.scope_id].record_exception(exception)
 
         def event_recording(
-            scope: ScopeIdentifier,
+            scope: ContextIdentifier,
             /,
             level: ObservabilityLevel,
             *,
@@ -661,7 +661,7 @@ class OpenTelemetry:
 
             Parameters
             ----------
-            scope: ScopeIdentifier
+            scope: ContextIdentifier
                 The scope identifier the event is associated with
             level: ObservabilityLevel
                 The severity level for this event
@@ -682,7 +682,7 @@ class OpenTelemetry:
             )
 
         def metric_recording(
-            scope: ScopeIdentifier,
+            scope: ContextIdentifier,
             /,
             level: ObservabilityLevel,
             *,
@@ -700,7 +700,7 @@ class OpenTelemetry:
 
             Parameters
             ----------
-            scope: ScopeIdentifier
+            scope: ContextIdentifier
                 The scope identifier the metric is associated with
             level: ObservabilityLevel
                 The severity level for this metric
@@ -730,7 +730,7 @@ class OpenTelemetry:
             )
 
         def attributes_recording(
-            scope: ScopeIdentifier,
+            scope: ContextIdentifier,
             /,
             level: ObservabilityLevel,
             attributes: Mapping[str, ObservabilityAttribute],
@@ -743,7 +743,7 @@ class OpenTelemetry:
 
             Parameters
             ----------
-            scope: ScopeIdentifier
+            scope: ContextIdentifier
                 The scope identifier the attributes are associated with
             level: ObservabilityLevel
                 The severity level for these attributes
@@ -759,9 +759,9 @@ class OpenTelemetry:
             scopes[scope.scope_id].record_attributes(attributes)
 
         def scope_entering(
-            scope: ScopeIdentifier,
+            scope: ContextIdentifier,
             /,
-        ) -> None:
+        ) -> str:
             """
             Handle scope entry by creating a new OpenTelemetry span.
 
@@ -771,7 +771,7 @@ class OpenTelemetry:
 
             Parameters
             ----------
-            scope: ScopeIdentifier
+            scope: ContextIdentifier
                 The identifier for the scope being entered
 
             Returns
@@ -851,8 +851,10 @@ class OpenTelemetry:
 
             scopes[scope.scope_id] = scope_store
 
+            return str(UUID(int=scope_store.span.get_span_context().trace_id))
+
         def scope_exiting(
-            scope: ScopeIdentifier,
+            scope: ContextIdentifier,
             /,
             *,
             exception: BaseException | None,
@@ -865,7 +867,7 @@ class OpenTelemetry:
 
             Parameters
             ----------
-            scope: ScopeIdentifier
+            scope: ContextIdentifier
                 The identifier for the scope being exited
             exception: BaseException | None
                 Optional exception that caused the scope to exit

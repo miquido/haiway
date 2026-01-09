@@ -1,10 +1,10 @@
-from asyncio import iscoroutinefunction
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine, Hashable
 from functools import (
     _make_key,  # pyright: ignore[reportPrivateUsage]
     update_wrapper,
 )
+from inspect import iscoroutinefunction
 from time import monotonic
 from typing import Any, NamedTuple, Protocol, overload
 

@@ -504,28 +504,6 @@ async def monitored_processing():
         raise e
 ```
 
-### 5. Context Isolation
-
-Remember that spawned tasks have isolated variable contexts:
-
-```python
-async def context_isolation_example():
-    # Set variable in parent
-    ctx.variable(RequestID("parent-123"))
-
-    async def child_task():
-        # Variable is NOT inherited
-        request_id = ctx.variable(RequestID)  # None
-
-        # Set new variable in child
-        ctx.variable(RequestID("child-456"))
-
-    await ctx.spawn(child_task)
-
-    # Parent variable unchanged
-    assert ctx.variable(RequestID).value == "parent-123"
-```
-
 ## Performance Considerations
 
 ### Concurrency vs Parallelism

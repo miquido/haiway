@@ -134,8 +134,8 @@ When multiple states of the same type exist, Haiway resolves using:
 1. Presets
 1. Parent context (lowest)
 
-Context variables are always isolated per spawned task (`ctx.spawn` wraps tasks with isolated
-`VariablesContext`), so variables set in the parent are not visible inside spawned tasks.
+Spawned tasks inherit the current scope (state and observability) but remain isolated from any
+parent-owned mutations done within their own scope.
 
 ## 4) Structured Concurrency (Scoped Tasks)
 
@@ -148,7 +148,7 @@ from haiway import ctx
 
 
 async def worker():
-    # Inherits current scope (state, observability, variables)
+    # Inherits current scope (state, observability)
     await asyncio.sleep(0.5)
     print("ZZZZzzzzz....")
 
