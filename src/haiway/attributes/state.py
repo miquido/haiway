@@ -24,7 +24,6 @@ from typing import (
     dataclass_transform,
     overload,
 )
-from weakref import WeakValueDictionary
 
 from haiway.attributes.annotations import ObjectAttribute, resolve_self_attribute
 from haiway.attributes.attribute import Attribute
@@ -159,7 +158,9 @@ class StateMeta(type):
         )
         cls.__FIELDS__ = tuple(fields)  # pyright: ignore[reportConstantRedefinition]
         cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
-        cls.__slots__ = tuple(field.name for field in fields)  # pyright: ignore[reportAttributeAccessIssue]
+        cls.__slots__ = tuple(  # pyright: ignore[reportAttributeAccessIssue]
+            field.name for field in fields
+        )
         cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
 
         return cls
@@ -261,13 +262,13 @@ def _resolve_default(
     )
 
 
-_types_cache: WeakValueDictionary[
+_types_cache: MutableMapping[
     tuple[
         Any,
         tuple[Any, ...],
     ],
     Any,
-] = WeakValueDictionary()
+] = {}
 
 
 class State(metaclass=StateMeta):

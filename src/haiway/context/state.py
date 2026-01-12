@@ -1,236 +1,33 @@
-from collections.abc import Collection, Iterable, MutableMapping
+from collections.abc import Collection, Iterable, Mapping, MutableMapping
 from contextvars import ContextVar, Token
 from threading import Lock
 from types import TracebackType
-from typing import ClassVar, Self, cast
+from typing import ClassVar, Self, cast, final
 
 from haiway.attributes import State
-from haiway.context.types import MissingContext, MissingState
-from haiway.types import Immutable
+from haiway.context.types import ContextMissing, ContextStateMissing
 
-__all__ = (
-    "ScopeState",
-    "StateContext",
-)
+__all__ = ("ContextState",)
 
 
-class ScopeState(Immutable):
-    """
-    Container for state objects within a scope.
-
-    Stores state objects by their type, allowing retrieval by type.
-    Only one state of a given type can be stored at a time.
-    This class is immutable after initialization.
-    """
-
-    _state: MutableMapping[type[State], State]
-    _lock: Lock
-
-    def __init__(
-        self,
-        state: Iterable[State],
-    ) -> None:
-        object.__setattr__(
-            self,
-            "_state",
-            {type(element): element for element in state},
-        )
-        object.__setattr__(
-            self,
-            "_lock",
-            Lock(),
-        )
-
-    def check_state[StateType: State](
-        self,
-        state: type[StateType],
-        /,
-        *,
-        instantiate_defaults: bool = False,
-    ) -> bool:
-        """
-        Check state object availability by its type.
-
-        If the state type is not found, attempts to instantiate a new instance of\
-         the type if possible.
-
-        Parameters
-        ----------
-        state: type[StateType]
-            The type of state to check
-
-        instantiate_defaults: bool = False
-            Control if default value should be instantiated during check.
-
-        Returns
-        -------
-        bool
-            True if state is available, otherwise False.
-        """
-        if state in self._state:
-            return True
-
-        elif instantiate_defaults:
-            with self._lock:
-                if state in self._state:
-                    return True
-
-                try:
-                    initialized: StateType = state()
-                    self._state[state] = initialized
-                    return True
-
-                except Exception:
-                    return False  # unavailable, we don't care the exception
-
-        else:
-            return False
-
-    def state[StateType: State](
-        self,
-        state: type[StateType],
-        /,
-        default: StateType | None = None,
-    ) -> StateType:
-        """
-        Get a state object by its type.
-
-        If the state type is not found, attempts to use a provided default
-        or instantiate a new instance of the type. Raises MissingState
-        if neither is possible.
-
-        Parameters
-        ----------
-        state: type[StateType]
-            The type of state to retrieve
-        default: StateType | None
-            Optional default value to use if state not found
-
-        Returns
-        -------
-        StateType
-            The requested state object
-
-        Raises
-        ------
-        MissingState
-            If state not found and default not provided or instantiation fails
-        """
-        if state in self._state:
-            return cast(StateType, self._state[state])
-
-        elif default is not None:
-            return default
-
-        else:
-            with self._lock:
-                if state in self._state:
-                    return cast(StateType, self._state[state])
-
-                try:
-                    initialized: StateType = state()
-                    self._state[state] = initialized
-                    return initialized
-
-                except Exception as exc:
-                    raise MissingState(
-                        f"{state.__qualname__} is not defined in current scope"
-                        " and failed to provide a default value"
-                    ) from exc
-
-    def updated(
-        self,
-        state: Iterable[State],
-    ) -> Self:
-        """
-        Create a new ScopeState with updated state objects.
-
-        Combines the current state with new state objects, with new state
-        objects overriding existing ones of the same type.
-
-        Parameters
-        ----------
-        state: Iterable[State]
-            New state objects to add or replace
-
-        Returns
-        -------
-        Self
-            A new ScopeState with the combined state
-        """
-        # Fast path: if no new state, return self
-        state_list = list(state)
-        if not state_list:
-            return self
-
-        # Optimize: pre-allocate with known size and use dict comprehension
-        combined_state = {**self._state, **{type(s): s for s in state_list}}
-        return self.__class__(combined_state.values())
-
-    def snapshot(self) -> Collection[State]:
-        with self._lock:
-            return tuple(self._state.values())
-
-
-class StateContext(Immutable):
-    """
-    Context manager for state within a scope.
-
-    Manages state propagation and access within a context. Provides
-    methods to retrieve state by type and create updated state contexts.
-    This class is immutable after initialization.
-    """
-
-    _context: ClassVar[ContextVar[ScopeState]] = ContextVar[ScopeState]("StateContext")
-
+@final  # consider immutable
+class ContextState:
     @classmethod
-    def current_state(cls) -> Collection[State]:
-        """
-        Return an immutable snapshot of the current state.
-
-        Returns
-        -------
-        Collection[State]
-            State objects present in the current context,
-            or an empty tuple if no context is active.
-        """
+    def snapshot(cls) -> Collection[State]:
         try:
-            scope_state: ScopeState = cls._context.get()
-            return scope_state.snapshot()
+            return tuple(cls._context.get()._state.values())
 
         except LookupError:
             return ()  # return empty as default
 
     @classmethod
-    def check_state[StateType: State](
+    def contains[StateType: State](
         cls,
         state: type[StateType],
         /,
-        instantiate_defaults: bool = False,
     ) -> bool:
-        """
-        Check if state object is available in the current context.
-
-        Verifies if state object of the specified type is available the current context.
-
-        Parameters
-        ----------
-        state: type[StateType]
-            The type of state to check
-
-        instantiate_defaults: bool = False
-            Control if default value should be instantiated during check.
-
-        Returns
-        -------
-        bool
-            True if state is available, otherwise False.
-        """
         try:
-            return cls._context.get().check_state(
-                state,
-                instantiate_defaults=instantiate_defaults,
-            )
+            return state in cls._context.get()._state
 
         except LookupError:
             return False  # no context no state
@@ -242,93 +39,101 @@ class StateContext(Immutable):
         /,
         default: StateType | None = None,
     ) -> StateType:
-        """
-        Get a state object by type from the current context.
-
-        Retrieves a state object of the specified type from the current context.
-        If not found, uses the provided default or attempts to create a new instance.
-
-        Parameters
-        ----------
-        state: type[StateType]
-            The type of state to retrieve
-        default: StateType | None
-            Optional default value to use if state not found
-
-        Returns
-        -------
-        StateType
-            The requested state object
-
-        Raises
-        ------
-        MissingContext
-            If called outside of a state context
-        MissingState
-            If state not found and default not provided or instantiation fails
-        """
-
         try:
-            return cls._context.get().state(
-                state,
-                default=default,
-            )
+            current: Self = cls._context.get()
+            if state in current._state:
+                return cast(StateType, current._state[state])
 
-        except LookupError as exc:
+            if default is not None:
+                return default  # do not store default
+
+            initialized: StateType
             try:
-                if default is not None:
-                    return default
+                initialized = state()  # initialize out of lock to prevent recursion
 
-                else:
-                    return state()
+            except Exception as exc:
+                raise ContextStateMissing(
+                    f"{state.__qualname__} is not defined in current scope"
+                    " and failed to provide a default value"
+                ) from exc
 
-            except Exception:
-                raise MissingContext("StateContext requested but not defined!") from exc
+            with current._lock:
+                if state in current._state:  # check again under lock
+                    return cast(StateType, current._state[state])
+
+                current._state[state] = initialized
+                return initialized
+
+        except LookupError:
+            if default is not None:
+                return default
+
+            raise ContextMissing("ContextState requested but not defined!") from None
 
     @classmethod
     def updated(
         cls,
-        state: Iterable[State],
+        state: Iterable[State | None],
         /,
     ) -> Self:
-        """
-        Create a new StateContext with updated state.
-
-        If called within an existing context, inherits and updates that context's state.
-        If called outside any context, creates a new root context.
+        """Create a new context by merging the current state with provided values.
 
         Parameters
         ----------
-        state: Iterable[State]
-            New state objects to add or replace
+        state:
+            Iterable of states to merge. ``None`` entries are ignored. Later items
+            override earlier items by their concrete ``type``.
 
         Returns
         -------
         Self
-            A new StateContext with the combined state
+            A new context instance. When a current context exists, this method
+            allocates a copy via ``object.__new__(cls)``, merges into
+            ``updated._state`` from the current state and the resolved input, and
+            assigns a fresh ``Lock`` for thread-safety. When no current context
+            exists, it creates a new root by delegating to ``cls(state=state)``.
+
+        Raises
+        ------
+        ContextMissing
+            If ``cls(state=state)`` fails due to missing required state in the
+            constructor. Any such exception is propagated from that creation path.
         """
-        try:
-            # update current scope context
-            return cls(_state=cls._context.get().updated(state=state))
+        try:  # update current scope context
+            current: Self = cls._context.get()
+            resolved: Mapping[type[State], State] = {
+                type(element): element for element in state if element is not None
+            }
 
-        except LookupError:  # create root scope when missing
-            return cls(_state=ScopeState(state))
+            updated: Self = object.__new__(cls)  # always provide a copy
+            updated._state = {**current._state, **resolved}
+            updated._lock = Lock()
+            updated._token = None
+            return updated
 
-    _state: ScopeState
-    _token: Token[ScopeState] | None = None
+        except LookupError:  # or create root scope when missing
+            return cls(state=state)
+
+    _context: ClassVar[ContextVar[Self]] = ContextVar("ContextState")
+    __slots__ = (
+        "_lock",
+        "_state",
+        "_token",
+    )
+
+    def __init__(
+        self,
+        state: Iterable[State | None],
+    ) -> None:
+        self._state: MutableMapping[type[State], State] = {
+            type(element): element for element in state if element is not None
+        }
+        self._lock: Lock = Lock()
+        self._token: Token[ContextState] | None = None
 
     def __enter__(self) -> None:
-        """
-        Enter this state context.
-
-        Sets this context's state as the current state in the context.
-        """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
-        object.__setattr__(
-            self,
-            "_token",
-            StateContext._context.set(self._state),
-        )
+        self._token = ContextState._context.set(self)
 
     def __exit__(
         self,
@@ -336,24 +141,6 @@ class StateContext(Immutable):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        """
-        Exit this state context.
-
-        Restores the previous state context.
-
-        Parameters
-        ----------
-        exc_type: type[BaseException] | None
-            Type of exception that caused the exit
-        exc_val: BaseException | None
-            Exception instance that caused the exit
-        exc_tb: TracebackType | None
-            Traceback for the exception
-        """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
-        StateContext._context.reset(self._token)
-        object.__setattr__(
-            self,
-            "_token",
-            None,
-        )
+        ContextState._context.reset(self._token)
+        self._token = None

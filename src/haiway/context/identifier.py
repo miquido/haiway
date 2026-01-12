@@ -1,32 +1,25 @@
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, final
 from uuid import UUID, uuid4
 
-from haiway.types import Immutable
+from haiway.context.types import ContextMissing
 
-__all__ = ("ScopeIdentifier",)
+__all__ = ("ContextIdentifier",)
 
 
-class ScopeIdentifier(Immutable):
-    """
-    Identifies and manages scope context identities.
-
-    ScopeIdentifier maintains a context-local scope identity including
-    scope ID, and parent ID. It provides a hierarchical structure for tracking
-    execution scopes, supporting both root scopes and nested child scopes.
-
-    This class is immutable after instantiation.
-    """
-
-    _context: ClassVar[ContextVar[Self]] = ContextVar[Self]("ScopeIdentifier")
-
+@final  # consider immutable
+class ContextIdentifier:
     @classmethod
     def current(
         cls,
         /,
     ) -> Self:
-        return cls._context.get()
+        try:
+            return cls._context.get()
+
+        except LookupError:
+            raise ContextMissing("Context identifier requested but not defined!") from None
 
     @classmethod
     def scope(
@@ -34,23 +27,6 @@ class ScopeIdentifier(Immutable):
         name: str,
         /,
     ) -> Self:
-        """
-        Create a new scope identifier.
-
-        If called within an existing scope, creates a nested scope with a new ID.
-        If called outside any scope, creates a root scope with new scope ID.
-
-        Parameters
-        ----------
-        name: str
-            The name of the scope
-
-        Returns
-        -------
-        Self
-            A newly created scope identifier
-        """
-
         try:  # check for current scope
             return cls(
                 name=name,
@@ -59,9 +35,7 @@ class ScopeIdentifier(Immutable):
                 parent_id=cls._context.get().scope_id,
             )
 
-        except LookupError:
-            # create root scope when missing
-
+        except LookupError:  # create root scope when missing
             scope_id: UUID = uuid4()
             return cls(
                 name=name,
@@ -69,11 +43,15 @@ class ScopeIdentifier(Immutable):
                 parent_id=scope_id,  # own id is parent_id for root
             )
 
-    parent_id: UUID
-    scope_id: UUID
-    name: str
-    unique_name: str
-    _token: Token[Self] | None = None
+    _context: ClassVar[ContextVar[Self]] = ContextVar("ContextIdentifier")
+
+    __slots__ = (
+        "_token",
+        "name",
+        "parent_id",
+        "scope_id",
+        "unique_name",
+    )
 
     def __init__(
         self,
@@ -81,44 +59,14 @@ class ScopeIdentifier(Immutable):
         scope_id: UUID,
         name: str,
     ) -> None:
-        object.__setattr__(
-            self,
-            "parent_id",
-            parent_id,
-        )
-        object.__setattr__(
-            self,
-            "scope_id",
-            scope_id,
-        )
-        object.__setattr__(
-            self,
-            "name",
-            name,
-        )
-        object.__setattr__(
-            self,
-            "unique_name",
-            f"[{name}] [{scope_id}]",
-        )
-        object.__setattr__(
-            self,
-            "_token",
-            None,
-        )
+        self.parent_id: UUID = parent_id
+        self.scope_id: UUID = scope_id
+        self.name: str = name
+        self.unique_name: str = f"[{name}] [{scope_id}]"
+        self._token: Token[ContextIdentifier] | None = None
 
     @property
     def is_root(self) -> bool:
-        """
-        Check if this scope is a root scope.
-
-        A root scope is one that was created outside of any other scope.
-
-        Returns
-        -------
-        bool
-            True if this is a root scope, False if it's a nested scope
-        """
         return self.scope_id == self.parent_id
 
     def __str__(self) -> str:
@@ -134,17 +82,8 @@ class ScopeIdentifier(Immutable):
         return hash(self.scope_id)
 
     def __enter__(self) -> None:
-        """
-        Enter this scope identifier's context.
-
-        Sets this identifier as the current scope identifier in the context.
-        """
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
-        object.__setattr__(
-            self,
-            "_token",
-            ScopeIdentifier._context.set(self),
-        )
+        self._token = ContextIdentifier._context.set(self)
 
     def __exit__(
         self,
@@ -152,24 +91,6 @@ class ScopeIdentifier(Immutable):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        """
-        Exit this scope identifier's context.
-
-        Restores the previous scope identifier in the context.
-
-        Parameters
-        ----------
-        exc_type: type[BaseException] | None
-            Type of exception that caused the exit
-        exc_val: BaseException | None
-            Exception instance that caused the exit
-        exc_tb: TracebackType | None
-            Traceback for the exception
-        """
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
-        ScopeIdentifier._context.reset(self._token)  # pyright: ignore[reportArgumentType]
-        object.__setattr__(
-            self,
-            "_token",
-            None,
-        )
+        ContextIdentifier._context.reset(self._token)
+        self._token = None

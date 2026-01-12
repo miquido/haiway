@@ -140,7 +140,7 @@ def PostgresConfigurationRepository(
         ctx.log_info("...configuration loaded!")
         return config.from_json(cast(str, loaded["content"]))
 
-    async def define(
+    async def defining(
         identifier: str,
         value: Configuration,
         **extra: Any,
@@ -193,7 +193,7 @@ def PostgresConfigurationRepository(
     return ConfigurationRepository(
         listing=listing,
         loading=loading,
-        defining=define,
+        defining=defining,
         removing=removing,
         meta=Meta.of({"source": "postgres"}),
     )

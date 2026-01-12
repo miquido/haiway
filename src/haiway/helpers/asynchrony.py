@@ -1,8 +1,9 @@
-from asyncio import AbstractEventLoop, get_running_loop, iscoroutinefunction
+from asyncio import AbstractEventLoop, get_running_loop
 from collections.abc import Callable, Coroutine
 from concurrent.futures import Executor
 from contextvars import Context, copy_context
 from functools import partial
+from inspect import iscoroutinefunction
 from typing import Any, cast, overload
 
 from haiway.types.missing import MISSING, Missing

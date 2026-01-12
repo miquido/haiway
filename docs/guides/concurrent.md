@@ -9,13 +9,16 @@ explains how to effectively use these tools to build high-performance concurrent
 
 ### Structured Concurrency
 
-Haiway follows structured concurrency where tasks are managed through scope task groups:
+Haiway follows structured concurrency where tasks are managed through task groups owned by isolated
+scopes:
 
-- Tasks spawned within a scope run in its task group; they keep running until they finish or are
-  cancelled.
-- Exceptions in child tasks can propagate to parent scopes.
+- Tasks spawned within a scope run in the nearest isolated scope's task group (root or
+  `isolated=True`); they keep running until they finish or are cancelled.
+- Exceptions in child tasks cancel sibling tasks and are logged when the isolated scope exits.
+- Exceptions from child tasks do not raise from `ctx.scope()`; handle them in the tasks themselves.
+- Awaiting a task still surfaces its exception to the caller.
 - Resources are properly cleaned up through the scope lifecycle.
-- Task isolation ensures independent execution contexts.
+- Task isolation is opt-in via `isolated=True`; non-isolated scopes share the parent task group.
 
 ### Context Propagation
 
@@ -24,12 +27,34 @@ When spawning tasks, Haiway preserves the execution context:
 - State objects remain accessible via `ctx.state()`
 - Logging maintains proper scope identification
 - Observability tracking continues across task boundaries
-- Variables are isolated per task (not inherited from parent)
+- Python contextvars are copied at spawn time; later changes do not propagate between tasks
+- Haiway ctx.state() is separate from Python contextvars: a spawned task receives the current Haiway
+  state snapshot, and any updates via nested `ctx.scope(...)` stay within that task's scope (no
+  propagation to sibling tasks or the parent)
+
+### Isolated Scopes and Task Groups
+
+Only isolated scopes create their own task group and event bus. Nested non-isolated scopes share the
+parent's task group and event bus.
+
+```python
+async def main():
+    async with ctx.scope("app"):
+        ctx.spawn(run_in_app_group)
+
+        # Shares the same task group as "app"
+        async with ctx.scope("child"):
+            ctx.spawn(run_in_app_group)
+
+        # Creates a new task group and event bus
+        async with ctx.scope("child-isolated", isolated=True):
+            ctx.spawn(run_in_child_group)
+```
 
 ## Basic Task Spawning
 
 The fundamental building block for concurrency in Haiway is `ctx.spawn()`, which creates tasks
-within the current scope's task group:
+within the nearest isolated scope's task group:
 
 ```python
 from haiway import ctx
@@ -58,7 +83,8 @@ async def main():
 
 ### Fire-and-Forget Tasks
 
-Tasks spawned with `ctx.spawn()` don't need to be awaited explicitly:
+Tasks spawned with `ctx.spawn()` don't need to be awaited explicitly. They are still tied to the
+current isolated scope and will be awaited on scope exit:
 
 ```python
 async def background_task():
@@ -75,8 +101,10 @@ async def main():
         # Do other work
         await handle_requests()
 
-        # Background task is cancelled only if you cancel it or the task group raises;
+        # Background task is cancelled only if you cancel it or a sibling fails;
         # otherwise it runs to completion before scope exit
+
+If you need work to outlive the current scope, use `ctx.spawn_background()` instead of `ctx.spawn()`.
 ```
 
 ### Task Cancellation
@@ -502,28 +530,6 @@ async def monitored_processing():
             attributes={"error": str(e)}
         )
         raise e
-```
-
-### 5. Context Isolation
-
-Remember that spawned tasks have isolated variable contexts:
-
-```python
-async def context_isolation_example():
-    # Set variable in parent
-    ctx.variable(RequestID("parent-123"))
-
-    async def child_task():
-        # Variable is NOT inherited
-        request_id = ctx.variable(RequestID)  # None
-
-        # Set new variable in child
-        ctx.variable(RequestID("child-456"))
-
-    await ctx.spawn(child_task)
-
-    # Parent variable unchanged
-    assert ctx.variable(RequestID).value == "parent-123"
 ```
 
 ## Performance Considerations

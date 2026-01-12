@@ -172,15 +172,13 @@ it's used. It gets called once on the context beginning and the second time when
 For more advanced scenarios, you can use context presets to package state and disposables together:
 
 ```python
-from haiway.context import ContextPreset
+from haiway.context import ContextPresets
 
 # Create a preset with predefined state
-api_preset = ContextPreset(
-    name="api_client",
-    state=[
-        UsersService(fetching=production_users_fetching),
-        ApiConfig(base_url="https://api.example.com", timeout=60)
-    ]
+api_preset = ContextPresets.of(
+    "api_client",
+    UsersService(fetching=production_users_fetching),
+    ApiConfig(base_url="https://api.example.com", timeout=60),
 )
 
 async def main():
@@ -201,7 +199,7 @@ if __name__ == "__main__":
 
 **What's happening here:**
 
-- **Preset Definition**: `ContextPreset` packages multiple state objects together
+- **Preset Definition**: `ContextPresets.of(...)` packages multiple state objects together
 - **Direct Usage**: Pass the preset directly to `ctx.scope()` instead of a string name
 - **State Override**: Explicit state parameters override preset state by type
 - **Priority System**: Explicit state (highest) > disposables > preset state > contextual state

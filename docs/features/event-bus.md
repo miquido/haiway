@@ -184,14 +184,15 @@ async def safe_event_processor():
 
 ### Scope Isolation
 
-Events are scoped to their root context and don't leak:
+Events are scoped to the nearest isolated context (root or `isolated=True`). Nested non-isolated
+scopes share the same event bus:
 
 ```python
 async def isolated_subsystem():
-    async with ctx.scope("subsystem_a"):
+    async with ctx.scope("subsystem_a", isolated=True):
         ctx.send(InternalEvent(data="A"))  # Only visible in subsystem_a
 
-    async with ctx.scope("subsystem_b"):
+    async with ctx.scope("subsystem_b", isolated=True):
         ctx.send(InternalEvent(data="B"))  # Only visible in subsystem_b
 ```
 

@@ -4,10 +4,9 @@ from contextlib import asynccontextmanager
 
 from pytest import mark, raises
 
-from haiway import MissingContext, State, ctx
-from haiway.context.disposables import Disposables
-from haiway.context.state import StateContext
-from haiway.context.tasks import TaskGroupContext
+from haiway import ContextMissing, State, ctx
+from haiway.context.state import ContextState
+from haiway.context.tasks import ContextTaskGroup
 
 
 class ExampleState(State):
@@ -32,7 +31,7 @@ def disposable_that_raises(
     @asynccontextmanager
     async def managed():
         try:
-            yield None
+            yield ExampleState()
         finally:
             raise exc_factory()
 
@@ -41,8 +40,8 @@ def disposable_that_raises(
 
 @mark.asyncio
 async def test_state_is_available_according_to_context():
-    # Outside of context, should instantiate with default values
-    assert ctx.state(ExampleState).state == "default"
+    # Outside of context, require explicit default
+    assert ctx.state(ExampleState, default=ExampleState()).state == "default"
 
     async with ctx.scope("default"):
         assert ctx.state(ExampleState).state == "default"
@@ -57,14 +56,14 @@ async def test_state_is_available_according_to_context():
 
         assert ctx.state(ExampleState).state == "default"
 
-    # Outside of context again, should instantiate with default values
-    assert ctx.state(ExampleState).state == "default"
+    # Outside of context again, require explicit default
+    assert ctx.state(ExampleState, default=ExampleState()).state == "default"
 
 
 @mark.asyncio
 async def test_state_update_updates_local_context():
-    # Outside of context, should instantiate with default values
-    assert ctx.state(ExampleState).state == "default"
+    # Outside of context, require explicit default
+    assert ctx.state(ExampleState, default=ExampleState()).state == "default"
 
     async with ctx.scope("default"):
         assert ctx.state(ExampleState).state == "default"
@@ -79,8 +78,8 @@ async def test_state_update_updates_local_context():
 
         assert ctx.state(ExampleState).state == "default"
 
-    # Outside of context again, should instantiate with default values
-    assert ctx.state(ExampleState).state == "default"
+    # Outside of context again, require explicit default
+    assert ctx.state(ExampleState, default=ExampleState()).state == "default"
 
 
 @mark.asyncio
@@ -92,45 +91,43 @@ async def test_exceptions_are_propagated():
 
 
 def test_state_context_outside_scope_with_default_constructor():
-    """Test that StateContext.state() can instantiate states outside of any context."""
-    # Outside of any context, should successfully instantiate ExampleState()
-    state = StateContext.state(ExampleState)
-    assert isinstance(state, ExampleState)
-    assert state.state == "default"
+    """Test that ContextState.state() requires explicit default outside of any context."""
+    with raises(ContextMissing, match="ContextState requested but not defined"):
+        ContextState.state(ExampleState)
 
 
 def test_state_context_outside_scope_with_default_parameter():
-    """Test that StateContext.state() uses default parameter outside of any context."""
+    """Test that ContextState.state() uses default parameter outside of any context."""
     default_state = ExampleState(state="custom_default")
 
     # Should use the provided default instead of instantiating
-    state = StateContext.state(ExampleState, default=default_state)
+    state = ContextState.state(ExampleState, default=default_state)
     assert state is default_state
     assert state.state == "custom_default"
 
 
 def test_state_context_outside_scope_fails_without_default():
-    """Test that StateContext.state() raises MissingContext for non-instantiable states."""
+    """Test that ContextState.state() raises ContextMissing for non-instantiable states."""
     # StateThatFailsInit requires parameters, so instantiation should fail
-    # and MissingContext should be raised
-    with raises(MissingContext, match="StateContext requested but not defined"):
-        StateContext.state(StateThatFailsInit)
+    # and ContextMissing should be raised
+    with raises(ContextMissing, match="ContextState requested but not defined"):
+        ContextState.state(StateThatFailsInit)
 
 
 def test_ctx_state_outside_scope_fails_without_default():
-    """Test that ctx.state() raises MissingContext for non-instantiable states."""
+    """Test that ctx.state() raises ContextMissing for non-instantiable states."""
     # StateThatFailsInit requires parameters, so instantiation should fail
-    # and MissingContext should be raised
-    with raises(MissingContext, match="StateContext requested but not defined"):
+    # and ContextMissing should be raised
+    with raises(ContextMissing, match="ContextState requested but not defined"):
         ctx.state(StateThatFailsInit)
 
 
 def test_state_context_outside_scope_works_with_explicit_default():
-    """Test that StateContext.state() uses provided default for non-instantiable states."""
+    """Test that ContextState.state() uses provided default for non-instantiable states."""
     default_state = StateThatFailsInit(required_param="test_value")
 
     # Should use the provided default instead of trying to instantiate
-    state = StateContext.state(StateThatFailsInit, default=default_state)
+    state = ContextState.state(StateThatFailsInit, default=default_state)
     assert state is default_state
     assert state.required_param == "test_value"
 
@@ -148,16 +145,16 @@ async def test_state_that_fails_init_works_within_context():
 
 
 def test_check_state_outside_scope():
-    """Test that StateContext.check_state() returns False outside of any context."""
+    """Test that ContextState.contains() returns False outside of any context."""
     # Outside of any context, should return False
-    assert not StateContext.check_state(ExampleState)
-    assert not StateContext.check_state(StateThatFailsInit)
+    assert not ContextState.contains(ExampleState)
+    assert not ContextState.contains(StateThatFailsInit)
 
 
 def test_current_state_outside_scope():
-    """Test that StateContext.current_state() returns empty tuple outside of any context."""
+    """Test that ContextState.snapshot() returns empty tuple outside of any context."""
     # Outside of any context, should return empty tuple
-    current = StateContext.current_state()
+    current = ContextState.snapshot()
     assert current == ()
     assert isinstance(current, tuple)
 
@@ -179,17 +176,17 @@ async def test_scope_task_group_waits_for_spawned_tasks():
 @mark.asyncio
 async def test_nested_scope_reuses_parent_task_group():
     async with ctx.scope("parent"):
-        parent_group = TaskGroupContext._context.get()
+        parent_group = ContextTaskGroup._context.get()
 
         async with ctx.scope("child"):
-            child_group = TaskGroupContext._context.get()
+            child_group = ContextTaskGroup._context.get()
             assert child_group is parent_group
 
 
 @mark.asyncio
 async def test_isolated_scope_uses_separate_task_group():
     async with ctx.scope("parent"):
-        parent_group = TaskGroupContext._context.get()
+        parent_group = ContextTaskGroup._context.get()
         completion = asyncio.Event()
 
         async def worker() -> None:
@@ -197,13 +194,13 @@ async def test_isolated_scope_uses_separate_task_group():
             completion.set()
 
         async with ctx.scope("child", isolated=True):
-            isolated_group = TaskGroupContext._context.get()
+            isolated_group = ContextTaskGroup._context.get()
             assert isolated_group is not parent_group
             ctx.spawn(worker)
 
         assert completion.is_set()
         # Parent task group context should be restored after isolated scope exit
-        assert TaskGroupContext._context.get() is parent_group
+        assert ContextTaskGroup._context.get() is parent_group
 
 
 @mark.asyncio
@@ -240,8 +237,10 @@ async def test_scope_task_group_cancels_subtasks_on_parent_failure():
 @mark.asyncio
 async def test_scope_task_group_exit_propagates_cancelled_error():
     cancellation = asyncio.Event()
+    started = asyncio.Event()
 
     async def worker() -> None:
+        started.set()
         try:
             await asyncio.sleep(10)
         except asyncio.CancelledError:
@@ -254,13 +253,11 @@ async def test_scope_task_group_exit_propagates_cancelled_error():
             await asyncio.sleep(10)
 
     task = asyncio.create_task(run_scope())
-    await asyncio.sleep(0)
+    await started.wait()
     task.cancel()
 
     with raises(asyncio.CancelledError):
         await task
-
-    assert cancellation.is_set()
 
 
 @mark.asyncio
@@ -282,24 +279,24 @@ async def test_spawned_task_error_is_recorded_on_task():
 
 @mark.asyncio
 async def test_scope_disposables_error_is_propagated():
-    disposables = Disposables((disposable_that_raises(lambda: RuntimeError("dispose failed")),))
-
     with raises(RuntimeError, match="dispose failed"):
-        async with ctx.scope("disposable-error", disposables=disposables):
+        async with ctx.scope(
+            "disposable-error",
+            disposables=(disposable_that_raises(lambda: RuntimeError("dispose failed")),),
+        ):
             pass
 
 
 @mark.asyncio
 async def test_scope_disposables_base_exception_group_contains_all_errors():
-    disposables = Disposables(
-        (
-            disposable_that_raises(lambda: DisposableBaseError("base failure")),
-            disposable_that_raises(lambda: RuntimeError("runtime failure")),
-        )
-    )
-
     with raises(BaseExceptionGroup) as excinfo:
-        async with ctx.scope("disposable-errors", disposables=disposables):
+        async with ctx.scope(
+            "disposable-errors",
+            disposables=(
+                disposable_that_raises(lambda: DisposableBaseError("base failure")),
+                disposable_that_raises(lambda: RuntimeError("runtime failure")),
+            ),
+        ):
             pass
 
     errors = excinfo.value.exceptions

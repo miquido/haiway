@@ -73,7 +73,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         value: Any,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be modified"
         )
 
@@ -82,7 +82,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         name: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be deleted"
         )
 

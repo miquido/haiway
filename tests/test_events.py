@@ -1,11 +1,11 @@
 import asyncio
-from asyncio import Task
+from asyncio import Task, get_running_loop
 
 from pytest import mark, raises
 
-from haiway import MissingContext, State, ctx
-from haiway.context import EventSubscription
-from haiway.context.events import EventsContext
+from haiway import ContextMissing, State, ctx
+from haiway.context import EventsSubscription
+from haiway.context.events import ContextEvents
 
 
 class OrderCreated(State):
@@ -197,7 +197,7 @@ async def test_context_isolation():
 
         await task1
 
-    # Second root context - should have its own EventsContext
+    # Second root context - should have its own ContextEvents
     async with ctx.scope("context2"):
         context2_events = []
 
@@ -228,15 +228,15 @@ async def test_context_isolation():
 @mark.asyncio
 async def test_missing_context_errors():
     # Test send outside any context
-    with raises(MissingContext):
+    with raises(ContextMissing):
         ctx.send(OrderCreated(order_id="fail", amount=0.0))
 
     # Test subscribe outside any context
-    with raises(MissingContext):
+    with raises(ContextMissing):
         ctx.subscribe(OrderCreated)
 
-    # Note: ctx.scope automatically creates EventsContext for root scopes,
-    # so we can't test MissingContext within a ctx.scope anymore
+    # Note: ctx.scope automatically creates ContextEvents for root scopes,
+    # so we can't test ContextMissing within a ctx.scope anymore
 
 
 @mark.asyncio
@@ -307,7 +307,7 @@ async def test_concurrent_send_and_receive():
 
 @mark.asyncio
 async def test_reentrant_context_not_allowed():
-    events_ctx = EventsContext()
+    events_ctx = ContextEvents(loop=get_running_loop())
 
     async with events_ctx:
         # Try to enter the same context again
@@ -321,8 +321,8 @@ async def test_subscription_iterator_is_async():
     async with ctx.scope("test"):
         subscription = ctx.subscribe(OrderCreated)
 
-        # Verify it's an EventSubscription
-        assert isinstance(subscription, EventSubscription)
+        # Verify it's an EventsSubscription
+        assert isinstance(subscription, EventsSubscription)
 
         # Verify it has async iterator methods
         assert hasattr(subscription, "__anext__")

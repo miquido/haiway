@@ -1,6 +1,5 @@
-from __future__ import annotations
-
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
+from functools import update_wrapper
 from typing import Any, Concatenate
 
 from haiway.attributes import State
@@ -38,6 +37,7 @@ class statemethod[Subject: State, **Arguments, Result]:
     """
 
     __slots__ = (
+        "_class_cache",
         "_method",
         "_name",
     )
@@ -46,8 +46,24 @@ class statemethod[Subject: State, **Arguments, Result]:
         self,
         method: Callable[Concatenate[Subject, Arguments], Result],
     ) -> None:
-        self._method: Callable[Concatenate[Subject, Arguments], Result] = method
         self._name: str | None = None
+        self._method: Callable[Concatenate[Subject, Arguments], Result] = method
+        self._class_cache: MutableMapping[type[State], Callable[Arguments, Result]] = {}
+
+    def _bind_class_method(
+        self,
+        owner: type[Subject],
+    ) -> Callable[Arguments, Result]:
+        assert issubclass(owner, State)  # nosec: B101
+
+        def class_method(
+            *args: Arguments.args,
+            **kwargs: Arguments.kwargs,
+        ) -> Result:
+            return self._method(ctx.state(owner), *args, **kwargs)
+
+        update_wrapper(class_method, self._method)
+        return class_method
 
     def __set_name__(
         self,
@@ -55,65 +71,25 @@ class statemethod[Subject: State, **Arguments, Result]:
         name: str,
     ) -> None:
         self._name = name
+        self._class_cache[owner] = self._bind_class_method(owner)
 
     def __get__(
         self,
         obj: Subject | None,
         owner: type[Subject] | None = None,
     ) -> Callable[Arguments, Result]:
-        # Instance access: bind to provided instance
         if obj is not None:
+            # Instance access
+            return self._method.__get__(obj, owner)
 
-            def bound(
-                *args: Arguments.args,
-                **kwargs: Arguments.kwargs,
-            ) -> Result:
-                return self._method(obj, *args, **kwargs)
-
-            # Preserve useful metadata without copying signature
-            bound.__name__ = getattr(
-                self._method,
-                "__name__",
-                "bound",
-            )
-            bound.__doc__ = getattr(
-                self._method,
-                "__doc__",
-                None,
-            )
-            if hasattr(self._method, "__module__") and self._method.__module__:
-                bound.__module__ = self._method.__module__
-
-            bound.__wrapped__ = self._method  # type: ignore[attr-defined]
-
-            return bound
+        assert owner is not None  # nosec: B101
 
         # Class access: resolve instance from current ctx
-        if owner is None:
-            name: str = self._name if self._name is not None else "<unknown>"
-            raise AttributeError(f"Unbound statemethod access to '{name}' without owner class")
+        cached: Callable[Arguments, Result] | None = self._class_cache.get(owner)
+        if cached is not None:
+            return cached
 
-        def bound(
-            *args: Arguments.args,
-            **kwargs: Arguments.kwargs,
-        ) -> Result:
-            instance: Subject = ctx.state(owner)
-            return self._method(instance, *args, **kwargs)
-
-        # Preserve useful metadata without copying signature
-        bound.__name__ = getattr(
-            self._method,
-            "__name__",
-            "bound",
-        )
-        bound.__doc__ = getattr(
-            self._method,
-            "__doc__",
-            None,
-        )
-        if hasattr(self._method, "__module__") and self._method.__module__:
-            bound.__module__ = self._method.__module__
-
-        bound.__wrapped__ = self._method  # type: ignore[attr-defined]
-
-        return bound
+        # Bind classmethod and cache
+        class_method = self._bind_class_method(owner)
+        self._class_cache[owner] = class_method
+        return class_method

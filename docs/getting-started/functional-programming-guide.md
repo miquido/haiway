@@ -131,11 +131,11 @@ When multiple states of the same type exist, Haiway resolves using:
 
 1. Explicit state passed to `ctx.scope(...)` (highest)
 1. Disposables (resources yielded into the scope)
-1. Presets
+1. Presets (`ContextPresets`)
 1. Parent context (lowest)
 
-Context variables are always isolated per spawned task (`ctx.spawn` wraps tasks with isolated
-`VariablesContext`), so variables set in the parent are not visible inside spawned tasks.
+Spawned tasks inherit the current scope (state and observability) but remain isolated—mutations made
+within the task's own scope do not affect the parent.
 
 ## 4) Structured Concurrency (Scoped Tasks)
 
@@ -148,7 +148,7 @@ from haiway import ctx
 
 
 async def worker():
-    # Inherits current scope (state, observability, variables)
+    # Inherits current scope (state, observability)
     await asyncio.sleep(0.5)
     print("ZZZZzzzzz....")
 
@@ -165,7 +165,7 @@ if __name__ == "__main__":
 
 Why it matters:
 
-- Automatic cancellation/cleanup with the scope
+- Automatic cancellation/cleanup with the isolated scope
 - Consistent access to contextual state and observability
 
 ## 5) Testing the Functional Way
@@ -232,7 +232,8 @@ Guidelines:
 - State access: `ctx.state(T)` by type only
 - Priority: explicit > disposables > presets > parent context
 - Methods: use `@statemethod` for helpers that may be called from class or instance
-- Concurrency: use `ctx.spawn(...)` inside an active `ctx.scope(...)`
+- Concurrency: use `ctx.spawn(...)` inside an active `ctx.scope(...)`; use `isolated=True` for
+  task/event boundaries and `ctx.spawn_background(...)` for detached work
 - Observability: `ctx.record_info(event=..., attributes={...})` or `ctx.log_info(...)`
 
 This functional, immutable, and context‑driven approach yields predictable, testable, and

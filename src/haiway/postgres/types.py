@@ -367,7 +367,7 @@ class PostgresRow(Mapping[str, PostgresValue]):
         value: Any,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be modified"
         )
 
@@ -376,7 +376,7 @@ class PostgresRow(Mapping[str, PostgresValue]):
         name: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be deleted"
         )
 
@@ -386,7 +386,7 @@ class PostgresRow(Mapping[str, PostgresValue]):
         value: PostgresValue,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
+            f"Can't modify immutable {self.__class__.__qualname__}"
             f" item - '{key}' cannot be modified"
         )
 
@@ -395,8 +395,7 @@ class PostgresRow(Mapping[str, PostgresValue]):
         key: str,
     ) -> NoReturn:
         raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__},"
-            f" item - '{key}' cannot be deleted"
+            f"Can't modify immutable {self.__class__.__qualname__} item - '{key}' cannot be deleted"
         )
 
     def __getitem__(
@@ -454,7 +453,7 @@ class PostgresTransactionContext(Protocol):
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> bool | None: ...
+    ) -> None: ...
 
 
 @runtime_checkable
@@ -475,7 +474,7 @@ class PostgresConnectionContext(Protocol):
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> bool | None: ...
+    ) -> None: ...
 
 
 @runtime_checkable
