@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable, Mapping, Sequence, Set
 from copy import copy, deepcopy
 from datetime import date, datetime
@@ -15,9 +16,9 @@ from typing import (
 )
 from uuid import UUID, uuid4
 
-from pytest import raises
+from pytest import mark, raises
 
-from haiway import MISSING, Alias, Default, Missing, State, ValidationError
+from haiway import MISSING, Alias, Default, Missing, State, ValidationError, ctx
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -525,3 +526,57 @@ def test_hash_excludes_missing_values() -> None:
 
     # obj3 should have different hash from obj2 since None != MISSING
     assert hash2 != hash3
+
+
+@mark.asyncio
+async def test_concurrent_state_initialization() -> None:
+    """Verify concurrent state requests don't double-initialize."""
+    init_count = 0
+
+    class CountingState(State):
+        def __init__(self) -> None:
+            nonlocal init_count
+            init_count += 1
+
+    async with ctx.scope("concurrent"):
+        # Request state concurrently from multiple coroutines
+        async def request_state() -> CountingState:
+            return ctx.state(CountingState)
+
+        results = await asyncio.gather(
+            request_state(),
+            request_state(),
+            request_state(),
+        )
+
+        # All should reference the same instance
+        assert results[0] is results[1] is results[2]
+        # Initialization should happen exactly once
+        assert init_count == 1
+
+
+@mark.asyncio
+async def test_no_deadlock_on_recursive_state_access() -> None:
+    """Verify recursive state access during init doesn't cause deadlock."""
+    init_count = 0
+
+    class DependentState(State):
+        value: str = "default"
+
+    class RecursiveState(State):
+        value: str = "recursive"
+
+        def __init__(self) -> None:
+            nonlocal init_count
+            init_count += 1
+            # Access another state during initialization
+            # This would deadlock with a non-reentrant lock
+            ctx.state(DependentState)
+
+    async with ctx.scope("recursive"):
+        # This should not deadlock
+        recursive = ctx.state(RecursiveState)
+        assert recursive.value == "recursive"
+        assert ctx.state(RecursiveState) is recursive
+        # Initialization happened exactly once (despite recursive access)
+        assert init_count == 1
