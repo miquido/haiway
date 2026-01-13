@@ -197,7 +197,7 @@ class FileContext(Protocol):
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> bool | None:
+    ) -> None:
         """
         Exit the file context and clean up resources.
 
@@ -209,11 +209,6 @@ class FileContext(Protocol):
             The exception value if an exception occurred
         exc_tb : TracebackType | None
             The exception traceback if an exception occurred
-
-        Returns
-        -------
-        bool | None
-            None to allow exceptions to propagate
         """
         ...
 
@@ -372,7 +367,7 @@ def _file_access_context(
             exc_type: type[BaseException] | None,
             exc_val: BaseException | None,
             exc_tb: TracebackType | None,
-        ) -> bool | None:
+        ) -> None:
             assert self._file_handle is not None  # nosec: B101
             await _close_file_handle(
                 self._file_handle,

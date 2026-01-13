@@ -1,9 +1,8 @@
-from asyncio import AbstractEventLoop, Future, get_running_loop
+from asyncio import AbstractEventLoop, Future, InvalidStateError, get_running_loop
 from collections.abc import AsyncIterator, MutableMapping
 from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import Any, ClassVar, Self, final
-from weakref import WeakValueDictionary
 
 from haiway.attributes import State
 from haiway.context.types import ContextMissing
@@ -84,7 +83,7 @@ class ContextEvents:
         loop: AbstractEventLoop,
     ) -> None:
         self._loop: AbstractEventLoop = loop
-        self._threads: MutableMapping[type[State], Future[Event[Any]]] = WeakValueDictionary()
+        self._threads: MutableMapping[type[State], Future[Event[Any]]] = {}
         self._token: Token[ContextEvents] | None = None
 
     def _send(
@@ -123,7 +122,14 @@ class ContextEvents:
                 continue
 
             # end all incomplete futures
-            future.set_exception(StopAsyncIteration())
+            try:
+                future.set_exception(StopAsyncIteration())
+
+            except InvalidStateError:
+                pass  # Already done by concurrent send
+
+        # Clear all references to allow garbage collection
+        self._threads.clear()
 
     async def __aenter__(self) -> None:
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101

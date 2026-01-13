@@ -86,8 +86,11 @@ class BackgroundTaskGroup:
     ) -> None:
         for signum in _SHUTDOWN_SIGNALS:
 
-            def schedule_shutdown() -> None:
-                self.shutdown(loop=loop)
+            def schedule_shutdown(
+                *,
+                _loop: AbstractEventLoop = loop,
+            ) -> None:
+                self.shutdown(loop=_loop)
 
             try:
                 loop.add_signal_handler(signum, schedule_shutdown)
