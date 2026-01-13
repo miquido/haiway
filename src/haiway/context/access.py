@@ -187,14 +187,14 @@ class ctx:
             name = scope
             presets = None
 
-        context_disposables: ContextDisposables
+        context_disposables: Disposables
         if disposables is None:
-            context_disposables = ContextDisposables.of(
+            context_disposables = Disposables.of(
                 DisposableState.of(*(element for element in state if element is not None))
             )
 
         else:
-            context_disposables = ContextDisposables.of(
+            context_disposables = Disposables.of(
                 *disposables,
                 DisposableState.of(*(element for element in state if element is not None)),
             )
@@ -270,7 +270,7 @@ class ctx:
         ...         await conn_state.connection.execute("SELECT 1")
         """
 
-        return Disposables(disposables)
+        return ContextDisposables(disposables)
 
     @overload
     @staticmethod

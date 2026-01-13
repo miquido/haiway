@@ -77,10 +77,8 @@ async def test_context_disposables_collects_state() -> None:
     mock = MockDisposable(enter_return=state)
     disposables = ContextDisposables.of(mock)
 
-    async with disposables as states:
-        collected = tuple(states)
-
-    assert collected == (state,)
+    async with disposables:
+        assert ctx.state(ExampleState) is state
     assert mock.enter_called
     assert mock.exit_called
 
@@ -92,10 +90,9 @@ async def test_context_disposables_collects_multiple_states() -> None:
     mock = MockDisposable(enter_return=[state1, state2])
     disposables = ContextDisposables.of(mock)
 
-    async with disposables as states:
-        collected = tuple(states)
-
-    assert set(collected) == {state1, state2}
+    async with disposables:
+        assert ctx.state(ExampleState) is state1
+        assert ctx.state(AnotherExampleState) is state2
     assert mock.enter_called
     assert mock.exit_called
 
@@ -107,11 +104,11 @@ async def test_context_disposables_enter_exception_propagates() -> None:
     disposables = ContextDisposables.of(mock)
 
     with raises(RuntimeError, match="enter failed"):
-        async with disposables as states:
-            tuple(states)
+        async with disposables:
+            pass
 
     assert mock.enter_called
-    assert mock.exit_called
+    assert mock.exit_called is False
 
 
 @mark.asyncio
@@ -148,14 +145,20 @@ async def test_context_disposables_exit_with_multiple_exceptions_groups() -> Non
 
 
 @mark.asyncio
-async def test_disposables_context_propagates_state() -> None:
-    async with Disposables.of(disposable_returning_single_state()):
-        state = ctx.state(ExampleState)
-        assert state.value == "single"
+async def test_disposables_collects_state() -> None:
+    async with Disposables.of(disposable_returning_single_state()) as states:
+        collected = tuple(states)
+
+    assert len(collected) == 1
+    assert collected[0].value == "single"
 
 
 @mark.asyncio
-async def test_disposables_context_multiple_states() -> None:
-    async with Disposables.of(disposable_returning_multiple_states()):
-        assert ctx.state(ExampleState).value == "first"
-        assert ctx.state(AnotherExampleState).data == 100
+async def test_disposables_collects_multiple_states() -> None:
+    async with Disposables.of(disposable_returning_multiple_states()) as states:
+        collected = tuple(states)
+
+    assert len(collected) == 2
+    assert {type(state) for state in collected} == {ExampleState, AnotherExampleState}
+    assert next(state for state in collected if isinstance(state, ExampleState)).value == "first"
+    assert next(state for state in collected if isinstance(state, AnotherExampleState)).data == 100

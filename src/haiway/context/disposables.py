@@ -78,7 +78,7 @@ class DisposableState:
 
 
 @final  # consider immutable
-class ContextDisposables:
+class Disposables:
     @classmethod
     def of(
         cls,
@@ -208,7 +208,7 @@ def _collect_state(
 
 
 @final  # immutable
-class Disposables:
+class ContextDisposables:
     @classmethod
     def of(
         cls,
@@ -226,11 +226,11 @@ class Disposables:
         disposables: Iterable[Disposable | None],
         /,
     ) -> None:
-        self._disposables: ContextDisposables
+        self._disposables: Disposables
         object.__setattr__(
             self,
             "_disposables",
-            ContextDisposables(disposables),
+            Disposables(disposables),
         )
         self._context_state: ContextState | None
         object.__setattr__(
