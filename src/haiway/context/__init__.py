@@ -1,5 +1,5 @@
 from haiway.context.access import ctx
-from haiway.context.disposables import Disposable, Disposables, DisposableState
+from haiway.context.disposables import ContextDisposables, Disposable, Disposables, DisposableState
 from haiway.context.events import ContextEvents, EventsSubscription
 from haiway.context.identifier import ContextIdentifier
 from haiway.context.observability import (
@@ -21,6 +21,7 @@ from haiway.context.state import ContextState
 from haiway.context.types import ContextException, ContextMissing, ContextStateMissing
 
 __all__ = (
+    "ContextDisposables",
     "ContextEvents",
     "ContextException",
     "ContextIdentifier",

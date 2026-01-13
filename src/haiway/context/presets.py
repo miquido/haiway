@@ -16,7 +16,7 @@ from typing import (
 )
 
 from haiway.attributes import State
-from haiway.context.disposables import ContextDisposables, Disposable, DisposableState
+from haiway.context.disposables import Disposable, Disposables, DisposableState
 
 __all__ = (
     "ContextPresets",
@@ -157,8 +157,8 @@ class ContextPresets:
             disposables=(*self._disposables, *disposables),
         )
 
-    def resolve(self) -> ContextDisposables:
-        return ContextDisposables(factory() for factory in self._disposables)
+    def resolve(self) -> Disposables:
+        return Disposables(factory() for factory in self._disposables)
 
     def __setattr__(
         self,

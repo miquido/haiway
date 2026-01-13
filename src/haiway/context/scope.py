@@ -4,7 +4,7 @@ from logging import Logger
 from types import TracebackType
 from typing import final
 
-from haiway.context.disposables import ContextDisposables
+from haiway.context.disposables import Disposables
 from haiway.context.events import ContextEvents
 from haiway.context.identifier import ContextIdentifier
 from haiway.context.observability import ContextObservability, Observability, ObservabilityLevel
@@ -35,7 +35,7 @@ class ContextScope:
         self,
         name: str,
         presets: ContextPresets | None,
-        disposables: ContextDisposables,
+        disposables: Disposables,
         observability: Observability | Logger | None,
         isolated: bool,
     ) -> None:
@@ -49,7 +49,7 @@ class ContextScope:
         # remember requested presets
         self._presets: ContextPresets | None = presets
         # store provided disposables extended with provided state
-        self._disposables: ContextDisposables = disposables
+        self._disposables: Disposables = disposables
         # prepare for context state management
         self._state: ContextState | None = None
         # prepare for isolation
@@ -81,7 +81,7 @@ class ContextScope:
                 )
 
             else:
-                presets_disposables: ContextDisposables = presets.resolve()
+                presets_disposables: Disposables = presets.resolve()
                 self._state = ContextState.updated(
                     (
                         *await self._exit_stack.enter_async_context(presets_disposables),
