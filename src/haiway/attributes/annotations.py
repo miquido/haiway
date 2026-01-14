@@ -9,7 +9,6 @@ import typing
 import uuid
 from collections import abc as collections_abc
 from collections.abc import (
-    Collection,
     Generator,
     Hashable,
     Iterable,
@@ -1705,7 +1704,7 @@ class TupleAttribute(Immutable):
         if isinstance(value, str | bytes | bytearray | memoryview):
             raise TypeError(f"'{value}' is not matching expected type of 'tuple'")
 
-        if isinstance(value, Collection):
+        if isinstance(value, Sequence):
             if len(value) != len(self.values):  # pyright: ignore[reportUnknownArgumentType]
                 raise ValueError(
                     f"'{value}' does not match expected tuple length {len(self.values)}"
@@ -1726,7 +1725,7 @@ class TupleAttribute(Immutable):
         value: Any,
     ) -> bool:
         return (
-            isinstance(value, tuple)
+            isinstance(value, Sequence)
             and len(value) == len(self.values)  # pyright: ignore[reportUnknownArgumentType]
             and all(element.check(value[idx]) for idx, element in enumerate(self.values))
         )
@@ -1816,7 +1815,7 @@ class SequenceAttribute(Immutable):
         if isinstance(value, str | bytes | bytearray | memoryview):
             raise TypeError(f"'{value}' is not matching expected type of 'Sequence'")
 
-        if isinstance(value, Iterable):
+        if isinstance(value, Sequence):
 
             def validated() -> Generator[Any]:
                 for idx, element in enumerate(value):  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]

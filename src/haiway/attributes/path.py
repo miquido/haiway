@@ -280,7 +280,7 @@ class PropertyAttributePathComponent(AttributePathComponent):
 
 
 @final
-class SequenceItemAttributePathComponent[Owner, Value](AttributePathComponent):
+class SequenceItemAttributePathComponent(AttributePathComponent):
     """
     Path component for accessing items in a sequence by index.
 
@@ -843,7 +843,7 @@ class AttributePath[Root, Attribute]:
             attribute=annotation,
         )
 
-    def __getitem__(
+    def __getitem__(  # noqa: C901, PLR0912
         self,
         key: str | int,
     ) -> Any:
@@ -895,9 +895,24 @@ class AttributePath[Root, Attribute]:
             If the key type is incompatible with the attribute type or if the
             attribute type does not support item access
         """
-        match _unaliased_origin(self.__attribute__):
+        unaliased_attribute: Any = _unaliased(self.__attribute__)
+        if isinstance(unaliased_attribute, types.UnionType) or (
+            get_origin(unaliased_attribute) is typing.Union
+        ):
+            non_optional = tuple(
+                arg for arg in get_args(unaliased_attribute) if arg is not types.NoneType
+            )
+            if len(non_optional) != 1:
+                raise TypeError(
+                    "Unsupported Union type annotation",
+                    self.__attribute__.__name__,
+                )
+
+            unaliased_attribute = _unaliased(non_optional[0])
+
+        match get_origin(unaliased_attribute) or unaliased_attribute:
             case collections_abc.Mapping | typing.Mapping | builtins.dict:
-                match get_args(_unaliased(self.__attribute__)):
+                match get_args(unaliased_attribute):
                     case (builtins.str | builtins.int, element_annotation):
                         return AttributePath[Root, Any](
                             self.__root__,
@@ -925,13 +940,13 @@ class AttributePath[Root, Attribute]:
                         self.__attribute__.__name__,
                     )
 
-                match get_args(_unaliased(self.__attribute__)):
+                match get_args(unaliased_attribute):
                     case (element_annotation, builtins.Ellipsis | types.EllipsisType):
                         return AttributePath[Root, Any](
                             self.__root__,
                             *(
                                 *self.__components__,
-                                SequenceItemAttributePathComponent[Any, Any](
+                                SequenceItemAttributePathComponent(
                                     root=self.__attribute__,  # pyright: ignore[reportArgumentType]
                                     attribute=element_annotation,
                                     index=key,
@@ -945,7 +960,7 @@ class AttributePath[Root, Attribute]:
                             self.__root__,
                             *(
                                 *self.__components__,
-                                SequenceItemAttributePathComponent[Any, Any](
+                                SequenceItemAttributePathComponent(
                                     root=self.__attribute__,  # pyright: ignore[reportArgumentType]
                                     attribute=other[key],
                                     index=key,
@@ -961,13 +976,13 @@ class AttributePath[Root, Attribute]:
                         self.__attribute__.__name__,
                     )
 
-                match get_args(_unaliased(self.__attribute__)):
+                match get_args(unaliased_attribute):
                     case (element_annotation,):
                         return AttributePath[Root, Any](
                             self.__root__,
                             *(
                                 *self.__components__,
-                                SequenceItemAttributePathComponent[Any, Any](
+                                SequenceItemAttributePathComponent(
                                     root=self.__attribute__,  # pyright: ignore[reportArgumentType]
                                     attribute=element_annotation,
                                     index=key,
@@ -1092,17 +1107,22 @@ class AttributePath[Root, Attribute]:
             return resolved
 
 
-def _unaliased_origin(base: Any) -> Any:
-    if isinstance(base, TypeAliasType):
-        return get_origin(base.__value__) or base.__value__
-
-    else:
-        return get_origin(base) or base
-
-
 def _unaliased(base: Any) -> Any:
-    if isinstance(base, TypeAliasType):
-        return base.__value__
+    while True:
+        if isinstance(base, TypeAliasType):
+            base = base.__value__
+            continue
 
-    else:
+        if get_origin(base) is typing.Annotated:
+            base = get_args(base)[0]
+            continue
+
         return base
+
+
+def _unaliased_origin(base: Any) -> Any:
+    base = _unaliased(base)
+    if isinstance(base, types.UnionType) or get_origin(base) is typing.Union:
+        return tuple(_unaliased_origin(arg) for arg in get_args(base))
+
+    return get_origin(base) or base
