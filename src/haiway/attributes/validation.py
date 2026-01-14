@@ -98,7 +98,7 @@ class ValidationContext:
         ValidationContext._context.reset(self._token)
         self._token = None
 
-        if isinstance(exc_val, Exception) and exc_type is not ValidationError:
+        if isinstance(exc_val, Exception) and not isinstance(exc_val, ValidationError):
             raise ValidationError(
                 path=self._path,
                 cause=exc_val,
