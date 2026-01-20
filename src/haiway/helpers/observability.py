@@ -17,13 +17,6 @@ __all__ = ("LoggerObservability",)
 
 
 class ScopeStore:
-    """
-    Internal class for storing scope information during observability tracking.
-
-    Tracks timing information, nested scopes, and recorded events for a specific scope.
-    Used by LoggerObservability to maintain the hierarchy of scopes and their data.
-    """
-
     __slots__ = (
         "_completed",
         "_exited",
@@ -47,44 +40,21 @@ class ScopeStore:
 
     @property
     def time(self) -> float:
-        """Calculate the elapsed time in seconds since this scope was entered."""
         return (self._completed or monotonic()) - self.entered
 
     @property
     def exited(self) -> bool:
-        """Check if this scope has been exited."""
         return self._exited is not None
 
     def exit(self) -> None:
-        """Mark this scope as exited and record the exit time."""
         assert self._exited is None  # nosec: B101
         self._exited = monotonic()
 
     @property
     def completed(self) -> bool:
-        """
-        Check if this scope and all its nested scopes are completed.
-
-        A scope is considered completed when it has been exited and all its
-        nested scopes have also been completed.
-        """
         return self._completed is not None and all(nested.completed for nested in self.nested)
 
     def try_complete(self) -> bool:
-        """
-        Try to mark this scope as completed.
-
-        A scope can only be completed if:
-        - It has been exited
-        - It has not already been completed
-        - All its nested scopes are completed
-
-        Returns
-        -------
-        bool
-            True if the scope was successfully marked as completed,
-            False if any completion condition was not met
-        """
         if self._exited is None:
             return False  # not elegible for completion yet
 

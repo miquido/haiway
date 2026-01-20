@@ -1,11 +1,12 @@
 from collections.abc import Iterable, Mapping
 from typing import Any, cast, overload
 
-from haiway.types.missing import MISSING
+from haiway.types import MISSING, Map
 
 __all__ = (
     "as_dict",
     "as_list",
+    "as_map",
     "as_set",
     "as_tuple",
     "without_missing",
@@ -190,6 +191,51 @@ def as_dict[K, V](
 
     else:
         return dict(mapping)
+
+
+@overload
+def as_map[K, V](
+    mapping: Mapping[K, V],
+    /,
+) -> Map[K, V]: ...
+
+
+@overload
+def as_map[K, V](
+    mapping: Mapping[K, V] | None,
+    /,
+) -> Map[K, V] | None: ...
+
+
+def as_map[K, V](
+    mapping: Mapping[K, V] | None,
+    /,
+) -> Map[K, V] | None:
+    """
+    Converts any given Mapping into a Map.
+
+    Parameters
+    ----------
+    mapping : Mapping[K, V] | None
+        The input mapping to be converted to a Map.
+        If None is provided, None is returned.
+
+    Returns
+    -------
+    Map[K, V] | None
+        A new Map containing all elements of the input mapping,
+        or the original Map if it was already one.
+        Returns None if None was provided.
+    """
+
+    if mapping is None:
+        return None
+
+    elif isinstance(mapping, Map):
+        return mapping
+
+    else:
+        return Map(mapping)
 
 
 @overload
