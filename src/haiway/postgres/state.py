@@ -1,5 +1,5 @@
 import pkgutil
-from collections.abc import Sequence
+from collections.abc import Generator, MutableMapping, Sequence
 from importlib import import_module
 from types import ModuleType
 from typing import Any, Final, overload
@@ -187,16 +187,9 @@ class Postgres(State):
                 ctx.log_info(f"...discovering migrations from {migrations}...")
                 module: ModuleType = import_module(migrations)
 
-                migration_sequence: Sequence[PostgresMigrating] = [
+                migration_sequence = [
                     import_module(f"{module.__name__}.{name}").migration
-                    for name in sorted(
-                        (
-                            module_name
-                            for _, module_name, _ in pkgutil.iter_modules(module.__path__)
-                            if module_name.startswith("migration_")
-                        ),
-                        key=lambda name: int(name[len("migration_") :]),
-                    )
+                    for name in _validated_migration_names(module=module)
                 ]
                 ctx.log_info(f"...found {len(migration_sequence)} migrations...")
 
@@ -325,3 +318,41 @@ SELECT COUNT(*) as count FROM migrations;\
 MIGRATION_COMPLETION_STATEMENT: Final[str] = """\
 INSERT INTO migrations DEFAULT VALUES;\
 """
+
+
+def _validated_migration_names(
+    module: ModuleType,
+) -> Generator[str]:
+    names: list[str] = [
+        module_name
+        for _, module_name, _ in pkgutil.iter_modules(module.__path__)
+        if module_name.startswith("migration_")
+    ]
+
+    yield from _validate_migration_names(names)
+
+
+def _validate_migration_names(
+    names: Sequence[str],
+) -> Generator[str]:
+    discovered: MutableMapping[int, str] = {}
+    for module_name in names:
+        if not module_name.startswith("migration_"):
+            raise ValueError("Migration modules must start with 'migration_'")
+
+        suffix: str = module_name[len("migration_") :]
+        if not suffix.isdigit():
+            raise ValueError(f"Migration module `{module_name}` suffix must be an integer")
+
+        number: int = int(suffix)
+        if number in discovered:
+            raise ValueError("Migration modules must not contain duplicates")
+
+        discovered[number] = module_name
+
+    for idx in range(len(discovered)):
+        if migration := discovered.get(idx):
+            yield migration
+
+        else:
+            raise ValueError("Migrations numbers must use continuous values starting from '0'")

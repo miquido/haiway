@@ -1,65 +1,72 @@
 import signal
-from asyncio import AbstractEventLoop, Task, TaskGroup, get_running_loop
+from asyncio import AbstractEventLoop, CancelledError, Task, TaskGroup, gather, get_running_loop
 from collections.abc import Callable, Collection, Coroutine, MutableMapping, MutableSet
 from contextvars import Context, ContextVar, Token, copy_context
 from inspect import iscoroutine
 from threading import Lock
 from types import FrameType, TracebackType
-from typing import Any, ClassVar, Final, cast, final
+from typing import Any, ClassVar, cast, final
 
 from haiway.context.observability import ContextObservability, ObservabilityLevel
 
-__all__ = ("ContextTaskGroup",)
-
-_SHUTDOWN_SIGNALS: tuple[int, ...] = (
-    signal.SIGINT,
-    signal.SIGTERM,
-    getattr(signal, "SIGBREAK", signal.SIGTERM),
+__all__ = (
+    "BackgroundTaskGroup",
+    "ContextTaskGroup",
 )
 
 
-@final
+@final  # global background tasks
 class BackgroundTaskGroup:
-    __slots__ = (
-        "_lock",
-        "_loops_tasks",
-    )
+    _lock: ClassVar[Lock] = Lock()
+    _loops_tasks: ClassVar[MutableMapping[AbstractEventLoop, MutableSet[Task[Any]]]] = {}
 
-    def __init__(self) -> None:
-        self._loops_tasks: MutableMapping[AbstractEventLoop, MutableSet[Task[Any]]] = {}
-        self._lock: Lock = Lock()
-
+    @classmethod
     def create_task[Result](
-        self,
+        cls,
         coroutine: Coroutine[None, None, Result],
         /,
         *,
         context: Context | None = None,
     ) -> Task[Result]:
         loop: AbstractEventLoop = get_running_loop()
-        loop_tasks: MutableSet[Task[Any]] | None
-        install_handlers: bool = False
-        with self._lock:
-            loop_tasks = self._loops_tasks.get(loop)
-            if loop_tasks is None:
-                loop_tasks = set()
-                self._loops_tasks[loop] = loop_tasks
-                install_handlers = True
-
-        if install_handlers:
-            # Install best-effort signal handlers to shut down background tasks.
-            self._install_loop_handlers(loop)
 
         task: Task[Any] = loop.create_task(
             coroutine,
             context=context,
         )
-        loop_tasks.add(task)
-        task.add_done_callback(loop_tasks.discard)
+
+        loop_tasks: MutableSet[Task[Any]] | None
+        with cls._lock:
+            loop_tasks = cls._loops_tasks.get(loop)
+            if loop_tasks is None:
+                loop_tasks = set()
+                cls._loops_tasks[loop] = loop_tasks
+
+            loop_tasks.add(task)
+
+        def handle_done(completed: Task[Any]) -> None:
+            loop_tasks.discard(completed)
+
+            try:
+                exception = completed.exception()
+            except CancelledError:
+                return
+
+            if exception is None:
+                return
+
+            ContextObservability.record_log(
+                ObservabilityLevel.ERROR,
+                "Background task failed",
+                exception=exception,
+            )
+
+        task.add_done_callback(handle_done)
         return task
 
+    @classmethod
     def shutdown(
-        self,
+        cls,
         *,
         loop: AbstractEventLoop | None = None,
     ) -> None:
@@ -67,69 +74,75 @@ class BackgroundTaskGroup:
             loop = get_running_loop()
 
         loop_tasks: Collection[Task[Any]]
-        with self._lock:
-            loop_tasks = tuple(self._loops_tasks.pop(loop, ()))
+        with cls._lock:
+            loop_tasks = tuple(cls._loops_tasks.pop(loop, ()))
 
         if loop.is_closed():
-            return  # can't do anything at this state
+            return
 
-        def clear_tasks() -> None:
-            for task in loop_tasks:
-                task.cancel()
+        else:
+            def cancel_tasks() -> None:
+                for task in loop_tasks:
+                    try:
+                        task.cancel()
+                    except RuntimeError:
+                        pass
 
-        loop.call_soon_threadsafe(clear_tasks)
+            async def drain_tasks() -> None:
+                await gather(*loop_tasks, return_exceptions=True)
 
-    def _install_loop_handlers(
-        self,
-        loop: AbstractEventLoop,
-        /,
-    ) -> None:
-        for signum in _SHUTDOWN_SIGNALS:
+            def schedule_cleanup() -> None:
+                cancel_tasks()
 
-            def schedule_shutdown(
-                *,
-                _loop: AbstractEventLoop = loop,
-            ) -> None:
-                self.shutdown(loop=_loop)
+                try:
+                    loop.create_task(drain_tasks())  # noqa: RUF006
+                except RuntimeError:
+                    pass
 
             try:
-                loop.add_signal_handler(signum, schedule_shutdown)
+                loop.call_soon_threadsafe(schedule_cleanup)
+            except RuntimeError:
+                cancel_tasks()
 
-            except (NotImplementedError, RuntimeError, ValueError):
-                previous_handler: Any = signal.getsignal(signum)
+    @classmethod
+    def shutdown_all(cls) -> None:
+        loops: Collection[AbstractEventLoop]
+        with cls._lock:
+            loops = tuple(cls._loops_tasks.keys())
 
-                if callable(previous_handler):
-
-                    def _composed_handler(
-                        _signum: int,
-                        _frame: FrameType | None,
-                        *,
-                        _previous: Callable[[int, FrameType | None], Any] = previous_handler,
-                    ) -> None:
-                        schedule_shutdown()
-                        _previous(_signum, _frame)
-
-                    try:
-                        signal.signal(signum, _composed_handler)
-
-                    except ValueError:
-                        continue
-                else:
-
-                    def _handler(
-                        _signum: int,
-                        _frame: FrameType | None,
-                    ) -> None:
-                        schedule_shutdown()
-
-                    try:
-                        signal.signal(signum, _handler)
-
-                    except ValueError:
-                        continue
+        for loop in loops:
+            cls.shutdown(loop=loop)
 
 
-BACKGROUND_TASKS: Final[BackgroundTaskGroup] = BackgroundTaskGroup()
+# Install best-effort signal handlers to shut down background tasks.
+for signum in (
+    signal.SIGINT,
+    signal.SIGTERM,
+):
+    previous_handler: Any = signal.getsignal(signum)
+
+    def handle_signal(
+        received: int,
+        frame: FrameType | None,
+        *,
+        previous: signal.Handlers | Callable[[int, FrameType | None], None] = previous_handler,
+    ) -> None:
+        BackgroundTaskGroup.shutdown_all()
+        if previous is signal.SIG_IGN:
+            return
+
+        if previous is signal.SIG_DFL:
+            signal.signal(received, signal.SIG_DFL)
+            signal.raise_signal(received)
+            return
+
+        if callable(previous):
+            previous(received, frame)
+
+    try:
+        signal.signal(signum, handle_signal)
+    except (OSError, RuntimeError, ValueError):
+        pass  # ignore
 
 
 @final  # consider immutable
@@ -183,7 +196,7 @@ class ContextTaskGroup:
                 *args, **kwargs
             )
 
-        return BACKGROUND_TASKS.create_task(
+        return BackgroundTaskGroup.create_task(
             coroutine,
             context=copy_context(),
         )
@@ -215,9 +228,6 @@ class ContextTaskGroup:
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         assert self._task_group is not None  # nosec: B101
 
-        ContextTaskGroup._context.reset(self._token)
-        self._token = None
-
         try:
             await self._task_group.__aexit__(
                 exc_type,
@@ -225,12 +235,19 @@ class ContextTaskGroup:
                 exc_tb,
             )
 
-        except ExceptionGroup as exc:  # do not propagate group errors
+        except ExceptionGroup as exc:  # log before propagation
             ContextObservability.record_log(
                 ObservabilityLevel.ERROR,
                 "Context task group exit failed",
                 exception=exc,
             )
+            if exc_val is not None:
+                raise exc_val from exc  # reraise currently handled exception
+
+            else:
+                raise  # raise exit exception
 
         finally:
+            ContextTaskGroup._context.reset(self._token)
+            self._token = None
             self._task_group = None

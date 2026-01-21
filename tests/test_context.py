@@ -1,10 +1,12 @@
 import asyncio
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from types import TracebackType
 
 from pytest import mark, raises
 
 from haiway import ContextMissing, State, ctx
+from haiway.context import tasks as tasks_module
 from haiway.context.state import ContextState
 from haiway.context.tasks import ContextTaskGroup
 
@@ -235,6 +237,85 @@ async def test_scope_task_group_cancels_subtasks_on_parent_failure():
 
 
 @mark.asyncio
+async def test_scope_task_group_exit_propagates_exception_group():
+    async def worker() -> None:
+        await asyncio.sleep(0)
+        raise FakeException()
+
+    with raises(ExceptionGroup):
+        async with ctx.scope("task-group-exception-group"):
+            ctx.spawn(worker)
+
+
+@mark.asyncio
+async def test_context_task_group_keeps_context_during_exit(monkeypatch):
+    instances: list[object] = []
+    captured: list[object | None] = []
+
+    class CapturingTaskGroup(asyncio.TaskGroup):
+        def __init__(self) -> None:
+            super().__init__()
+            instances.append(self)
+
+        async def __aenter__(self) -> asyncio.TaskGroup:
+            return await super().__aenter__()
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> bool | None:
+            try:
+                captured.append(ContextTaskGroup._context.get())
+            except LookupError:
+                captured.append(None)
+            return await super().__aexit__(exc_type, exc_val, exc_tb)
+
+    monkeypatch.setattr(tasks_module, "TaskGroup", CapturingTaskGroup)
+
+    async with ContextTaskGroup():
+        await asyncio.sleep(0)
+
+    assert len(instances) == 1
+    assert captured == [instances[0]]
+
+
+def test_background_task_shutdown_handles_loop_race(monkeypatch):
+    class DummyTask:
+        def __init__(self) -> None:
+            self.cancelled = False
+
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    class DummyLoop:
+        def __init__(self) -> None:
+            self.called = False
+
+        def is_closed(self) -> bool:
+            return False
+
+        def call_soon_threadsafe(self, callback: object) -> None:
+            self.called = True
+            raise RuntimeError("loop closed")
+
+    dummy_loop = DummyLoop()
+    dummy_task = DummyTask()
+
+    monkeypatch.setattr(
+        tasks_module.BackgroundTaskGroup,
+        "_loops_tasks",
+        {dummy_loop: {dummy_task}},
+    )
+
+    tasks_module.BackgroundTaskGroup.shutdown(loop=dummy_loop)
+
+    assert dummy_loop.called is True
+    assert dummy_task.cancelled is True
+
+
+@mark.asyncio
 async def test_scope_task_group_exit_propagates_cancelled_error():
     cancellation = asyncio.Event()
     started = asyncio.Event()
@@ -266,11 +347,14 @@ async def test_spawned_task_error_is_recorded_on_task():
         await asyncio.sleep(0)
         raise FakeException()
 
-    async with ctx.scope("subtask-error"):
-        task = ctx.spawn(failing_task)
-        # Yield control so the task can run and fail inside the scope
-        await asyncio.sleep(0)
+    task: asyncio.Task[None] | None = None
+    with raises(ExceptionGroup):
+        async with ctx.scope("subtask-error"):
+            task = ctx.spawn(failing_task)
+            # Yield control so the task can run and fail inside the scope
+            await asyncio.sleep(0)
 
+    assert task is not None
     assert task.done()
     assert not task.cancelled()
     exception = task.exception()

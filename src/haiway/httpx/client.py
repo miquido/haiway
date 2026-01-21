@@ -250,4 +250,17 @@ class HTTPXClient(Immutable):
             )
 
         except Exception as exc:
-            raise HTTPClientError("HTTP request failed") from exc
+            url_string: str = url
+            try:
+                url_string = str(URL(url))
+
+            except Exception:  # nosec: B110
+                pass  # skip and use whathever there was
+
+            raise HTTPClientError(
+                "HTTP request failed",
+                method=method,
+                url=url_string,
+                status_code=None,
+                cause=exc,
+            ) from exc

@@ -30,8 +30,10 @@ from haiway.context.observability import (
 from haiway.context.presets import ContextPresets, ContextPresetsRegistry
 from haiway.context.scope import ContextScope
 from haiway.context.state import ContextState
-from haiway.context.tasks import ContextTaskGroup
-from haiway.utils.stream import AsyncStream
+from haiway.context.tasks import (
+    BackgroundTaskGroup,
+    ContextTaskGroup,
+)
 
 __all__ = ("ctx",)
 
@@ -365,6 +367,16 @@ class ctx:
         return ContextTaskGroup.background_run(coro, *args, **kwargs)
 
     @staticmethod
+    def shutdown_background_tasks() -> None:
+        """
+        Cancel all background tasks created via ``ctx.spawn_background`` or fallback spawns.
+
+        Intended for graceful shutdown and test teardown to avoid task leaks.
+        """
+
+        BackgroundTaskGroup.shutdown_all()
+
+    @staticmethod
     def stream[Element, **Arguments](
         source: Callable[Arguments, AsyncGenerator[Element]],
         /,
@@ -391,23 +403,14 @@ class ctx:
             iterator for accessing generated elements
         """
 
-        output_stream = AsyncStream[Element]()
-        stream_scope: AbstractAsyncContextManager[str] = ctx.scope("stream")
+        scope = ctx.scope("stream")  # prepare scope before generator
 
-        async def stream() -> None:
-            async with stream_scope:
-                try:
-                    async for result in source(*args, **kwargs):
-                        await output_stream.send(result)
+        async def stream() -> AsyncGenerator[Element]:
+            async with scope:
+                async for result in source(*args, **kwargs):
+                    yield result
 
-                except BaseException as exc:
-                    output_stream.finish(exception=exc)
-
-                else:
-                    output_stream.finish()
-
-        ContextTaskGroup.run(stream)
-        return output_stream
+        return stream()
 
     @staticmethod
     def check_cancellation() -> None:

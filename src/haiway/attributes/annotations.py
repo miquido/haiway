@@ -3544,6 +3544,16 @@ def _resolve_typeddict(
 ANY_ATTRIBUTE: Final[AnyAttribute] = AnyAttribute()
 MISSING_ATTRIBUTE: Final[MissingAttribute] = MissingAttribute()
 NONE_ATTRIBUTE: Final[NoneAttribute] = NoneAttribute()
+STRING_ATTRIBUTE: Final[StringAttribute] = StringAttribute()
+INTEGER_ATTRIBUTE: Final[IntegerAttribute] = IntegerAttribute()
+FLOAT_ATTRIBUTE: Final[FloatAttribute] = FloatAttribute()
+BOOL_ATTRIBUTE: Final[BoolAttribute] = BoolAttribute()
+BYTES_ATTRIBUTE: Final[BytesAttribute] = BytesAttribute()
+UUID_ATTRIBUTE: Final[UUIDAttribute] = UUIDAttribute()
+DATETIME_ATTRIBUTE: Final[DatetimeAttribute] = DatetimeAttribute()
+DATE_ATTRIBUTE: Final[DateAttribute] = DateAttribute()
+TIME_ATTRIBUTE: Final[TimeAttribute] = TimeAttribute()
+PATH_ATTRIBUTE: Final[PathAttribute] = PathAttribute()
 
 
 def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
@@ -3575,34 +3585,34 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             return MetaAttribute()
 
         case builtins.str:
-            return StringAttribute()
+            return STRING_ATTRIBUTE
 
         case builtins.int:
-            return IntegerAttribute()
+            return INTEGER_ATTRIBUTE
 
         case builtins.float:
-            return FloatAttribute()
+            return FLOAT_ATTRIBUTE
 
         case builtins.bool:
-            return BoolAttribute()
+            return BOOL_ATTRIBUTE
 
         case builtins.bytes:
-            return BytesAttribute()
+            return BYTES_ATTRIBUTE
 
         case uuid.UUID:
-            return UUIDAttribute()
+            return UUID_ATTRIBUTE
 
         case datetime.datetime:
-            return DatetimeAttribute()
+            return DATETIME_ATTRIBUTE
 
         case datetime.date:
-            return DateAttribute()
+            return DATE_ATTRIBUTE
 
         case datetime.time:
-            return TimeAttribute()
+            return TIME_ATTRIBUTE
 
         case pathlib.Path:
-            return PathAttribute()
+            return PATH_ATTRIBUTE
 
         case type() as str_enum if issubclass(str_enum, enum.StrEnum):
             return StrEnumAttribute(base=str_enum)
