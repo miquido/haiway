@@ -91,12 +91,14 @@ class ContextEvents:
         payload: State,
     ) -> None:
         assert self._loop == get_running_loop()  # nosec: B101
+
         payload_type: type[State] = type(payload)
         current: Future[Event[State]] | None = self._threads.get(payload_type)
         if current is None:
             return  # if no one watches, no need to send anywhere
 
         assert not current.done()  # nosec: B101
+
         event: Event[State] = Event(
             payload=payload,
             next=self._loop.create_future(),
@@ -109,6 +111,7 @@ class ContextEvents:
         payload: type[Payload],
     ) -> EventsSubscription[Payload]:
         assert self._loop == get_running_loop()  # nosec: B101
+
         current: Future[Event[Payload]] | None = self._threads.get(payload)
         if current is None:  # prepare for upcoming events
             current = self._loop.create_future()
@@ -141,7 +144,7 @@ class ContextEvents:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
+        assert self._token is not None, "Unbalanced ContextEvents enter/exit"  # nosec: B101
 
         try:
             ContextEvents._context.reset(self._token)

@@ -125,8 +125,16 @@ async def main():
         await asyncio.sleep(10)
         ctx.cancel()  # Cancels current task
         # or
-        task.cancel()  # Cancel specific task
+task.cancel()  # Cancel specific task
 ```
+
+### Background Task Shutdown Semantics
+
+Background tasks spawned via `ctx.spawn_background()` are tracked for best-effort cleanup on
+shutdown. When the event loop is still running, Haiway will cancel tracked background tasks during
+shutdown. If the event loop is already closed (common during interpreter teardown), cancellation is
+skipped to avoid raising `RuntimeError: Event loop is closed`. For deterministic cleanup, cancel
+background tasks explicitly before loop shutdown.
 
 ## Streaming with Context
 

@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterable, Mapping, Sequence
+from collections.abc import AsyncIterable, Mapping, MutableSequence, Sequence
 from typing import Protocol, cast, final, overload, runtime_checkable
 
 from haiway.attributes import State
@@ -72,13 +72,43 @@ class HTTPResponse(Immutable):
         if isinstance(self._body, bytes):
             return self._body
 
-        object.__setattr__(
-            self,
-            "_body",
-            b"".join([part async for part in self._body]),
-        )
+        parts: MutableSequence[bytes] = []
+        async for part in self.iter_bytes():
+            parts.append(part)
+
+        object.__setattr__(self, "_body", b"".join(parts))
 
         return cast(bytes, self._body)
+
+    async def iter_bytes(self) -> AsyncIterable[bytes]:
+        if isinstance(self._body, bytes):
+            yield self._body
+            return
+
+        parts: MutableSequence[bytes] = []
+        body_iter = self._body
+        completed = False
+        try:
+            async for part in body_iter:
+                parts.append(part)
+                yield part
+            completed = True
+        finally:
+            if completed:
+                object.__setattr__(self, "_body", b"".join(parts))
+            else:
+                await self._close_body(body_iter)
+
+    async def stream_body(self) -> AsyncIterable[bytes]:
+        async for part in self.iter_bytes():
+            yield part
+
+    async def _close_body(self, body: AsyncIterable[bytes]) -> None:
+        closer = getattr(body, "aclose", None)
+        if closer is None:
+            return
+
+        await closer()
 
 
 @runtime_checkable
@@ -132,7 +162,31 @@ class HTTPRequesting(Protocol):
 
 
 class HTTPClientError(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        method: str | None = None,
+        url: str | None = None,
+        status_code: int | None = None,
+        cause: Exception | None = None,
+    ) -> None:
+        context_parts: MutableSequence[str] = []
+        if method:
+            context_parts.append(f"method={method}")
+
+        if url:
+            context_parts.append(f"url={url}")
+
+        if status_code is not None:
+            context_parts.append(f"status={status_code}")
+
+        context = f" ({', '.join(context_parts)})" if context_parts else ""
+        super().__init__(f"{message}{context}")
+        self.method = method
+        self.url = url
+        self.status_code = status_code
+        self.__cause__ = cause
 
 
 @final
@@ -242,7 +296,10 @@ class HTTPClient(State):
 
         except Exception as exc:
             raise HTTPClientError(
-                f"HTTP request failed due to an error: {exc or type(exc).__name__}"
+                f"HTTP request failed due to an error: {exc or type(exc).__name__}",
+                method="GET",
+                url=url,
+                cause=exc,
             ) from exc
 
     @overload
@@ -324,7 +381,10 @@ class HTTPClient(State):
 
         except Exception as exc:
             raise HTTPClientError(
-                f"HTTP request failed due to an error: {exc or type(exc).__name__}"
+                f"HTTP request failed due to an error: {exc or type(exc).__name__}",
+                method="PUT",
+                url=url,
+                cause=exc,
             ) from exc
 
     @overload
@@ -406,7 +466,10 @@ class HTTPClient(State):
 
         except Exception as exc:
             raise HTTPClientError(
-                f"HTTP request failed due to an error: {exc or type(exc).__name__}"
+                f"HTTP request failed due to an error: {exc or type(exc).__name__}",
+                method="POST",
+                url=url,
+                cause=exc,
             ) from exc
 
     @overload
