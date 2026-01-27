@@ -71,7 +71,7 @@ class ContextState:
             raise ContextMissing("ContextState requested but not defined!") from None
 
     @classmethod
-    def updated(
+    def updating(
         cls,
         state: Iterable[State | None],
         /,

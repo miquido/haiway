@@ -210,7 +210,7 @@ class ctx:
         )
 
     @staticmethod
-    def updated(
+    def updating(
         *state: State | None,
     ) -> AbstractContextManager[None]:
         """
@@ -231,7 +231,7 @@ class ctx:
             context manager object intended to enter updated state context with it
         """
 
-        return ContextState.updated(state)
+        return ContextState.updating(state)
 
     @staticmethod
     def disposables(

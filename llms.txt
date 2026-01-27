@@ -3,7 +3,7 @@
 Haiway is a functional/async framework built around immutable `State`, context-scoped dependency injection (`ctx`), and structured concurrency. Keep typing strict and behavior explicit.
 
 ## Core Ideas
-- Immutable data: every domain/config object subclasses `State`; instances cannot be mutated, updates are done via `.updated(...)`.
+- Immutable data: every domain/config object subclasses `State`; instances cannot be mutated, updates are done via `.updating(...)`.
 - Context-first DI: `async with ctx.scope(name_or_preset, *state, disposables=(...)):` installs state for the lifetime of the scope. `ctx.state(Type)` resolves by type. Priority: explicit state > disposables > preset state > parent scope.
 - Protocol-driven logic: define contracts as `Protocol` and inject implementations as state. Expose public API via `@statemethod` on service `State` containers.
 - Structured concurrency: tasks live inside the current scope task group via `ctx.spawn`. Logging, cancellation, and state all propagate automatically.

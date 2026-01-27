@@ -270,9 +270,9 @@ def test_meta_excluding_none():
     assert result is original  # same instance
 
 
-def test_meta_updated():
+def test_meta_updating():
     original = Meta({"name": "original"})
-    updated = original.updated(name="updated", kind="test")
+    updated = original.updating(name="updated", kind="test")
     assert updated["name"] == "updated"
     assert updated["kind"] == "test"
 

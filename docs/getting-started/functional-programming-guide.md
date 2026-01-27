@@ -20,7 +20,7 @@ class User(State):
     last_login: datetime | None = None
 
     def with_login(self) -> "User":
-        return self.updated(
+        return self.updating(
             login_count=self.login_count + 1,
             last_login=datetime.now(),
         )
@@ -35,7 +35,7 @@ print(f"User2: {u2}")
 Why it matters:
 
 - Thread‑safe sharing by default; easy reasoning and testing
-- `.updated()` copies with structural sharing for performance
+- `.updating()` copies with structural sharing for performance
 - Collections: prefer `Sequence`/`Mapping`/`Set` (sequences/sets become immutable; mappings stay
   dicts)
 

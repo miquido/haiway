@@ -80,14 +80,14 @@ State instances are immutable, so you cannot modify them directly:
 user.name = "Bob"  # Raises AttributeError
 ```
 
-Instead, create new instances with updated values using the `updated` method:
+Instead, create new instances with updated values using the `updating` method:
 
 ```python
-updated_user = user.updated(name="Bob Smith")
+updated_user = user.updating(name="Bob Smith")
 ```
 
 This creates a new instance with the updated value, leaving the original instance unchanged. The
-`updated` method accepts keyword arguments for any attributes you want to change.
+`updating` method accepts keyword arguments for any attributes you want to change.
 
 ### Attribute Metadata with `typing.Annotated`
 
@@ -113,7 +113,7 @@ class Invoice(State):
 Supported annotations include:
 
 - `Alias("external_name")` — maps the attribute to an alternate key when using `to_mapping`,
-  `from_mapping`, JSON helpers, and `updated`.
+  `from_mapping`, JSON helpers, and `updating`.
 - `Description("text")` — surfaces in generated JSON schemas and downstream documentation.
 - `Meta.of({...})` — attaches structured metadata that you can later inspect from field definitions.
 - `Specification({...})` — overrides the JSON Schema fragment when the inferred schema is
@@ -181,7 +181,7 @@ str_container = Container[str](value="hello")
 The type parameter is enforced during validation:
 
 ```python
-int_container.updated(value="string")  # Raises TypeError
+int_container.updating(value="string")  # Raises TypeError
 ```
 
 ### Conversion to Mappings and JSON
@@ -276,13 +276,22 @@ overrides are respected. If a State cannot be represented as JSON Schema (for ex
 callables), `json_schema(required=True)` raises a `TypeError` so you can detect unsupported shapes
 early.
 
+When serialization must be guaranteed, mark the class as serializable to enforce schema generation
+at definition time:
+
+```python
+class SerializableInvoice(State, serializable=True):
+    id: str
+    total: int
+```
+
 ### Best Practices
 
 1. **Use Immutability**: Embrace the immutable nature of State - never try to modify instances.
 1. **Make Small States**: Keep State classes focused on a single concern.
 1. **Provide Defaults**: Use default values for optional attributes to make creation easier.
 1. **Use Type Annotations**: Always provide accurate type annotations for all attributes.
-1. **Consistent Updates**: Always use `updated` (or helper functions that call it) for changes.
+1. **Consistent Updates**: Always use `updating` (or helper functions that call it) for changes.
 1. **Composition**: Compose complex states from simpler ones.
 
 ### Path-Based Updates and Requirements
@@ -372,17 +381,17 @@ user = User(
 )
 
 # Update a simple attribute
-user1 = user.updated(name="Alice Johnson")
+user1 = user.updating(name="Alice Johnson")
 
 # Update multiple attributes
-user3 = user.updated(
+user3 = user.updating(
     active=False,
     updated_at=datetime.now(),
 )
 
 # Update a nested attribute directly
-new_address = user.address.updated(street="456 Oak Ave")
-user4 = user.updated(address=new_address)
+new_address = user.address.updating(street="456 Oak Ave")
+user4 = user.updating(address=new_address)
 ```
 
 ### Performance Considerations
@@ -395,7 +404,7 @@ For high-performance scenarios:
 
 - Keep State classes relatively small and focused
 - Consider using path-based updates for nested changes
-- If needed, batch multiple updates into a single `updated` call
+- If needed, batch multiple updates into a single `updating` call
 
 ### Integration with Haiway Context
 
@@ -415,7 +424,7 @@ async def main():
         config = ctx.state(AppConfig)
 
         # Create updated state in nested context
-        async with ctx.scope("debug", config.updated(log_level="DEBUG")):
+        async with ctx.scope("debug", config.updating(log_level="DEBUG")):
             # Use updated state
             debug_config = ctx.state(AppConfig)
             assert debug_config.log_level == "DEBUG"

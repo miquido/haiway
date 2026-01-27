@@ -560,7 +560,7 @@ class Meta(dict[str, BasicValue]):
             {key: value for key, value in self.items() if key not in excluded_set}
         )
 
-    def updated(
+    def updating(
         self,
         **values: BasicValue,
     ) -> Self:

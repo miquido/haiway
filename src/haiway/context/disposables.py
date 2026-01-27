@@ -244,7 +244,7 @@ class ContextDisposables:
 
     async def __aenter__(self) -> None:
         assert self._context_state is None  # nosec: B101
-        context_state: ContextState = ContextState.updated(await self._disposables.__aenter__())
+        context_state: ContextState = ContextState.updating(await self._disposables.__aenter__())
         context_state.__enter__()
         object.__setattr__(
             self,
