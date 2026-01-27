@@ -211,7 +211,7 @@ async def health_monitor():
     async for event in ctx.subscribe(HealthCheckFailed):
         # Update system state
         current = ctx.state(SystemStatus)
-        updated = current.updated(healthy=False, last_check=time.time())
+        updated = current.updating(healthy=False, last_check=time.time())
 
         # Trigger recovery via another event
         ctx.send(SystemUnhealthy(reason=event.reason))

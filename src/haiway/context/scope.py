@@ -76,13 +76,13 @@ class ContextScope:
 
             # resolve combined state
             if presets is None:
-                self._state = ContextState.updated(
+                self._state = ContextState.updating(
                     await self._exit_stack.enter_async_context(self._disposables)
                 )
 
             else:
                 presets_disposables: Disposables = presets.resolve()
-                self._state = ContextState.updated(
+                self._state = ContextState.updating(
                     (
                         *await self._exit_stack.enter_async_context(presets_disposables),
                         *await self._exit_stack.enter_async_context(self._disposables),

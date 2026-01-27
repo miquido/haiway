@@ -248,7 +248,7 @@ from datetime import datetime
 # Implementation of note creation function
 async def file_note_create(content: str, **extra: Any) -> Note:
     # Retrieve path from the current context's state, updated if needed
-    path = ctx.state(NotesDirectory).updated(**extra).path
+    path = ctx.state(NotesDirectory).updating(**extra).path
     # Store note in file within the path...
     note = Note(
         identifier=uuid4(),
@@ -261,7 +261,7 @@ async def file_note_create(content: str, **extra: Any) -> Note:
 # Implementation of note update function
 async def file_note_update(note: Note, **extra: Any) -> None:
     # Retrieve path from the current context's state, updated if needed
-    path = ctx.state(NotesDirectory).updated(**extra).path
+    path = ctx.state(NotesDirectory).updating(**extra).path
     # Update the note...
     # Implementation for updating note in file...
 

@@ -27,7 +27,7 @@ prefs = UserPreferences()
 # prefs.theme = "dark"  # This would raise an error!
 
 # Instead, create updated instances through copies
-dark_prefs: UserPreferences = prefs.updated(theme="dark")
+dark_prefs: UserPreferences = prefs.updating(theme="dark")
 print(f"Original: {prefs.theme}, Updated: {dark_prefs.theme}")
 ```
 
@@ -39,7 +39,7 @@ print(f"Original: {prefs.theme}, Updated: {dark_prefs.theme}")
   (`overrides` stays a plain dict while `languages` becomes a tuple)
 - **Structured Metadata**: `Meta` ensures metadata values stay JSON-compatible, offers helpers such
   as `.with_tags(...)`, and keeps instances immutable
-- **Memory Sharing**: The `.updated()` method creates structural sharing - unchanged fields
+- **Memory Sharing**: The `.updating()` method creates structural sharing - unchanged fields
   reference the same objects
 - **Type Safety**: Field types are validated at runtime, ensuring data integrity
 - **Default Values**: Fields can have defaults, and missing fields use type-appropriate defaults

@@ -43,7 +43,7 @@ async def main():
     )
 
     # Create a copy with updated fields (original unchanged)
-    other_alice: User = alice.updated(
+    other_alice: User = alice.updating(
         id="2",
         email="other_alice@example.com",
     )
@@ -65,7 +65,7 @@ if __name__ == "__main__":
 - State is **automatically propagated** to all code within the scope (including nested function
   calls)
 - `ctx.state(User)` retrieves contextual state using its type as a key
-- The `.updated()` method creates a copy of object with modified fields, leaving the original
+- The `.updating()` method creates a copy of the object with modified fields, leaving the original
   unchanged
 - Context automatically manages the lifecycle - when the scope exits, resources are cleaned up
 
@@ -187,7 +187,7 @@ async def main():
         users = await UsersService.fetch_users()
         config = ctx.state(ApiConfig)
         print(f"Using {config.base_url} with {len(users)} users")
-    
+
     # Override preset state with explicit values
     async with ctx.scope(api_preset, ApiConfig(timeout=30)):
         config = ctx.state(ApiConfig)

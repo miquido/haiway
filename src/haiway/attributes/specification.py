@@ -99,12 +99,9 @@ def _specification(  # noqa: C901, PLR0911, PLR0912
 
         return specification
 
-    elif hasattr(annotation.base, "__SPECIFICATION__"):
+    elif getattr(annotation.base, "__SERIALIZABLE__", False):
         recursion_guard[key] = _RecursionGuard(annotation)
-        specification: TypeSpecification | None = cast(
-            TypeSpecification | None,
-            annotation.base.__SPECIFICATION__,
-        )
+        specification: TypeSpecification | None = annotation.base.__SPECIFICATION__
 
         if specification is None:
             return None

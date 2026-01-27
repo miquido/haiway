@@ -231,12 +231,12 @@ def test_from_mapping_accepts_nested_aliases() -> None:
     }
 
 
-def test_updated_honors_aliases() -> None:
+def test_updating_honors_aliases() -> None:
     class Example(State):
         value: Annotated[int, Alias("external")]
 
     example = Example(value=1)
-    updated = example.updated(external=2)
+    updated = example.updating(external=2)
 
     assert updated.value == 2
     assert updated != example
@@ -310,16 +310,16 @@ def test_copying_leaves_same_object() -> None:
     assert deepcopy(origin) is origin
 
 
-def test_updated_returns_self_when_no_changes() -> None:
+def test_updating_returns_self_when_no_changes() -> None:
     class Example(State):
         value: int
         text: str
 
     instance = Example(value=1, text="a")
-    assert instance.updated() is instance
+    assert instance.updating() is instance
 
 
-def test_updated_only_validates_provided_attributes() -> None:
+def test_updating_only_validates_provided_attributes() -> None:
     counter: dict[str, int] = {"calls": 0}
 
     class Tracked(State):
@@ -340,13 +340,13 @@ def test_updated_only_validates_provided_attributes() -> None:
     instance = Container(first=1, tracked=Tracked(value=1))
     counter["calls"] = 0
 
-    updated_first = instance.updated(first=2)
+    updated_first = instance.updating(first=2)
     assert updated_first is not instance
     assert updated_first.tracked is instance.tracked
     assert counter["calls"] == 0
 
     counter["calls"] = 0
-    replacement = instance.updated(tracked=Tracked(value=2))
+    replacement = instance.updating(tracked=Tracked(value=2))
     assert replacement is not instance
     assert counter["calls"] == 1
 
@@ -580,3 +580,17 @@ async def test_no_deadlock_on_recursive_state_access() -> None:
         assert ctx.state(RecursiveState) is recursive
         # Initialization happened exactly once (despite recursive access)
         assert init_count == 1
+
+
+def test_serializable_required_rejects_missing_spec() -> None:
+    with raises(TypeError, match="requires serialization"):
+
+        class Unserializable(State, serializable=True):
+            func: Callable[[], None]
+
+
+def test_serializable_required_accepts_schema() -> None:
+    class Serializable(State, serializable=True):
+        value: int
+
+    assert Serializable.json_schema(required=True) is not None

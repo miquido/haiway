@@ -22,6 +22,7 @@ from typing import (
     TypeVar,
     cast,
     dataclass_transform,
+    final,
     overload,
 )
 
@@ -65,18 +66,20 @@ class StateMeta(type):
 
     __SELF_ATTRIBUTE__: ObjectAttribute
     __TYPE_PARAMETERS__: Mapping[str, Any] | None
-    __SPECIFICATION__: TypeSpecification | None
+    __SPECIFICATION__: TypeSpecification
     __FIELDS__: Sequence[Attribute]
     __ALLOWED_FIELDS__: Set[str]
+    __SERIALIZABLE__: bool
     __slots__: tuple[str, ...]
 
-    def __new__(
+    def __new__(  # noqa: C901, PLR0912
         mcs,
         /,
         name: str,
         bases: tuple[type, ...],
         namespace: dict[str, Any],
         type_parameters: dict[str, Any] | None = None,
+        serializable: bool = False,
         **kwargs: Any,
     ) -> Any:
         cls = type.__new__(
@@ -86,6 +89,7 @@ class StateMeta(type):
             namespace,
             **kwargs,
         )
+
         self_attribute: ObjectAttribute = resolve_self_attribute(
             cls,
             parameters=type_parameters or {},
@@ -105,6 +109,7 @@ class StateMeta(type):
             }
             cls.__FIELDS__ = ()  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
             cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
+            cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
 
             return cls  # early exit - base class
 
@@ -146,16 +151,22 @@ class StateMeta(type):
                 if field.required:
                     required_fields.append(field.name)
 
-        cls.__SPECIFICATION__ = (  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
-            {
+        if specification_fields is not None:  # it is technically not serializable otherwise
+            cls.__SPECIFICATION__ = {  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
                 "type": "object",
                 "properties": specification_fields,
                 "required": required_fields,
                 "additionalProperties": False,
             }
-            if specification_fields is not None
-            else None  # it is technically not serializable at all
-        )
+            cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
+
+        elif serializable:
+            raise TypeError(f"{cls.__name__} requires serialization but cannot produce json schema")
+
+        else:  # no specification
+            cls.__SERIALIZABLE__ = False  # pyright: ignore[reportConstantRedefinition]
+            cls.__SPECIFICATION__ = _no_specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
+
         cls.__FIELDS__ = tuple(fields)  # pyright: ignore[reportConstantRedefinition]
         cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
         cls.__slots__ = tuple(  # pyright: ignore[reportAttributeAccessIssue]
@@ -262,6 +273,16 @@ def _resolve_default(
     )
 
 
+@final
+class _NoSpecification:
+    __slots__ = ()
+
+    def __get__(self, instance: object, owner: type[object]) -> NoReturn:
+        raise TypeError(f"{owner.__name__} cannot be represented using json schema")
+
+
+_no_specification: _NoSpecification = _NoSpecification()
+
 _types_cache: MutableMapping[
     tuple[
         Any,
@@ -305,7 +326,7 @@ class State(metaclass=StateMeta):
     New instances with updated values can be created from existing ones:
 
     ```python
-    updated_user = user.updated(age=31)
+    updated_user = user.updating(age=31)
     ```
     """
 
@@ -499,7 +520,7 @@ class State(metaclass=StateMeta):
         TypeError
             If ``required`` is ``True`` but the class does not declare a schema.
         """
-        if cls.__SPECIFICATION__ is not None:
+        if cls.__SERIALIZABLE__:
             return json.dumps(
                 cls.__SPECIFICATION__,
                 indent=indent,
@@ -666,7 +687,7 @@ class State(metaclass=StateMeta):
                     field.validate_from(kwargs),
                 )
 
-    def updated(
+    def updating(
         self,
         **kwargs: Any,
     ) -> Self:
@@ -905,7 +926,7 @@ class State(metaclass=StateMeta):
         """
         Create a new instance with replaced attribute values.
 
-        This internal method is used by updated() to create a new instance
+        This internal method is used by updating() to create a new instance
         with updated values.
 
         Parameters

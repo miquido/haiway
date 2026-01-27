@@ -70,10 +70,10 @@ async def test_state_update_updates_local_context():
     async with ctx.scope("default"):
         assert ctx.state(ExampleState).state == "default"
 
-        with ctx.updated(ExampleState(state="updated")):
+        with ctx.updating(ExampleState(state="updated")):
             assert ctx.state(ExampleState).state == "updated"
 
-            with ctx.updated(ExampleState(state="modified")):
+            with ctx.updating(ExampleState(state="modified")):
                 assert ctx.state(ExampleState).state == "modified"
 
             assert ctx.state(ExampleState).state == "updated"

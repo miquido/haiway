@@ -196,7 +196,9 @@ def test_state_specification_missing_when_child_has_no_specification() -> None:
     class Example(State):
         callback: typing.Callable[[int], int]
 
-    assert Example.__SPECIFICATION__ is None
+    assert Example.__SERIALIZABLE__ is False
+    with pytest.raises(TypeError, match="cannot be represented using json schema"):
+        _ = Example.__SPECIFICATION__
 
 
 def test_state_specification_manual_override_for_unspecified_type() -> None:
