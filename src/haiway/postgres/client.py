@@ -1,5 +1,5 @@
 from collections.abc import Callable, Coroutine, Mapping, Sequence
-from ssl import SSLContext, create_default_context
+from ssl import CERT_NONE, SSLContext, create_default_context
 from types import TracebackType
 from typing import Self
 from urllib.parse import ParseResult, parse_qs, urlparse
@@ -58,7 +58,10 @@ def _resolve_sslmode(
         return None
 
     if mode in {"require", "required", "on", "true"}:
-        return True
+        context = create_default_context()
+        context.check_hostname = False
+        context.verify_mode = CERT_NONE
+        return context
 
     if mode in {"verify-ca"}:
         context = create_default_context()
