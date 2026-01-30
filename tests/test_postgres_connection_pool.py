@@ -1,3 +1,4 @@
+import pytest
 from pytest import raises
 
 from haiway.postgres.client import PostgresConnectionPool
@@ -20,7 +21,7 @@ def test_postgres_connection_pool_of_parses_dsn_components() -> None:
     assert pool.database == "sample"
     assert pool.user == "alice"
     assert pool.password == "secret"
-    assert pool.ssl is True
+    assert pool.ssl == "require"
     assert pool.connection_limit == POSTGRES_CONNECTIONS
 
 
@@ -36,7 +37,7 @@ def test_postgres_connection_pool_of_applies_defaults_when_missing_components() 
     assert pool.database == "service"
     assert pool.user == POSTGRES_USER
     assert pool.password == POSTGRES_PASSWORD
-    assert getattr(pool.ssl, "check_hostname", False) is True
+    assert pool.ssl == "verify-full"
     assert pool.connection_limit == 4
 
 
@@ -48,7 +49,7 @@ def test_postgres_connection_pool_of_uses_defaults_when_database_missing() -> No
     assert pool.database == POSTGRES_DATABASE
     assert pool.user == POSTGRES_USER
     assert pool.password == POSTGRES_PASSWORD
-    assert pool.ssl is None
+    assert pool.ssl == "prefer"
 
 
 def test_postgres_connection_pool_of_rejects_unknown_scheme() -> None:
@@ -58,20 +59,36 @@ def test_postgres_connection_pool_of_rejects_unknown_scheme() -> None:
 
 def test_postgres_sslmode_disable_maps_to_bool_false() -> None:
     pool = PostgresConnectionPool.of("postgresql://localhost?sslmode=disable")
-    assert pool.ssl is False
+    assert pool.ssl == "disable"
 
 
 def test_postgres_sslmode_require_maps_to_bool_true() -> None:
     pool = PostgresConnectionPool.of("postgresql://localhost?sslmode=require")
-    assert pool.ssl is True
+    assert pool.ssl == "require"
 
 
 def test_postgres_sslmode_verify_full_creates_context() -> None:
     pool = PostgresConnectionPool.of("postgresql://localhost?sslmode=verify-full")
-    assert pool.ssl is not None
-    assert getattr(pool.ssl, "check_hostname", False) is True
+    assert pool.ssl == "verify-full"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    (
+        ("sslmode=true", True),
+        ("sslmode=false", False),
+        ("ssl=true", True),
+        ("ssl=false", False),
+    ),
+)
+def test_postgres_sslmode_accepts_boolean_query_values(
+    query: str,
+    expected: bool,
+) -> None:
+    pool = PostgresConnectionPool.of(f"postgresql://localhost?{query}")
+    assert pool.ssl is expected
 
 
 def test_postgres_sslmode_unknown_raises_value_error() -> None:
-    with raises(ValueError, match="Unsupported sslmode"):
-        PostgresConnectionPool.of("postgresql://localhost?sslmode=weird")
+    pool = PostgresConnectionPool.of("postgresql://localhost?sslmode=weird")
+    assert pool.ssl == "weird"

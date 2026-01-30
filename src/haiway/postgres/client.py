@@ -1,5 +1,5 @@
 from collections.abc import Callable, Coroutine, Mapping, Sequence
-from ssl import SSLContext, create_default_context
+from ssl import SSLContext
 from types import TracebackType
 from typing import Self
 from urllib.parse import ParseResult, parse_qs, urlparse
@@ -44,35 +44,6 @@ async def _noop_initialize(connection: Connection) -> None:
     pass
 
 
-def _resolve_sslmode(
-    ssl_mode: str | SSLContext | bool | None,
-) -> SSLContext | bool | None:
-    if isinstance(ssl_mode, SSLContext | bool) or ssl_mode is None:
-        return ssl_mode
-
-    mode = ssl_mode.lower().strip()
-    if mode in {"disable", "disabled", "off", "false"}:
-        return False
-
-    if mode in {"allow", "prefer"}:
-        return None
-
-    if mode in {"require", "required", "on", "true"}:
-        return True
-
-    if mode in {"verify-ca"}:
-        context = create_default_context()
-        context.check_hostname = False
-        return context
-
-    if mode in {"verify-full", "full"}:
-        context = create_default_context()
-        context.check_hostname = True
-        return context
-
-    raise ValueError(f"Unsupported sslmode value: {ssl_mode!r}")
-
-
 class PostgresConnectionPool(Immutable):
     """Disposable that instantiates a connection pool."""
 
@@ -102,9 +73,20 @@ class PostgresConnectionPool(Immutable):
         )
 
         ssl_values: Sequence[str] = query.get("sslmode", query.get("ssl", ()))
-        resolved_ssl: SSLContext | bool | None = _resolve_sslmode(
-            ssl_values[-1] if ssl_values else ssl
-        )
+        if ssl_values:
+            normalized_ssl: str = ssl_values[-1].strip().lower()
+            resolved_ssl: SSLContext | str | bool | None
+            if normalized_ssl == "true":
+                resolved_ssl = True
+
+            elif normalized_ssl == "false":
+                resolved_ssl = False
+
+            else:
+                resolved_ssl = normalized_ssl
+
+        else:
+            resolved_ssl = ssl
 
         for key in ("connections", "connection_limit", "maxsize", "max_size"):
             if values := query.get(key):
@@ -133,7 +115,7 @@ class PostgresConnectionPool(Immutable):
     database: str = POSTGRES_DATABASE
     user: str = POSTGRES_USER
     password: str = POSTGRES_PASSWORD
-    ssl: SSLContext | bool | None = _resolve_sslmode(POSTGRES_SSLMODE)
+    ssl: SSLContext | str | bool | None = POSTGRES_SSLMODE
     connection_limit: int = POSTGRES_CONNECTIONS
     initialize: Callable[[Connection], Coroutine[None, None, None]] = _noop_initialize
     _pool: Pool | None = None  # initialized on demand
