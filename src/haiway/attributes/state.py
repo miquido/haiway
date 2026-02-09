@@ -277,7 +277,11 @@ def _resolve_default(
 class _NoSpecification:
     __slots__ = ()
 
-    def __get__(self, instance: object, owner: type[object]) -> NoReturn:
+    def __get__(
+        self,
+        instance: object,
+        owner: type[object],
+    ) -> NoReturn:
         raise TypeError(f"{owner.__name__} cannot be represented using json schema")
 
 
@@ -737,7 +741,7 @@ class State(metaclass=StateMeta):
         Mapping[str, Any]
             A mapping of attribute names to values
         """
-        dict_result: dict[str, Any] = {}
+        dict_result: MutableMapping[str, Any] = {}
         if recursive:
             for field in self.__FIELDS__:
                 key: str = field.alias if field.alias is not None else field.name
@@ -821,7 +825,7 @@ class State(metaclass=StateMeta):
         int
             Hash derived from non-missing attribute values.
         """
-        hash_values: list[int] = []
+        hash_values: MutableSequence[int] = []
         for field in self.__FIELDS__:
             value: Any = getattr(self, field.name, MISSING)
 
@@ -905,7 +909,8 @@ class State(metaclass=StateMeta):
         """
         Create a deep copy of this instance.
 
-        Since State is immutable, this returns the instance itself.
+        Despite State being immutable, this returns the copy of this instance
+        ensuring recursive deepcopy usage.
 
         Parameters
         ----------
@@ -915,9 +920,24 @@ class State(metaclass=StateMeta):
         Returns
         -------
         Self
-            This instance
+            Copy of this instance
         """
-        return self  # State is immutable, no need to provide an actual copy
+        if memo is None:
+            memo = {}
+
+        deep_copy: Self = object.__new__(self.__class__)
+        memo[id(self)] = deep_copy
+        for field in self.__class__.__FIELDS__:
+            object.__setattr__(
+                deep_copy,
+                field.name,
+                deepcopy(
+                    getattr(self, field.name),
+                    memo=memo,
+                ),
+            )
+
+        return deep_copy
 
     def __replace__(
         self,
@@ -943,15 +963,15 @@ class State(metaclass=StateMeta):
             return self  # do not make a copy when nothing will be updated
 
         fields: Sequence[Attribute] = self.__class__.__FIELDS__
-        alias_to_name: dict[str, str] = {
+        alias_to_name: Mapping[str, str] = {
             field.alias if field.alias is not None else field.name: field.name for field in fields
         }
-        valid_keys: set[str] = set(alias_to_name.keys()) | set(alias_to_name.values())
+        valid_keys: Set[str] = set(alias_to_name.keys()) | set(alias_to_name.values())
 
         if kwargs.keys().isdisjoint(valid_keys):
             return self  # do not make a copy when nothing will be updated
 
-        canonical_updates: dict[str, Any] = {}
+        canonical_updates: MutableMapping[str, Any] = {}
         for key, value in kwargs.items():
             if key in valid_keys:
                 canonical_updates[alias_to_name.get(key, key)] = value
