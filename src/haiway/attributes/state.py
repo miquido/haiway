@@ -110,6 +110,8 @@ class StateMeta(type):
             cls.__FIELDS__ = ()  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
             cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
             cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
+            cls.__slots__ = ()  # pyright: ignore[reportAttributeAccessIssue]
+            cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
 
             return cls  # early exit - base class
 
