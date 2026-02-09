@@ -81,6 +81,7 @@ class BackgroundTaskGroup:
             return
 
         else:
+
             def cancel_tasks() -> None:
                 for task in loop_tasks:
                     try:
