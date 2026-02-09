@@ -300,14 +300,58 @@ def test_generic_subtypes_validation() -> None:
 def test_copying_leaves_same_object() -> None:
     class Nested(State):
         string: str
+        payload: Any
 
     class Copied(State):
         string: str
         nested: Nested
+        items: Sequence[Nested]
+        payload: Any
 
-    origin = Copied(string="42", nested=Nested(string="answer"))
+    nested_payload: dict[str, list[str]] = {"inner": ["x"]}
+    payload: dict[str, list[int]] = {"numbers": [1, 2]}
+    nested = Nested(string="answer", payload=nested_payload)
+    origin = Copied(
+        string="42",
+        nested=nested,
+        items=[nested],
+        payload=payload,
+    )
     assert copy(origin) is origin
-    assert deepcopy(origin) is origin
+    deep_copied = deepcopy(origin)
+    assert deep_copied is not origin
+    assert deep_copied == origin
+    assert deep_copied.nested is not origin.nested
+    assert deep_copied.items is not origin.items
+    assert deep_copied.items[0] is not origin.items[0]
+    assert deep_copied.payload is not origin.payload
+    assert deep_copied.payload["numbers"] is not origin.payload["numbers"]
+    assert deep_copied.nested.payload is not origin.nested.payload
+    assert deep_copied.nested.payload["inner"] is not origin.nested.payload["inner"]
+
+
+def test_deepcopy_preserves_aliasing_and_cycles() -> None:
+    class Shared(State):
+        value: int
+
+    class Cyclic(State):
+        payload: Any
+
+    class Box:
+        def __init__(self) -> None:
+            self.ref: Any | None = None
+
+    shared = Shared(value=1)
+    result = deepcopy([shared, shared])
+    assert result[0] is result[1]
+    assert result[0] is not shared
+
+    box = Box()
+    cyclic = Cyclic(payload=box)
+    box.ref = cyclic
+    cyclic_copy = deepcopy(cyclic)
+    assert cyclic_copy is not cyclic
+    assert cyclic_copy.payload.ref is cyclic_copy
 
 
 def test_updating_returns_self_when_no_changes() -> None:
