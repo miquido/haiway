@@ -1,4 +1,4 @@
-from asyncio import ALL_COMPLETED, FIRST_COMPLETED, Task, wait
+from asyncio import ALL_COMPLETED, FIRST_COMPLETED, CancelledError, Task, wait
 from collections.abc import (
     AsyncIterable,
     Callable,
@@ -13,6 +13,7 @@ from collections.abc import (
 from typing import Any, Literal, overload
 
 from haiway.context import ctx
+from haiway.context.tasks import ContextTaskGroup
 from haiway.utils.stream import AsyncStream
 
 __all__ = (
@@ -23,7 +24,7 @@ __all__ = (
 )
 
 
-async def process_concurrently[Element](  # noqa: C901, PLR0912
+async def process_concurrently[Element](  # noqa: C901, PLR0912, PLR0915
     source: AsyncIterable[Element] | Iterable[Element],
     /,
     handler: Callable[[Element], Coroutine[None, None, None]],
@@ -82,38 +83,71 @@ async def process_concurrently[Element](  # noqa: C901, PLR0912
 
     """
     assert concurrent_tasks > 0  # nosec: B101
-    tasks: MutableSet[Task[Exception | None]] = set()
+    tasks: MutableSet[Task[None]] = set()
 
-    async def process(
-        element: Element,
-        /,
-    ) -> Exception | None:
-        try:
-            await handler(element)
+    if ignore_exceptions:
 
-        except Exception as exc:
-            if not ignore_exceptions:
-                return exc
+        async def process(
+            element: Element,
+            /,
+        ) -> None:
+            try:
+                await handler(element)
 
-            ctx.log_error(
-                f"Concurrent processing error - {type(exc)}: {exc}",
-                exception=exc,
-            )
+            except Exception as exc:
+                ctx.log_error(
+                    f"Concurrent processing error - {type(exc)}: {exc}",
+                    exception=exc,
+                )
+                # do not propagate exception
+    else:
 
-    try:
+        async def process(
+            element: Element,
+            /,
+        ) -> None:
+            try:
+                await handler(element)
+
+            except Exception as exc:
+                ctx.log_error(
+                    f"Concurrent processing error - {type(exc)}: {exc}",
+                    exception=exc,
+                )
+                raise  # reraise exception
+
+    async with ContextTaskGroup():  # local task group for more granular management
         if isinstance(source, AsyncIterable):
             async for element in source:
                 tasks.add(ctx.spawn(process, element))
                 if len(tasks) < concurrent_tasks:
                     continue  # keep spawning tasks
 
-                completed, tasks = await wait(
-                    tasks,
-                    return_when=FIRST_COMPLETED,
-                )
-                for task in completed:
-                    if exc := task.result():
-                        raise exc
+                try:
+                    completed, tasks = await wait(
+                        tasks,
+                        return_when=FIRST_COMPLETED,
+                    )
+
+                except CancelledError:
+                    for task in tasks:
+                        if not task.done() or task.cancelled():
+                            continue  # examine only done tasks
+
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
+
+                    raise  # raise cancellation
+
+                else:
+                    for task in completed:
+                        if task.cancelled():
+                            continue
+
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
 
         else:
             assert isinstance(source, Iterable)  # nosec: B101
@@ -122,30 +156,58 @@ async def process_concurrently[Element](  # noqa: C901, PLR0912
                 if len(tasks) < concurrent_tasks:
                     continue  # keep spawning tasks
 
-                completed, tasks = await wait(
-                    tasks,
-                    return_when=FIRST_COMPLETED,
-                )
-                for task in completed:
-                    if exc := task.result():
-                        raise exc
+                try:
+                    completed, tasks = await wait(
+                        tasks,
+                        return_when=FIRST_COMPLETED,
+                    )
 
-    except BaseException as exc:
-        # Cancel all running tasks
-        for task in tasks:
-            task.cancel()
+                except CancelledError:
+                    for task in tasks:
+                        if not task.done() or task.cancelled():
+                            continue  # examine only done tasks
 
-        raise
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
 
-    else:
+                    raise  # raise cancellation
+
+                else:
+                    for task in completed:
+                        if task.cancelled():
+                            continue
+
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
+
         if tasks:
-            completed, _ = await wait(
-                tasks,
-                return_when=ALL_COMPLETED,
-            )
-            for task in completed:
-                if exc := task.result():
-                    raise exc
+            try:
+                completed, _ = await wait(
+                    tasks,
+                    return_when=ALL_COMPLETED,
+                )
+
+            except CancelledError:
+                for task in tasks:
+                    if not task.done() or task.cancelled():
+                        continue  # examine only done tasks
+
+                    exc: BaseException | None = task.exception()
+                    if exc is not None:
+                        raise exc from None  # raise task error and break processing
+
+                raise  # raise cancellation
+
+            else:
+                for task in completed:
+                    if task.cancelled():
+                        continue
+
+                    exc: BaseException | None = task.exception()
+                    if exc is not None:
+                        raise exc from None  # raise task error and break processing
 
 
 @overload
@@ -169,7 +231,7 @@ async def execute_concurrently[Element, Result](
 ) -> Sequence[Result | Exception]: ...
 
 
-async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
+async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912, PLR0915
     handler: Callable[[Element], Coroutine[None, None, Result]],
     /,
     elements: AsyncIterable[Element] | Iterable[Element],
@@ -247,24 +309,38 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
 
     """
     assert concurrent_tasks > 0  # nosec: B101
-    tasks: MutableSet[Task[Any]] = set()
-    results: MutableSequence[Task[Any]] = []
+    tasks: MutableSet[Task[Result | Exception]] = set()
+    results: MutableSequence[Task[Result | Exception]] = []  # ordered results collection
 
-    async def process(
-        element: Element,
-        /,
-    ) -> Result | Exception:
-        try:
-            return await handler(element)
+    if return_exceptions:
 
-        except Exception as exc:
-            if return_exceptions:
-                return exc
+        async def process(
+            element: Element,
+            /,
+        ) -> Result | Exception:
+            try:
+                return await handler(element)
 
-            else:
-                raise
+            except Exception as exc:
+                return exc  # return exception as result
 
-    try:
+    else:
+
+        async def process(
+            element: Element,
+            /,
+        ) -> Result | Exception:
+            try:
+                return await handler(element)
+
+            except Exception as exc:
+                ctx.log_error(
+                    f"Concurrent execution error - {type(exc)}: {exc}",
+                    exception=exc,
+                )
+                raise  # reraise exception
+
+    async with ContextTaskGroup():  # local task group for more granular management
         if isinstance(elements, AsyncIterable):
             async for element in elements:
                 task: Task[Any] = ctx.spawn(process, element)
@@ -273,13 +349,31 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
                 if len(tasks) < concurrent_tasks:
                     continue  # keep spawning tasks
 
-                completed, tasks = await wait(
-                    tasks,
-                    return_when=FIRST_COMPLETED,
-                )
-                for task in completed:
-                    if exc := task.exception():
-                        raise exc
+                try:
+                    completed, tasks = await wait(
+                        tasks,
+                        return_when=FIRST_COMPLETED,
+                    )
+
+                except CancelledError:
+                    for task in tasks:
+                        if not task.done() or task.cancelled():
+                            continue  # examine only done tasks
+
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
+
+                    raise  # raise cancellation
+
+                else:
+                    for task in completed:
+                        if task.cancelled():
+                            continue
+
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
 
         else:
             assert isinstance(elements, Iterable)  # nosec: B101
@@ -290,30 +384,58 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
                 if len(tasks) < concurrent_tasks:
                     continue  # keep spawning tasks
 
-                completed, tasks = await wait(
-                    tasks,
-                    return_when=FIRST_COMPLETED,
-                )
-                for task in completed:
-                    if exc := task.exception():
-                        raise exc
+                try:
+                    completed, tasks = await wait(
+                        tasks,
+                        return_when=FIRST_COMPLETED,
+                    )
 
-    except BaseException as exc:
-        # Cancel all running tasks
-        for task in tasks:
-            task.cancel()
+                except CancelledError:
+                    for task in tasks:
+                        if not task.done() or task.cancelled():
+                            continue  # examine only done tasks
 
-        raise
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
 
-    else:
+                    raise  # raise cancellation
+
+                else:
+                    for task in completed:
+                        if task.cancelled():
+                            continue
+
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
+
         if tasks:
-            completed, _ = await wait(
-                tasks,
-                return_when=ALL_COMPLETED,
-            )
-            for task in completed:
-                if exc := task.exception():
-                    raise exc
+            try:
+                completed, _ = await wait(
+                    tasks,
+                    return_when=ALL_COMPLETED,
+                )
+
+            except CancelledError:
+                for task in tasks:
+                    if not task.done() or task.cancelled():
+                        continue  # examine only done tasks
+
+                    exc: BaseException | None = task.exception()
+                    if exc is not None:
+                        raise exc from None  # raise task error and break processing
+
+                raise  # raise cancellation
+
+            else:
+                for task in completed:
+                    if task.cancelled():
+                        continue
+
+                    exc: BaseException | None = task.exception()
+                    if exc is not None:
+                        raise exc from None  # raise task error and break processing
 
     return [result.result() for result in results]
 
@@ -340,7 +462,7 @@ async def concurrently[Result](
 ) -> Sequence[Result | Exception]: ...
 
 
-async def concurrently[Result](  # noqa: C901, PLR0912
+async def concurrently[Result](  # noqa: C901, PLR0912, PLR0915
     coroutines: AsyncIterable[Coroutine[None, None, Result]]
     | Iterable[Coroutine[None, None, Result]],
     /,
@@ -421,23 +543,37 @@ async def concurrently[Result](  # noqa: C901, PLR0912
     """
     assert concurrent_tasks > 0  # nosec: B101
     tasks: MutableSet[Task[Any]] = set()
-    results: MutableSequence[Task[Any]] = []
+    results: MutableSequence[Task[Any]] = []  # ordered results collection
 
-    async def process(
-        coroutine: Coroutine[None, None, Result],
-        /,
-    ) -> Result | Exception:
-        try:
-            return await coroutine
+    if return_exceptions:
 
-        except Exception as exc:
-            if return_exceptions:
-                return exc
+        async def process(
+            coroutine: Coroutine[None, None, Result],
+            /,
+        ) -> Result | Exception:
+            try:
+                return await coroutine
 
-            else:
-                raise
+            except Exception as exc:
+                return exc  # return exception as result
 
-    try:
+    else:
+
+        async def process(
+            coroutine: Coroutine[None, None, Result],
+            /,
+        ) -> Result | Exception:
+            try:
+                return await coroutine
+
+            except Exception as exc:
+                ctx.log_error(
+                    f"Concurrent execution error - {type(exc)}: {exc}",
+                    exception=exc,
+                )
+                raise  # reraise exception
+
+    async with ContextTaskGroup():  # local task group for more granular management
         if isinstance(coroutines, AsyncIterable):
             async for element in coroutines:
                 task: Task[Any] = ctx.spawn(process, element)
@@ -446,13 +582,31 @@ async def concurrently[Result](  # noqa: C901, PLR0912
                 if len(tasks) < concurrent_tasks:
                     continue  # keep spawning tasks
 
-                completed, tasks = await wait(
-                    tasks,
-                    return_when=FIRST_COMPLETED,
-                )
-                for task in completed:
-                    if exc := task.exception():
-                        raise exc
+                try:
+                    completed, tasks = await wait(
+                        tasks,
+                        return_when=FIRST_COMPLETED,
+                    )
+
+                except CancelledError:
+                    for task in tasks:
+                        if not task.done() or task.cancelled():
+                            continue  # examine only done tasks
+
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
+
+                    raise  # raise cancellation
+
+                else:
+                    for task in completed:
+                        if task.cancelled():
+                            continue
+
+                        exc: BaseException | None = task.exception()
+                        if exc is not None:
+                            raise exc from None  # raise task error and break processing
 
         else:
             assert isinstance(coroutines, Iterable)  # nosec: B101
@@ -465,13 +619,31 @@ async def concurrently[Result](  # noqa: C901, PLR0912
                     if len(tasks) < concurrent_tasks:
                         continue  # keep spawning tasks
 
-                    completed, tasks = await wait(
-                        tasks,
-                        return_when=FIRST_COMPLETED,
-                    )
-                    for task in completed:
-                        if exc := task.exception():
-                            raise exc
+                    try:
+                        completed, tasks = await wait(
+                            tasks,
+                            return_when=FIRST_COMPLETED,
+                        )
+
+                    except CancelledError:
+                        for task in tasks:
+                            if not task.done() or task.cancelled():
+                                continue  # examine only done tasks
+
+                            exc: BaseException | None = task.exception()
+                            if exc is not None:
+                                raise exc from None  # raise task error and break processing
+
+                        raise  # raise cancellation
+
+                    else:
+                        for task in completed:
+                            if task.cancelled():
+                                continue
+
+                            exc: BaseException | None = task.exception()
+                            if exc is not None:
+                                raise exc from None  # raise task error and break processing
 
             finally:
                 # cleanup already created coros
@@ -479,22 +651,32 @@ async def concurrently[Result](  # noqa: C901, PLR0912
                     for coro in iterator:
                         coro.close()
 
-    except BaseException as exc:
-        # Cancel all running tasks
-        for task in tasks:
-            task.cancel()
-
-        raise
-
-    else:
         if tasks:
-            completed, _ = await wait(
-                tasks,
-                return_when=ALL_COMPLETED,
-            )
-            for task in completed:
-                if exc := task.exception():
-                    raise exc
+            try:
+                completed, _ = await wait(
+                    tasks,
+                    return_when=ALL_COMPLETED,
+                )
+
+            except CancelledError:
+                for task in tasks:
+                    if not task.done() or task.cancelled():
+                        continue  # examine only done tasks
+
+                    exc: BaseException | None = task.exception()
+                    if exc is not None:
+                        raise exc from None  # raise task error and break processing
+
+                raise  # raise cancellation
+
+            else:
+                for task in completed:
+                    if task.cancelled():
+                        continue
+
+                    exc: BaseException | None = task.exception()
+                    if exc is not None:
+                        raise exc from None  # raise task error and break processing
 
     return [result.result() for result in results]
 
@@ -604,16 +786,17 @@ async def stream_concurrently[ElementA, ElementB](  # noqa: C901
         except BaseException as exc:
             merged_stream.finish(exception=exc)
 
-    task_a = ctx.spawn(producer_a)
-    task_b = ctx.spawn(producer_b)
+    async with ContextTaskGroup():  # local task group for more granular management
+        task_a: Task[None] = ctx.spawn(producer_a)
+        task_b: Task[None] = ctx.spawn(producer_b)
 
-    try:
-        async for element in merged_stream:
-            yield element
+        try:
+            async for element in merged_stream:
+                yield element
 
-    finally:
-        if not task_a.done():
-            task_a.cancel()
+        finally:
+            if not task_a.done():
+                task_a.cancel()
 
-        if not task_b.done():
-            task_b.cancel()
+            if not task_b.done():
+                task_b.cancel()

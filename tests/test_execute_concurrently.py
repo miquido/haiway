@@ -1,4 +1,4 @@
-from asyncio import CancelledError, sleep
+from asyncio import CancelledError, current_task, sleep
 from collections.abc import Sequence
 from typing import Any
 
@@ -65,6 +65,23 @@ async def test_propagates_handler_exceptions():
             handler,
             elements,
         )
+
+
+@mark.asyncio
+async def test_cancelled_task_does_not_mask_failure():
+    async def handler(element: int) -> int:
+        if element == 0:
+            task = current_task()
+            assert task is not None
+            task.cancel()
+            await sleep(0)
+            return 0
+
+        await sleep(0.05)
+        raise FakeException("boom")
+
+    with raises(FakeException):
+        await execute_concurrently(handler, [0, 1], concurrent_tasks=2)
 
 
 @mark.asyncio

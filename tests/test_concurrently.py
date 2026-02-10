@@ -1,4 +1,4 @@
-from asyncio import CancelledError, sleep
+from asyncio import CancelledError, current_task, sleep
 
 from pytest import mark, raises
 
@@ -66,6 +66,24 @@ async def test_propagates_coroutine_exceptions():
     coroutines = [good_coro(), bad_coro(), good_coro()]
     with raises(FakeException):
         await concurrently(coroutines)
+
+
+@mark.asyncio
+async def test_cancelled_task_does_not_mask_failure():
+    async def cancelled_coro() -> int:
+        task = current_task()
+        assert task is not None
+        task.cancel()
+        await sleep(0)
+        return 1
+
+    async def failing_coro() -> int:
+        await sleep(0.05)
+        raise FakeException("boom")
+
+    coroutines = [cancelled_coro(), failing_coro()]
+    with raises(FakeException):
+        await concurrently(coroutines, concurrent_tasks=2)
 
 
 @mark.asyncio
