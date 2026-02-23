@@ -46,7 +46,6 @@ from haiway.attributes.validation import (
     Verifying,
 )
 from haiway.types import (
-    META_EMPTY,
     MISSING,
     Alias,
     Description,
@@ -154,7 +153,7 @@ class AnyAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> Any:
@@ -297,7 +296,7 @@ class AliasAttribute(Immutable):
                 if isinstance(annotation, Meta):
                     return annotation
 
-            return META_EMPTY
+            return Meta.empty
 
         return self._resolved.meta
 
@@ -365,7 +364,7 @@ class MissingAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = False
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[haiway_types.Missing]:
@@ -457,7 +456,7 @@ class NoneAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> None:
@@ -550,7 +549,7 @@ class LiteralAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def type_name(self) -> str:
@@ -648,7 +647,7 @@ class BoolAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[bool]:
@@ -752,7 +751,7 @@ class IntegerAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[int]:
@@ -847,7 +846,7 @@ class FloatAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[float]:
@@ -942,7 +941,7 @@ class BytesAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[bytes]:
@@ -1034,7 +1033,7 @@ class UUIDAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[uuid.UUID]:
@@ -1133,7 +1132,7 @@ class StringAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[str]:
@@ -1225,7 +1224,7 @@ class DatetimeAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[datetime.datetime]:
@@ -1326,7 +1325,7 @@ class DateAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[datetime.date]:
@@ -1427,7 +1426,7 @@ class TimeAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[datetime.time]:
@@ -1528,7 +1527,7 @@ class PathAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[pathlib.Path]:
@@ -1629,7 +1628,7 @@ class TupleAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     def annotated(  # noqa: C901
         self,
@@ -1740,7 +1739,7 @@ class SequenceAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     def annotated(  # noqa: C901
         self,
@@ -1846,7 +1845,7 @@ class SetAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     def annotated(  # noqa: C901
         self,
@@ -1950,7 +1949,7 @@ class MappingAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     def annotated(  # noqa: C901
         self,
@@ -2053,7 +2052,7 @@ class MetaAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def base(self) -> type[haiway_types.Meta]:
@@ -2209,7 +2208,7 @@ class ObjectAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def type_name(self) -> str:
@@ -2314,7 +2313,7 @@ class TypedDictAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def type_name(self) -> str:
@@ -2426,7 +2425,7 @@ class FunctionAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def type_name(self) -> str:
@@ -2523,7 +2522,7 @@ class ProtocolAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def type_name(self) -> str:
@@ -2618,7 +2617,7 @@ class UnionAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def type_name(self) -> str:
@@ -2722,7 +2721,7 @@ class CustomAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def type_name(self) -> str:
@@ -2818,7 +2817,7 @@ class StrEnumAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def type_name(self) -> str:
@@ -2926,7 +2925,7 @@ class IntEnumAttribute(Immutable):
     verifying: Verifying[Any] = _no_verify
     required: bool = True
     specification: TypeSpecification | None = None
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty
 
     @property
     def type_name(self) -> str:

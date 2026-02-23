@@ -59,7 +59,6 @@ from haiway.helpers import (
     timeout,
 )
 from haiway.types import (
-    META_EMPTY,
     MISSING,
     Alias,
     BasicObject,
@@ -101,7 +100,6 @@ from haiway.utils import (
 )
 
 __all__ = (
-    "META_EMPTY",
     "MISSING",
     "Alias",
     "AsyncQueue",
