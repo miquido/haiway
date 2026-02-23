@@ -12,7 +12,7 @@ time.
 
 ## Prerequisites
 
-- Python 3.12 or higher
+- Python 3.13 or higher
 - Basic understanding of async/await in Python
 - Familiarity with Python type hints
 

@@ -33,7 +33,8 @@ Public exports are centralized in `src/haiway/__init__.py`.
 - Ensure latest, most strict typing syntax available from python 3.13+
 - Strict typing only: no untyped public APIs, no loose `Any` unless required by third-party boundaries
 - Prefer explicit attribute access with static types. Avoid dynamic `getattr` except at narrow boundaries.
-- Prefer abstract immutable protocols: `Mapping`, `Sequence`, `Iterable` over `dict`/`list`/`set` in public types
+- Prefer abstract immutable protocols: `Mapping`, `Sequence`, `Iterable` over `dict`/`list`/`set` in public types.
+  Sequences/sets are coerced to immutable containers, while mappings remain dict-like and should be treated as read-only.
 - Use `final` where applicable; avoid inheritance, prefer type composition
 - Use precise unions (`|`) and narrow with `match`/`isinstance`, avoid `cast` unless provably safe and localized
 - Favor structural typing (Protocols) for async clients and adapters; runtime-checkable protocols like `HTTPRequesting` keep boundaries explicit.
@@ -41,10 +42,12 @@ Public exports are centralized in `src/haiway/__init__.py`.
 
 ### Concurrency & Async
 
-- All I/O is async, keep boundaries async and use `ctx.spawn` for detached tasks
+- All I/O is async, keep boundaries async and use `ctx.spawn` for scoped tasks.
+  Use `ctx.spawn_background` only when work must outlive the current scope.
 - Ensure structured concurrency concepts and valid coroutine usage
 - Rely on haiway and asyncio packages with coroutines, avoid custom threading
 - Await long-running operations directly; never block the event loop with sync calls.
+- When bridging unavoidable sync APIs, prefer Haiway's `@asynchronous` helper.
 
 ### Exceptions & Error Translation
 

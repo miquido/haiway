@@ -29,7 +29,7 @@ All attributes must have type annotations. Provide default values where appropri
 # Optional loading - returns None if not found
 config = await DatabaseConfig.load()
 
-# Required loading - tries contextual state then class defaults if not found in repository
+# Required loading - tries contextual state, then class defaults if not found in repository
 config = await DatabaseConfig.load(required=True)
 
 # Loading with explicit default
@@ -41,13 +41,13 @@ config = await DatabaseConfig.load(default=DatabaseConfig(
 config = await DatabaseConfig.load(identifier="production_db")
 ```
 
-### Contextual Fallback (no implicit defaults)
+### Contextual and Class-Default Fallback
 
 When using `required=True`, the system first looks for a contextual instance bound via
 `ctx.scope(..., config_instance)`. This allows you to override repository values for the current
 scope (handy in tests or temporary overrides). If no contextual instance is available and nothing is
-found in the repository, `ConfigurationMissing` is raised—classes are **not** auto-instantiated with
-defaults.
+found in the repository, Haiway attempts to instantiate the configuration class with no arguments
+(class defaults). `ConfigurationMissing` is raised only when that also fails.
 
 ```python
 from haiway import ctx
@@ -97,20 +97,45 @@ Implement storage protocols for persistent configuration:
 import json
 from pathlib import Path
 
+from haiway import asynchronous
+
+
+@asynchronous
+def _path_exists(path: Path) -> bool:
+    return path.exists()
+
+
+@asynchronous
+def _read_text(path: Path) -> str:
+    return path.read_text()
+
+
+@asynchronous
+def _mkdir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+
+@asynchronous
+def _write_text(path: Path, content: str) -> None:
+    path.write_text(content)
+
+
 class FileStorage:
     def __init__(self, config_dir: Path):
         self.config_dir = config_dir
 
     async def load_config(self, identifier: str, **extra):
         config_file = self.config_dir / f"{identifier}.json"
-        if config_file.exists():
-            return json.loads(config_file.read_text())
+        if await _path_exists(config_file):
+            content = await _read_text(config_file)
+            return json.loads(content)
         return None
 
     async def define_config(self, identifier: str, value, **extra):
-        self.config_dir.mkdir(parents=True, exist_ok=True)
+        await _mkdir(self.config_dir)
         config_file = self.config_dir / f"{identifier}.json"
-        config_file.write_text(json.dumps(value, indent=2))
+        content = json.dumps(value, indent=2)
+        await _write_text(config_file, content)
 
 # Use custom storage
 storage = FileStorage(Path("./configs"))

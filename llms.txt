@@ -37,7 +37,7 @@ async def handler(user_id: UUID) -> User:
 
 ## State Essentials
 - Declare **all attributes with types**. Use `Sequence`/`Mapping`/`Set` (from `collections.abc`), not concrete `list`/`dict`/`set`. Use `| None` instead of `Optional`.
-- Immutability is enforced; collection fields are converted to immutable forms (`tuple`, `haiway.types.Map`, `frozenset`). Mutations raise.
+- Immutability is enforced; sequence/set fields are converted to immutable forms (`tuple`, `frozenset`), while mappings remain dict-like and should be treated as read-only. Mutations raise.
 - Metadata via `typing.Annotated` with `Alias`, `Description`, `Specification`, `Meta`, `Validator`. Example:
 ```python
 from typing import Annotated
@@ -49,7 +49,7 @@ class Invoice(State):
     meta: Meta = Meta.of(kind="invoice")
 ```
 - Lazy/default values: wrap in `Default(...)` or `Default(default_factory=...)`; env helpers integrate (`Default(env="API_KEY")`).
-- Conversions: `to_mapping(recursive=True)` returns JSON-ready structures honoring aliases and metadata.
+- Conversions: `to_mapping(recursive=True)` returns nested mapping/list structures honoring aliases and metadata.
 - Generics: `class Box[T](State): value: T`; specialization is validated (`Box[int](value=1)` ok, `Box[int](value="x")` raises).
 
 ## Context & Scopes
@@ -67,7 +67,7 @@ async with ctx.scope(
 - Events: `ctx.send(EventState)` publishes to subscribers; `async for e in ctx.subscribe(EventType): ...` consumes. Events are available only in isolated scopes (root scope or `isolated=True`); unsubscribed events are dropped.
 
 ## Concurrency Toolkit
-- `ctx.spawn(callable, *args, **kwargs)` spawns in the current scope task group with context propagation; outside a scope it uses the background task group. Use `ctx.spawn_background(...)` to force background tasks. Cancel via `task.cancel()` or cooperative `ctx.check_cancellation()`.
+- `ctx.spawn(callable, *args, **kwargs)` spawns in the current scope task group with context propagation; outside a scope it uses the background task group. Use `ctx.spawn_background(...)` to force background tasks. Cancel via `task.cancel()` or cooperative `ctx.check_cancellation()`. Unhandled child task failures are surfaced when the isolated scope exits.
 - Streaming: `async for item in ctx.stream(async_generator_fn, *args): ...` preserves context for generator work.
 - Concurrent helpers (all async-aware, preserve context):
   - `process_concurrently(source, handler, concurrent_tasks=2, ignore_exceptions=False)` – fire-and-forget per item, no result collection.
@@ -99,7 +99,7 @@ async with ctx.scope(
 - To mirror logs to OTLP or similar, wire `LoggerObservability` or dedicated exporters under `haiway.opentelemetry` into the context.
 
 ## Configuration & Environment
-- `Configuration`/`ConfigurationRepository` provide typed configs with repository-backed `load(required: bool = False, default: Configuration | None = None)` helpers. `ConfigurationMissing/ConfigurationInvalid` signal failures. `ConfigurationRepository.volatile(...)` is handy for tests.
+- `Configuration`/`ConfigurationRepository` provide typed configs with repository-backed `load(required: bool = False, default: Configuration | None = None)` helpers. With `required=True`, loading falls back to contextual state and then class default instantiation (no-arg constructor) before raising `ConfigurationMissing`. `ConfigurationInvalid` signals validation/loading failures. `ConfigurationRepository.volatile(...)` is handy for tests.
 - Env helpers: `getenv_*` (str/int/float/bool/base64) and `load_env` convert environment variables into typed values; prefer these instead of `os.getenv`.
 
 ## Non-Negotiable Rules for Contributions
