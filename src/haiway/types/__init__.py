@@ -5,7 +5,6 @@ from haiway.types.description import Description
 from haiway.types.immutable import Immutable
 from haiway.types.map import Map
 from haiway.types.meta import (
-    META_EMPTY,
     Meta,
     MetaTags,
     MetaValues,
@@ -14,7 +13,6 @@ from haiway.types.missing import MISSING, Missing, is_missing, not_missing, unwr
 from haiway.types.specification import Specification, TypeSpecification
 
 __all__ = (
-    "META_EMPTY",
     "MISSING",
     "Alias",
     "BasicObject",

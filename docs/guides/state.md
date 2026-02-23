@@ -145,7 +145,7 @@ class Dataset(State):
 
 `Meta.of(...)` accepts existing mappings or keyword arguments, and you can combine builders—for
 example, `Meta.of(kind="dataset").with_last_updated(timestamp)` returns a new instance with the
-timestamp recorded. When no metadata is provided, Haiway uses the singleton `META_EMPTY`, so you can
+timestamp recorded. When no metadata is provided, Haiway uses the shared `Meta.empty`, so you can
 always compare with identity checks.
 
 To inspect metadata added through annotations, read it from the resolved attribute definition:

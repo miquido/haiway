@@ -4,7 +4,7 @@ from typing import Any, Literal, Protocol, Self, overload, runtime_checkable
 from haiway.attributes import State
 from haiway.context import ctx
 from haiway.helpers.statemethods import statemethod
-from haiway.types import META_EMPTY, Meta
+from haiway.types import Meta
 
 __all__ = (
     "Configuration",
@@ -992,4 +992,4 @@ class ConfigurationRepository(State):
     loading: ConfigurationLoading = _none_loading
     defining: ConfigurationDefining = _noop_defining
     removing: ConfigurationRemoving = _noop_removing
-    meta: Meta = META_EMPTY
+    meta: Meta = Meta.empty

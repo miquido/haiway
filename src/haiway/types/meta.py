@@ -1,14 +1,13 @@
 import json
 from collections.abc import Collection, Mapping
 from datetime import datetime
-from typing import Any, Final, NoReturn, Self, TypeGuard, cast, final, overload
+from typing import Any, ClassVar, NoReturn, Self, TypeGuard, cast, final, overload
 from uuid import UUID
 
 from haiway.types.basic import BasicValue
 from haiway.types.map import Map
 
 __all__ = (
-    "META_EMPTY",
     "Meta",
     "MetaTags",
     "MetaValues",
@@ -42,6 +41,8 @@ class Meta(dict[str, BasicValue]):
     >>> print(meta.tags)  # ("active", "verified")
     >>> with_meta: Annotated[str, Meta.of(...)]
     """
+
+    empty: ClassVar[Self]  # definded after the class
 
     __slots__ = ()
 
@@ -89,7 +90,7 @@ class Meta(dict[str, BasicValue]):
         Parameters
         ----------
         meta : Self | MetaValues | None
-            The metadata to wrap. Can be None (returns META_EMPTY),
+            The metadata to wrap. Can be None (returns empty meta),
             an existing Meta instance (returns as-is), or a mapping
             of values to validate and wrap.
 
@@ -106,7 +107,7 @@ class Meta(dict[str, BasicValue]):
                 return cls({key: _validated_meta_value(value) for key, value in values.items()})
 
             else:
-                return cast(Self, META_EMPTY)
+                return cls.empty
 
         elif isinstance(meta, Meta):
             assert not values  # nosec: B101
@@ -745,4 +746,4 @@ def _validate_tag(tag: Any) -> TypeGuard[str]:
     return True
 
 
-META_EMPTY: Final[Meta] = Meta({})
+Meta.empty = Meta({})

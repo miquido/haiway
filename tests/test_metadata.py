@@ -4,15 +4,15 @@ from uuid import uuid4
 
 from pytest import raises
 
-from haiway.types import META_EMPTY, Map, Meta
+from haiway.types import Map, Meta
 from haiway.types.meta import _validated_meta_value
 
 
 def test_meta_empty_is_singleton():
-    # META_EMPTY is only returned for None, not empty dict
-    assert Meta.of(None) is META_EMPTY
-    assert not META_EMPTY
-    assert len(META_EMPTY) == 0
+    # Meta.empty is only returned for None, not empty dict
+    assert Meta.of(None) is Meta.empty
+    assert not Meta.empty
+    assert len(Meta.empty) == 0
 
     # Empty dict creates a new instance (but still empty)
     empty_from_dict = Meta.of({})
@@ -37,7 +37,7 @@ def test_meta_construction_validates_values():
 
 def test_meta_of_with_none_returns_empty():
     result = Meta.of(None)
-    assert result is META_EMPTY
+    assert result is Meta.empty
 
 
 def test_meta_of_with_existing_meta_returns_same():
