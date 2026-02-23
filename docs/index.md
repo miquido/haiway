@@ -1,7 +1,7 @@
 # Haiway
 
 [![PyPI](https://img.shields.io/pypi/v/haiway)](https://pypi.org/project/haiway/)
-![Python Version](https://img.shields.io/badge/Python-3.12+-blue)
+![Python Version](https://img.shields.io/badge/Python-3.13+-blue)
 [![License](https://img.shields.io/github/license/miquido/haiway)](https://github.com/miquido/haiway/blob/main/LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/miquido/haiway?style=social)](https://github.com/miquido/haiway)
 

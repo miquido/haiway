@@ -15,7 +15,8 @@ scopes:
 - Tasks spawned within a scope run in the nearest isolated scope's task group (root or
   `isolated=True`); they keep running until they finish or are cancelled.
 - Exceptions in child tasks cancel sibling tasks and are logged when the isolated scope exits.
-- Exceptions from child tasks do not raise from `ctx.scope()`; handle them in the tasks themselves.
+- Unhandled exceptions from child tasks are surfaced when the isolated scope exits; handle them in
+  tasks when needed.
 - Awaiting a task still surfaces its exception to the caller.
 - Resources are properly cleaned up through the scope lifecycle.
 - Task isolation is opt-in via `isolated=True`; non-isolated scopes share the parent task group.
@@ -103,9 +104,10 @@ async def main():
 
         # Background task is cancelled only if you cancel it or a sibling fails;
         # otherwise it runs to completion before scope exit
-
-If you need work to outlive the current scope, use `ctx.spawn_background()` instead of `ctx.spawn()`.
 ```
+
+If you need work to outlive the current scope, use `ctx.spawn_background()` instead of
+`ctx.spawn()`.
 
 ### Task Cancellation
 
@@ -125,7 +127,7 @@ async def main():
         await asyncio.sleep(10)
         ctx.cancel()  # Cancels current task
         # or
-task.cancel()  # Cancel specific task
+        task.cancel()  # Cancel specific task
 ```
 
 ### Background Task Shutdown Semantics

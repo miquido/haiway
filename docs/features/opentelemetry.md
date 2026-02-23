@@ -86,6 +86,7 @@ Use the configured OpenTelemetry observability in your Haiway contexts:
 ```python
 from haiway import ctx
 from haiway.opentelemetry import OpenTelemetry
+import asyncio
 
 async def main():
     # Use in context scope

@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Python 3.12 or higher
+- Python 3.13 or higher
 
 ## Install from PyPI
 
@@ -12,7 +12,8 @@ pip install haiway
 
 ## Optional Dependencies
 
-You may choose to install haiway including optional support for OpenTelemetry, httpx, and Postgres.
+You may choose to install haiway including optional support for OpenTelemetry, httpx, Postgres, and
+RabbitMQ.
 
 ### OpenTelemetry Support
 
@@ -32,6 +33,12 @@ For Postgres (`asyncpg`) support:
 
 ```bash
 pip install "haiway[postgres]"
+```
+
+For RabbitMQ (`pika`) support:
+
+```bash
+pip install "haiway[rabbitmq]"
 ```
 
 Now you're ready to continue with the [Quick Start](quickstart.md) guide!
