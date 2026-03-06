@@ -1,8 +1,6 @@
 import json
 from datetime import date, datetime, time
-from typing import (
-    Any,
-)
+from typing import Any
 from uuid import UUID
 
 __all__ = ("AttributesJSONEncoder",)
