@@ -1,7 +1,5 @@
 from collections.abc import Mapping
-from typing import (
-    Any,
-)
+from typing import Any
 
 from haiway.attributes.annotations import AttributeAnnotation
 from haiway.attributes.specification import type_specification
