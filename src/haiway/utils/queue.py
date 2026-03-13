@@ -1,11 +1,22 @@
 from asyncio import AbstractEventLoop, CancelledError, Future, get_running_loop
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn, cast, final
 
 __all__ = ("AsyncQueue",)
 
 
+@final
+class AsyncQueueEmpty(Exception):
+    """
+    Signal that a non-blocking queue read found no available element.
+
+    This exception is raised by :meth:`AsyncQueue.pending_next` when the queue
+    has not been finished but currently has no buffered elements to return.
+    """
+
+
+@final
 class AsyncQueue[Element](AsyncIterator[Element]):
     """
     Asynchronous queue supporting iteration and finishing.
@@ -175,6 +186,52 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         Any waiting consumers will receive this exception.
         """
         self.finish(exception=CancelledError())
+
+    def pending_next(self) -> Element:
+        """
+        Return the next buffered element without waiting.
+
+        This method is useful when callers need an immediate answer and want to
+        distinguish between an empty queue and a finished queue.
+
+        Returns
+        -------
+        Element
+            The next buffered element.
+
+        Raises
+        ------
+        AsyncQueueEmpty
+            If the queue is still open but has no buffered elements.
+        BaseException
+            Re-raises the finish reason when the queue has already been finished.
+        """
+        if self._queue:  # check the queue, let it finish
+            return self._queue.popleft()
+
+        if self._finish_reason is not None:  # check if is finished
+            raise self._finish_reason
+
+        raise AsyncQueueEmpty()
+
+    async def next(self) -> Element:
+        """
+        Await the next available element from the queue.
+
+        This is a named alternative to awaiting :meth:`__anext__`, which can be
+        preferable at call sites that are not using ``async for`` iteration.
+
+        Returns
+        -------
+        Element
+            The next available element.
+
+        Raises
+        ------
+        BaseException
+            Re-raises the finish reason when the queue has been finished.
+        """
+        return await self.__anext__()
 
     async def __anext__(self) -> Element:
         assert self._waiting is None, "Only a single queue consumer is supported!"  # nosec: B101

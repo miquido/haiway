@@ -1,8 +1,9 @@
-from asyncio import CancelledError
+from asyncio import CancelledError, sleep
 
 from pytest import mark, raises
 
 from haiway import AsyncQueue, ctx
+from haiway.utils.queue import AsyncQueueEmpty
 
 
 class FakeException(Exception):
@@ -109,3 +110,80 @@ async def test_ignores_when_finishing_when_finished():
     stream: AsyncQueue[int] = AsyncQueue()
     stream.finish()
     stream.finish()  # should not raise
+
+
+@mark.asyncio
+async def test_pending_next_returns_buffered_element():
+    stream: AsyncQueue[int] = AsyncQueue(1, 2)
+
+    assert stream.pending_next() == 1
+    assert stream.pending_next() == 2
+
+
+@mark.asyncio
+async def test_pending_next_raises_when_queue_is_empty():
+    stream: AsyncQueue[int] = AsyncQueue()
+
+    with raises(AsyncQueueEmpty):
+        stream.pending_next()
+
+
+@mark.asyncio
+async def test_pending_next_re_raises_finish_reason():
+    stream: AsyncQueue[int] = AsyncQueue()
+    stream.finish(exception=FakeException())
+
+    with raises(FakeException):
+        stream.pending_next()
+
+
+@mark.asyncio
+async def test_next_returns_buffered_element():
+    stream: AsyncQueue[int] = AsyncQueue(42)
+
+    assert await stream.next() == 42
+
+
+@mark.asyncio
+async def test_cancel_finishes_queue_with_cancelled_error():
+    stream: AsyncQueue[int] = AsyncQueue()
+
+    stream.cancel()
+
+    assert stream.is_finished is True
+    with raises(CancelledError):
+        await stream.next()
+
+
+@mark.asyncio
+async def test_clear_removes_buffered_elements():
+    stream: AsyncQueue[int] = AsyncQueue(1, 2, 3)
+
+    stream.clear()
+
+    with raises(AsyncQueueEmpty):
+        stream.pending_next()
+
+
+@mark.asyncio
+async def test_clear_does_not_drop_waiting_consumer_result():
+    stream: AsyncQueue[int] = AsyncQueue()
+
+    consumer = ctx.spawn(stream.next)
+    await sleep(0)
+
+    stream.clear()
+    stream.enqueue(7)
+
+    assert await consumer == 7
+
+
+@mark.asyncio
+async def test_queue_is_immutable():
+    stream: AsyncQueue[int] = AsyncQueue()
+
+    with raises(AttributeError):
+        stream._queue = []  # pyright: ignore[reportAttributeAccessIssue]
+
+    with raises(AttributeError):
+        del stream._queue  # pyright: ignore[reportAttributeAccessIssue]
