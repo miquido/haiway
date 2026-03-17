@@ -362,35 +362,30 @@ class ContextObservability:
         *,
         observability: Observability | Logger | None,
     ) -> Self:
-        current: Self
-        try:  # check for current scope
-            current = cls._context.get()
+        if observability is None:
+            try:  # check for current scope
+                return cls(
+                    scope=scope,
+                    observability=cls._context.get().observability,
+                )
 
-        except LookupError:  # create root scope when missing
-            if observability is None:
+            except LookupError:  # create default logger observability on missing
                 return cls(
                     scope=scope,
                     observability=_logger_observability(getLogger(scope.name)),
                 )
 
-            elif isinstance(observability, Logger):
-                return cls(
-                    scope=scope,
-                    observability=_logger_observability(observability),
-                )
+        elif isinstance(observability, Logger):
+            return cls(
+                scope=scope,
+                observability=_logger_observability(observability),
+            )
 
-            else:
-                return cls(
-                    scope=scope,
-                    observability=observability,
-                )
-
-        assert observability is None  # nosec: B101
-        # create nested scope
-        return cls(
-            scope=scope,
-            observability=current.observability,
-        )
+        else:
+            return cls(
+                scope=scope,
+                observability=observability,
+            )
 
     @classmethod
     def trace_id(cls) -> str:
