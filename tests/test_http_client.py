@@ -72,4 +72,23 @@ async def test_http_client_error_contains_context() -> None:
     error = exc_info.value
     assert error.method == "GET"
     assert error.url == "http://example.com/test"
+    assert isinstance(error.__cause__, RuntimeError)
     assert "HTTP request failed" in str(error)
+
+
+@mark.asyncio
+async def test_http_client_request_preserves_context_for_custom_method() -> None:
+    async def failing_request(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    client = HTTPClient(requesting=failing_request)
+
+    with raises(HTTPClientError) as exc_info:
+        await client.request("PATCH", url="http://example.com/test")
+
+    error = exc_info.value
+    assert error.method == "PATCH"
+    assert error.url == "http://example.com/test"
+    assert isinstance(error.__cause__, RuntimeError)
+    assert "method=PATCH" in str(error)
+    assert "url=http://example.com/test" in str(error)

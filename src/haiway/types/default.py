@@ -13,13 +13,27 @@ __all__ = (
 @final
 class DefaultValue:
     """
-    Container for a default value or a factory function that produces a default value.
+    Immutable resolver for field default values.
 
-    This class stores either a direct default value or a factory function that can
-    produce a default value when needed. It ensures the value or factory cannot be
-    modified after initialization.
+    ``DefaultValue`` stores exactly one default source: a literal value, a factory
+    callable, or an environment variable lookup. The owning ``Immutable`` or
+    ``State`` type calls the instance during object construction to resolve the
+    effective value for that field.
 
-    The value can be retrieved by calling the instance like a function.
+    Parameters
+    ----------
+    default : Any | Missing, optional
+        Literal default returned unchanged when no other source is configured.
+    default_factory : Callable[[], Any] | Missing, optional
+        Zero-argument callable invoked every time the default is resolved.
+    env : str | Missing, optional
+        Environment variable name read via ``os.getenv`` when resolving the
+        default.
+
+    Raises
+    ------
+    AssertionError
+        If incompatible sources are provided together.
 
     Examples
     --------
@@ -136,29 +150,29 @@ def Default[Value](
     default_factory: Callable[[], Value] | Missing = MISSING,
     env: str | Missing = MISSING,
 ) -> Value:
-    """Create an immutable provider for a default value.
+    """Create a field default resolver for ``Immutable`` and ``State`` types.
 
-    Exactly one source must be provided: either a literal ``default``, a
-    ``default_factory`` callable, or the name of an environment variable via
-    ``env``. When the returned object is invoked it yields the configured
-    default or ``MISSING`` if the resolver has no value.
+    The returned object is a ``DefaultValue`` instance disguised as ``Value`` so
+    static type checkers treat the annotated field as its resolved runtime type.
+    Haiway consumes it while constructing an ``Immutable`` or ``State``
+    subclass; it is not a descriptor and it does not defer resolution until
+    attribute access.
 
     Parameters
     ----------
-    default
+    default : Value | Missing, optional
         Literal value used when neither ``default_factory`` nor ``env`` are
         supplied.
-    default_factory
+    default_factory : Callable[[], Value] | Missing, optional
         Callable that is executed on demand to produce the default value.
-    env
+    env : str | Missing, optional
         Name of the environment variable queried for the default value when no
         other source is set.
 
     Returns
     -------
     Value
-        An immutable ``DefaultValue`` wrapper that can be called to retrieve
-        the resolved default.
+        A typed field marker wrapping an immutable ``DefaultValue`` resolver.
 
     Raises
     ------

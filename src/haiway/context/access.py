@@ -72,7 +72,8 @@ class ctx:
 
         When entering this context manager, the provided presets become available
         for use with ctx.scope(). The presets are looked up by their name when
-        creating scopes.
+        creating scopes. Registry lookup is scoped: nested registries shadow outer
+        registries for the duration of the nested ``with`` block.
 
         Note: For single preset usage, consider passing the preset directly to
         ctx.scope() instead of using this registry.
@@ -150,7 +151,9 @@ class ctx:
             Either a name of the scope context (can be associated with state presets with
             matching name from preset registry), or a context preset to be used directly
             within the scope context. When a preset is provided directly, its state and
-            disposables will be applied to the scope with lower priority than explicit state.
+            disposables will be applied to the scope with lower priority than explicit state and
+            with higher priority than inherited parent state. Direct presets take precedence over
+            registry lookup.
 
         *state: State | None
             state propagated within the scope context, will be merged with current state by
@@ -163,14 +166,14 @@ class ctx:
 
         observability: Observability | Logger | None = None
             observability solution responsible for recording and storing metrics, logs and events.
-            Assigning observability within existing context will result in an error.
-            When not provided, logger with the scope name will be requested and used.
+            When not provided, the current observability backend is reused if one exists;
+            otherwise a logger with the scope name will be requested and used.
 
         isolated: bool = False
-            control if scope inheritance and task group will be isolated from parent.
-            When set to True, context will use a separate TaskGroup and will not propagate its
-            context/state to the parent scope. Isolation does not affect event propagation within
-            the context. Root scope is always isolated.
+            controls whether task and event handling are isolated from the parent scope.
+            When set to True, the scope uses its own TaskGroup and event bus. State inheritance
+            still flows from parent to child when the scope is entered, but updates remain local
+            to the child scope. Root scope is always isolated.
 
         Returns
         -------
@@ -300,7 +303,14 @@ class ctx:
         """
         Spawn an async task within current scope context task group.
 
-        When called outside of context, it will spawn a background task instead.
+        Spawned tasks inherit the current context snapshot via ``contextvars`` at
+        spawn time. When called outside of a scope task group, this falls back to
+        the global background task group instead.
+
+        Tasks created inside a scope are awaited by the owning task group on scope
+        exit. They are not automatically cancelled on a healthy scope exit; use
+        ``task.cancel()`` or ``ctx.spawn_background(...)`` when different lifetime
+        semantics are required.
 
         Parameters
         ----------
@@ -347,6 +357,11 @@ class ctx:
         """
         Spawn an async task within background task group.
 
+        Background tasks inherit the current context snapshot via ``contextvars``
+        at spawn time, but they are detached from the current scope's task group
+        and may outlive that scope. Use ``ctx.shutdown_background_tasks()`` for
+        best-effort cleanup during shutdown or tests.
+
         Parameters
         ----------
         coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result]
@@ -385,6 +400,10 @@ class ctx:
     ) -> AsyncIterable[Element]:
         """
         Stream results produced by a generator within the proper context state.
+
+        The source generator runs inside a dedicated ``"stream"`` child scope so
+        that state, observability, and trace information remain available while the
+        stream is consumed.
 
         Parameters
         ----------
@@ -484,7 +503,8 @@ class ctx:
 
         Retrieves state objects that have been propagated within the current execution context.
         State objects are automatically made available through context scopes and disposables.
-        If no matching state is found, creates a default instance if possible.
+        Resolution is by exact concrete type. If no matching state is found inside a
+        scope, a default instance is created lazily when possible.
 
         Parameters
         ----------
@@ -502,9 +522,9 @@ class ctx:
         Raises
         ------
         ContextMissing
-            If called outside of any scope context
+            If called outside of any scope context and no explicit default was provided
         ContextStateMissing
-            If no state is found and no default can be created
+            If no state is found in the current scope and no default can be created
 
         Examples
         --------
@@ -549,7 +569,8 @@ class ctx:
         Send an event to all active subscribers within the current context.
 
         Events are dispatched based on their exact type - subscribers must
-        subscribe to the specific State type to receive events.
+        subscribe to the specific State type to receive events. Only subscribers
+        that already exist receive the event.
 
         Parameters
         ----------
@@ -559,7 +580,9 @@ class ctx:
         Raises
         ------
         ContextMissing
-            If called outside of an ContextEvents
+            If no event bus is installed in the current scope. Event buses exist in
+            root scopes and in scopes created with ``isolated=True``; nested
+            non-isolated scopes reuse the parent's bus.
 
         Examples
         --------
@@ -585,7 +608,8 @@ class ctx:
         Subscribe to events of a specific type within the current context.
 
         Creates a subscription that receives all events of the specified type
-        sent after the subscription is created.
+        sent after the subscription is created. Delivery is FIFO for a given event
+        type within the current scope and event loop.
 
         Parameters
         ----------
@@ -596,6 +620,11 @@ class ctx:
         -------
         EventsSubscription[Event]
             An async iterator that yields events of the specified type
+
+        Raises
+        ------
+        ContextMissing
+            If no event bus is installed in the current scope
 
         Examples
         --------

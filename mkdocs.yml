@@ -91,8 +91,11 @@ nav:
   - Guides:
       - guides/index.md
       - State: guides/state.md
+      - Types: guides/types.md
       - Functionalities: guides/functionalities.md
+      - Helpers: guides/helpers.md
       - Configuration: guides/configuration.md
+      - Utilities: guides/utilities.md
       - Concurrent Processing: guides/concurrent.md
       - Packages: guides/packages.md
   - Features:
@@ -100,6 +103,7 @@ nav:
       - HTTPClient: features/http-client.md
       - Caching Helper: features/caching.md
       - Postgres: features/postgres.md
+      - RabbitMQ: features/rabbitmq.md
       - File Access: features/file-access.md
       - Event Bus: features/event-bus.md
       - State Methods: features/state-methods.md

@@ -24,6 +24,13 @@ def PostgresConfigurationRepository(
     cache_expiration: float = 600.0
         Lifetime in seconds for cached entries before a fresh query is issued.
 
+    Returns
+    -------
+    ConfigurationRepository
+        Repository state backed by the ``configurations`` Postgres table. New
+        values are stored as append-only snapshots; reads resolve the newest row
+        for each identifier.
+
     Notes
     -----
     Requires the ``configurations`` table to exist; see the schema comment

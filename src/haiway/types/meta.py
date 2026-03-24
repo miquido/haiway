@@ -23,15 +23,17 @@ class Meta(dict[str, BasicValue]):
     """
     Immutable metadata container with type-safe access to common fields.
 
-    Meta provides a structured way to store and access metadata as key-value pairs
-    with built-in support for common metadata fields like identifiers, names,
-    descriptions, tags, and timestamps. All values are validated to ensure they
-    conform to the MetaValue type constraints.
+    ``Meta`` stores JSON-compatible metadata with convenience accessors for
+    common fields such as identifiers, names, descriptions, tags, and
+    timestamps. The validating constructors normalize nested lists to tuples and
+    nested mappings to immutable ``Map`` instances so metadata stays immutable
+    through the full object graph.
 
-    The class implements the Mapping protocol, allowing dict-like access while
-    maintaining immutability. It provides builder-style methods (with_*) for
-    creating modified copies and convenience properties for accessing standard
-    metadata fields.
+    The class inherits from ``dict`` for storage and read access, but blocks all
+    mutating methods. Prefer ``Meta.of(...)``, ``Meta.from_mapping(...)``, or
+    ``Meta.from_json(...)`` when constructing values that should be validated.
+    Direct ``Meta({...})`` construction preserves the base ``dict`` behavior and
+    therefore does not perform recursive validation on its own.
 
     Examples
     --------
@@ -51,6 +53,24 @@ class Meta(dict[str, BasicValue]):
         cls,
         value: Any,
     ) -> Self:
+        """
+        Coerce a mapping-like value into validated metadata.
+
+        Parameters
+        ----------
+        value : Any
+            Candidate metadata object.
+
+        Returns
+        -------
+        Self
+            Validated metadata with recursively normalized values.
+
+        Raises
+        ------
+        TypeError
+            If ``value`` is not mapping-like.
+        """
         match value:
             case {**values}:
                 return cls({key: _validated_meta_value(element) for key, element in values.items()})
@@ -82,25 +102,25 @@ class Meta(dict[str, BasicValue]):
         **values: BasicValue,
     ) -> Self:
         """
-        Create a Meta instance from various input types.
+        Create validated metadata from an existing ``Meta``, mapping, or kwargs.
 
-        This factory method provides a flexible way to create Meta instances,
-        handling None values, existing Meta instances, and raw mappings.
+        This helper is the preferred construction entry point because it applies
+        recursive value validation and normalization.
 
         Parameters
         ----------
         meta : Self | MetaValues | None
-            The metadata to wrap. Can be None (returns empty meta),
-            an existing Meta instance (returns as-is), or a mapping
-            of values to validate and wrap.
-
-        **values: BasicValue
-            Key-value pairs to be added to the result metadata.
+            Metadata to wrap. ``None`` returns ``Meta.empty`` when no keyword
+            values are provided. Passing an existing ``Meta`` returns it
+            unchanged.
+        **values : BasicValue
+            Metadata values supplied directly as keyword arguments. This form is
+            only accepted when ``meta`` is not provided.
 
         Returns
         -------
         Self
-            A Meta instance containing the provided metadata.
+            Validated metadata with immutable nested values.
         """
         if meta is None:
             if values:
@@ -124,6 +144,19 @@ class Meta(dict[str, BasicValue]):
         mapping: Mapping[str, BasicValue],
         /,
     ) -> Self:
+        """
+        Build validated metadata from a mapping.
+
+        Parameters
+        ----------
+        mapping : Mapping[str, BasicValue]
+            Mapping to validate and normalize recursively.
+
+        Returns
+        -------
+        Self
+            Metadata containing the normalized mapping contents.
+        """
         return cls({key: _validated_meta_value(value) for key, value in mapping.items()})
 
     @classmethod
@@ -132,6 +165,24 @@ class Meta(dict[str, BasicValue]):
         value: str | bytes,
         /,
     ) -> Self:
+        """
+        Deserialize validated metadata from a JSON object payload.
+
+        Parameters
+        ----------
+        value : str | bytes
+            JSON payload expected to decode to an object.
+
+        Returns
+        -------
+        Self
+            Metadata created from the decoded payload.
+
+        Raises
+        ------
+        ValueError
+            If the payload is not a JSON object.
+        """
         match json.loads(value):
             case {**values}:
                 return cls({key: _validated_meta_value(val) for key, val in values.items()})
@@ -140,11 +191,27 @@ class Meta(dict[str, BasicValue]):
                 raise ValueError(f"Invalid Meta value json: {other}")
 
     def to_str(self) -> str:
+        """
+        Return the string representation of the metadata.
+
+        Returns
+        -------
+        str
+            Human-readable representation identical to ``str(self)``.
+        """
         return self.__str__()
 
     def to_json(
         self,
     ) -> str:
+        """
+        Serialize metadata to a JSON object string.
+
+        Returns
+        -------
+        str
+            JSON encoding of the metadata mapping.
+        """
         return json.dumps(self)
 
     @property

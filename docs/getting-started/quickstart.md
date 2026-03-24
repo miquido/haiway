@@ -151,7 +151,13 @@ the context and they are going to be initialized when this context starts and cl
 context is finished. You can define disposables like this:
 
 ```python
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from haiway import State
+
+
+class DatabaseState(State):
+    connection: Mapping[str, str]
 
 @asynccontextmanager
 async def database_connection():

@@ -7,7 +7,7 @@ Haiway is a functional/async framework built around immutable `State`, context-s
 - Context-first DI: `async with ctx.scope(name_or_preset, *state, disposables=(...)):` installs state for the lifetime of the scope. `ctx.state(Type)` resolves by type. Priority: explicit state > disposables > preset state > parent scope.
 - Protocol-driven logic: define contracts as `Protocol` and inject implementations as state. Expose public API via `@statemethod` on service `State` containers.
 - Structured concurrency: tasks live inside the current scope task group via `ctx.spawn`. Logging, cancellation, and state all propagate automatically.
-- Observability: never `print`. Use `ctx.log_*` and `ctx.record_*`; tracing hooks live in `haiway.context.observability` and can be bridged with OpenTelemetry via `LoggerObservability` or `opentelemetry` adapters.
+- Observability: never `print`. Use `ctx.log_*` and `ctx.record_*`; `LoggerObservability(...)` provides a standard-logging backend, while `haiway.opentelemetry.OpenTelemetry` provides OpenTelemetry integration.
 
 ## Minimal Skeleton
 ```python
@@ -88,15 +88,16 @@ async with ctx.scope(
 - **HTTP**: Use `haiway.helpers.HTTPClient` static methods (`get/post/put/delete/request`). Provide an implementation via state, typically `haiway.httpx.HTTPXClient` disposable. Responses are `HTTPResponse` (immutable; `await response.body()` returns bytes). Errors raise `HTTPClientError` (original cause in `__cause__`).
 - **File access**: `haiway.helpers.File` is a typed async file helper backed by context-managed resources; respect `FileAccess` flags when opening.
 - **Postgres**: the `haiway.postgres` package offers async client/state helpers aligned with `asyncpg` patterns; configure via state and keep operations async-only.
+- **RabbitMQ**: the `haiway.rabbitmq` package offers async queue access built on `pika`; use `RabbitMQClient` as a disposable and resolve `RabbitMQ`/`MQQueue`/`MQMessage` from context for typed publish/consume flows.
 
 ## Caching & Resilience
 - Memoization: `cache` (LRU, in-process, async-only) and `cache_externally(make_key, read, write, clear?)` for custom backends. `clear_cache()` available when supported.
 - Retries/timeouts/throttling: decorators from `haiway.helpers` integrate with `ctx.spawn` and preserve typing.
 
 ## Observability
-- Logging: `ctx.log_debug/info/warning/error/critical(message_or_event, **fields)`; structured fields are encouraged. Never log secrets.
-- Metrics/events: `ctx.record_info(...)/record_warning/record_error` or generic `ctx.record(event=?, attributes=?, metric=?, value=?, kind=?, unit=?)` depending on level. `ctx.trace_id()` surfaces the current trace identifier.
-- To mirror logs to OTLP or similar, wire `LoggerObservability` or dedicated exporters under `haiway.opentelemetry` into the context.
+- Logging: `ctx.log_debug/info/warning/error(message, *args, exception=...)`. There is no `ctx.log_critical(...)`. Never log secrets.
+- Metrics/events/attributes: use `ctx.record_debug(...)`, `ctx.record_info(...)`, `ctx.record_warning(...)`, or `ctx.record_error(...)` with either `event=...`, or `metric=..., value=..., kind=..., unit=?`, or `attributes={...}`. There is no generic `ctx.record(...)`. `ctx.trace_id()` surfaces the current trace identifier.
+- For standard logging, wire `LoggerObservability(...)` into the context. For OTLP/OpenTelemetry export, configure and use `haiway.opentelemetry.OpenTelemetry`.
 
 ## Configuration & Environment
 - `Configuration`/`ConfigurationRepository` provide typed configs with repository-backed `load(required: bool = False, default: Configuration | None = None)` helpers. With `required=True`, loading falls back to contextual state and then class default instantiation (no-arg constructor) before raising `ConfigurationMissing`. `ConfigurationInvalid` signals validation/loading failures. `ConfigurationRepository.volatile(...)` is handy for tests.

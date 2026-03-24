@@ -3,6 +3,35 @@
 Haiway provides a simple configuration system built on top of the State class. Configuration classes
 are immutable, type-safe, and can be loaded from various storage backends.
 
+For process environment access, Haiway also exposes standalone helpers such as `load_env()`,
+`getenv_str()`, `getenv_int()`, and `getenv_bool()`. Those functions are not part of the
+`Configuration` repository model, but they are commonly used during bootstrap to assemble initial
+settings or defaults.
+
+## Environment Bootstrap
+
+For lightweight startup configuration, load a `.env` file and parse individual values directly from
+the environment:
+
+```python
+from haiway import getenv_bool, getenv_int, getenv_str, load_env
+
+load_env()
+
+app_env = getenv_str("APP_ENV", "development")
+port = getenv_int("APP_PORT", 8080)
+debug = getenv_bool("DEBUG", False)
+database_url = getenv_str("DATABASE_URL", required=True)
+```
+
+Notes:
+
+- `load_env()` silently skips missing files.
+- It only supports simple `KEY=VALUE` lines and comments starting with `#`.
+- `getenv_bool()` treats only `"true"`, `"1"`, and `"t"` as `True`; any other present value is
+  `False`.
+- Use `getenv()` when you need a custom parser function.
+
 ## Basic Usage
 
 ### Defining Configuration Classes
@@ -10,7 +39,7 @@ are immutable, type-safe, and can be loaded from various storage backends.
 Create configuration classes by inheriting from `Configuration`:
 
 ```python
-from haiway.helpers import Configuration
+from haiway import Configuration
 
 class DatabaseConfig(Configuration):
     host: str = "localhost"
@@ -29,7 +58,7 @@ All attributes must have type annotations. Provide default values where appropri
 # Optional loading - returns None if not found
 config = await DatabaseConfig.load()
 
-# Required loading - tries contextual state, then class defaults if not found in repository
+# Required loading - repository first, then ctx.state(DatabaseConfig)
 config = await DatabaseConfig.load(required=True)
 
 # Loading with explicit default
@@ -43,21 +72,28 @@ config = await DatabaseConfig.load(identifier="production_db")
 
 ### Contextual and Class-Default Fallback
 
-When using `required=True`, the system first looks for a contextual instance bound via
-`ctx.scope(..., config_instance)`. This allows you to override repository values for the current
-scope (handy in tests or temporary overrides). If no contextual instance is available and nothing is
-found in the repository, Haiway attempts to instantiate the configuration class with no arguments
-(class defaults). `ConfigurationMissing` is raised only when that also fails.
+When using `required=True`, Haiway first asks the current `ConfigurationRepository` for the
+configuration. Only when the repository returns no value does it fall back to `ctx.state(...)`.
+
+That fallback matters because `ctx.state(ConfigType)` behaves in two useful ways:
+
+- it returns a contextual instance already bound in the current scope, if one exists
+- otherwise it lazily creates a default instance when the state type can be constructed with no
+  arguments
+
+This means configuration classes with fully defaulted fields can still load successfully even when
+the repository has no stored value. `ConfigurationMissing` is raised only when the repository misses
+and `ctx.state(...)` cannot supply an instance.
 
 ```python
-from haiway import ctx
+from haiway import Configuration, ConfigurationMissing, ctx
 
 class ServerConfig(Configuration):
     host: str = "0.0.0.0"
     port: int = 8000
     workers: int = 4
 
-# Uses contextual override when present
+# Uses contextual override when repository misses
 async with ctx.scope("server", ServerConfig(port=9001)):
     config = await ServerConfig.load(required=True)
     assert config.port == 9001
@@ -75,8 +111,7 @@ except ConfigurationMissing:
 For testing and development:
 
 ```python
-from haiway.helpers import ConfigurationRepository
-from haiway import ctx
+from haiway import ConfigurationRepository, ctx
 
 # Create repository with configurations
 db_config = DatabaseConfig(
@@ -88,6 +123,9 @@ repo = ConfigurationRepository.volatile(db_config)
 async with ctx.scope("app", repo):
     config = await DatabaseConfig.load(required=True)
 ```
+
+`ConfigurationRepository.volatile(...)` stores configuration instances in memory and keys unnamed
+entries by `type(config).__qualname__`.
 
 ### Custom Storage Backend
 
@@ -151,7 +189,7 @@ async with ctx.scope("app", repo):
 ## Error Handling
 
 ```python
-from haiway.helpers import ConfigurationMissing, ConfigurationInvalid
+from haiway import ConfigurationInvalid, ConfigurationMissing
 
 try:
     config = await DatabaseConfig.load(required=True)
@@ -170,12 +208,22 @@ async with ctx.scope("app", repo):
 
     # Store configuration
     await ConfigurationRepository.define(config)
+    await ConfigurationRepository.define(
+        "production_db",
+        DatabaseConfig(
+            database="myapp",
+            username="admin",
+            password="secret",
+        ),
+    )
 
     # Remove configuration
     await ConfigurationRepository.remove(DatabaseConfig)
+    await ConfigurationRepository.remove("production_db")
 
     # List available configurations
     available = await ConfigurationRepository.configurations()
+    only_databases = await ConfigurationRepository.configurations(DatabaseConfig)
 ```
 
 That's it! The configuration system is designed to be simple and integrate seamlessly with Haiway's

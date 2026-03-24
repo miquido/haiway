@@ -760,7 +760,7 @@ class AttributePath[Root, Attribute]:
         Returns
         -------
         str
-            A string representation of the path (e.g., ".attr1.attr2[0]")
+            A string representation of the path (e.g., ``"attr1.attr2[0]"``)
         """
         path: str = ""
         for component in self.__components__:
@@ -857,32 +857,9 @@ class AttributePath[Root, Attribute]:
         Parameters
         ----------
         key : str | int
-            The key or index to access. String keys are used for mapping access
-            and integer keys for sequence/tuple access.
-
-        Returns
-        -------
-        AttributePath
-            A new AttributePath extended with the item access component
-
-        Raises
-        ------
-        TypeError
-            If the key type is incompatible with the attribute type or if the
-            attribute type does not support item access
-        """
-        """
-        Extend the path with item access using the specified key.
-
-        This method is called when using item access notation (path[key]) on an
-        AttributePath instance. It creates a new AttributePath that includes the
-        additional item access component.
-
-        Parameters
-        ----------
-        key : str | int
-            The key or index to access. String keys are used for mapping access
-            and integer keys for sequence/tuple access.
+            The key or index to access. String and integer keys are supported
+            for mappings; integer indices are supported for sequences and
+            tuples.
 
         Returns
         -------
@@ -1005,29 +982,7 @@ class AttributePath[Root, Attribute]:
         self,
         source: Root,
         /,
-    ) -> Attribute:
-        """
-        Access the attribute value at this path in the source object.
-
-        This overload is used when retrieving a value without updating it.
-
-        Parameters
-        ----------
-        source : Root
-            The source object to access the attribute in
-
-        Returns
-        -------
-        Attribute
-            The attribute value at this path
-
-        Raises
-        ------
-        AttributeError
-            If any component in the path doesn't exist
-        TypeError
-            If any component in the path is of the wrong type
-        """
+    ) -> Attribute: ...
 
     @overload
     def __call__(
@@ -1035,31 +990,7 @@ class AttributePath[Root, Attribute]:
         source: Root,
         /,
         updated: Attribute,
-    ) -> Root:
-        """
-        Create a new root object with an updated attribute value at this path.
-
-        This overload is used when updating a value.
-
-        Parameters
-        ----------
-        source : Root
-            The source object to update
-        updated : Attribute
-            The new value to set at this path
-
-        Returns
-        -------
-        Root
-            A new root object with the updated attribute value
-
-        Raises
-        ------
-        AttributeError
-            If any component in the path doesn't exist
-        TypeError
-            If any component in the path is of the wrong type
-        """
+    ) -> Root: ...
 
     def __call__(
         self,
@@ -1067,6 +998,41 @@ class AttributePath[Root, Attribute]:
         /,
         updated: Attribute | Missing = MISSING,
     ) -> Root | Attribute:
+        """
+        Read the value at this path or return an updated root object.
+
+        Parameters
+        ----------
+        root : Root
+            Root object against which the path should be resolved.
+        updated : Attribute | Missing, default=MISSING
+            When provided, the path is updated immutably and a new root object
+            is returned. When omitted, the current value at the path is
+            returned.
+
+        Returns
+        -------
+        Root | Attribute
+            The resolved attribute value, or a new root object when ``updated``
+            is provided.
+
+        Raises
+        ------
+        AssertionError
+            If ``root``, ``updated``, or the resolved value does not match the
+            path type annotations.
+        AttributeError
+            If an attribute component cannot be resolved on the current
+            subject.
+        KeyError
+            If a mapping key component is missing from the current subject.
+        IndexError
+            If a sequence index component is out of bounds for the current
+            subject.
+        TypeError
+            If updating a path component requires an unsupported subject or
+            value type.
+        """
         assert isinstance(root, _unaliased_origin(self.__root__)), (  # nosec: B101
             f"AttributePath '{self.__repr__()}' used on unexpected root of "
             f"'{type(root).__name__}' instead of '{self.__root__.__name__}'"

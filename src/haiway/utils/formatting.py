@@ -36,15 +36,14 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
 
     Notes
     -----
-    - Strings are quoted, with multi-line strings using triple quotes
-    - Bytes are noted with its size
-    - Mappings (like dictionaries) are formatted with keys and values
-    - Sequences (like lists) are formatted with indices and values
-    - Objects with ``__dict__`` are formatted with their attribute names and values;
-      other objects fall back to ``str(obj)`` while preserving caller-managed
-      indentation
-    - MISSING values are converted to empty strings
-    - Nested structures maintain proper indentation
+    - Strings are quoted, with multiline strings rendered as indented triple-quoted blocks
+    - Bytes-like values are rendered as ``<<<N bytes>>>``
+    - Mappings are formatted with rendered keys and values
+    - Sequences are formatted with positional indices
+    - Objects with ``__dict__`` are rendered from their public attributes
+    - Other objects fall back to ``str(obj)`` while preserving caller-managed indentation
+    - ``MISSING`` values render as empty strings and are skipped by nested formatters
+    - Nested structures maintain indentation recursively
     """
     if value is None:
         return "None"

@@ -70,8 +70,13 @@ class FileWriting(Protocol):
     Protocol for asynchronous file writing operations.
 
     Implementations write the provided content to the file, completely
-    replacing any existing content. The write operation is atomic and
-    includes proper synchronization to ensure data is written to disk.
+    replacing any existing content. In the default implementation, writes are
+    synchronized only by the per-FileAccessContext lock and become
+    cross-context or cross-process safe only when FileAccess.open(...,
+    exclusive=True) acquires the file lock. The default implementation also
+    fsyncs after each in-place update, but it is not atomic across processes
+    unless exclusive=True is used or the caller adopts an atomic temp-file
+    rename pattern.
     """
 
     async def __call__(

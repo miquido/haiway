@@ -162,12 +162,22 @@ type TypeSpecification = (
 @final
 class Specification:
     """
-    Immutable wrapper ensuring a `TypeSpecification` instance remains intact.
+    Immutable wrapper for a JSON-schema-like ``TypeSpecification`` fragment.
+
+    Haiway consumes ``Specification`` most commonly through
+    ``typing.Annotated[...]`` on ``State`` fields. The wrapper keeps the schema
+    fragment immutable and typed, but it does not deeply validate every schema
+    keyword beyond requiring a non-empty specification object.
 
     Parameters
     ----------
     specification : TypeSpecification
-        Underlying type specification describing the accepted structure.
+        Underlying schema fragment describing the accepted serialized structure.
+
+    Raises
+    ------
+    AssertionError
+        If an empty specification is provided.
 
 
     Examples

@@ -52,8 +52,8 @@ annotations. If a value fails validation, an exception will be raised.
 ### Default Values and Lazy Initialization
 
 Use the `Default` helper when a field needs to be computed lazily or resolved from the environment.
-`Default` returns a `DefaultValue` container that the State runtime unwraps when the field is
-accessed:
+`Default` returns a `DefaultValue` container that the State runtime resolves while creating each
+instance:
 
 ```python
 from uuid import uuid4
@@ -62,15 +62,15 @@ from haiway import Default, State
 class ServiceConfig(State):
     correlation_id: str = Default(default_factory=lambda: uuid4().hex)
     timeout_seconds: float = Default(1.5)  # literal defaults still work
-    api_key: str | None = Default(env="SERVICE_API_KEY")  # read from environment when needed
 
 config = ServiceConfig()
 assert isinstance(config.correlation_id, str)
 ```
 
 Factories are called every time a new instance is created, so each `ServiceConfig` receives its own
-identifier. Environment defaults are resolved on demand, which keeps tests deterministic—set the
-environment variable or pass an explicit value when constructing the state.
+identifier. Environment-backed defaults are also read during construction, so tests stay
+deterministic: set the environment variable before instantiating the state or pass an explicit value
+in the constructor.
 
 ### Immutability and Updates
 
@@ -118,17 +118,21 @@ Supported annotations include:
 - `Meta.of({...})` — attaches structured metadata that you can later inspect from field definitions.
 - `Specification({...})` — overrides the JSON Schema fragment when the inferred schema is
   insufficient.
-- `Validator(callable)` — applies additional validation logic after type checking succeeds.
+- `Validator(callable)` — applies additional validation or coercion logic before the base attribute
+  validation runs.
+- `Verifier(callable)` — applies an additional check after the base attribute has been validated and
+  typed.
 
-Attributes annotated as `typing.NotRequired[T]` are treated as optional even without a default. This
-is useful when mirroring typed dictionaries or validating payloads where the field may be omitted.
+`typing.NotRequired[T]` is most useful inside `TypedDict` definitions embedded in State fields. For
+regular State attributes, prefer an explicit default when a field may be omitted.
 
 ### Structured Metadata with `Meta`
 
 Use the `Meta` container when you need immutable, JSON-compatible metadata on either a field itself
-or on the annotations that describe it. `Meta` instances validate every value, expose convenience
-accessors (such as `.kind`, `.tags`, `.has_tags(...)`, `.with_identifier(...)`), and are exported
-directly from `haiway`.
+or on the annotations that describe it. Prefer `Meta.of(...)`, `Meta.from_mapping(...)`, or
+`Meta.from_json(...)` when constructing metadata: those entry points validate values, convert
+sequences to tuples, and convert nested mappings to immutable `Map` instances. `Meta` also exposes
+convenience accessors such as `.kind`, `.tags`, `.has_tags(...)`, and `.with_identifier(...)`.
 
 ```python
 from typing import Annotated
@@ -143,10 +147,10 @@ class Dataset(State):
     ]
 ```
 
-`Meta.of(...)` accepts existing mappings or keyword arguments, and you can combine builders—for
-example, `Meta.of(kind="dataset").with_last_updated(timestamp)` returns a new instance with the
-timestamp recorded. When no metadata is provided, Haiway uses the shared `Meta.empty`, so you can
-always compare with identity checks.
+`Meta.of(...)` accepts either an existing mapping or keyword arguments, and you can combine
+builders. For example, `Meta.of(kind="dataset").with_last_updated(timestamp)` returns a new instance
+with the timestamp recorded. When no metadata is provided, Haiway uses the shared `Meta.empty`, so
+`Meta.of(None) is Meta.empty`.
 
 To inspect metadata added through annotations, read it from the resolved attribute definition:
 
@@ -157,8 +161,10 @@ assert path_meta.has_tags(("pii",))
 ```
 
 Metadata values are limited to strings, numbers, booleans, `None`, sequences, and nested mappings.
-Passing unsupported objects raises a `TypeError`, which keeps emitted schemas and observability
-events consistent.
+Passing unsupported objects through the validating constructors raises a `TypeError`, which keeps
+emitted schemas and observability events consistent. Direct `Meta({...})` construction preserves the
+underlying `dict` behavior and does not perform recursive validation on its own, so use the factory
+helpers when the input is external or mutable.
 
 ### Generic State Classes
 
@@ -209,7 +215,7 @@ When working with external payloads, use the complementary helpers:
   This is handy when accepting heterogeneous inputs.
 
 Aliases apply consistently across these helpers. For example, the `Invoice.customer` field above
-accepts `customer` or `customer_id` when instantiating, and `Invoice.to_mapping(aliased=True)` emits
+accepts `customer` or `customer_id` when instantiating, and `invoice.to_mapping()` emits
 `{"customer_id": "...", ...}`.
 
 ### Type Validation
@@ -218,14 +224,14 @@ State classes perform thorough type validation for all supported Python types:
 
 - **Basic Types**: int, str, bool, float, bytes
 - **Container Types**:
-  - **Sequence[T]**: Use `Sequence[T]` instead of `list[T]` — are converted to immutable tuples
-  - **Mapping[K, V]**: Use `Mapping[K, V]` instead of `dict[K, V]` — remains a dict
-  - **Set[T]**: Use `Set[T]` instead of `set[T]` — are converted to immutable frozensets
+  - **Sequence[T]**: sequence-like inputs are normalized to immutable tuples
+  - **Mapping[K, V]**: mappings are validated recursively and remain regular dict-like values
+  - **Set[T]**: set-like inputs are normalized to immutable frozensets
   - **tuple[T, ...]**: Fixed or variable-length tuples
 - **Special Types**: UUID, datetime, date, time, timedelta, timezone, Path, re.Pattern
 - **Union Types**: str | None, int | float
 - **Literal Types**: Literal["a", "b", "c"]
-- **Enum Types**: Standard Enum and StrEnum classes
+- **Enum Types**: Enum, StrEnum, and IntEnum
 - **Callable Types**: Function types and Protocol interfaces
 - **TypedDict**: Validates structure with Required/NotRequired fields
 - **Nested State Classes**: Validates recursively including generic State types
@@ -233,7 +239,7 @@ State classes perform thorough type validation for all supported Python types:
 
 #### Important Typing Requirements
 
-**Always use abstract collection types instead of concrete types:**
+**Prefer abstract collection types in public State definitions:**
 
 ```python
 # ✅ Correct - Use abstract types
@@ -244,23 +250,31 @@ class Config(State):
     data: Mapping[str, int]     # Not dict[str, int]
     tags: Set[str]              # Not set[str]
 
-# ✅ Lists are converted to tuples (immutable)
+# Lists and sets are accepted at runtime and normalized
 config = Config(
     items=["a", "b", "c"],      # Becomes ("a", "b", "c")
     data={"key": 1},            # Remains {"key": 1}
     tags={"tag1", "tag2"}       # Becomes frozenset({"tag1", "tag2"})
 )
 
-# ❌ Incorrect - Don't use concrete types
-class BadConfig(State):
-    items: list[str]            # Will cause validation errors
-    data: dict[str, int]        # Will cause validation errors
-    tags: set[str]              # Will cause validation errors
+# Concrete collection annotations also work, but are less flexible for public APIs
+class ConcreteConfig(State):
+    items: list[str]
+    data: dict[str, int]
+    tags: set[str]
 ```
 
-This requirement preserves type safety and predictable behavior. Sequences and sets are wrapped in
-immutable containers, while mappings stay as plain dicts—treat them as read-only to avoid accidental
-mutation.
+This keeps interfaces flexible while preserving predictable runtime behavior. Sequences and sets are
+wrapped in immutable containers, while mappings stay as plain dicts, so treat them as read-only once
+they cross a State boundary.
+
+A few validation details matter in practice:
+
+- Plain `Enum` fields accept enum members and do not coerce from raw values.
+- `StrEnum` and `IntEnum` fields accept both enum members and matching raw string or integer forms.
+- Callable and protocol fields validate correctly at runtime but do not produce JSON Schema
+  specifications.
+- Validation failures are wrapped in `ValidationError`, which includes a precise nested path.
 
 ### JSON Schema Generation
 
@@ -335,6 +349,9 @@ AttributeRequirement.equal(
 `AttributeRequirement` instances raise a `ValueError` when a check fails, which makes them useful in
 tests or guard clauses. Use paths for bulk updates in performance-sensitive code—they only rebuild
 the segments that actually change.
+
+Paths support nested attribute traversal, indexing into sequences and tuples, mapping access for
+`str` and `int` keys, and optional container access for unions shaped like `T | None`.
 
 ### Example: Complex State Management
 

@@ -11,6 +11,7 @@ framework's functional style while handling connection pooling and transactions 
   and primitive types
 - **Protocol Driven**: Backends plug in via protocols, enabling custom clients in tests
 - **Migrations Included**: Built-in runner discovers and executes ordered migration modules
+- **Configuration Storage**: Optional `ConfigurationRepository` backed by versioned Postgres rows
 - **Immutable State**: Connections are exposed as `State`; rows are immutable `Mapping` wrappers
   with strict typing helpers
 
@@ -46,7 +47,8 @@ async with ctx.scope(
 ## Configuration
 
 Connection parameters are sourced from environment variables at import time. All values have sane
-defaults so the driver works out of the box:
+defaults so the driver works out of the box. Because these values are read when the module is
+imported, changing the environment later does not affect already-imported defaults:
 
 | Variable               | Default     | Description                           |
 | ---------------------- | ----------- | ------------------------------------- |
@@ -71,14 +73,15 @@ pool = PostgresConnectionPool.of(
 ```
 
 The helper parses the DSN, applies sane defaults for missing components, and respects query-string
-overrides such as `sslmode` or `connections`.
+overrides such as `sslmode`, `ssl`, `connections`, `connection_limit`, `maxsize`, or `max_size`.
 
 ## Working with Connections
 
 `Postgres` is a `State` that exposes functional helpers: `fetch`, `fetch_one`, and `execute`. When
 called outside an existing connection scope the helpers acquire and release a connection
 automatically. Inside a scope that already provides a `PostgresConnection`, the helpers reuse the
-instance and avoid nested acquisitions.
+instance and avoid nested acquisitions. Explicit recursive calls to `Postgres.acquire_connection()`
+from inside an existing connection scope raise `RuntimeError`.
 
 To run multiple statements on a single connection, acquire it explicitly:
 
@@ -111,8 +114,9 @@ type assumptions honest at runtime.
 automatically:
 
 ```python
+from haiway.postgres import PostgresConnection
+
 async with ctx.scope("postgres", disposables=(PostgresConnectionPool(),)):
-    # make sure to acquire the connection for transaction and use PostgresConnection
     async with ctx.disposables(Postgres.acquire_connection()):
         async with PostgresConnection.transaction():
             await PostgresConnection.execute("DELETE FROM jobs WHERE finished")
@@ -126,7 +130,8 @@ changes.
 
 The optional, lightweight migration runner executes callables conforming to `PostgresMigrating`. You
 can pass either a sequence of migrations or a dotted module path where submodules named
-`migration_<number>` expose a `migration` coroutine.
+`migration_<number>` expose a `migration` coroutine. Module names must use a continuous sequence
+starting at `migration_0`; gaps or duplicate numbers raise `ValueError`.
 
 ```python
 async with ctx.scope("migrations", disposables=(PostgresConnectionPool(),)):
@@ -136,6 +141,59 @@ async with ctx.scope("migrations", disposables=(PostgresConnectionPool(),)):
 The runner ensures a `migrations` table exists, reads the current version, and applies any pending
 entries in numeric order. Each migration executes inside its own transaction and appends an entry to
 the table once complete.
+
+Example package layout:
+
+```text
+my_app/db/migrations/
+├── __init__.py
+├── migration_0.py
+└── migration_1.py
+```
+
+Each module should export an async `migration(connection: PostgresConnection) -> None` callable.
+
+## Configuration Repository
+
+`PostgresConfigurationRepository()` adapts Haiway's generic `ConfigurationRepository` to a
+Postgres-backed store. It persists immutable configuration snapshots in a `configurations` table and
+uses in-memory caching for listing and loading operations.
+
+```python
+from haiway import ConfigurationRepository, ctx
+from haiway.postgres import PostgresConfigurationRepository, PostgresConnectionPool
+
+async with ctx.scope(
+    "config",
+    PostgresConfigurationRepository(),
+    disposables=(PostgresConnectionPool(),),
+):
+    available = await ConfigurationRepository.configurations()
+```
+
+The repository expects this schema to exist before use:
+
+```sql
+CREATE TABLE configurations (
+    identifier TEXT NOT NULL,
+    name TEXT NOT NULL,
+    content JSONB NOT NULL,
+    created TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (identifier, created)
+);
+
+CREATE INDEX IF NOT EXISTS configurations_idx
+ON configurations (identifier, created DESC);
+```
+
+Behavior summary:
+
+- `listing(...)` returns the newest distinct identifiers, optionally filtered by configuration type
+- `loading(...)` fetches the newest row for an identifier and reconstructs it with `from_json(...)`
+- `defining(...)` inserts a new snapshot row instead of updating in place
+- `removing(...)` deletes all rows for the identifier
+- successful writes clear the in-memory listing/loading caches
+- cache behavior is configurable through `cache_limit` and `cache_expiration`
 
 ## Error Handling
 
@@ -158,7 +216,7 @@ fixtures without touching a real database.
 
 ```python
 from haiway import ctx
-from haiway.postgres.state import Postgres, PostgresConnection
+from haiway.postgres import Postgres, PostgresConnection
 
 class _NoopTransaction:
     async def __aenter__(self) -> None:
@@ -206,8 +264,9 @@ async def test_insert():
 
 ## Best Practices
 
-**Use scopes**: Always run database operations within a context that manages disposables **Group
-statements**: Acquire a connection explicitly when running related queries **Validate data**: Prefer
-`PostgresRow` accessors over direct subscripting **Log migrations**: Watch the logger output during
-migration execution for progress tracking **Surface errors**: Catch `PostgresException` to translate
-into application-level failures
+- Use `ctx.scope(...)` or `ctx.disposables(...)` so pools and acquired connections are cleaned up.
+- Acquire a connection explicitly when several statements must share one transaction or session.
+- Prefer `PostgresRow` accessors over direct subscripting when the column type matters.
+- Keep migration modules numbered continuously from `migration_0`.
+- Catch `PostgresException` at the application boundary and translate it into domain-specific
+  errors.

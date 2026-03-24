@@ -165,7 +165,8 @@ if __name__ == "__main__":
 
 Why it matters:
 
-- Automatic cancellation/cleanup with the isolated scope
+- Scope exit waits for unfinished spawned tasks; cancellation happens when the scope fails, is
+  cancelled, or when you cancel tasks explicitly
 - Consistent access to contextual state and observability
 
 ## 5) Testing the Functional Way

@@ -42,7 +42,10 @@ class ContextPresets:
     Presets are composable collections of disposable factories that can be resolved
     and then wired into a running context. Immutability is enforced via `@final`
     and attribute guards, so instances are safe to share between scopes and cannot
-    be mutated after creation.
+    be mutated after creation. Resolution happens per scope entry: disposable
+    factories are called each time ``resolve()`` is used, while state provided via
+    ``ContextPresets.of(..., *state)`` is wrapped once in ``DisposableState`` and
+    reused as provided unless the state itself is produced by an async factory.
 
     Examples
     --------
@@ -85,7 +88,8 @@ class ContextPresets:
         -----
         When `state` is provided, it is composed into a `DisposableState` and
         wrapped as a callable factory, so the preset behaves consistently with
-        other disposable factories.
+        other disposable factories. Async state factories inside `state` are run
+        when the preset is resolved for a scope entry.
         """
         if state:
             disposable_state: DisposableState = DisposableState.of(*state)
