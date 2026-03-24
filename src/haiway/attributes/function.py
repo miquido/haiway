@@ -14,6 +14,40 @@ __all__ = ("Function",)
 
 
 class Function[**Args, Result]:
+    """
+    Wrap a callable with runtime argument validation.
+
+    Parameters
+    ----------
+    function : Callable[Args, Result]
+        Callable to wrap. Its signature and resolved type hints define the
+        accepted positional, keyword, variadic, and aliased arguments.
+
+    Returns
+    -------
+    Result
+        Result returned by the wrapped callable after validated arguments are
+        passed through.
+
+    Raises
+    ------
+    TypeError
+        Raised when the wrapped callable has untyped parameters, when
+        unexpected or duplicate arguments are provided, or when invocation
+        cannot be matched to the inspected signature.
+    Exception
+        Propagates validation errors raised while resolving attribute
+        definitions or validating argument values before invocation.
+
+    Notes
+    -----
+    ``Function`` inspects the wrapped callable's signature, resolves type hints
+    through Haiway's attribute system, and validates every argument before
+    calling the underlying callable. Keyword aliases declared through
+    ``typing.Annotated[..., Alias(...)]`` are supported in the same way as for
+    ``State`` fields.
+    """
+
     def __init__(
         self,
         function: Callable[Args, Result],

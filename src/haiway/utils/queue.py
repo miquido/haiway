@@ -21,12 +21,11 @@ class AsyncQueue[Element](AsyncIterator[Element]):
     """
     Asynchronous queue supporting iteration and finishing.
 
-    A queue implementation optimized for asynchronous workflows, providing async
-    iteration over elements and supporting operations like enqueuing elements,
-    finishing the queue, and cancellation.
+    A queue implementation optimized for asynchronous workflows. Producers can
+    enqueue items ahead of the consumer, and buffered items are preserved until
+    they are consumed or explicitly cleared.
 
-    Cannot be concurrently consumed by multiple readers - only one consumer
-    can iterate through the queue at a time.
+    Only one consumer may actively iterate through the queue at a time.
 
     Parameters
     ----------
@@ -146,8 +145,9 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         """
         Mark the queue as finished, optionally with an exception.
 
-        After finishing, no more elements can be enqueued. Any waiting consumers
-        will be notified with the provided exception or StopAsyncIteration.
+        After finishing, no more elements can be enqueued. Already buffered
+        elements remain available to the consumer. Once the buffer is drained,
+        the consumer receives the provided exception or ``StopAsyncIteration``.
         If the queue is already finished, this method does nothing.
 
         Parameters
@@ -264,8 +264,9 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         """
         Clear all pending elements from the queue.
 
-        This method removes all elements currently in the queue. It will only
-        clear the queue if no consumer is currently waiting for an element.
+        This method removes currently buffered elements only. It does nothing
+        while a consumer is actively waiting for the next element, so that a
+        queued wake-up is not disrupted.
         """
         if self._waiting is None or self._waiting.done():
             self._queue.clear()

@@ -30,6 +30,10 @@ class HTTPResponse(Immutable):
     Encapsulates the response from an HTTP request including status code,
     headers, and body content.
 
+    The response body may be provided either as already-buffered bytes or as
+    an async byte stream. Buffered access is available through `body()`, while
+    `iter_bytes()` and `stream_body()` preserve streaming semantics.
+
     Attributes
     ----------
     status_code : int
@@ -40,7 +44,11 @@ class HTTPResponse(Immutable):
     Methods
     -------
     body() -> bytes
-        Asynchronously read and cache the raw response body content.
+        Asynchronously read and cache the full response body content.
+    iter_bytes() -> AsyncIterable[bytes]
+        Stream body chunks and cache them once iteration completes.
+    stream_body() -> AsyncIterable[bytes]
+        Alias for `iter_bytes()` for call sites that want explicit streaming.
 
     Examples
     --------
@@ -69,6 +77,18 @@ class HTTPResponse(Immutable):
         )
 
     async def body(self) -> bytes:
+        """Read and cache the full response body.
+
+        Returns
+        -------
+        bytes
+            The complete response payload.
+
+        Notes
+        -----
+        When the body is backed by an async iterator, this method consumes the
+        iterator to completion and caches the resulting bytes for later reuse.
+        """
         if isinstance(self._body, bytes):
             return self._body
 
@@ -81,6 +101,19 @@ class HTTPResponse(Immutable):
         return cast(bytes, self._body)
 
     async def iter_bytes(self) -> AsyncIterable[bytes]:
+        """Iterate over response body chunks.
+
+        Yields
+        ------
+        bytes
+            Subsequent chunks from the response body.
+
+        Notes
+        -----
+        If iteration completes successfully, the streamed chunks are cached as
+        a single `bytes` value. If iteration stops early due to an exception,
+        the underlying stream is closed when possible.
+        """
         if isinstance(self._body, bytes):
             yield self._body
             return
@@ -100,6 +133,18 @@ class HTTPResponse(Immutable):
                 await self._close_body(body_iter)
 
     async def stream_body(self) -> AsyncIterable[bytes]:
+        """Stream response body chunks.
+
+        Yields
+        ------
+        bytes
+            Subsequent chunks from the response body.
+
+        Notes
+        -----
+        This is a semantic alias for `iter_bytes()` intended for call sites
+        that want an explicit streaming-oriented name.
+        """
         async for part in self.iter_bytes():
             yield part
 
@@ -198,13 +243,21 @@ class HTTPClient(State):
     provided through the `requesting` protocol.
 
     This class serves as the main interface for HTTP operations in Haiway,
-    offering convenience methods for common HTTP verbs while maintaining
-    flexibility through the general `request` method.
+    offering convenience methods for GET, POST, and PUT while maintaining
+    flexibility through the general `request` method for other verbs.
 
     Attributes
     ----------
     requesting : HTTPRequesting
         The protocol implementation that performs actual HTTP requests.
+
+    Notes
+    -----
+    - When accessed on the class, `@statemethod` resolves the current
+      `HTTPClient` instance from the active Haiway context.
+    - HTTP status codes such as 4xx and 5xx are returned as normal
+      `HTTPResponse` values. `HTTPClientError` is reserved for transport or
+      adapter failures.
 
     Examples
     --------
@@ -296,7 +349,7 @@ class HTTPClient(State):
 
         except Exception as exc:
             raise HTTPClientError(
-                f"HTTP request failed due to an error: {exc or type(exc).__name__}",
+                f"HTTP request failed due to an error: {type(exc).__name__}",
                 method="GET",
                 url=url,
                 cause=exc,
@@ -381,7 +434,7 @@ class HTTPClient(State):
 
         except Exception as exc:
             raise HTTPClientError(
-                f"HTTP request failed due to an error: {exc or type(exc).__name__}",
+                f"HTTP request failed due to an error: {type(exc).__name__}",
                 method="PUT",
                 url=url,
                 cause=exc,
@@ -466,7 +519,7 @@ class HTTPClient(State):
 
         except Exception as exc:
             raise HTTPClientError(
-                f"HTTP request failed due to an error: {exc or type(exc).__name__}",
+                f"HTTP request failed due to an error: {type(exc).__name__}",
                 method="POST",
                 url=url,
                 cause=exc,
@@ -572,7 +625,10 @@ class HTTPClient(State):
 
         except Exception as exc:
             raise HTTPClientError(
-                f"HTTP request failed due to an error: {exc or type(exc).__name__}"
+                f"HTTP request failed due to an error: {type(exc).__name__}",
+                method=method,
+                url=url,
+                cause=exc,
             ) from exc
 
     requesting: HTTPRequesting

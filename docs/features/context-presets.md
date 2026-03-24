@@ -15,6 +15,9 @@ Context presets allow you to:
 - **Compose complex configurations** from simpler building blocks
 - **Maintain consistency** across different execution contexts
 
+Each scope entry resolves preset factories again. Static state is reused as provided, while async
+state factories and disposable factories run per scope entry to produce fresh state/resources.
+
 ## Basic Usage
 
 ### Creating Context Presets
@@ -226,6 +229,9 @@ async def run_dynamic_environment():
 1. **Preset state** - from preset's state and disposables
 1. **Contextual state** - inherited from parent contexts
 
+Resolution is by exact concrete `State` type. If multiple sources produce the same state type, the
+higher-priority source wins.
+
 ## Preset Registry
 
 Instead of directly providing presets you can use the preset registry approach allowing to resolve
@@ -241,6 +247,10 @@ with ctx.presets(dev_preset, prod_preset, staging_preset):
     async with ctx.scope("production"):   # Matches prod_preset
         db_config = ctx.state(DatabaseConfig)
 ```
+
+Direct presets passed to `ctx.scope(preset)` take precedence over registry lookup. Registry lookup
+is scoped through `ctx.presets(...)`, and a nested registry shadows the outer registry for the
+duration of that nested `with` block.
 
 ## Best Practices
 

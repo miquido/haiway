@@ -13,6 +13,9 @@ The event bus allows you to:
 - Automatically manage event lifecycle and memory
 - Ensure events are scoped to their context
 
+Event routing is based on the exact `State` subclass. A subscription only receives events sent after
+the subscription has been created.
+
 ## Basic Usage
 
 ### Defining Events
@@ -72,7 +75,7 @@ async def monitor_logins():
 
 ### Background Event Processing
 
-Start event processors as background tasks:
+Start event processors as scoped tasks:
 
 ```python
 async def main():
@@ -84,10 +87,14 @@ async def main():
         # Run main application logic
         await run_application()
 
-        # Cancel processors when done
+        # Cancel processors when done if they are open-ended loops
         login_monitor.cancel()
         order_processor.cancel()
 ```
+
+`ctx.spawn()` ties tasks to the current scope's task group. Scope exit waits for unfinished tasks;
+it does not automatically cancel healthy long-running processors unless the scope itself is
+cancelled, fails, or you cancel the task explicitly.
 
 ### Multiple Subscribers
 
@@ -111,6 +118,8 @@ async def main():
 
         await run_application()
 ```
+
+Each subscriber receives the full event stream for the subscribed type.
 
 ## Advanced Usage
 
@@ -196,6 +205,13 @@ async def isolated_subsystem():
         ctx.send(InternalEvent(data="B"))  # Only visible in subsystem_b
 ```
 
+This means:
+
+- A root scope always has an event bus.
+- A nested non-isolated scope reuses the parent's bus.
+- An `isolated=True` scope gets its own independent bus.
+- Calling `ctx.send()` or `ctx.subscribe()` without an installed bus raises `ContextMissing`.
+
 ## Integration with Other Features
 
 ### With State Management
@@ -255,8 +271,7 @@ async def monitored_processor():
 
 1. **Type-based routing**: Events are routed by exact type match - inheritance is not considered
 1. **No persistence**: Events are in-memory only and don't survive process restarts
-1. **No ordering guarantees**: While events are generally delivered in order, this isn't guaranteed
-   across multiple publishers
+1. **Ordering**: Events are delivered FIFO per event type within a context and event loop
 1. **Same event loop**: All operations must occur within the same asyncio event loop
 
 For distributed event systems or persistent event stores, consider integrating with external message

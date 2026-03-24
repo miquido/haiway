@@ -16,7 +16,7 @@ class UserPreferences(State):
     theme: str = "light"
     notifications: bool = True
     languages: Sequence[str] = ("en",)  # Becomes tuple
-    overrides: Mapping[str, str] = {}   # Stays a dict (treat as read-only)
+    overrides: Mapping[str, str] = {}   # Becomes immutable Map
     metadata: Meta = Meta.of(
         kind="user-preferences",
         tags=("ui", "notifications"),
@@ -36,13 +36,14 @@ print(f"Original: {prefs.theme}, Updated: {dark_prefs.theme}")
 - **Automatic Immutability**: `State` base class prevents modification after creation using
   `__setattr__` blocking
 - **Type Conversion**: Sequences and sets are converted to immutable counterparts during validation
-  (`overrides` stays a plain dict while `languages` becomes a tuple)
+  (`overrides` becomes a `Map` while `languages` becomes a tuple)
 - **Structured Metadata**: `Meta` ensures metadata values stay JSON-compatible, offers helpers such
   as `.with_tags(...)`, and keeps instances immutable
 - **Memory Sharing**: The `.updating()` method creates structural sharing - unchanged fields
   reference the same objects
 - **Type Safety**: Field types are validated at runtime, ensuring data integrity
-- **Default Values**: Fields can have defaults, and missing fields use type-appropriate defaults
+- **Default Values**: Fields can declare explicit defaults or factories; fields without defaults
+  remain required
 
 `Meta` behaves like an immutable mapping with convenience accessors, so you can safely check
 `prefs.metadata.kind` or call `prefs.metadata.has_tags(("ui",))` without worrying about accidental
@@ -53,7 +54,7 @@ mutation.
 Always use **abstract collection types** to ensure immutability:
 
 - `Sequence[T]` instead of `list[T]` (becomes tuple)
-- `Mapping[K,V]` instead of `dict[K,V]` (remains a dict; treat it as read-only)
+- `Mapping[K,V]` instead of `dict[K,V]` (becomes immutable `Map`)
 - `Set[T]` instead of `set[T]` (becomes frozenset)
 
 **Why this matters:**
@@ -90,8 +91,9 @@ asyncio.run(main())
 **What's happening here:**
 
 - **Context Stack**: Each `ctx.scope()` creates a new context that inherits from its parent
-- **Automatic Cleanup**: When an isolated scope exits, its resources and tasks are cleaned up;
-  nested non-isolated scopes share cleanup with their parent
+- **Automatic Cleanup**: Scope resources are cleaned up on exit. Spawned tasks are awaited on scope
+  exit, and are cancelled when the scope fails/is cancelled or when you cancel them explicitly;
+  nested non-isolated scopes share task cleanup with their parent
 - **State Isolation**: Each context can contain its own state objects, accessed by type
 - **Scope Propagation**: Child scopes inherit state and observability from parent scopes
 - **Nested Scopes**: Inner scopes can access outer scope state, but not vice versa

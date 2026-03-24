@@ -21,13 +21,13 @@ __all__ = ("HTTPXClient",)
 class HTTPXClient(Immutable):
     """HTTPX-based implementation of the HTTP client.
 
-    Provides an async HTTP client using the HTTPX library as the backend.
-    Implements the HTTPRequesting protocol and integrates with Haiway's
-    context system through an async context manager interface.
+    Provides an async HTTP client using `httpx.AsyncClient` as the backend.
+    Implements the `HTTPRequesting` protocol and integrates with Haiway's
+    context system through the disposable async context manager interface.
 
     The client is configured with sensible defaults including disabled cookies
-    and explicit redirect handling. It supports connection pooling and reuse
-    through the context manager pattern.
+    and explicit redirect handling. Within an entered scope it reuses one
+    HTTPX connection pool, then closes it on exit.
 
     Parameters
     ----------
@@ -48,29 +48,38 @@ class HTTPXClient(Immutable):
     Examples
     --------
     >>> # Basic usage with context manager
-    >>> async with HTTPXClient(base_url="https://api.example.com") as http:
-    ...     async with ctx.scope("api", http):
+    >>> async with ctx.scope(
+    ...     "api",
+    ...     disposables=(HTTPXClient(base_url="https://api.example.com"),),
+    ... ):
     ...         response = await HTTPClient.get(url="/users")
     ...
     >>> # With custom configuration
-    >>> async with HTTPXClient(
-    ...     base_url="https://api.example.com",
-    ...     headers={"Authorization": "Bearer token"},
-    ...     timeout=30.0,
-    ...     max_redirects=5  # extra HTTPX option
-    ... ) as http:
-    ...     async with ctx.scope("api", http):
-    ...         response = await HTTPClient.post(
-    ...             url="/data",
-    ...             body=json.dumps({"key": "value"})
-    ...         )
+    >>> async with ctx.scope(
+    ...     "api",
+    ...     disposables=(
+    ...         HTTPXClient(
+    ...             base_url="https://api.example.com",
+    ...             headers={"Authorization": "Bearer token"},
+    ...             timeout=30.0,
+    ...             max_redirects=5,
+    ...         ),
+    ...     ),
+    ... ):
+    ...     response = await HTTPClient.post(
+    ...         url="/data",
+    ...         body=json.dumps({"key": "value"}),
+    ...     )
 
     Notes
     -----
     - Cookies are disabled by default for security and predictability.
+    - Redirect following defaults to ``False`` at the client level and can be
+      overridden per request.
     - The client must be used as an async context manager to ensure proper
       resource cleanup.
-    - Each context manager entry creates a fresh client connection pool.
+    - Re-entering a previously closed instance creates a fresh internal
+      ``httpx.AsyncClient`` with the same configuration.
     """
 
     _base_url: str
@@ -131,18 +140,18 @@ class HTTPXClient(Immutable):
     async def __aenter__(self) -> HTTPClient:
         """Enter the async context manager and return an HTTPClient.
 
-        Creates or reuses an HTTPX AsyncClient and returns an HTTPClient
-        instance configured to use this client for requests.
+        Opens the internal HTTPX client and returns an `HTTPClient` state
+        bound to this instance's request method.
 
         Returns
         -------
         HTTPClient
-            An HTTPClient instance bound to this HTTPX client.
+            An `HTTPClient` state instance bound to this HTTPX client.
 
         Notes
         -----
-        If the internal client is closed, a new one will be created with
-        the same configuration.
+        If the internal client was previously closed, a new one is created
+        with the same configuration before entering the context.
         """
         if self._client.is_closed:
             object.__setattr__(
@@ -195,8 +204,8 @@ class HTTPXClient(Immutable):
     ) -> HTTPResponse:
         """Execute an HTTP request using the HTTPX client.
 
-        Implements the HTTPRequesting protocol to perform HTTP requests.
-        This method is called by the HTTPClient interface methods.
+        Implements the `HTTPRequesting` protocol and is invoked by the
+        `HTTPClient` facade methods resolved from the current context.
 
         Parameters
         ----------
@@ -218,7 +227,8 @@ class HTTPXClient(Immutable):
         Returns
         -------
         HTTPResponse
-            The HTTP response with status, headers, and body.
+            The HTTP response with status, headers, and a lazily-consumed
+            body stream.
 
         Raises
         ------
@@ -227,8 +237,10 @@ class HTTPXClient(Immutable):
 
         Notes
         -----
-        - Response body is fully read into memory before returning.
-        - Uses HTTPX's USE_CLIENT_DEFAULT for None timeout/redirect values.
+        - The returned response body is streamed from ``response.aiter_bytes()``
+          and buffered only if the caller consumes it fully.
+        - ``timeout=None`` and ``follow_redirects=None`` defer to the client
+          defaults via ``httpx.USE_CLIENT_DEFAULT``.
         """
         try:
             response: Response = await self._client.request(

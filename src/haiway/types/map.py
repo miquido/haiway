@@ -9,7 +9,13 @@ __all__ = ("Map",)
 
 @final
 class Map[Key, Element](dict[Key, Element]):
-    """An immutable ``dict`` wrapper with convenience conversion helpers."""
+    """
+    Immutable ``dict`` subclass with JSON helpers and persistent-style merges.
+
+    ``Map`` behaves like a normal mapping for reads, but all mutating
+    operations raise ``AttributeError``. Merge operators create new ``Map``
+    instances instead of changing the original object.
+    """
 
     __slots__ = ()
 
@@ -19,7 +25,24 @@ class Map[Key, Element](dict[Key, Element]):
         value: str | bytes,
         /,
     ) -> Self:
-        """Deserialize a JSON object into a ``Map`` instance."""
+        """
+        Deserialize a JSON object into a ``Map`` instance.
+
+        Parameters
+        ----------
+        value : str | bytes
+            JSON payload expected to decode to an object.
+
+        Returns
+        -------
+        Self
+            Immutable mapping containing the decoded key-value pairs.
+
+        Raises
+        ------
+        ValueError
+            If the payload does not decode to a JSON object.
+        """
         match json.loads(value):
             case {**values}:
                 return cls(values)
@@ -28,13 +51,27 @@ class Map[Key, Element](dict[Key, Element]):
                 raise ValueError(f"Invalid json: {other}")
 
     def to_str(self) -> str:
-        """Return the string representation of the map."""
+        """
+        Return the string representation of the map.
+
+        Returns
+        -------
+        str
+            Human-readable representation identical to ``str(self)``.
+        """
         return self.__str__()
 
     def to_json(
         self,
     ) -> str:
-        """Serialize the map into a JSON object string."""
+        """
+        Serialize the map into a JSON object string.
+
+        Returns
+        -------
+        str
+            JSON encoding of the mapping contents.
+        """
         return json.dumps(self)
 
     def __setattr__(

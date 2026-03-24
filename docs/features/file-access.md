@@ -77,7 +77,7 @@ async def update_shared_resource():
         parsed["counter"] += 1
         parsed["last_update"] = datetime.now().isoformat()
 
-        # Write atomically
+        # Replace the file contents in-place
         await File.write(json.dumps(parsed).encode())
 ```
 
@@ -164,7 +164,6 @@ async def update_text_file():
 ```python
 import json
 import yaml
-import json
 from datetime import datetime
 
 async def manage_config():
@@ -196,7 +195,7 @@ async def manage_config():
         await File.write(yaml.dump(data).encode())
 ```
 
-### Atomic File Updates
+### Durable In-Place Updates
 
 Writes are in-place with `os.write` followed by `fsync`; they are **not** copy-on-write or rename
 atomic. Use exclusive locks plus your own temp-file strategy if you need atomic replacement.
@@ -213,7 +212,7 @@ async def atomic_update():
         # Process data (may take time)
         processed = expensive_computation(current)
 
-        # Write atomically - old content replaced only on success
+        # Replace file contents and fsync the result
         await File.write(processed)
         # File is automatically fsync'd to ensure durability
 ```
@@ -263,7 +262,7 @@ async def test_file_processing():
 
 1. **Always use as disposable**: Ensures file handles are properly closed
 1. **Handle exceptions**: Wrap file operations in try/except blocks
-1. **Use exclusive locking**: For critical updates that must be atomic
+1. **Use exclusive locking**: For critical updates that must not overlap
 1. **Create parent directories**: Use `create=True` when writing to new locations
 1. **Avoid multiple concurrent opens**: You can open more than one file in a scope; the newest
    `File` state shadows earlier ones. Prefer one file per scope to avoid surprises.
@@ -273,13 +272,13 @@ async def test_file_processing():
 ### Unix/Linux/macOS
 
 - Full support for exclusive file locking via fcntl
-- Atomic operations with proper fsync
+- In-place writes with proper fsync
 - File permissions respected
 
 ### Windows
 
 - No exclusive locking (fcntl not available)
-- Still provides atomic writes with fsync
+- Still provides in-place writes with fsync
 - File handles properly managed
 
 ## Implementation Details
@@ -288,7 +287,7 @@ The file access system uses:
 
 - **OS-level file operations**: Direct use of os.open, os.read, os.write for efficiency
 - **Exclusive locking**: fcntl.flock on supported platforms
-- **Atomic writes**: Truncate and fsync ensure durability
+- **Durable writes**: In-place writes, truncate, and fsync ensure durability
 - **Async wrappers**: File I/O operations run in thread pool to avoid blocking
 
 ## Custom Implementations

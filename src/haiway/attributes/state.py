@@ -512,7 +512,7 @@ class State(metaclass=StateMeta):
         ----------
         indent : int | None, optional
             Indentation passed to ``json.dumps`` for pretty-printing.
-        required : bool, default=False
+        required : bool, default=True
             When ``True``, raises if the class has no specification.
 
         Returns
@@ -562,7 +562,7 @@ class State(metaclass=StateMeta):
         Raises
         ------
         ValueError
-            If the payload cannot be decoded or does not match the schema.
+            If the payload cannot be decoded or fails State validation.
         """
         try:
             return cls.validate(
@@ -637,7 +637,7 @@ class State(metaclass=StateMeta):
         ----------
         indent : int | None, optional
             Indentation passed to ``json.dumps`` for pretty-printing.
-        encoder_class : type[json.JSONEncoder], default=StateJSONEncoder
+        encoder_class : type[json.JSONEncoder], default=AttributesJSONEncoder
             Encoder class responsible for encoding custom types.
 
         Returns
@@ -731,17 +731,19 @@ class State(metaclass=StateMeta):
         recursive: bool = True,
     ) -> Mapping[str, Any]:
         """
-        Convert this instance to a mapping of attribute names to values.
+        Convert this instance to a mapping of exported attribute values.
 
         Parameters
         ----------
         recursive : bool, default=True
-            If True, nested instances are also converted to mappings
+            If True, nested ``State`` objects and collection elements are
+            converted recursively.
 
         Returns
         -------
         Mapping[str, Any]
-            A mapping of attribute names to values
+            A mapping keyed by attribute aliases when present, otherwise by
+            canonical field names. Values equal to ``MISSING`` are omitted.
         """
         dict_result: MutableMapping[str, Any] = {}
         if recursive:
@@ -911,8 +913,8 @@ class State(metaclass=StateMeta):
         """
         Create a deep copy of this instance.
 
-        Despite State being immutable, this returns the copy of this instance
-        ensuring recursive deepcopy usage.
+        Unlike ``__copy__``, this creates a new instance so nested mutable
+        values are deep-copied consistently.
 
         Parameters
         ----------
@@ -954,7 +956,9 @@ class State(metaclass=StateMeta):
         Parameters
         ----------
         **kwargs : Any
-            New values for attributes to replace
+            New values for attributes to replace. Both canonical field names and
+            aliases are accepted; aliases are normalized to canonical names
+            before validation.
 
         Returns
         -------

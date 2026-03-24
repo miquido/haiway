@@ -32,8 +32,7 @@ pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
 
 ### 2. Configuration
 
-Configure OpenTelemetry once at application startup (calling `configure` again will rebuild the
-exporters with new settings; it is allowed but reinitializes providers):
+Configure OpenTelemetry once at application startup before creating any observability scopes:
 
 ```python
 from haiway.opentelemetry import OpenTelemetry
@@ -92,7 +91,7 @@ async def main():
     # Use in context scope
     async with ctx.scope(
         "application",
-        # Create observability instance
+        # Create an OpenTelemetry-backed observability adapter
         observability=OpenTelemetry.observability()
     ):
         await process_requests()
@@ -103,28 +102,42 @@ async def process_requests():
         ctx.log_info("Processing batch of requests")
 
         # Record custom metrics
-        ctx.record_metric("requests.processed", value=10, kind="counter")
+        ctx.record_info(
+            metric="requests.processed",
+            value=10,
+            kind="counter",
+        )
 
         # Record custom events
-        ctx.record_event("batch.started", attributes={
-            "batch_size": 10,
-            "priority": "high"
-        })
+        ctx.record_info(
+            event="batch.started",
+            attributes={
+                "batch_size": 10,
+                "priority": "high",
+            },
+        )
 
         await process_individual_requests()
 
 async def process_individual_requests():
     # Nested spans are automatically created
     async with ctx.scope("individual-request"):
-        ctx.record_attributes({
-            "request.id": "req-123",
-            "user.id": "user-456"
-        })
+        ctx.record_info(
+            attributes={
+                "request.id": "req-123",
+                "user.id": "user-456",
+            },
+        )
 
         # Simulated work
         await asyncio.sleep(0.1)
 
-        ctx.record_metric("request.duration", value=100, unit="ms", kind="histogram")
+        ctx.record_info(
+            metric="request.duration",
+            value=100,
+            unit="ms",
+            kind="histogram",
+        )
 ```
 
 ### Console vs OTLP Export
@@ -156,7 +169,8 @@ OpenTelemetry.configure(
 
 ### Automatic Span Creation
 
-Haiway automatically creates OpenTelemetry spans for each context scope:
+Haiway automatically creates OpenTelemetry spans for each context scope that uses an
+OpenTelemetry-backed observability instance:
 
 ```python
 async def handle_request():
@@ -173,16 +187,25 @@ async def handle_request():
 Connect to existing distributed traces from other services:
 
 ```python
-# Link to external trace (e.g., from HTTP headers)
-external_trace_id = request.headers.get("x-trace-id")
+# Link to an external trace using a W3C traceparent header
+incoming_traceparent = request.headers.get("traceparent")
 
 observability = OpenTelemetry.observability(
-    traceparent=external_trace_id  # expects a W3C traceparent string
+    traceparent=incoming_traceparent
 )
 
 async with ctx.scope("service-handler", observability=observability):
-    # This span will be linked to the external trace
+    # This root span gets a link to the external trace/span context
     await handle_service_request()
+```
+
+`traceparent=` creates an OpenTelemetry `Link` on the root span. It does not install the remote span
+as the direct parent.
+
+To propagate the current active span to another system, use:
+
+```python
+traceparent = OpenTelemetry.traceparent()
 ```
 
 ### Trace Context Propagation
@@ -209,17 +232,17 @@ async def child_operation(task_id: int):
 
 ### Metric Types
 
-Haiway supports three OpenTelemetry metric types:
+Haiway supports three metric kinds through the level-specific `ctx.record_*` helpers:
 
 ```python
 # Counter: Monotonically increasing values
-ctx.record_metric("requests.total", value=1, kind="counter")
+ctx.record_info(metric="requests.total", value=1, kind="counter")
 
 # Histogram: Distribution of values (e.g., latencies, sizes)
-ctx.record_metric("request.duration", value=150, unit="ms", kind="histogram")
+ctx.record_info(metric="request.duration", value=150, unit="ms", kind="histogram")
 
 # Gauge: Point-in-time values that can go up or down
-ctx.record_metric("active_connections", value=42, kind="gauge")
+ctx.record_info(metric="active_connections", value=42, kind="gauge")
 ```
 
 ### Metric Attributes
@@ -227,15 +250,15 @@ ctx.record_metric("active_connections", value=42, kind="gauge")
 Add dimensional data to metrics:
 
 ```python
-ctx.record_metric(
-    "requests.processed",
+ctx.record_info(
+    metric="requests.processed",
     value=1,
     kind="counter",
     attributes={
         "method": "POST",
         "endpoint": "/api/users",
-        "status": "success"
-    }
+        "status": "success",
+    },
 )
 ```
 
@@ -244,9 +267,9 @@ ctx.record_metric(
 Specify units for better observability:
 
 ```python
-ctx.record_metric("response.size", value=1024, unit="byte", kind="histogram")
-ctx.record_metric("cpu.usage", value=75.5, unit="percent", kind="gauge")
-ctx.record_metric("request.rate", value=150, unit="1/s", kind="gauge")
+ctx.record_info(metric="response.size", value=1024, unit="byte", kind="histogram")
+ctx.record_info(metric="cpu.usage", value=75.5, unit="percent", kind="gauge")
+ctx.record_info(metric="request.rate", value=150, unit="1/s", kind="gauge")
 ```
 
 ## Structured Logging
@@ -261,14 +284,15 @@ async with ctx.scope("user-service"):
 
     try:
         user = await fetch_user(user_id)
-        ctx.log_debug("User fetched successfully", user_id=user_id)
+        ctx.log_debug("User fetched successfully: %s", user_id)
     except UserNotFound as e:
-        ctx.log_error("User not found", user_id=user_id, exception=e)
+        ctx.log_error("User not found: %s", user_id, exception=e)
 ```
 
 ### Log Levels
 
-Control log verbosity by setting the observability level:
+Control the minimum observability level by setting `level=`. The threshold applies to logs, events,
+metrics, and attributes:
 
 ```python
 from haiway.context import ObservabilityLevel
@@ -288,17 +312,23 @@ async with ctx.scope("critical-operation", observability=observability):
 Record significant events with structured attributes:
 
 ```python
-ctx.record_event("user.login", attributes={
-    "user_id": "user-123",
-    "login_method": "oauth",
-    "client_ip": "192.168.1.100",
-    "success": True
-})
+ctx.record_info(
+    event="user.login",
+    attributes={
+        "user_id": "user-123",
+        "login_method": "oauth",
+        "client_ip": "192.168.1.100",
+        "success": True,
+    },
+)
 
-ctx.record_event("cache.miss", attributes={
-    "cache_key": "user:profile:123",
-    "ttl": 3600
-})
+ctx.record_info(
+    event="cache.miss",
+    attributes={
+        "cache_key": "user:profile:123",
+        "ttl": 3600,
+    },
+)
 ```
 
 ### Business Events
@@ -306,13 +336,16 @@ ctx.record_event("cache.miss", attributes={
 Track business-relevant events:
 
 ```python
-ctx.record_event("order.created", attributes={
-    "order_id": "ord-789",
-    "customer_id": "cust-456",
-    "total_amount": 99.99,
-    "currency": "USD",
-    "items_count": 3
-})
+ctx.record_info(
+    event="order.created",
+    attributes={
+        "order_id": "ord-789",
+        "customer_id": "cust-456",
+        "total_amount": 99.99,
+        "currency": "USD",
+        "items_count": 3,
+    },
+)
 ```
 
 ## Advanced Usage
@@ -339,7 +372,8 @@ OpenTelemetry.configure(
 
 ### Error Handling and Status
 
-Spans automatically record error status when exceptions occur:
+On scope exit, spans are marked `ERROR` when the scope exits with an exception and `OK` otherwise.
+If you also want the exception attached to the span, log it with `exception=...`:
 
 ```python
 async with ctx.scope("risky-operation"):
@@ -347,9 +381,41 @@ async with ctx.scope("risky-operation"):
         await potentially_failing_operation()
         # Span status: OK
     except Exception as e:
-        # Span status: ERROR, exception recorded
+        # Span status: ERROR
+        # Exception details attached to the active span:
         ctx.log_error("Operation failed", exception=e)
         raise
+```
+
+## Attribute Normalization
+
+Before sending data to OpenTelemetry, Haiway normalizes observability attributes:
+
+- `None` and `MISSING` values are skipped
+- sequences are filtered and exported as tuples
+- mapping values are flattened into dotted keys such as `http.request_id`
+
+Example:
+
+```python
+ctx.record_info(
+    attributes={
+        "request": {
+            "id": "req-123",
+            "method": "POST",
+        },
+        "tags": ["api", "critical"],
+        "optional": None,
+    },
+)
+```
+
+This produces span attributes equivalent to:
+
+```text
+request.id=req-123
+request.method=POST
+tags=("api", "critical")
 ```
 
 ## Integration with Popular Tools
@@ -430,11 +496,13 @@ Use consistent attribute names across your services:
 
 ```python
 # Good: Consistent attribute naming
-ctx.record_attributes({
-    "user.id": user_id,
-    "user.role": user_role,
-    "request.id": request_id
-})
+ctx.record_info(
+    attributes={
+        "user.id": user_id,
+        "user.role": user_role,
+        "request.id": request_id,
+    },
+)
 
 # Establish naming conventions:
 # - Use dots for namespacing
@@ -450,6 +518,7 @@ ctx.record_attributes({
 
 - Verify OTLP endpoint is reachable
 - Check if OpenTelemetry.configure() was called before creating observability
+- Check that the `haiway[opentelemetry]` extra is installed
 - Ensure proper network connectivity to your observability backend
 
 **2. High memory usage**
@@ -461,7 +530,7 @@ ctx.record_attributes({
 **3. Missing trace correlation**
 
 - Ensure observability is properly passed through context scopes
-- Verify external trace ID format is correct
+- Verify the supplied `traceparent` value is a valid W3C traceparent string
 - Check that async context is properly propagated
 
 ## Further Reading

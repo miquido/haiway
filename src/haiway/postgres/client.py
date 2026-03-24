@@ -45,7 +45,19 @@ async def _noop_initialize(connection: Connection) -> None:
 
 
 class PostgresConnectionPool(Immutable):
-    """Disposable that instantiates a connection pool."""
+    """Disposable Postgres connection pool backed by ``asyncpg``.
+
+    The pool is intended to be installed into a Haiway scope via
+    ``ctx.scope(..., disposables=(PostgresConnectionPool(),))``. Entering the
+    disposable creates an ``asyncpg`` pool and exposes a contextual
+    :class:`haiway.postgres.state.Postgres` state that can acquire individual
+    connections on demand.
+
+    Notes
+    -----
+    Connection defaults come from :mod:`haiway.postgres.config` and are read at
+    import time.
+    """
 
     @classmethod
     def of(
@@ -56,6 +68,39 @@ class PostgresConnectionPool(Immutable):
         connection_limit: int = POSTGRES_CONNECTIONS,
         initialize: Callable[[Connection], Coroutine[None, None, None]] = _noop_initialize,
     ) -> Self:
+        """Create a pool configuration from a Postgres DSN.
+
+        Parameters
+        ----------
+        dsn : str
+            Connection string using the ``postgres`` or ``postgresql`` scheme.
+        ssl : str, default=POSTGRES_SSLMODE
+            Fallback SSL mode used when the DSN does not define ``sslmode`` or
+            ``ssl``.
+        connection_limit : int, default=POSTGRES_CONNECTIONS
+            Fallback maximum pool size used when the DSN does not define one of
+            the supported query parameters.
+        initialize : Callable[[Connection], Coroutine[None, None, None]]
+            Optional async hook executed by ``asyncpg`` for every newly created
+            connection.
+
+        Returns
+        -------
+        Self
+            Immutable pool configuration ready to be used as a disposable.
+
+        Raises
+        ------
+        ValueError
+            If the DSN scheme is not supported or the connection limit override
+            cannot be parsed as an integer.
+
+        Notes
+        -----
+        The DSN may override SSL behavior via ``sslmode`` or ``ssl`` and the
+        pool size via ``connections``, ``connection_limit``, ``maxsize``, or
+        ``max_size`` query parameters.
+        """
         parsed: ParseResult = urlparse(dsn)
         if parsed.scheme not in {"postgres", "postgresql"}:
             raise ValueError(f"Unsupported Postgres DSN scheme: {parsed.scheme!r}")
@@ -153,7 +198,19 @@ class PostgresConnectionPool(Immutable):
             pass  # nosec: B110
 
     def acquire_connection(self) -> PostgresConnectionContext:
-        """Return an async context manager yielding a ``PostgresConnection``."""
+        """Return a connection-acquiring context bound to this pool.
+
+        Returns
+        -------
+        PostgresConnectionContext
+            Async context manager yielding a contextual
+            :class:`haiway.postgres.state.PostgresConnection`.
+
+        Raises
+        ------
+        AssertionError
+            If the pool has not been entered yet.
+        """
 
         assert self._pool is not None, "Postgres connection pool is not initialized"  # nosec: B101
         return _ConnectionContext(_pool_context=self._pool.acquire())  # pyright: ignore[reportUnknownMemberType, reportUnknownMemberType]

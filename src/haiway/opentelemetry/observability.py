@@ -43,11 +43,11 @@ __all__ = ("OpenTelemetry",)
 
 class ScopeStore:
     """
-    Internal class for storing and managing OpenTelemetry scope data.
+    Internal storage for OpenTelemetry state associated with one Haiway scope.
 
-    This class tracks scope state including its span, meter, logger, and context.
-    It manages the lifecycle of OpenTelemetry resources for a specific scope,
-    including recording logs, metrics, events, and maintaining the context hierarchy.
+    A store owns the active span context for the scope, caches lazily created
+    metric instruments, and coordinates delayed span completion until all nested
+    scopes have exited.
     """
 
     __slots__ = (
@@ -252,8 +252,8 @@ class ScopeStore:
         """
         Record a metric with the given name, value, and attributes.
 
-        Creates a counter if one does not already exist for the metric name,
-        and adds the value to it with the provided attributes.
+        Instruments are created lazily per metric name and cached on the scope
+        store. The concrete OpenTelemetry instrument depends on ``kind``.
 
         Parameters
         ----------
@@ -369,14 +369,12 @@ def _sanitized_attributes(
 @final
 class OpenTelemetry:
     """
-    Integration with OpenTelemetry for distributed tracing, metrics, and logging.
+    Bridge Haiway observability callbacks to the OpenTelemetry SDK.
 
-    This class provides a bridge between Haiway's observability abstractions and
-    the OpenTelemetry SDK, enabling distributed tracing, metrics collection, and
-    structured logging with minimal configuration.
-
-    The class must be configured once at application startup using the configure()
-    class method before it can be used.
+    Configure providers once at application startup, then pass
+    ``OpenTelemetry.observability()`` into a root ``ctx.scope(...)`` to have
+    nested Haiway scopes emit spans, logs, metrics, and span attributes through
+    OpenTelemetry.
     """
 
     service: ClassVar[str] = ""
@@ -401,9 +399,9 @@ class OpenTelemetry:
         """
         Configure the OpenTelemetry integration.
 
-        This method must be called once at application startup to configure the
-        OpenTelemetry SDK with the appropriate service information, exporters,
-        and resource attributes.
+        This installs global OpenTelemetry logger, meter, and tracer providers
+        for the current process. Call it during application startup before
+        creating OpenTelemetry-backed observability scopes.
 
         Parameters
         ----------
@@ -432,6 +430,12 @@ class OpenTelemetry:
         -------
         type[Self]
             The OpenTelemetry class, for method chaining
+
+        Notes
+        -----
+        This method replaces the process-level providers used by this
+        integration. It should be treated as startup configuration rather than a
+        per-request or dynamic reconfiguration API.
         """
         # Create shared resource for both metrics and traces
         resource: Resource = Resource.create(
@@ -514,7 +518,7 @@ class OpenTelemetry:
         version: int = 0,
     ) -> str | None:
         """
-        Get the active span encoded as a W3C traceparent string.
+        Encode the current active span context as a W3C ``traceparent`` value.
 
         Parameters
         ----------
@@ -524,7 +528,8 @@ class OpenTelemetry:
         Returns
         -------
         str | None
-            Encoded traceparent value when a valid span context exists, otherwise None.
+            Encoded ``traceparent`` value when a valid span context exists,
+            otherwise ``None``.
         """
         try:
             span_context: trace.SpanContext = trace.get_current_span().get_span_context()
@@ -549,19 +554,22 @@ class OpenTelemetry:
         traceparent: str | None = None,
     ) -> Observability:
         """
-        Create an Observability implementation using OpenTelemetry.
+        Create a Haiway ``Observability`` adapter backed by OpenTelemetry.
 
-        This method creates an Observability implementation that bridges Haiway's
-        observability abstractions to OpenTelemetry, allowing transparent usage
-        of OpenTelemetry for distributed tracing, metrics, and logging.
+        The returned object is intended to be installed on a root Haiway scope.
+        Nested scopes then reuse the same adapter, producing child spans under
+        that root and routing logs, metrics, events, and attributes through the
+        configured OpenTelemetry providers.
 
         Parameters
         ----------
         level : ObservabilityLevel, default=ObservabilityLevel.INFO
-            The minimum observability level to record
+            Minimum level recorded by this adapter. The threshold applies to
+            logs, events, metrics, and attributes.
         traceparent : str | None, optional
-            Standardized traceparent allowing to link the otel scope with external systems.
-            If provided, the root span will be linked to this external trace.
+            W3C ``traceparent`` value used to create a link on the root span.
+            This links the Haiway trace to an external span context, but does
+            not install that remote span as the direct parent.
 
         Returns
         -------
@@ -570,8 +578,8 @@ class OpenTelemetry:
 
         Notes
         -----
-        The OpenTelemetry class must be configured using configure() before
-        calling this method.
+        ``OpenTelemetry.configure()`` must be called before the returned
+        observability instance is entered by ``ctx.scope(...)``.
         """
         tracer: Tracer = trace.get_tracer(cls.service)
         meter: Meter | None = None
@@ -615,8 +623,9 @@ class OpenTelemetry:
             """
             Record a log message using OpenTelemetry logging.
 
-            Creates a log record with the appropriate severity level and attributes
-            based on the current scope context.
+            The message is emitted with the scope's active OpenTelemetry
+            context so that log records correlate with the current trace. When
+            ``exception`` is provided, it is also recorded on the active span.
 
             Parameters
             ----------
@@ -701,8 +710,9 @@ class OpenTelemetry:
             """
             Record a metric using OpenTelemetry metrics.
 
-            Records a numeric measurement using the appropriate OpenTelemetry
-            instrument type based on the metric name and value type.
+            Records a numeric measurement using the OpenTelemetry instrument
+            selected by ``kind``. Instruments are created lazily per scope and
+            metric name.
 
             Parameters
             ----------
@@ -744,8 +754,7 @@ class OpenTelemetry:
             """
             Record standalone attributes using OpenTelemetry span attributes.
 
-            Records key-value attributes by adding them to the current active span
-            for the scope.
+            Records key-value attributes on the active span for the scope.
 
             Parameters
             ----------
@@ -771,9 +780,10 @@ class OpenTelemetry:
             """
             Handle scope entry by creating a new OpenTelemetry span.
 
-            This method is called when a new scope is entered. It creates a new
-            OpenTelemetry span for the scope and sets up the appropriate parent-child
-            relationships with existing spans.
+            The first entered scope becomes the root for this adapter instance.
+            Later scopes become child spans using the parent scope's
+            OpenTelemetry context. If ``traceparent`` was supplied, the root
+            span receives a link to that remote span context.
 
             Parameters
             ----------
@@ -787,8 +797,8 @@ class OpenTelemetry:
 
             Notes
             -----
-            This method initializes the scopes dictionary entry for the new scope
-            and creates meter instruments if this is the first scope entry.
+            The meter is created when the root scope is entered and then shared
+            by all nested scopes created through the same adapter instance.
             """
             assert scope.scope_id not in scopes  # nosec: B101
             assert cls._logger is not None, (  # nosec: B101
@@ -869,8 +879,10 @@ class OpenTelemetry:
             """
             Handle scope exit by completing the OpenTelemetry span.
 
-            This method is called when a scope is exited. It marks the scope as exited,
-            attempts to complete it, and ends the associated OpenTelemetry span.
+            The span status is set to ``ERROR`` when the scope exits with an
+            exception and ``OK`` otherwise. Span completion is deferred until
+            all nested scopes have completed, preserving proper parent-child
+            lifetimes.
 
             Parameters
             ----------
@@ -879,14 +891,11 @@ class OpenTelemetry:
             exception: BaseException | None
                 Optional exception that caused the scope to exit
 
-            Returns
-            -------
-            None
-
             Notes
             -----
-            This method ensures proper cleanup of spans, including recording any
-            exception that occurred during the scope's execution.
+            Exceptions are not recorded here automatically. To attach exception
+            details to the active span, log with ``exception=...`` while the
+            scope is active.
             """
             nonlocal root_scope
             nonlocal scopes

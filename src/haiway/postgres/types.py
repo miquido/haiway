@@ -33,7 +33,11 @@ __all__ = (
 
 
 class PostgresException(Exception):
-    """Raised when an unexpected database failure occurs."""
+    """Raised when SQL execution through the Postgres adapter fails.
+
+    The exception wraps lower-level driver failures so application code can
+    handle database execution errors through a stable Haiway-specific type.
+    """
 
 
 type PostgresValue = UUID | datetime | date | time | str | bytes | float | int | bool | None
@@ -53,6 +57,13 @@ class PostgresRow(Mapping[str, PostgresValue]):
         self,
         record: Record,
     ) -> None:
+        """Wrap an ``asyncpg.Record`` as an immutable typed mapping.
+
+        Parameters
+        ----------
+        record : Record
+            Raw record returned by ``asyncpg``.
+        """
         assert isinstance(record, Record)  # nosec: B101
         self._record: Record
         object.__setattr__(
@@ -198,7 +209,32 @@ class PostgresRow(Mapping[str, PostgresValue]):
         default: str | None = None,
         required: bool = False,
     ) -> str | None:
-        """Return the column as ``str`` when present."""
+        """Return the column as ``str`` when present.
+
+        This accessor makes missing and ``NULL`` handling explicit for callers.
+
+        Parameters
+        ----------
+        key : str
+            Column name to read.
+        default : str | None, default=None
+            Value returned when the column is missing or ``NULL``.
+        required : bool, default=False
+            When ``True``, raise ``ValueError`` if the column is missing or
+            ``NULL`` and no explicit default was provided.
+
+        Returns
+        -------
+        str | None
+            The column value when present as ``str``. Returns ``default`` when
+            the column is missing or ``NULL``, which defaults to ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``required=True`` and the column is missing or ``NULL`` and no
+            explicit default was provided.
+        """
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:
@@ -241,7 +277,32 @@ class PostgresRow(Mapping[str, PostgresValue]):
         default: int | None = None,
         required: bool = False,
     ) -> int | None:
-        """Return the column as ``int`` when present."""
+        """Return the column as ``int`` when present.
+
+        This accessor makes missing and ``NULL`` handling explicit for callers.
+
+        Parameters
+        ----------
+        key : str
+            Column name to read.
+        default : int | None, default=None
+            Value returned when the column is missing or ``NULL``.
+        required : bool, default=False
+            When ``True``, raise ``ValueError`` if the column is missing or
+            ``NULL`` and no explicit default was provided.
+
+        Returns
+        -------
+        int | None
+            The column value when present as ``int``. Returns ``default`` when
+            the column is missing or ``NULL``, which defaults to ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``required=True`` and the column is missing or ``NULL`` and no
+            explicit default was provided.
+        """
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:
@@ -288,6 +349,31 @@ class PostgresRow(Mapping[str, PostgresValue]):
 
         Accepts native ``float`` values as well as numeric ``int`` or ``Decimal`` instances
         returned by asyncpg for ``numeric``/``decimal`` columns.
+
+        This accessor makes missing and ``NULL`` handling explicit for callers.
+
+        Parameters
+        ----------
+        key : str
+            Column name to read.
+        default : float | None, default=None
+            Value returned when the column is missing or ``NULL``.
+        required : bool, default=False
+            When ``True``, raise ``ValueError`` if the column is missing or
+            ``NULL`` and no explicit default was provided.
+
+        Returns
+        -------
+        float | None
+            The column value when present as ``float``. Returns ``default``
+            when the column is missing or ``NULL``, which defaults to
+            ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``required=True`` and the column is missing or ``NULL`` and no
+            explicit default was provided.
         """
 
         value: PostgresValue = self._record.get(key, None)
@@ -334,7 +420,32 @@ class PostgresRow(Mapping[str, PostgresValue]):
         default: bool | None = None,
         required: bool = False,
     ) -> bool | None:
-        """Return the column as ``bool`` when present."""
+        """Return the column as ``bool`` when present.
+
+        This accessor makes missing and ``NULL`` handling explicit for callers.
+
+        Parameters
+        ----------
+        key : str
+            Column name to read.
+        default : bool | None, default=None
+            Value returned when the column is missing or ``NULL``.
+        required : bool, default=False
+            When ``True``, raise ``ValueError`` if the column is missing or
+            ``NULL`` and no explicit default was provided.
+
+        Returns
+        -------
+        bool | None
+            The column value when present as ``bool``. Returns ``default`` when
+            the column is missing or ``NULL``, which defaults to ``None``.
+
+        Raises
+        ------
+        ValueError
+            If ``required=True`` and the column is missing or ``NULL`` and no
+            explicit default was provided.
+        """
 
         value: PostgresValue = self._record.get(key, None)
         if value is None:

@@ -52,9 +52,10 @@ def getenv[Value](
     required: bool = False,
 ) -> Value | None:
     """
-    Get a value from an environment variable and transforms.
+    Read and transform an environment variable.
 
-    Uses provided transformation method to deliver custom data type from env variable.
+    Uses the provided transformation callable to convert the raw string value
+    into a caller-defined type.
 
     Parameters
     ----------
@@ -125,8 +126,8 @@ def getenv_bool(
     """
     Get a boolean value from an environment variable.
 
-    Interprets 'true', '1', and 't' (case-insensitive) as True,
-    any other value as False.
+    Interprets ``"true"``, ``"1"``, and ``"t"`` case-insensitively as
+    ``True``. Any other present value is interpreted as ``False``.
 
     Parameters
     ----------
@@ -416,7 +417,9 @@ def getenv_base64[Value](
     Raises
     ------
     ValueError
-        If required=True, the environment variable is not set, and no default is provided
+        If required=True and the environment variable is not set and no
+        default is provided, if the value is not valid base64, or if the
+        decoded bytes cannot be transformed by ``decoder``.
     """
     value = os_getenv(key=key)
     if value is None:
@@ -444,16 +447,17 @@ def load_env(
     """
     Load environment variables from a .env file.
 
-    A minimalist implementation that reads key-value pairs from the specified file
-    and sets them as environment variables. If the file doesn't exist, the function
-    silently continues without loading any variables.
+    This is a minimalist ``.env`` loader. It reads key-value pairs from the
+    specified file and stores them in ``os.environ``. Missing files are
+    silently ignored.
 
     The file format follows these rules:
-    - Lines starting with '#' are treated as comments and ignored
-    - Each variable must be on a separate line in the format `KEY=VALUE`
-    - No spaces or additional characters are allowed around the '=' sign
-    - Keys without values are ignored
-    - Inline comments are not supported
+    - Lines starting with ``#`` are treated as comments and ignored
+    - Each variable must be on a separate line in the format ``KEY=VALUE``
+    - The first ``=`` separates key from value
+    - Keys with empty values are ignored
+    - Values are stripped with ``str.strip()``
+    - Inline comments, quoting rules, and shell-style expansion are not supported
 
     Parameters
     ----------
@@ -466,7 +470,8 @@ def load_env(
     Returns
     -------
     None
-        This function modifies the environment variables but doesn't return anything.
+        This function modifies the process environment in place and does not
+        return anything.
     """
 
     try:

@@ -1,4 +1,6 @@
-Haiway is a python framework helping to build high-quality codebases. Focuses on strict typing and functional programming principles extended with structured concurrency concepts. Delivers opinionated, strict rules and patterns resulting in modular, safe and highly maintainable applications.
+# AGENTS
+
+Haiway is a Python framework helping to build high-quality codebases. It focuses on strict typing and functional programming principles extended with structured concurrency concepts. It delivers opinionated, strict rules and patterns resulting in modular, safe, and highly maintainable applications.
 
 ## Development Toolchain
 
@@ -13,18 +15,19 @@ Haiway is a python framework helping to build high-quality codebases. Focuses on
 - `src/haiway/`: Core framework package.
   - `attributes/`: Attribute annotations, state objects, and validation helpers.
   - `context/`: Structured-concurrency context management, scopes, and lifecycle utilities.
-  - `helpers/`: Cross-cutting helpers for configuration, async orchestration, retries, throttling, and HTTP adapters.
+  - `helpers/`: Cross-cutting helpers for configuration, async orchestration, retries, throttling, HTTP adapters, file access, and message queues.
   - `httpx/`: Thin wrappers around `httpx.AsyncClient` aligned with haiway abstractions.
-  - `opentelemetry/`: Observability utilities and exporters for OpenTelemetry integration.
+  - `opentelemetry/`: OpenTelemetry integration and observability backend wiring.
   - `postgres/`: Async Postgres client, configuration, and typed row/state helpers built on top of `asyncpg` patterns.
+  - `rabbitmq/`: Async RabbitMQ client/state helpers and typed queue/message abstractions built on top of `pika`.
   - `types/`: Fundamental typed primitives (e.g., `Missing`, immutable containers) shared across modules.
   - `utils/`: Generic async utilities (queues, streams, env helpers, logging bootstrap, metadata helpers).
 - `tests/`: Pytest suite mirroring package structure; keep new tests alongside the code they cover.
 - `docs/`: MkDocs content, author guides, and API references; update navigation in `mkdocs.yml` when adding pages.
-- `Makefile`: Entry point for common dev tasks (`format`, `lint`, `test`, `docs`).
+- `Makefile`: Entry point for common dev tasks (`format`, `lint`, `test`, `docs`, `docs-format`, `docs-lint`, `sync`, `update`).
 - `pyproject.toml`: Project metadata, dependencies, and configuration.
 
-Public exports are centralized in `src/haiway/__init__.py`.
+Core public exports are centralized in `src/haiway/__init__.py`. Optional integration packages also expose public APIs from their own subpackages such as `haiway.postgres`, `haiway.rabbitmq`, and `haiway.opentelemetry`.
 
 ## Style & Patterns
 
@@ -57,7 +60,8 @@ Public exports are centralized in `src/haiway/__init__.py`.
 
 ### Logging & Observability
 
-- Use observability hooks (logs, metrics, traces) from `ctx` helper (`ctx.log_*`, `ctx.record`) instead of `print`/`logging`—tests assert on emitted events.
+- Use observability hooks from `ctx` helper (`ctx.log_debug/info/warning/error` and `ctx.record_debug/info/warning/error`) instead of `print`/`logging`.
+- Record metrics, events, and attributes through the level-specific `ctx.record_*` helpers; there is no generic `ctx.record(...)` helper.
 - Surface user-facing errors via structured events before raising typed exceptions.
 
 ## Testing & CI
@@ -88,7 +92,7 @@ Public exports are centralized in `src/haiway/__init__.py`.
 ### Docs (MkDocs)
 
 - Site is built with MkDocs + Material and `mkdocstrings` for API docs.
-- Author pages under `docs/` and register navigation in `mkdocs.yml` (`nav:` section).
+- Author pages under `docs/` and register navigation in `mkdocs.yml` (`nav:` section), including feature pages for integrations such as HTTP, Postgres, RabbitMQ, OpenTelemetry, file access, and context utilities.
 - Lint `make docs-lint` and format `make docs-format` after editing.
 - Keep docstrings high‑quality; `mkdocstrings` pulls them into reference pages.
 - When adding public APIs, update examples/guides as needed and ensure cross-links render.
@@ -104,4 +108,4 @@ Public exports are centralized in `src/haiway/__init__.py`.
 - Quality: `make lint` is clean (Ruff, Bandit, Pyright strict)
 - Tests: `make test` passes, add/update tests if behavior changes
 - Types: strict, no ignores, no loosening of typing
-- API surface: update `__init__.py` exports and docs if needed
+- API surface: update `src/haiway/__init__.py` for core exports or the relevant integration subpackage exports for optional packages, and update docs if needed

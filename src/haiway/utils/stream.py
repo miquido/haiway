@@ -16,15 +16,16 @@ class AsyncStream[Element](AsyncIterator[Element]):
     """
     An asynchronous stream implementation supporting push-based async iteration.
 
-    AsyncStream provides a way to create a stream of elements where producers can
-    asynchronously send elements and consumers can iterate over them using async
-    iteration. Only one consumer can iterate through the stream at a time.
+    AsyncStream provides a way to create a stream of elements where producers
+    asynchronously send elements and a single consumer iterates over them using
+    async iteration.
 
-    This class implements a flow-controlled stream where the producer waits until
-    the consumer is ready to receive the next element, ensuring back-pressure.
+    This class implements a flow-controlled stream. When no consumer is waiting,
+    a producer calling :meth:`send` waits until that element is consumed,
+    providing back-pressure.
 
-    Unlike AsyncQueue, AsyncStream cannot be reused for multiple iterations and
-    requires coordination between producer and consumer.
+    Unlike :class:`AsyncQueue`, this primitive is designed for paced handoff
+    rather than unconstrained buffering.
     """
 
     __slots__ = (
@@ -71,9 +72,10 @@ class AsyncStream[Element](AsyncIterator[Element]):
         """
         Send an element to the stream.
 
-        This method waits until the consumer is ready to receive the element,
-        implementing back-pressure. If the stream is finished, the element will
-        be silently discarded.
+        If a consumer is already waiting, the element is delivered immediately.
+        Otherwise the element is queued and this call waits until the consumer
+        takes it, implementing back-pressure. If the stream is finished, the
+        element is silently discarded.
 
         Parameters
         ----------
@@ -101,9 +103,9 @@ class AsyncStream[Element](AsyncIterator[Element]):
         """
         Mark the stream as finished, optionally with an exception.
 
-        After finishing, sent elements will be silently discarded. The consumer
-        will receive the provided exception or StopAsyncIteration when attempting
-        to get the next element.
+        After finishing, future sends are silently discarded. Pending producers
+        are released, and the consumer receives the provided exception or
+        ``StopAsyncIteration`` when attempting to get the next element.
 
         If the stream is already finished, this method does nothing.
 

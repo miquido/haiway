@@ -176,19 +176,19 @@ class Configuration(State):
             **extra: Additional parameters passed to the loading protocol.
 
         Returns:
-            Configuration instance from repository or default instance from class.
+            Configuration instance resolved from the repository or current context.
 
         Raises:
             ConfigurationMissing: If configuration is not found and class cannot be
-                instantiated with defaults.
+                be resolved from context.
             ConfigurationInvalid: If configuration data fails validation.
 
         Note:
-            If the configuration is not found in the repository, this method first attempts
-            to resolve a contextual instance bound via ctx.state(config). If no contextual
-            state is available, it will try to create a default instance by calling the
-            configuration class constructor with no arguments. Only if both strategies
-            fail will ConfigurationMissing be raised.
+            If the configuration is not found in the repository, this method falls back
+            to ``ctx.state(cls)``. That means an already-bound contextual instance wins,
+            and state types that can be instantiated without arguments may still resolve
+            successfully through ``ctx.state(...)``. ``ConfigurationMissing`` is raised
+            only when neither strategy yields a value.
         """
         ...
 
@@ -216,16 +216,15 @@ class Configuration(State):
             Configuration instance, default, or None based on parameters.
 
         Raises:
-            ConfigurationMissing: If required=True and configuration not found and class
-                cannot be instantiated with defaults.
+            ConfigurationMissing: If required=True and configuration cannot be loaded
+                from the repository or resolved from context.
             ConfigurationInvalid: If configuration data fails validation.
 
         Note:
-            When required=True and no configuration is found, this method first tries to
-            resolve a contextual instance via ctx.state(cls). If no contextual override
-            exists, it attempts to create a default instance by calling the configuration
-            class constructor with no arguments. This allows contextual overrides to win
-            while still honoring configuration classes that provide defaults.
+            When ``required=True`` and the repository returns no value, this method
+            falls back to ``ctx.state(cls)``. This allows contextual overrides to win
+            and also permits lazy default instance creation when the state type can be
+            constructed without arguments.
         """
         return await ConfigurationRepository.load(
             cls,
@@ -594,19 +593,19 @@ class ConfigurationRepository(State):
             **extra: Additional parameters passed to the loading protocol.
 
         Returns:
-            Configuration instance from repository or default instance from class.
+            Configuration instance resolved from the repository or current context.
 
         Raises:
             ConfigurationMissing: If configuration is not found and class cannot be
-                instantiated with defaults.
+                resolved from context.
             ConfigurationInvalid: If configuration data fails validation.
 
         Note:
-            If the configuration is not found in the repository, this method first attempts
-            to resolve a contextual instance bound via ctx.state(config). If that also fails,
-            it will try to create a default instance by calling the configuration class
-            constructor with no arguments. Only if both strategies fail will
-            ConfigurationMissing be raised.
+            If the configuration is not found in the repository, this method falls back
+            to ``ctx.state(config)``. That means an already-bound contextual instance wins,
+            and state types that can be instantiated without arguments may still resolve
+            successfully through ``ctx.state(...)``. ``ConfigurationMissing`` is raised
+            only when neither strategy yields a value.
         """
         ...
 
@@ -650,16 +649,15 @@ class ConfigurationRepository(State):
             Typed configuration instance, default, or None based on parameters.
 
         Raises:
-            ConfigurationMissing: If required=True and configuration not found and class
-                cannot be instantiated with defaults.
+            ConfigurationMissing: If required=True and configuration cannot be loaded
+                from the repository or resolved from context.
             ConfigurationInvalid: If configuration data fails validation.
 
         Note:
-            When required=True and no configuration is found, this method first attempts
-            to resolve a contextual instance via ctx.state(config). If no contextual state
-            is available, it tries to create a default instance by calling the configuration
-            class constructor with no arguments. This allows contextual overrides to win
-            while still honoring configuration classes that provide defaults.
+            When ``required=True`` and the repository returns no value, this method
+            falls back to ``ctx.state(config)``. This allows contextual overrides to win
+            and also permits lazy default instance creation when the state type can be
+            constructed without arguments.
 
         Example:
             ```python
@@ -674,7 +672,7 @@ class ConfigurationRepository(State):
                 default=DatabaseConfig(host="localhost")
             )
 
-            # This will try contextual state, then class defaults if not found in repository
+            # This will load from the repository first, then fall back to ctx.state(...)
             config = await ConfigurationRepository.load(
                 DatabaseConfig,
                 required=True

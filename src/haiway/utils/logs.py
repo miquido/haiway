@@ -12,20 +12,39 @@ def setup_logging(
     disable_existing_loggers: bool = True,
 ) -> None:
     """\
-    Setup logging configuration and prepare specified loggers.
+    Configure standard-library logging for the current process.
 
     Parameters
     ----------
     *loggers: str
-        names of additional loggers to configure.
+        Names of additional loggers to configure explicitly alongside the root logger.
     time: bool = True
-        include timestamps in logs (emits local timezone offset).
-    debug: bool = __debug__
-        include debug logs.
+        Include timestamps in log output. When enabled, timestamps include the
+        local timezone offset.
+    debug: bool = getenv_bool("DEBUG_LOGGING", __debug__)
+        Whether to emit debug-level logs. The default is resolved from the
+        ``DEBUG_LOGGING`` environment variable when this module is imported,
+        falling back to ``__debug__``.
     disable_existing_loggers: bool = True
-        disable other loggers which were created before calling the setup.
+        Disable loggers that were created before calling this function.
 
-    NOTE: this function should be run only once on application start
+    Returns
+    -------
+    None
+        ``setup_logging`` configures logging in place and does not return a value.
+
+    Raises
+    ------
+    ValueError
+        Propagated when ``setup_logging`` receives an invalid logging configuration.
+    OSError
+        Propagated when ``setup_logging`` cannot access stdout while creating the console handler.
+
+    Notes
+    -----
+    This helper configures the root logger plus any explicitly named loggers
+    to write to stdout. It should normally be called once during application
+    startup.
     """
 
     dictConfig(

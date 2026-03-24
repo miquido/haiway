@@ -1,6 +1,6 @@
 # Caching Helper
 
-Haiway ships two memoization helpers under `haiway.helpers.caching`:
+Haiway ships two memoization helpers exported from `haiway`:
 
 - `cache` keeps coroutine results in-process with an LRU store.
 - `cache_externally` coordinates reads and writes against a user-provided backend while preserving
@@ -11,7 +11,7 @@ Both decorators require `async def` targets and lean on `ctx.spawn` for backgrou
 ## Default In-Memory Cache
 
 ```python
-from haiway.helpers.caching import cache
+from haiway import cache
 
 @cache
 async def resolve_profile(user_id: str) -> dict[str, str]:
@@ -36,7 +36,7 @@ Key characteristics of the built-in cache:
 and the decorator mirrors the coroutine's interface while delegating persistence.
 
 ```python
-from haiway.helpers.caching import cache_externally
+from haiway import cache_externally
 
 async def read_from_store(cache_key: str) -> dict[str, str] | None:
     if raw := await redis.get(cache_key):

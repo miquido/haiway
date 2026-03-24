@@ -24,10 +24,11 @@ __all__ = (
 @runtime_checkable
 class Validating[Type](Protocol):
     """
-    Protocol defining the interface for validation functions.
+    Protocol defining the interface for pre-validation callables.
 
-    These functions validate and potentially transform input values to
-    ensure they conform to the expected type or format.
+    A ``Validating`` callable receives the raw incoming value before the base
+    attribute validator runs. It may coerce, normalize, or reject the input by
+    raising an exception.
     """
 
     def __call__(
@@ -39,10 +40,11 @@ class Validating[Type](Protocol):
 @runtime_checkable
 class Verifying[Type](Protocol):
     """
-    Protocol defining the interface for verification functions.
+    Protocol defining the interface for post-validation callables.
 
-    These functions verify input values after initial validation to
-    ensure they conform to the expected type or format.
+    A ``Verifying`` callable receives a value that has already been validated
+    against the base attribute type. It can enforce additional invariants while
+    preserving the typed result.
     """
 
     def __call__(
@@ -109,8 +111,8 @@ class ValidationError(Exception):
     """
     Exception raised when validation fails.
 
-    This exception indicates that a value failed to meet the
-    validation requirements for an attribute or argument.
+    This exception wraps the original validation error together with the nested
+    attribute path at which the failure occurred.
     """
 
     __slots__ = (
@@ -131,6 +133,14 @@ class ValidationError(Exception):
 
 @final
 class Validator[Type]:
+    """
+    Wrapper for a pre-validation callable used inside ``typing.Annotated``.
+
+    ``Validator`` runs before the base attribute validation logic. Use it when
+    you need to coerce or reject raw input values before type-specific
+    validation happens.
+    """
+
     __slots__ = ("validator",)
 
     def __init__(
@@ -163,6 +173,13 @@ class Validator[Type]:
 
 @final
 class Verifier[Type]:
+    """
+    Wrapper for a post-validation callable used inside ``typing.Annotated``.
+
+    ``Verifier`` runs after the base attribute validation logic. Use it when
+    the value must already be typed before enforcing an additional invariant.
+    """
+
     __slots__ = ("verifier",)
 
     def __init__(

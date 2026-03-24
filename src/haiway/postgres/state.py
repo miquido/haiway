@@ -26,7 +26,14 @@ __all__ = (
 
 
 class PostgresConnection(State):
-    """Access to PostgresConnection methods"""
+    """Contextual API bound to a single acquired Postgres connection.
+
+    Instances are produced by :class:`haiway.postgres.client.PostgresConnectionPool`
+    and installed into the current Haiway scope while a connection is checked
+    out from the underlying pool. The ``@statemethod`` descriptor allows the
+    methods to be called either on the instance itself or on the class when the
+    state is present in context.
+    """
 
     @overload
     @classmethod
@@ -52,7 +59,21 @@ class PostgresConnection(State):
         /,
         *args: Any,
     ) -> PostgresRow | None:
-        """Return the first row of a query or ``None`` when no data is found."""
+        """Return the first row of a query or ``None`` when no data is found.
+
+        Parameters
+        ----------
+        statement : str
+            SQL statement executed against the active connection.
+        *args : Any
+            Positional parameters forwarded to the driver.
+
+        Returns
+        -------
+        PostgresRow | None
+            First returned row wrapped as :class:`PostgresRow`, or ``None`` when
+            the result set is empty.
+        """
 
         return next(
             iter(
@@ -88,7 +109,20 @@ class PostgresConnection(State):
         /,
         *args: Any,
     ) -> Sequence[PostgresRow]:
-        """Execute the statement and return all resulting rows."""
+        """Execute the statement and return all resulting rows.
+
+        Parameters
+        ----------
+        statement : str
+            SQL statement executed against the active connection.
+        *args : Any
+            Positional parameters forwarded to the driver.
+
+        Returns
+        -------
+        Sequence[PostgresRow]
+            Immutable sequence of wrapped result rows.
+        """
 
         return await self.statement_executing(
             statement,
@@ -119,7 +153,15 @@ class PostgresConnection(State):
         /,
         *args: Any,
     ) -> None:
-        """Execute the statement ignoring any returned rows."""
+        """Execute the statement while discarding any returned rows.
+
+        Parameters
+        ----------
+        statement : str
+            SQL statement executed against the active connection.
+        *args : Any
+            Positional parameters forwarded to the driver.
+        """
 
         await self.statement_executing(
             statement,
@@ -128,7 +170,14 @@ class PostgresConnection(State):
 
     @statemethod
     def transaction(self) -> PostgresTransactionContext:
-        """Prepare a transaction context bound to this connection."""
+        """Prepare a transaction context bound to this connection.
+
+        Returns
+        -------
+        PostgresTransactionContext
+            Async context manager that commits on success and rolls back when an
+            exception escapes the block.
+        """
 
         return self.transaction_preparing()
 
@@ -137,11 +186,30 @@ class PostgresConnection(State):
 
 
 class Postgres(State):
-    """Entry point for acquiring connections and orchestrating migrations."""
+    """High-level Postgres service exposed as Haiway state.
+
+    This state provides ergonomic query helpers that transparently acquire a
+    connection when necessary and reuse the current
+    :class:`PostgresConnection` when one is already present in the active
+    context.
+    """
 
     @statemethod
     def acquire_connection(self) -> PostgresConnectionContext:
-        """Provide a disposable that yields a ``PostgresConnection``."""
+        """Provide a disposable yielding a single contextual connection.
+
+        Returns
+        -------
+        PostgresConnectionContext
+            Async context manager that installs :class:`PostgresConnection`
+            while the connection is acquired.
+
+        Raises
+        ------
+        RuntimeError
+            If called while a :class:`PostgresConnection` is already present in
+            the current scope.
+        """
 
         if ctx.contains_state(PostgresConnection):
             raise RuntimeError("Recursive Postgres connection acquiring is forbidden")
@@ -175,6 +243,20 @@ class Postgres(State):
         containing ``migration_<n>`` submodules. Each migration runs inside its
         own transaction and increments the internal ``migrations`` table on
         success.
+
+        Parameters
+        ----------
+        migrations : Sequence[PostgresMigrating] | str
+            Explicit sequence of migration callables or dotted package path used
+            for discovery.
+
+        Raises
+        ------
+        ValueError
+            If discovered migration modules are not numbered continuously from
+            ``migration_0``.
+        Exception
+            Re-raises any exception raised by a migration after logging it.
         """
 
         async with ctx.scope(
@@ -262,7 +344,12 @@ class Postgres(State):
         /,
         *args: Any,
     ) -> PostgresRow | None:
-        """Fetch a single row using contextual or ad-hoc connection."""
+        """Fetch a single row using a contextual or ad-hoc connection.
+
+        When a :class:`PostgresConnection` is already present in context it is
+        reused. Otherwise a temporary connection is acquired for the duration of
+        the call.
+        """
 
         if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.fetch_one(statement, *args)
@@ -277,7 +364,12 @@ class Postgres(State):
         /,
         *args: Any,
     ) -> Sequence[PostgresRow]:
-        """Fetch all rows using contextual or ad-hoc connection."""
+        """Fetch all rows using a contextual or ad-hoc connection.
+
+        When a :class:`PostgresConnection` is already present in context it is
+        reused. Otherwise a temporary connection is acquired for the duration of
+        the call.
+        """
 
         if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.fetch(statement, *args)
@@ -292,7 +384,12 @@ class Postgres(State):
         /,
         *args: Any,
     ) -> None:
-        """Execute a statement using contextual or ad-hoc connection."""
+        """Execute a statement using a contextual or ad-hoc connection.
+
+        When a :class:`PostgresConnection` is already present in context it is
+        reused. Otherwise a temporary connection is acquired for the duration of
+        the call.
+        """
 
         if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.execute(statement, *args)

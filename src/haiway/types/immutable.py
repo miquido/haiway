@@ -77,6 +77,27 @@ def _collect_attributes(
 
 
 class Immutable(metaclass=ImmutableMeta):
+    """
+    Base class for frozen, slot-based Haiway value objects.
+
+    Subclasses declare typed attributes as class annotations. The metaclass
+    collects those annotations, derives ``__slots__`` and ``__match_args__``,
+    and resolves literal defaults or ``Default(...)`` field markers during
+    instance construction.
+
+    Parameters
+    ----------
+    **kwargs : Any
+        Values for declared attributes. Required attributes must be provided;
+        optional attributes use their configured defaults.
+
+    Raises
+    ------
+    AttributeError
+        If a required attribute is missing or any mutation is attempted after
+        initialization.
+    """
+
     __ATTRIBUTES__: ClassVar[Mapping[str, DefaultValue | None]]
 
     def __init__(

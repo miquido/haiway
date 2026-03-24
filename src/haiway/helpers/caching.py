@@ -316,9 +316,6 @@ def cache_externally[**Args, Result, Key: Hashable](
 
     Parameters
     ----------
-    function : Callable[Args, Coroutine[Any, Any, Result]] | None
-        Coroutine to memoize when ``cache_externally`` is used directly as ``@cache_externally``.
-        Leave ``None`` to receive a decorator that can be applied later.
     make_key : CacheMakeKey[Args, Key]
         Callable that converts invocation arguments into a hashable key understood by the backend.
     read : CacheRead[Key, Result]
