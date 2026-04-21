@@ -17,7 +17,7 @@ class NestedState(State):
 
 
 class RecursiveState(State):
-    more: "RecursiveState | None"
+    more: RecursiveState | None
 
 
 class ExampleState(State):

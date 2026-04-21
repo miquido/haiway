@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Python 3.13 or higher
+- Python 3.14 or higher
 
 ## Install from PyPI
 

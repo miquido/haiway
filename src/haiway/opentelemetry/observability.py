@@ -5,7 +5,7 @@ from uuid import UUID
 
 from grpc import ChannelCredentials
 from opentelemetry import metrics, trace
-from opentelemetry._logs import set_logger_provider
+from opentelemetry._logs import get_logger_provider, set_logger_provider
 from opentelemetry._logs._internal import Logger
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.context import Context, attach, detach, get_current
@@ -383,6 +383,47 @@ class OpenTelemetry:
     _logger: ClassVar[Logger | None] = None
 
     @classmethod
+    def autoconfigure(
+        cls,
+        *,
+        service: str,
+        version: str = "",
+        environment: str = "",
+    ) -> type[Self]:
+        """
+        Bind Haiway observability to already configured global OpenTelemetry providers.
+
+        This method does not create exporters or install SDK providers. It only
+        resolves the process-global logger provider, stores service metadata used
+        by the Haiway bridge, and enables ``OpenTelemetry.observability()`` to
+        consume providers configured externally through the OpenTelemetry SDK,
+        environment variables, or auto-instrumentation.
+
+        Parameters
+        ----------
+        service : str
+            The name of the service
+        version : str, default=""
+            The version of the service
+        environment : str, default=""
+            The deployment environment (e.g., "production", "staging")
+
+        Returns
+        -------
+        type[Self]
+            The OpenTelemetry class, for method chaining
+        """
+        cls.service = service
+        cls.version = version
+        cls.environment = environment
+        cls._logger = get_logger_provider().get_logger(
+            service,
+            version=version,
+        )
+
+        return cls
+
+    @classmethod
     def configure(
         cls,
         *,
@@ -578,8 +619,9 @@ class OpenTelemetry:
 
         Notes
         -----
-        ``OpenTelemetry.configure()`` must be called before the returned
-        observability instance is entered by ``ctx.scope(...)``.
+        ``OpenTelemetry.configure()`` or ``OpenTelemetry.autoconfigure()`` must
+        be called before the returned observability instance is entered by
+        ``ctx.scope(...)``.
         """
         tracer: Tracer = trace.get_tracer(cls.service)
         meter: Meter | None = None
@@ -802,7 +844,8 @@ class OpenTelemetry:
             """
             assert scope.scope_id not in scopes  # nosec: B101
             assert cls._logger is not None, (  # nosec: B101
-                "OpenTelemetry.configure must be called before using observability."
+                "OpenTelemetry.configure or OpenTelemetry.autoconfigure must be "
+                "called before using observability."
             )
 
             nonlocal root_scope

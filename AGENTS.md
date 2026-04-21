@@ -4,7 +4,7 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
 
 ## Development Toolchain
 
-- Python: 3.13+
+- Python: 3.14+
 - Virtualenv: managed by uv, available at `./.venv`, assume already set up and working within venv
 - Formatting: Ruff formatter (`make format`), no other formatter
 - Linters/Type-checkers: Ruff, Bandit, Pyright (strict). Run via `make lint`
@@ -33,7 +33,7 @@ Core public exports are centralized in `src/haiway/__init__.py`. Optional integr
 
 ### Typing & Immutability
 
-- Ensure latest, most strict typing syntax available from python 3.13+
+- Ensure latest, most strict typing syntax available from python 3.14+
 - Strict typing only: no untyped public APIs, no loose `Any` unless required by third-party boundaries
 - Prefer explicit attribute access with static types. Avoid dynamic `getattr` except at narrow boundaries.
 - Prefer abstract immutable protocols: `Mapping`, `Sequence`, `Iterable` over `dict`/`list`/`set` in public types.

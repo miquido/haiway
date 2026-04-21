@@ -77,7 +77,7 @@ class PostgresConnection(State):
 
         return next(
             iter(
-                await self.statement_executing(
+                await self._statement_executing(
                     statement,
                     *args,
                 )
@@ -124,7 +124,7 @@ class PostgresConnection(State):
             Immutable sequence of wrapped result rows.
         """
 
-        return await self.statement_executing(
+        return await self._statement_executing(
             statement,
             *args,
         )
@@ -163,7 +163,7 @@ class PostgresConnection(State):
             Positional parameters forwarded to the driver.
         """
 
-        await self.statement_executing(
+        await self._statement_executing(
             statement,
             *args,
         )
@@ -179,10 +179,20 @@ class PostgresConnection(State):
             exception escapes the block.
         """
 
-        return self.transaction_preparing()
+        return self._transaction_preparing()
 
-    statement_executing: PostgresStatementExecuting
-    transaction_preparing: PostgresTransactionPreparing
+    _statement_executing: PostgresStatementExecuting
+    _transaction_preparing: PostgresTransactionPreparing
+
+    def __init__(
+        self,
+        statement_executing: PostgresStatementExecuting,
+        transaction_preparing: PostgresTransactionPreparing,
+    ) -> None:
+        super().__init__(
+            _statement_executing=statement_executing,
+            _transaction_preparing=transaction_preparing,
+        )
 
 
 class Postgres(State):
@@ -214,7 +224,7 @@ class Postgres(State):
         if ctx.contains_state(PostgresConnection):
             raise RuntimeError("Recursive Postgres connection acquiring is forbidden")
 
-        return self.connection_acquiring()
+        return self._connection_acquiring()
 
     @overload
     @classmethod
@@ -397,7 +407,13 @@ class Postgres(State):
         async with ctx.disposables(self.acquire_connection()):
             return await PostgresConnection.execute(statement, *args)
 
-    connection_acquiring: PostgresConnectionAcquiring
+    _connection_acquiring: PostgresConnectionAcquiring
+
+    def __init__(
+        self,
+        connection_acquiring: PostgresConnectionAcquiring,
+    ) -> None:
+        super().__init__(_connection_acquiring=connection_acquiring)
 
 
 MIGRATIONS_TABLE_CREATE_STATEMENT: Final[str] = """\

@@ -5,8 +5,9 @@ tracing, metrics collection, and structured logging. This integration allows you
 applications with industry-standard tooling while maintaining Haiway's functional programming
 principles.
 
-**Note:** OpenTelemetry is supported in Haiway **ONLY through GRPC**. We do not support HTTP. Use
-the gRPC port in your collector (for example port 4317 in OtelCollector).
+**Note:** `OpenTelemetry.configure()` currently provisions only OTLP gRPC exporters. If you need
+OTLP HTTP/protobuf or other SDK-level configuration, initialize global OpenTelemetry providers
+outside Haiway and bind Haiway with `OpenTelemetry.autoconfigure()`.
 
 ## Overview
 
@@ -56,6 +57,19 @@ OpenTelemetry.configure(
         "team": "backend",
         "component": "api"
     }
+)
+```
+
+If your process already configures OpenTelemetry through SDK autoconfiguration, environment
+variables, or auto-instrumentation, bind Haiway to those global providers instead:
+
+```python
+from haiway.opentelemetry import OpenTelemetry
+
+OpenTelemetry.autoconfigure(
+    service="my-service",
+    version="1.0.0",
+    environment="production",
 )
 ```
 
@@ -517,7 +531,8 @@ ctx.record_info(
 **1. No telemetry data appearing**
 
 - Verify OTLP endpoint is reachable
-- Check if OpenTelemetry.configure() was called before creating observability
+- Check if OpenTelemetry.configure() was called before creating observability, or if autoconfigure()
+  was used when relying on externally configured global providers
 - Check that the `haiway[opentelemetry]` extra is installed
 - Ensure proper network connectivity to your observability backend
 

@@ -18,7 +18,7 @@ class _CloseTrackingBody:
         self._index = 0
         self.closed = False
 
-    def __aiter__(self) -> "_CloseTrackingBody":
+    def __aiter__(self) -> _CloseTrackingBody:
         return self
 
     async def __anext__(self) -> bytes:
