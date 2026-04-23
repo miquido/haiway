@@ -125,6 +125,21 @@ def test_basic_equals_checks_properties() -> None:
     assert Basics(string="a", integer=1) != Basics(string="b", integer=2)
 
 
+def test_state_equality_requires_exact_class_match() -> None:
+    class Parent(State):
+        required: int
+
+    class Child(Parent):
+        extra: int = 0
+
+    parent = Parent(required=1)
+    child = Child(required=1, extra=0)
+
+    assert parent != child
+    assert child != parent
+    assert hash(parent) != hash(child)
+
+
 def test_basic_initializes_with_arguments_and_defaults() -> None:
     class Basics(State):
         string: str
@@ -163,7 +178,7 @@ def test_nested_initializes_with_proper_arguments() -> None:
 
     class Recursive(State):
         nested: Nested
-        recursion: "Recursive | None"
+        recursion: Recursive | None
         self_recursion: Self | None
 
     recursive = Recursive(
@@ -191,6 +206,20 @@ def test_dict_skips_missing_properties() -> None:
     assert Basics(string="a", integer=1).to_mapping() == {"string": "a", "integer": 1}
     assert Basics(string="a", integer=MISSING).to_mapping() == {"string": "a"}
     assert Basics(string="a", integer=None).to_mapping() == {"string": "a", "integer": None}
+
+
+def test_inherited_fields_are_preserved_in_state_subclasses() -> None:
+    class Parent(State):
+        required: int
+
+    class Child(Parent):
+        extra: int
+
+    assert [field.name for field in Child.__FIELDS__] == ["required", "extra"]
+    assert Child(required=1, extra=2).to_mapping() == {"required": 1, "extra": 2}
+
+    with raises(ValidationError):
+        Child(extra=2)
 
 
 def test_to_mapping_uses_alias_for_nested_states() -> None:

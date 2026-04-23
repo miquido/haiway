@@ -15,7 +15,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.13"]
+        python-version: ["3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,8 @@ jobs:
         run: uv sync --all-groups --all-extras --frozen --no-python-downloads
 
       - name: Lint
-        run: uv run ruff check --output-format=github ./src ./tests && uv run pyright --project ./
+        run: uv run ruff check --output-format=github ./src ./tests && uv run pyright
+          --project ./
 
       - name: Docs Lint (non-Windows)
         if: runner.os != 'Windows'
@@ -40,7 +41,8 @@ jobs:
           uv run mdformat --wrap 100 --check README.md docs
 
       - name: Test
-        run: uv run pytest --rootdir= ./tests --doctest-modules --junitxml=junit/test-results.xml
+        run: uv run pytest --rootdir= ./tests --doctest-modules
+          --junitxml=junit/test-results.xml
 
       - name: Build
         run: uv build

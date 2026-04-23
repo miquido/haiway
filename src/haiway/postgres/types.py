@@ -578,7 +578,7 @@ class PostgresTransactionPreparing(Protocol):
 class PostgresConnectionContext(Protocol):
     """Async context manager yielding a `PostgresConnection`."""
 
-    async def __aenter__(self) -> "PostgresConnection": ...
+    async def __aenter__(self) -> PostgresConnection: ...
 
     async def __aexit__(
         self,
@@ -601,5 +601,5 @@ class PostgresMigrating(Protocol):
 
     async def __call__(
         self,
-        connection: "PostgresConnection",
+        connection: PostgresConnection,
     ) -> None: ...

@@ -85,21 +85,21 @@ class NumberEnumSpecification(TypedDict, total=False):
 
 @final
 class UnionSpecification(TypedDict, total=False):
-    oneOf: Required[Sequence["TypeSpecification"]]
+    oneOf: Required[Sequence[TypeSpecification]]
     description: NotRequired[str]
 
 
 @final
 class ArraySpecification(TypedDict, total=False):
     type: Required[Literal["array"]]
-    items: NotRequired["TypeSpecification"]
+    items: NotRequired[TypeSpecification]
     description: NotRequired[str]
 
 
 @final
 class TupleSpecification(TypedDict, total=False):
     type: Required[Literal["array"]]
-    prefixItems: Required[Sequence["TypeSpecification"]]
+    prefixItems: Required[Sequence[TypeSpecification]]
     items: Required[Literal[False]]
     description: NotRequired[str]
 
@@ -107,7 +107,7 @@ class TupleSpecification(TypedDict, total=False):
 @final
 class DictSpecification(TypedDict, total=False):
     type: Required[Literal["object"]]
-    additionalProperties: Required["TypeSpecification"]
+    additionalProperties: Required[TypeSpecification]
     required: NotRequired[Sequence[str]]
     description: NotRequired[str]
 
@@ -115,7 +115,7 @@ class DictSpecification(TypedDict, total=False):
 @final
 class ObjectSpecification(TypedDict, total=False):
     type: Required[Literal["object"]]
-    properties: Required[Mapping[str, "TypeSpecification"]]
+    properties: Required[Mapping[str, TypeSpecification]]
     additionalProperties: Required[Literal[False]]
     required: NotRequired[Sequence[str]]
     title: NotRequired[str]

@@ -1,3 +1,4 @@
+import annotationlib
 import inspect
 from collections.abc import Mapping, MutableMapping
 from typing import (
@@ -6,7 +7,6 @@ from typing import (
     NoReturn,
     Self,
     dataclass_transform,
-    final,
     get_origin,
     get_type_hints,
 )
@@ -31,6 +31,14 @@ class ImmutableMeta(type):
         namespace: dict[str, Any],
         **kwargs: Any,
     ) -> type:
+        if any(
+            isinstance(base, ImmutableMeta) and base.__name__ != "Immutable"
+            for base in bases
+        ):
+            raise TypeError(
+                "Immutable subclasses cannot be inherited; inherit directly from Immutable"
+            )
+
         state_type = type.__new__(
             mcs,
             name,
@@ -39,22 +47,42 @@ class ImmutableMeta(type):
             **kwargs,
         )
 
-        state_type.__ATTRIBUTES__ = _collect_attributes(state_type)  # pyright: ignore[reportAttributeAccessIssue]
+        state_type.__ATTRIBUTES__ = _collect_attributes(  # pyright: ignore[reportAttributeAccessIssue]
+            state_type,
+            namespace=namespace,
+        )
         state_type.__slots__ = tuple(state_type.__ATTRIBUTES__.keys())  # pyright: ignore[reportAttributeAccessIssue]
         state_type.__match_args__ = state_type.__slots__  # pyright: ignore[reportAttributeAccessIssue]
-
-        # Only mark subclasses as final (not the base Immutable class itself)
-        if name != "Immutable":
-            state_type = final(state_type)
 
         return state_type
 
 
 def _collect_attributes(
     cls: type[Any],
+    *,
+    namespace: Mapping[str, Any] | None = None,
 ) -> Mapping[str, DefaultValue | None]:
     attributes: MutableMapping[str, DefaultValue | None] = {}
-    for key, annotation in get_type_hints(cls, localns={cls.__name__: cls}).items():
+    annotations: Mapping[str, Any]
+    annotate = (
+        annotationlib.get_annotate_from_class_namespace(namespace)
+        if namespace is not None
+        else None
+    )
+    if annotate is not None:
+        annotations = annotationlib.call_annotate_function(
+            annotate,
+            annotationlib.Format.FORWARDREF,
+            owner=cls,
+        )
+
+    else:
+        annotations = get_type_hints(
+            cls,
+            localns={cls.__name__: cls},
+        )
+
+    for key, annotation in annotations.items():
         if key.startswith("__"):
             continue  # do not dunder specials
 

@@ -814,7 +814,7 @@ class AttributePath[Root, Attribute]:
         try:
             return object.__getattribute__(self, name)
 
-        except (AttributeError, KeyError):
+        except AttributeError, KeyError:
             pass  # continue
 
         assert not name.startswith(  # nosec: B101

@@ -96,7 +96,7 @@ class MQMessage[Content](Immutable):
     def map[MappedContent](
         self,
         mapping: Callable[[Content], MappedContent],
-    ) -> "MQMessage[MappedContent]":
+    ) -> MQMessage[MappedContent]:
         return MQMessage(
             content=mapping(self.content),
             acknowledge=self._acknowledge,

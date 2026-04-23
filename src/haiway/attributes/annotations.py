@@ -1,3 +1,4 @@
+import annotationlib
 import builtins
 import datetime
 import enum
@@ -129,7 +130,7 @@ class AttributeAnnotation(Protocol):
     def annotated(
         self,
         annotations: Sequence[Any],
-    ) -> "AttributeAnnotation": ...
+    ) -> AttributeAnnotation: ...
 
     def validate(
         self,
@@ -3042,11 +3043,13 @@ def resolve_self_attribute(
     cls: type[Any],
     /,
     parameters: Mapping[str, Any],
+    namespace: Mapping[str, Any] | None = None,
 ) -> ObjectAttribute:
     recursion_guard: MutableMapping[Any, AttributeAnnotation] = {}
     resolved_parameters: Mapping[str, AttributeAnnotation] = {
         key: resolve_attribute(
             value,
+            localns={cls.__name__: cls},
             module=cls.__module__,
             resolved_parameters=parameters,
             recursion_guard=recursion_guard,
@@ -3069,13 +3072,52 @@ def resolve_self_attribute(
         )
     ] = self_attribute
 
-    for key, annotation in get_type_hints(
-        self_attribute.base,
-        localns={
-            self_attribute.base.__name__: self_attribute.base,
-        },
-        include_extras=True,
-    ).items():
+    annotations: Mapping[str, Any]
+    annotate = (
+        annotationlib.get_annotate_from_class_namespace(namespace)
+        if namespace is not None
+        else None
+    )
+    if annotate is not None:
+        annotations = {}
+        for base in reversed(self_attribute.base.__mro__[1:-1]):
+            base_annotate = getattr(base, "__annotate__", None)
+            if base_annotate is not None:
+                annotations.update(
+                    annotationlib.call_annotate_function(
+                        base_annotate,
+                        annotationlib.Format.FORWARDREF,
+                        owner=base,
+                    )
+                )
+
+            else:
+                annotations.update(
+                    get_type_hints(
+                        base,
+                        localns={base.__name__: base},
+                        include_extras=True,
+                    )
+                )
+
+        annotations.update(
+            annotationlib.call_annotate_function(
+                annotate,
+                annotationlib.Format.FORWARDREF,
+                owner=self_attribute.base,
+            )
+        )
+
+    else:
+        annotations = get_type_hints(
+            self_attribute.base,
+            localns={
+                self_attribute.base.__name__: self_attribute.base,
+            },
+            include_extras=True,
+        )
+
+    for key, annotation in annotations.items():
         if key.startswith("__"):
             continue  # do not include special items
 
@@ -3084,6 +3126,7 @@ def resolve_self_attribute(
 
         attribute: AttributeAnnotation = resolve_attribute(
             annotation,
+            localns={self_attribute.base.__name__: self_attribute.base},
             module=self_attribute.base.__module__,
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
@@ -3134,6 +3177,7 @@ def _recursion_key(
 def _resolve_parameters(
     annotation: Any,
     *,
+    localns: Mapping[str, Any] | None,
     module: str,
     resolved_parameters: Mapping[str, AttributeAnnotation],
     recursion_guard: MutableMapping[Any, AttributeAnnotation],
@@ -3141,6 +3185,7 @@ def _resolve_parameters(
     return tuple(
         resolve_attribute(
             argument,
+            localns=localns,
             resolved_parameters=resolved_parameters,
             module=module,
             recursion_guard=recursion_guard,
@@ -3152,6 +3197,7 @@ def _resolve_parameters(
 def _evaluate_forward_ref(
     annotation: ForwardRef | str,
     /,
+    localns: Mapping[str, Any] | None,
     module: str,
 ) -> Any:
     # ForwardRef._evaluate is deprecated; evaluate compiled expression directly.
@@ -3163,9 +3209,6 @@ def _evaluate_forward_ref(
     else:
         forward_ref = annotation
 
-    if getattr(forward_ref, "__forward_evaluated__", False):
-        return forward_ref.__forward_value__
-
     module_name = forward_ref.__forward_module__ or module
     namespace: dict[str, Any]
     if module_name and module_name in sys.modules:
@@ -3173,10 +3216,14 @@ def _evaluate_forward_ref(
     else:
         namespace = {}
 
+    if localns:
+        namespace.update(localns)
+
     namespace.setdefault("__builtins__", builtins.__dict__)
 
     try:
         return eval(forward_ref.__forward_code__, namespace, namespace)  # nosec: B307
+
     except (NameError, AttributeError) as error:
         raise RuntimeError(f"Cannot resolve annotation of {annotation}") from error
 
@@ -3345,6 +3392,7 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
 def _resolve_type_alias(
     annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
     *,
+    localns: Mapping[str, Any] | None,
     module: str,
     resolved_parameters: Mapping[str, AttributeAnnotation],
     recursion_guard: MutableMapping[Any, AttributeAnnotation],
@@ -3374,6 +3422,7 @@ def _resolve_type_alias(
 
     resolved_attribute: AttributeAnnotation = resolve_attribute(
         annotation.__value__,
+        localns=localns,
         module=module,
         resolved_parameters=resolved_parameters,
         recursion_guard=recursion_guard,
@@ -3397,6 +3446,7 @@ def _resolve_type_alias(
 def _resolve_generic_alias(
     annotation: GenericAlias,
     *,
+    localns: Mapping[str, Any] | None,
     module: str,
     resolved_parameters: Mapping[str, AttributeAnnotation],
     recursion_guard: MutableMapping[Any, AttributeAnnotation],
@@ -3405,6 +3455,7 @@ def _resolve_generic_alias(
     if not hasattr(origin_type, "__class_getitem__"):
         return resolve_attribute(
             origin_type,
+            localns=localns,
             module=module,
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
@@ -3438,6 +3489,7 @@ def _resolve_generic_alias(
 
         return resolve_attribute(
             resolved_origin,
+            localns=localns,
             module=module,
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
@@ -3466,6 +3518,7 @@ def _resolve_generic_alias(
         origin=resolved_origin.__origin__,
         parameters=_resolve_parameters(
             resolved_origin.__origin__,
+            localns=localns,
             module=resolved_module,
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
@@ -3476,6 +3529,7 @@ def _resolve_generic_alias(
 
     resolved_attribute: AttributeAnnotation = resolve_attribute(
         resolved_origin.__origin__,
+        localns=localns,
         module=resolved_module,
         resolved_parameters=resolved_parameters,
         recursion_guard=recursion_guard,
@@ -3488,6 +3542,7 @@ def _resolve_generic_alias(
 def _resolve_typeddict(
     annotation: Any,
     *,
+    localns: Mapping[str, Any] | None,
     module: str,
     resolved_parameters: Mapping[str, AttributeAnnotation],
     recursion_guard: MutableMapping[str, AttributeAnnotation],
@@ -3520,6 +3575,7 @@ def _resolve_typeddict(
     ).items():
         attribute: AttributeAnnotation = resolve_attribute(
             element,
+            localns=localns,
             module=getattr(annotation, "__module__", module),
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
@@ -3558,6 +3614,7 @@ PATH_ATTRIBUTE: Final[PathAttribute] = PathAttribute()
 def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
     annotation: Any,
     *,
+    localns: Mapping[str, Any] | None,
     module: str,
     resolved_parameters: Mapping[str, AttributeAnnotation],
     recursion_guard: MutableMapping[Any, AttributeAnnotation],
@@ -3569,6 +3626,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
         case typeddict if is_typeddict(typeddict) or is_typeddict_ext(typeddict):
             return _resolve_typeddict(
                 typeddict,
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3645,12 +3703,14 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 base=Mapping[keys_annotation, values_annotation],
                 keys=resolve_attribute(
                     keys_annotation,
+                    localns=localns,
                     module=module,
                     resolved_parameters=resolved_parameters,
                     recursion_guard=recursion_guard,
                 ),
                 values=resolve_attribute(
                     values_annotation,
+                    localns=localns,
                     module=module,
                     resolved_parameters=resolved_parameters,
                     recursion_guard=recursion_guard,
@@ -3678,6 +3738,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 base=Set[values_annotation],
                 values=resolve_attribute(
                     values_annotation,
+                    localns=localns,
                     module=module,
                     resolved_parameters=resolved_parameters,
                     recursion_guard=recursion_guard,
@@ -3691,6 +3752,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
                         base=Sequence[values_annotation],
                         values=resolve_attribute(
                             values_annotation,
+                            localns=localns,
                             module=module,
                             resolved_parameters=resolved_parameters,
                             recursion_guard=recursion_guard,
@@ -3702,6 +3764,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
                         base=annotation,
                         values=_resolve_parameters(
                             annotation,
+                            localns=localns,
                             module=module,
                             resolved_parameters=resolved_parameters,
                             recursion_guard=recursion_guard,
@@ -3731,6 +3794,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 base=Sequence[values_annotation],
                 values=resolve_attribute(
                     values_annotation,
+                    localns=localns,
                     module=module,
                     resolved_parameters=resolved_parameters,
                     recursion_guard=recursion_guard,
@@ -3751,6 +3815,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
             parameters: Sequence[AttributeAnnotation] = _resolve_parameters(
                 annotation,
+                localns=localns,
                 module=getattr(annotation, "__module__", module),
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3784,6 +3849,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
     module: str,
     resolved_parameters: Mapping[str, Any],
     recursion_guard: MutableMapping[Any, AttributeAnnotation],
+    localns: Mapping[str, Any] | None = None,
 ) -> AttributeAnnotation:
     origin: Any | None = get_origin(annotation)
 
@@ -3792,6 +3858,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
     ):
         return _resolve_generic_alias(
             annotation,
+            localns=localns,
             module=module,
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
@@ -3807,6 +3874,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 alternatives=tuple(
                     resolve_attribute(
                         alternative,
+                        localns=localns,
                         module=module,
                         resolved_parameters=resolved_parameters,
                         recursion_guard=recursion_guard,
@@ -3818,6 +3886,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case typing.TypeAliasType | typing_extensions.TypeAliasType:
             return _resolve_type_alias(
                 annotation,
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3827,6 +3896,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
             annotation_args: Sequence[Any] = get_args(annotation)
             attribute: AttributeAnnotation = resolve_attribute(
                 annotation_args[0],
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3840,6 +3910,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 
             return resolve_attribute(
                 annotation.__bound__ or Any,
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3864,6 +3935,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case typing.Required | typing_extensions.Required:
             attribute: AttributeAnnotation = resolve_attribute(
                 get_args(annotation)[0],
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3874,6 +3946,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case typing.NotRequired | typing_extensions.NotRequired:
             attribute: AttributeAnnotation = resolve_attribute(
                 get_args(annotation)[0],
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3890,6 +3963,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 alternatives=(
                     resolve_attribute(
                         get_args(annotation)[0],
+                        localns=localns,
                         module=module,
                         resolved_parameters=resolved_parameters,
                         recursion_guard=recursion_guard,
@@ -3901,6 +3975,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case typing.Final | typing_extensions.Final:
             return resolve_attribute(
                 get_args(annotation)[0],
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3909,6 +3984,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case typing.ForwardRef | typing_extensions.ForwardRef:
             resolved: Any = _evaluate_forward_ref(
                 annotation,
+                localns=localns,
                 module=module,
             )
             if isinstance(resolved, Hashable):
@@ -3920,6 +3996,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 
             attrbute: AttributeAnnotation = resolve_attribute(
                 resolved,
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3931,6 +4008,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case builtins.str():
             resolved: Any = _evaluate_forward_ref(
                 annotation,
+                localns=localns,
                 module=module,
             )
             if isinstance(resolved, Hashable):
@@ -3942,6 +4020,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 
             attrbute: AttributeAnnotation = resolve_attribute(
                 resolved,
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
@@ -3953,6 +4032,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case type():
             return _resolve_type(
                 annotation,
+                localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,

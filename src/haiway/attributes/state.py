@@ -92,6 +92,7 @@ class StateMeta(type):
 
         self_attribute: ObjectAttribute = resolve_self_attribute(
             cls,
+            namespace=namespace,
             parameters=type_parameters or {},
         )
 
@@ -799,8 +800,8 @@ class State(metaclass=StateMeta):
         """
         Check if this instance is equal to another object.
 
-        Two State instances are considered equal if they are instances of the
-        same class or subclass and have equal values for all attributes.
+        Two State instances are considered equal only when they have the same
+        concrete class and equal values for all declared attributes.
 
         Parameters
         ----------
@@ -812,7 +813,7 @@ class State(metaclass=StateMeta):
         bool
             True if the objects are equal, False otherwise
         """
-        if not issubclass(other.__class__, self.__class__):
+        if other.__class__ is not self.__class__:
             return False
 
         return all(

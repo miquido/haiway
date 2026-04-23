@@ -142,7 +142,7 @@ for signum in (
 
     try:
         signal.signal(signum, handle_signal)
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         pass  # ignore
 
 
