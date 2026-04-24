@@ -364,8 +364,8 @@ class Postgres(State):
         if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.fetch_one(statement, *args)
 
-        async with ctx.disposables(self.acquire_connection()):
-            return await PostgresConnection.fetch_one(statement, *args)
+        async with self.acquire_connection() as connection:
+            return await connection.fetch_one(statement, *args)
 
     @statemethod
     async def fetch(
@@ -384,8 +384,8 @@ class Postgres(State):
         if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.fetch(statement, *args)
 
-        async with ctx.disposables(self.acquire_connection()):
-            return await PostgresConnection.fetch(statement, *args)
+        async with self.acquire_connection() as connection:
+            return await connection.fetch(statement, *args)
 
     @statemethod
     async def execute(
@@ -404,8 +404,8 @@ class Postgres(State):
         if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.execute(statement, *args)
 
-        async with ctx.disposables(self.acquire_connection()):
-            return await PostgresConnection.execute(statement, *args)
+        async with self.acquire_connection() as connection:
+            return await connection.execute(statement, *args)
 
     _connection_acquiring: PostgresConnectionAcquiring
 
