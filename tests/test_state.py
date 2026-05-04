@@ -3,6 +3,7 @@ from collections.abc import Callable, Mapping, Sequence, Set
 from copy import copy, deepcopy
 from datetime import date, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import (
     Annotated,
     Any,
@@ -667,3 +668,18 @@ def test_serializable_required_accepts_schema() -> None:
         value: int
 
     assert Serializable.json_schema(required=True) is not None
+
+
+def test_serializable_state_path_schema_and_json() -> None:
+    class PathState(State, serializable=True):
+        path: Path
+
+    payload = PathState(path=Path("/tmp/example")).to_json()
+    assert "\"path\": \"/tmp/example\"" in payload
+
+    decoded = PathState.from_json(payload)
+    assert decoded.path == Path("/tmp/example")
+
+    schema = PathState.json_schema(required=True)
+    assert "\"path\"" in schema
+    assert "\"format\": \"path\"" in schema

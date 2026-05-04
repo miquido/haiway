@@ -20,6 +20,7 @@ from haiway.attributes.annotations import (
     MetaAttribute,
     MissingAttribute,
     NoneAttribute,
+    PathAttribute,
     SequenceAttribute,
     StrEnumAttribute,
     StringAttribute,
@@ -408,6 +409,16 @@ def _prepare_specification_of_time(
     }
 
 
+def _prepare_specification_of_path(
+    annotation: AttributeAnnotation,
+    recursion_guard: MutableMapping[int, _RecursionGuard],
+) -> TypeSpecification:
+    return {
+        "type": "string",
+        "format": "path",
+    }
+
+
 def _prepare_specification_of_custom(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
@@ -513,6 +524,7 @@ SPECIFICATIONS: Mapping[
     DateAttribute: _prepare_specification_of_date,
     DatetimeAttribute: _prepare_specification_of_datetime,
     TimeAttribute: _prepare_specification_of_time,
+    PathAttribute: _prepare_specification_of_path,
     MetaAttribute: _prepare_specification_of_meta,
     CustomAttribute: _prepare_specification_of_custom,
 }
