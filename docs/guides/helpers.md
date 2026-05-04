@@ -16,7 +16,7 @@ The public helpers exported from `haiway.helpers` are:
 - `cache`, `cache_externally`
 - `concurrently`, `execute_concurrently`, `process_concurrently`, `stream_concurrently`
 - `Configuration`, `ConfigurationRepository`, `ConfigurationMissing`, `ConfigurationInvalid`
-- `File`, `FileAccess`
+- `File`, `Files`, `Directory`, `FileException`, `Paths`
 - `HTTPClient`, `HTTPClientError`, `HTTPHeaders`, `HTTPQueryParams`, `HTTPRequesting`,
   `HTTPResponse`, `HTTPStatusCode`
 - `MQMessage`, `MQQueue`
@@ -30,8 +30,8 @@ The public helpers exported from `haiway.helpers` are:
 
 ### Context-Bound Facades
 
-Helpers such as `Configuration`, `ConfigurationRepository`, `HTTPClient`, `MQQueue`, `File`, and
-`FileAccess` expose methods through `@statemethod`.
+Helpers such as `Configuration`, `ConfigurationRepository`, `HTTPClient`, `MQQueue`, `File`,
+`Files`, and `Directory` expose methods through `@statemethod`.
 
 That means:
 
@@ -86,8 +86,8 @@ See [Configuration](configuration.md) for the repository model and examples.
 
 ## Files, HTTP, and Queues
 
-- `FileAccess.open(...)` produces an async context manager that installs a `File` state with
-  `read()` and `write()` methods.
+- `Files.access(...)` produces an async context manager that installs a `File` state with `read()`
+  and `write()` methods.
 - `HTTPClient` is a typed facade over an injected `requesting` implementation.
 - `MQQueue` is a typed facade over publishing and consuming protocols, and `MQMessage` carries
   payload plus acknowledge/reject callbacks.
