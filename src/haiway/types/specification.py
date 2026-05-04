@@ -53,6 +53,7 @@ class StringSpecification(TypedDict, total=False):
     format: NotRequired[
         Literal[
             "uri",
+            "path",
             "uuid",
             "date",
             "time",

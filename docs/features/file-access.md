@@ -101,8 +101,8 @@ Files.access(
 
 ## Error Handling
 
-Most errors raised by the helper come directly from the OS (`OSError`). `FileException` is raised
-only in a few guarded cases (e.g., missing file when `create=False`, unexpected EOF, failed write).
+File and directory helpers raise `FileException` for operational failures (open, read, write,
+traverse, close, and unlock). Original provider errors are preserved as `__cause__` for debugging.
 
 ```python
 from haiway.helpers import FileException
@@ -295,7 +295,7 @@ The file access system uses:
 Create custom file access implementations by implementing the protocols:
 
 ```python
-from haiway.helpers import FileAccessing, FileContext, File
+from haiway.helpers import FileAccess, FileAccessing, File
 
 class RemoteFileAccess:
     def __init__(self, server_url: str):
@@ -306,7 +306,7 @@ class RemoteFileAccess:
         path: Path | str,
         create: bool,
         exclusive: bool,
-    ) -> FileContext:
+    ) -> FileAccess:
         # Return a context manager that provides File operations
         return RemoteFileContext(self.server_url, path, create, exclusive)
 

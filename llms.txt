@@ -86,7 +86,7 @@ async with ctx.scope(
 
 ## I/O Helpers
 - **HTTP**: Use `haiway.helpers.HTTPClient` static methods (`get/post/put/delete/request`). Provide an implementation via state, typically `haiway.httpx.HTTPXClient` disposable. Responses are `HTTPResponse` (immutable; `await response.body()` returns bytes). Errors raise `HTTPClientError` (original cause in `__cause__`).
-- **File access**: `haiway.helpers.File` is a typed async file helper backed by context-managed resources; respect `FileAccess` flags when opening.
+- **File access**: use `haiway.helpers.Files.access(...)` to create a `FileAccess` disposable; inside the scope, use `haiway.helpers.File.read()` / `File.write()` for typed async operations.
 - **Postgres**: the `haiway.postgres` package offers async client/state helpers aligned with `asyncpg` patterns; configure via state and keep operations async-only.
 - **RabbitMQ**: the `haiway.rabbitmq` package offers async queue access built on `pika`; use `RabbitMQClient` as a disposable and resolve `RabbitMQ`/`MQQueue`/`MQMessage` from context for typed publish/consume flows.
 

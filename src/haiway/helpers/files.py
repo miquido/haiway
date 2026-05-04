@@ -54,6 +54,7 @@ class Paths(NamedTuple):
     directories: Sequence[Path]
 
 
+@final
 class FileException(Exception):
     """
     File operation failure.
@@ -131,7 +132,7 @@ class FileWriting(Protocol):
 
 
 @runtime_checkable
-class FileContext(Protocol):
+class FileAccess(Protocol):
     """
     Protocol for file context managers.
 
@@ -199,7 +200,7 @@ class FileAccessing(Protocol):
         path: Path | str,
         create: bool,
         exclusive: bool,
-    ) -> FileContext: ...
+    ) -> FileAccess: ...
 
 
 @final
@@ -281,13 +282,13 @@ class File(State):
         """
         await self._writing(content)
 
-    path: str
+    path: Path
     _reading: FileReading
     _writing: FileWriting
 
     def __init__(
         self,
-        path: str,
+        path: Path,
         reading: FileReading,
         writing: FileWriting,
     ) -> None:
@@ -314,21 +315,21 @@ class Directory(State):
         cls,
         /,
         recursive: bool = False,
-    ) -> Paths: ...
+    ) -> Sequence[FileAccess | Directory]: ...
 
     @overload
     async def traverse(
         self,
         /,
         recursive: bool = False,
-    ) -> Paths: ...
+    ) -> Sequence[FileAccess | Directory]: ...
 
     @statemethod
     async def traverse(
         self,
         /,
         recursive: bool = False,
-    ) -> Paths:
+    ) -> Sequence[FileAccess | Directory]:
         """
         Traverse directory entries using configured traversal implementation.
 
@@ -339,18 +340,34 @@ class Directory(State):
 
         Returns
         -------
-        Paths
-            Traversed directory entries split into ``files`` and ``directories``
+        Sequence[FileAccess | Directory]
+            Traversed file access contexts and nested directory states.
         """
+        paths: Paths = await self._traversing(recursive)
+        return (
+            *(
+                FileAccessContext(
+                    path=file,
+                    create=False,
+                    exclusive=False,
+                )
+                for file in paths.files
+            ),
+            *(
+                Directory(
+                    path=directory,
+                    traversing=_directory_contents_traversal(directory),
+                )
+                for directory in paths.directories
+            ),
+        )
 
-        return await self._traversing(recursive)
-
-    path: str
+    path: Path
     _traversing: DirectoryTraversing
 
     def __init__(
         self,
-        path: str,
+        path: Path,
         traversing: DirectoryTraversing,
     ) -> None:
         super().__init__(
@@ -382,6 +399,7 @@ def _open_file_handle(
         if exclusive:
             try:
                 flock(file_handle, LOCK_EX)
+
             except OSError:
                 os.close(file_handle)
                 raise
@@ -452,11 +470,13 @@ def _close_file_handle(
     if exclusive:
         try:
             flock(file_handle, LOCK_UN)
+
         except OSError as exc:
             unlock_error = exc
 
     try:
         os.close(file_handle)
+
     except OSError as exc:
         if unlock_error is not None:
             exc.add_note("unlock with flock(..., LOCK_UN) failed before close")
@@ -467,73 +487,73 @@ def _close_file_handle(
         raise FileException("Failed to unlock file handle") from unlock_error
 
 
-def _file_access_context(
-    path: Path | str,
-    create: bool,
-    exclusive: bool,
-) -> FileContext:
-    class FileAccessContext:
-        __slots__ = (
-            "_file_handle",
-            "_lock",
-            "path",
+@final
+class FileAccessContext:
+    __slots__ = (
+        "_create",
+        "_exclusive",
+        "_file_handle",
+        "_lock",
+        "path",
+    )
+
+    def __init__(
+        self,
+        path: Path | str,
+        create: bool,
+        exclusive: bool,
+    ) -> None:
+        self.path: Path = Path(path)
+        self._create: bool = create
+        self._exclusive: bool = exclusive
+        self._file_handle: int | None = None
+        self._lock: Lock = Lock()
+
+    async def __aenter__(self) -> File:
+        assert self._file_handle is None  # nosec: B101
+
+        self._file_handle = await _open_file_handle(
+            self.path,
+            create=self._create,
+            exclusive=self._exclusive,
         )
 
-        def __init__(
-            self,
-            path: Path | str,
-        ) -> None:
-            self.path: Path = Path(path)
-            self._file_handle: int | None = None
-            self._lock: Lock = Lock()
-
-        async def __aenter__(self) -> File:
-            assert self._file_handle is None  # nosec: B101
-
-            self._file_handle = await _open_file_handle(
-                self.path,
-                create=create,
-                exclusive=exclusive,
-            )
-
-            async def read_file() -> bytes:
-                assert self._file_handle is not None  # nosec: B101
-                async with self._lock:
-                    return await _read_file_contents(
-                        self._file_handle,
-                    )
-
-            async def write_file(content: bytes) -> None:
-                assert self._file_handle is not None  # nosec: B101
-                async with self._lock:
-                    await _write_file_contents(
-                        self._file_handle,
-                        content=content,
-                    )
-
-            return File(
-                path=str(self.path),
-                reading=read_file,
-                writing=write_file,
-            )
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc_val: BaseException | None,
-            exc_tb: TracebackType | None,
-        ) -> None:
+        async def read_file() -> bytes:
             assert self._file_handle is not None  # nosec: B101
-            try:
-                await _close_file_handle(
+            async with self._lock:
+                return await _read_file_contents(
                     self._file_handle,
-                    exclusive=exclusive,
                 )
 
-            finally:
-                self._file_handle = None
+        async def write_file(content: bytes) -> None:
+            assert self._file_handle is not None  # nosec: B101
+            async with self._lock:
+                await _write_file_contents(
+                    self._file_handle,
+                    content=content,
+                )
 
-    return FileAccessContext(path=path)
+        return File(
+            path=self.path,
+            reading=read_file,
+            writing=write_file,
+        )
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        assert self._file_handle is not None  # nosec: B101
+        try:
+            await _close_file_handle(
+                self._file_handle,
+                exclusive=self._exclusive,
+            )
+
+        finally:
+            self._file_handle = None
 
 
 @asynchronous
@@ -591,6 +611,21 @@ def _traverse_path_contents(  # noqa: C901, PLR0912
         raise FileException(f"Failed to traverse directory: {root}") from exc
 
 
+def _directory_contents_traversal(
+    path: Path | str,
+) -> DirectoryTraversing:
+    async def _traverse_directory_contents(
+        recursive: bool,
+    ) -> Paths:
+        return await _traverse_path_contents(
+            path=path,
+            recursive=recursive,
+        )
+
+    return _traverse_directory_contents
+
+
+@final
 class Files(State):
     """
     State container for filesystem traversal and file access helpers.
@@ -608,7 +643,7 @@ class Files(State):
         path: Path | str,
         *,
         recursive: bool = False,
-    ) -> Paths: ...
+    ) -> Sequence[FileAccess | Directory]: ...
 
     @overload
     async def traverse(
@@ -617,7 +652,7 @@ class Files(State):
         path: Path | str,
         *,
         recursive: bool = False,
-    ) -> Paths: ...
+    ) -> Sequence[FileAccess | Directory]: ...
 
     @statemethod
     async def traverse(
@@ -626,7 +661,7 @@ class Files(State):
         path: Path | str,
         *,
         recursive: bool = False,
-    ) -> Paths:
+    ) -> Sequence[FileAccess | Directory]:
         """
         Traverse directory entries using configured traversal implementation.
 
@@ -639,10 +674,27 @@ class Files(State):
 
         Returns
         -------
-        Paths
-            Traversed directory entries split into ``files`` and ``directories``
+        Sequence[FileAccess | Directory]
+            Traversed file access contexts and nested directory states.
         """
-        return await self._traversing(path, recursive)
+        paths: Paths = await self._traversing(path, recursive)
+        return (
+            *(
+                FileAccessContext(
+                    path=file,
+                    create=False,
+                    exclusive=False,
+                )
+                for file in paths.files
+            ),
+            *(
+                Directory(
+                    path=directory,
+                    traversing=_directory_contents_traversal(directory),
+                )
+                for directory in paths.directories
+            ),
+        )
 
     @overload
     @classmethod
@@ -653,7 +705,7 @@ class Files(State):
         *,
         create: bool = False,
         exclusive: bool = False,
-    ) -> FileContext: ...
+    ) -> FileAccess: ...
 
     @overload
     def access(
@@ -663,7 +715,7 @@ class Files(State):
         *,
         create: bool = False,
         exclusive: bool = False,
-    ) -> FileContext: ...
+    ) -> FileAccess: ...
 
     @statemethod
     def access(
@@ -673,7 +725,7 @@ class Files(State):
         *,
         create: bool = False,
         exclusive: bool = False,
-    ) -> FileContext:
+    ) -> FileAccess:
         """
         Prepare access to a file for reading and writing.
 
@@ -695,15 +747,14 @@ class Files(State):
 
         Returns
         -------
-        FileContext
-            A FileContext that manages the file lifecycle and provides access
-            to file operations through the File state class
+        FileAccess
+            A file access context manager that manages the file lifecycle and
+            provides access to file operations through the File state class.
 
         Raises
         ------
         FileException
-            If the file cannot be opened with the specified parameters, or if
-            a file is already open in the current context scope
+            If the file cannot be opened with the specified parameters.
         """
         return self._accessing(
             path,
@@ -717,7 +768,7 @@ class Files(State):
     def __init__(
         self,
         traversing: PathTraversing = _traverse_path_contents,
-        accessing: FileAccessing = _file_access_context,
+        accessing: FileAccessing = FileAccessContext,
     ) -> None:
         super().__init__(
             _traversing=traversing,

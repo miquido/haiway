@@ -4,7 +4,7 @@ import pytest
 
 from haiway import Directory, File, Files, ctx
 from haiway.helpers import files as files_module
-from haiway.helpers.files import FileException, Paths
+from haiway.helpers.files import FileAccess, FileException
 
 
 @pytest.mark.asyncio
@@ -40,9 +40,11 @@ async def test_file_access_export_alias(tmp_path: Path) -> None:
     async with ctx.scope("directory-traverse-alias", directory):
         traversed = await Directory.traverse()
 
-    assert isinstance(traversed, Paths)
-    assert set(traversed.files) == {first, second}
-    assert set(traversed.directories) == {nested}
+    files = {entry.path for entry in traversed if isinstance(entry, FileAccess)}
+    directories = {Path(entry.path) for entry in traversed if isinstance(entry, Directory)}
+
+    assert files == {first, second}
+    assert directories == {nested}
 
 
 @pytest.mark.asyncio
@@ -105,7 +107,7 @@ async def test_file_handle_is_cleared_even_if_close_fails(
         raise FileException("closing failed")
 
     monkeypatch.setattr(files_module, "_close_file_handle", failing_close)
-    context = files_module._file_access_context(
+    context = files_module.FileAccessContext(
         tmp_path / "resource.bin",
         create=True,
         exclusive=False,
@@ -134,11 +136,12 @@ async def test_files_access_traverse_direct_children(tmp_path: Path) -> None:
     async with ctx.scope("files-direct", files_access):
         traversed = await Files.traverse(root)
 
-    assert isinstance(traversed, Paths)
-    assert isinstance(traversed.files, tuple)
-    assert isinstance(traversed.directories, tuple)
-    assert set(traversed.files) == {first, second}
-    assert set(traversed.directories) == {nested}
+    assert isinstance(traversed, tuple)
+    files = {entry.path for entry in traversed if isinstance(entry, FileAccess)}
+    directories = {Path(entry.path) for entry in traversed if isinstance(entry, Directory)}
+
+    assert files == {first, second}
+    assert directories == {nested}
 
 
 @pytest.mark.asyncio
@@ -160,9 +163,11 @@ async def test_files_access_traverse_recursive(tmp_path: Path) -> None:
     async with ctx.scope("files-recursive", files_access):
         traversed = await Files.traverse(root, recursive=True)
 
-    assert isinstance(traversed, Paths)
-    assert set(traversed.files) == {top_file, nested_file, deep_file}
-    assert set(traversed.directories) == {nested, deep}
+    files = {entry.path for entry in traversed if isinstance(entry, FileAccess)}
+    directories = {Path(entry.path) for entry in traversed if isinstance(entry, Directory)}
+
+    assert files == {top_file, nested_file, deep_file}
+    assert directories == {nested, deep}
 
 
 @pytest.mark.asyncio
