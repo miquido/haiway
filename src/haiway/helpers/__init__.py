@@ -12,7 +12,13 @@ from haiway.helpers.configuration import (
     ConfigurationMissing,
     ConfigurationRepository,
 )
-from haiway.helpers.files import File, FileAccess
+from haiway.helpers.files import (
+    Directory,
+    File,
+    FileException,
+    Files,
+    Paths,
+)
 from haiway.helpers.http_client import (
     HTTPClient,
     HTTPClientError,
@@ -37,8 +43,10 @@ __all__ = (
     "ConfigurationInvalid",
     "ConfigurationMissing",
     "ConfigurationRepository",
+    "Directory",
     "File",
-    "FileAccess",
+    "FileException",
+    "Files",
     "HTTPClient",
     "HTTPClientError",
     "HTTPHeaders",
@@ -49,6 +57,7 @@ __all__ = (
     "LoggerObservability",
     "MQMessage",
     "MQQueue",
+    "Paths",
     "asynchronous",
     "cache",
     "cache_externally",

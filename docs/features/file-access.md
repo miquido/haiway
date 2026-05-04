@@ -22,13 +22,13 @@ Open and work with files using the context system:
 
 ```python
 from haiway import ctx
-from haiway.helpers import FileAccess, File
+from haiway.helpers import Files, File
 
 async def read_config():
     # Open file for reading and writing
     async with ctx.scope(
         "read_config",
-        disposables=(FileAccess.open("config.json"),)
+        disposables=(Files.access("config.json"),)
     ):
         # Read file contents
         content = await File.read()
@@ -48,7 +48,7 @@ Create files and their parent directories automatically:
 async def create_data_file():
     async with ctx.scope(
         "create_file",
-        disposables=(FileAccess.open("data/output.txt", create=True),)
+        disposables=(Files.access("data/output.txt", create=True),)
     ):
         # Write initial content
         await File.write(b"Initial data\n")
@@ -67,7 +67,7 @@ async def update_shared_resource():
     # Exclusive lock prevents concurrent access
     async with ctx.scope(
         "exclusive_update",
-        disposables=(FileAccess.open("shared.json", exclusive=True),)
+        disposables=(Files.access("shared.json", exclusive=True),)
     ):
         # Read current state
         data = await File.read()
@@ -83,12 +83,12 @@ async def update_shared_resource():
 
 ## File Access Options
 
-### FileAccess.open() Parameters
+### Files.access() Parameters
 
 Configure file access behavior:
 
 ```python
-FileAccess.open(
+Files.access(
     path="data/file.txt",      # Path as string or Path object
     create=False,              # Create file if it doesn't exist
     exclusive=False            # Use exclusive locking (Unix/Linux/macOS)
@@ -111,7 +111,7 @@ async def safe_file_read():
     try:
         async with ctx.scope(
             "read_file",
-            disposables=(FileAccess.open("data.txt"),)
+            disposables=(Files.access("data.txt"),)
         ):
             content = await File.read()
             return content.decode()
@@ -128,7 +128,7 @@ async def safe_file_read():
 async def process_binary_file():
     async with ctx.scope(
         "binary_ops",
-        disposables=(FileAccess.open("image.png"),)
+        disposables=(Files.access("image.png"),)
     ):
         # Read binary data
         image_data = await File.read()
@@ -146,7 +146,7 @@ async def process_binary_file():
 async def update_text_file():
     async with ctx.scope(
         "text_file",
-        disposables=(FileAccess.open("document.txt"),)
+        disposables=(Files.access("document.txt"),)
     ):
         # Read as text
         content = await File.read()
@@ -170,7 +170,7 @@ async def manage_config():
     # JSON configuration
     async with ctx.scope(
         "json_config",
-        disposables=(FileAccess.open("config.json", create=True),)
+        disposables=(Files.access("config.json", create=True),)
     ):
         try:
             data = json.loads(await File.read())
@@ -183,7 +183,7 @@ async def manage_config():
     # YAML configuration
     async with ctx.scope(
         "yaml_config",
-        disposables=(FileAccess.open("config.yaml", create=True),)
+        disposables=(Files.access("config.yaml", create=True),)
     ):
         try:
             content = await File.read()
@@ -204,7 +204,7 @@ atomic. Use exclusive locks plus your own temp-file strategy if you need atomic 
 async def atomic_update():
     async with ctx.scope(
         "atomic",
-        disposables=(FileAccess.open("critical.dat", exclusive=True),)
+        disposables=(Files.access("critical.dat", exclusive=True),)
     ):
         # Read current state
         current = await File.read()
@@ -313,11 +313,11 @@ class RemoteFileAccess:
 # Use custom implementation
 async with ctx.scope(
     "remote_files",
-    FileAccess(accessing=RemoteFileAccess("https://files.example.com"))
+    Files(accessing=RemoteFileAccess("https://files.example.com"))
 ):
     async with ctx.scope(
         "read_remote",
-        disposables=(FileAccess.open("remote/data.txt"),)
+        disposables=(Files.access("remote/data.txt"),)
     ):
         content = await File.read()
 ```
