@@ -155,7 +155,7 @@ Each module should export an async `migration(connection: PostgresConnection) ->
 
 ## Configuration Repository
 
-`PostgresConfigurationRepository()` adapts Haiway's generic `ConfigurationRepository` to a
+`PostgresConfigurationRepository` adapts Haiway's generic `ConfigurationRepository` to a
 Postgres-backed store. It persists immutable configuration snapshots in a `configurations` table and
 uses in-memory caching for listing and loading operations.
 
@@ -165,13 +165,20 @@ from haiway.postgres import PostgresConfigurationRepository, PostgresConnectionP
 
 async with ctx.scope(
     "config",
-    PostgresConfigurationRepository(),
+    PostgresConfigurationRepository.prepare(),
     disposables=(PostgresConnectionPool(),),
 ):
     available = await ConfigurationRepository.configurations()
 ```
 
-The repository expects this schema to exist before use:
+Before using the repository, create the backing table and index:
+
+```python
+async with ctx.scope("config.migrate", disposables=(PostgresConnectionPool(),)):
+    await PostgresConfigurationRepository.migrate()
+```
+
+`prepare(...)` expects this schema to exist:
 
 ```sql
 CREATE TABLE configurations (
@@ -193,7 +200,7 @@ Behavior summary:
 - `defining(...)` inserts a new snapshot row instead of updating in place
 - `removing(...)` deletes all rows for the identifier
 - successful writes clear the in-memory listing/loading caches
-- cache behavior is configurable through `cache_limit` and `cache_expiration`
+- cache behavior is configurable through `prepare(cache_limit=..., cache_expiration=...)`
 
 ## Error Handling
 

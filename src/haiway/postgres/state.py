@@ -246,6 +246,7 @@ class Postgres(State):
         self,
         migrations: Sequence[PostgresMigrating] | str,
         /,
+        timeout: int = 300,
     ) -> None:
         """Run sequential migrations against the current database.
 
@@ -291,44 +292,60 @@ class Postgres(State):
             assert all(isinstance(migration, PostgresMigrating) for migration in migration_sequence)  # nosec: B101
 
             connection: PostgresConnection = ctx.state(PostgresConnection)
-            # make sure migrations table exists
-            await connection.execute(MIGRATIONS_TABLE_CREATE_STATEMENT)
-            # get current version
-            fetched_version: PostgresRow | None = await connection.fetch_one(
-                CURRENT_MIGRATIONS_FETCH_STATEMENT
-            )
-            current_version: int
-            if fetched_version is None:
-                current_version = 0
-
-            else:
-                current_version = fetched_version.get_int("count", default=0)
-
-            ctx.log_info(
-                f"...current database version: {current_version},"
-                f" migrations to apply: {len(migration_sequence) - current_version}..."
-            )
-
-            # perform migrations from current version to latest
-            for idx, migration in enumerate(migration_sequence[current_version:]):
-                ctx.log_info(f"...executing migration {current_version + idx}...")
-                try:
-                    async with connection.transaction():
-                        await migration(connection)
-
-                        await connection.execute(MIGRATION_COMPLETION_STATEMENT)
-
-                except Exception as exc:
-                    ctx.log_error(
-                        f"...migration  {current_version + idx} failed...",
-                        exception=exc,
-                    )
-                    raise
+            try:
+                await connection.execute(MIGRATIONS_LOCK_TIMEOUT_STATEMENT.format(timeout))
+                await connection.execute(
+                    MIGRATIONS_ADVISORY_LOCK_STATEMENT,
+                    MIGRATIONS_ADVISORY_LOCK_KEY,
+                )
+                # make sure migrations table exists
+                await connection.execute(MIGRATIONS_TABLE_CREATE_STATEMENT)
+                # get current version
+                fetched_version: PostgresRow | None = await connection.fetch_one(
+                    CURRENT_MIGRATIONS_FETCH_STATEMENT
+                )
+                current_version: int
+                if fetched_version is None:
+                    current_version = 0
 
                 else:
-                    ctx.log_info(f"...migration  {current_version + idx} completed...")
+                    current_version = fetched_version.get_int("count", default=0)
 
-            ctx.log_info("...migrations completed successfully!")
+                ctx.log_info(
+                    f"...current database version: {current_version},"
+                    f" migrations to apply: {len(migration_sequence) - current_version}..."
+                )
+
+                # perform migrations from current version to latest
+                for idx, migration in enumerate(migration_sequence[current_version:]):
+                    ctx.log_info(f"...executing migration {current_version + idx}...")
+                    try:
+                        async with connection.transaction():
+                            await migration(connection)
+
+                            await connection.execute(MIGRATION_COMPLETION_STATEMENT)
+
+                    except Exception as exc:
+                        ctx.log_error(
+                            f"...migration {current_version + idx} failed...",
+                            exception=exc,
+                        )
+                        raise
+
+                    else:
+                        ctx.log_info(f"...migration  {current_version + idx} completed...")
+
+                ctx.log_info("...migrations completed successfully!")
+
+            finally:
+                try:
+                    await connection.execute(
+                        MIGRATIONS_ADVISORY_UNLOCK_STATEMENT,
+                        MIGRATIONS_ADVISORY_LOCK_KEY,
+                    )
+
+                finally:
+                    await connection.execute(MIGRATIONS_LOCK_TIMEOUT_RESET_STATEMENT)
 
     @overload
     @classmethod
@@ -421,6 +438,24 @@ CREATE TABLE IF NOT EXISTS migrations (
     id SERIAL PRIMARY KEY,
     executed_at TIMESTAMP NOT NULL DEFAULT NOW()
 );\
+"""
+
+MIGRATIONS_ADVISORY_LOCK_KEY: Final[int] = 1264456023
+
+MIGRATIONS_ADVISORY_LOCK_STATEMENT: Final[str] = """\
+SELECT pg_advisory_lock($1::BIGINT);\
+"""
+
+MIGRATIONS_ADVISORY_UNLOCK_STATEMENT: Final[str] = """\
+SELECT pg_advisory_unlock($1::BIGINT);\
+"""
+
+MIGRATIONS_LOCK_TIMEOUT_STATEMENT: Final[str] = """\
+SET lock_timeout = '%ds';\
+"""
+
+MIGRATIONS_LOCK_TIMEOUT_RESET_STATEMENT: Final[str] = """\
+RESET lock_timeout;\
 """
 
 CURRENT_MIGRATIONS_FETCH_STATEMENT: Final[str] = """\

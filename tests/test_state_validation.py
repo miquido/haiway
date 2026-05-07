@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta, timezone
