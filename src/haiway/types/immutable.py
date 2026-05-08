@@ -31,10 +31,7 @@ class ImmutableMeta(type):
         namespace: dict[str, Any],
         **kwargs: Any,
     ) -> type:
-        if any(
-            isinstance(base, ImmutableMeta) and base.__name__ != "Immutable"
-            for base in bases
-        ):
+        if any(isinstance(base, ImmutableMeta) and base.__name__ != "Immutable" for base in bases):
             raise TypeError(
                 "Immutable subclasses cannot be inherited; inherit directly from Immutable"
             )

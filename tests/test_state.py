@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Callable, Mapping, Sequence, Set
 from copy import copy, deepcopy
 from datetime import date, datetime
@@ -675,11 +676,13 @@ def test_serializable_state_path_schema_and_json() -> None:
         path: Path
 
     payload = PathState(path=Path("/tmp/example")).to_json()
-    assert "\"path\": \"/tmp/example\"" in payload
+    decoded_json = json.loads(payload)
+    assert decoded_json["path"] == "/tmp/example"
 
     decoded = PathState.from_json(payload)
     assert decoded.path == Path("/tmp/example")
 
     schema = PathState.json_schema(required=True)
-    assert "\"path\"" in schema
-    assert "\"format\": \"path\"" in schema
+    schema_json = json.loads(schema)
+    assert "path" in schema_json["properties"]
+    assert schema_json["properties"]["path"]["format"] == "path"
