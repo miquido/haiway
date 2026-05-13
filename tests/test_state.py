@@ -20,7 +20,7 @@ from uuid import UUID, uuid4
 
 from pytest import mark, raises
 
-from haiway import MISSING, Alias, Default, Missing, State, ValidationError, ctx
+from haiway import MISSING, Alias, BasicObject, Default, Missing, State, ValidationError, ctx
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -260,6 +260,72 @@ def test_from_mapping_accepts_nested_aliases() -> None:
     assert container.to_mapping() == {
         "child_alias": {"child_value": "ok"},
     }
+
+
+def test_mapping_union_roundtrip_preserves_nested_bool_values() -> None:
+    class Container(State):
+        values: Mapping[str, float | bool]
+
+    payload = {
+        "values": {
+            "flag": True,
+            "ratio": 1.5,
+        }
+    }
+    decoded = Container.from_mapping(payload)
+
+    assert decoded.values["flag"] is True
+    assert decoded.to_mapping() == payload
+
+
+def test_nested_mapping_union_roundtrip_preserves_bool_values() -> None:
+    class Container(State):
+        values: Mapping[str, Mapping[str, float | bool]]
+
+    payload = {
+        "values": {
+            "outer": {
+                "flag": True,
+                "ratio": 1.5,
+            }
+        }
+    }
+    decoded = Container.from_mapping(payload)
+
+    assert decoded.values["outer"]["flag"] is True
+    assert decoded.to_mapping() == payload
+
+
+def test_mapping_sequence_union_roundtrip_preserves_bool_values() -> None:
+    class Container(State):
+        values: Mapping[str, Sequence[float | bool]]
+
+    payload = {
+        "values": {
+            "outer": [True, 1.5, False],
+        }
+    }
+    decoded = Container.from_mapping(payload)
+
+    assert decoded.values["outer"][0] is True
+    assert decoded.values["outer"][2] is False
+    assert decoded.to_mapping() == payload
+
+
+def test_basic_object_roundtrip_preserves_bool_values() -> None:
+    class Container(State):
+        payload: BasicObject
+
+    payload = {
+        "payload": {
+            "test": True,
+            "ratio": 1.5,
+        }
+    }
+    decoded = Container.from_mapping(payload)
+
+    assert decoded.payload["test"] is True
+    assert decoded.to_mapping() == payload
 
 
 def test_updating_honors_aliases() -> None:

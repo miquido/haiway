@@ -14,8 +14,6 @@ __all__ = (
     "HTTPResponse",
     "HTTPStatusCode",
 )
-
-
 type HTTPStatusCode = int
 type HTTPHeaders = Mapping[str, str]
 type HTTPQueryParams = Mapping[
@@ -26,21 +24,17 @@ type HTTPQueryParams = Mapping[
 
 class HTTPResponse(Immutable):
     """Immutable HTTP response container.
-
     Encapsulates the response from an HTTP request including status code,
     headers, and body content.
-
     The response body may be provided either as already-buffered bytes or as
     an async byte stream. Buffered access is available through `body()`, while
     `iter_bytes()` and `stream_body()` preserve streaming semantics.
-
     Attributes
     ----------
     status_code : int
         HTTP status code (e.g., 200, 404, 500).
     headers : Mapping[str, str]
         Response headers as an immutable mapping.
-
     Methods
     -------
     body() -> bytes
@@ -49,7 +43,6 @@ class HTTPResponse(Immutable):
         Stream body chunks and cache them once iteration completes.
     stream_body() -> AsyncIterable[bytes]
         Alias for `iter_bytes()` for call sites that want explicit streaming.
-
     Examples
     --------
     >>> response = HTTPResponse(
@@ -78,12 +71,10 @@ class HTTPResponse(Immutable):
 
     async def body(self) -> bytes:
         """Read and cache the full response body.
-
         Returns
         -------
         bytes
             The complete response payload.
-
         Notes
         -----
         When the body is backed by an async iterator, this method consumes the
@@ -91,23 +82,18 @@ class HTTPResponse(Immutable):
         """
         if isinstance(self._body, bytes):
             return self._body
-
         parts: MutableSequence[bytes] = []
         async for part in self.iter_bytes():
             parts.append(part)
-
         object.__setattr__(self, "_body", b"".join(parts))
-
         return cast(bytes, self._body)
 
     async def iter_bytes(self) -> AsyncIterable[bytes]:
         """Iterate over response body chunks.
-
         Yields
         ------
         bytes
             Subsequent chunks from the response body.
-
         Notes
         -----
         If iteration completes successfully, the streamed chunks are cached as
@@ -117,7 +103,6 @@ class HTTPResponse(Immutable):
         if isinstance(self._body, bytes):
             yield self._body
             return
-
         parts: MutableSequence[bytes] = []
         body_iter = self._body
         completed = False
@@ -134,12 +119,10 @@ class HTTPResponse(Immutable):
 
     async def stream_body(self) -> AsyncIterable[bytes]:
         """Stream response body chunks.
-
         Yields
         ------
         bytes
             Subsequent chunks from the response body.
-
         Notes
         -----
         This is a semantic alias for `iter_bytes()` intended for call sites
@@ -152,18 +135,15 @@ class HTTPResponse(Immutable):
         closer = getattr(body, "aclose", None)
         if closer is None:
             return
-
         await closer()
 
 
 @runtime_checkable
 class HTTPRequesting(Protocol):
     """Protocol for HTTP request implementations.
-
     Defines the interface that concrete HTTP clients must implement to handle
     HTTP requests. This protocol allows for different backend implementations
     while maintaining a consistent interface.
-
     Parameters
     ----------
     method : str
@@ -180,12 +160,10 @@ class HTTPRequesting(Protocol):
         Request timeout in seconds. None uses client default.
     follow_redirects : bool | None
         Whether to follow redirects. None uses client default.
-
     Returns
     -------
     HTTPResponse
         The response from the HTTP request.
-
     Raises
     ------
     HTTPClientError
@@ -219,13 +197,10 @@ class HTTPClientError(Exception):
         context_parts: MutableSequence[str] = []
         if method:
             context_parts.append(f"method={method}")
-
         if url:
             context_parts.append(f"url={url}")
-
         if status_code is not None:
             context_parts.append(f"status={status_code}")
-
         context = f" ({', '.join(context_parts)})" if context_parts else ""
         super().__init__(f"{message}{context}")
         self.method = method
@@ -237,20 +212,16 @@ class HTTPClientError(Exception):
 @final
 class HTTPClient(State):
     """Context-aware HTTP client for making HTTP requests.
-
     Provides a functional interface for HTTP operations using the context
     system for dependency injection. The actual HTTP implementation is
     provided through the `requesting` protocol.
-
     This class serves as the main interface for HTTP operations in Haiway,
     offering convenience methods for GET, POST, and PUT while maintaining
     flexibility through the general `request` method for other verbs.
-
     Attributes
     ----------
     requesting : HTTPRequesting
         The protocol implementation that performs actual HTTP requests.
-
     Notes
     -----
     - When accessed on the class, `@statemethod` resolves the current
@@ -258,7 +229,6 @@ class HTTPClient(State):
     - HTTP status codes such as 4xx and 5xx are returned as normal
       `HTTPResponse` values. `HTTPClientError` is reserved for transport or
       adapter failures.
-
     Examples
     --------
     >>> # Using with HTTPXClient
@@ -286,7 +256,6 @@ class HTTPClient(State):
         timeout: float | None = None,
         follow_redirects: bool | None = None,
     ) -> HTTPResponse: ...
-
     @overload
     async def get(
         self,
@@ -297,7 +266,6 @@ class HTTPClient(State):
         timeout: float | None = None,
         follow_redirects: bool | None = None,
     ) -> HTTPResponse: ...
-
     @statemethod
     async def get(
         self,
@@ -309,7 +277,6 @@ class HTTPClient(State):
         follow_redirects: bool | None = None,
     ) -> HTTPResponse:
         """Perform an HTTP GET request.
-
         Parameters
         ----------
         url : str
@@ -322,12 +289,10 @@ class HTTPClient(State):
             Request timeout in seconds.
         follow_redirects : bool | None, optional
             Whether to follow redirects.
-
         Returns
         -------
         HTTPResponse
             The response from the GET request.
-
         Raises
         ------
         HTTPClientError
@@ -343,10 +308,8 @@ class HTTPClient(State):
                 timeout=timeout,
                 follow_redirects=follow_redirects,
             )
-
         except HTTPClientError:
             raise
-
         except Exception as exc:
             raise HTTPClientError(
                 f"HTTP request failed due to an error: {type(exc).__name__}",
@@ -367,7 +330,6 @@ class HTTPClient(State):
         timeout: float | None = None,
         follow_redirects: bool | None = None,
     ) -> HTTPResponse: ...
-
     @overload
     async def put(
         self,
@@ -379,7 +341,6 @@ class HTTPClient(State):
         timeout: float | None = None,
         follow_redirects: bool | None = None,
     ) -> HTTPResponse: ...
-
     @statemethod
     async def put(
         self,
@@ -392,7 +353,6 @@ class HTTPClient(State):
         follow_redirects: bool | None = None,
     ) -> HTTPResponse:
         """Perform an HTTP PUT request.
-
         Parameters
         ----------
         url : str
@@ -407,12 +367,10 @@ class HTTPClient(State):
             Request timeout in seconds.
         follow_redirects : bool | None, optional
             Whether to follow redirects.
-
         Returns
         -------
         HTTPResponse
             The response from the PUT request.
-
         Raises
         ------
         HTTPClientError
@@ -428,10 +386,8 @@ class HTTPClient(State):
                 timeout=timeout,
                 follow_redirects=follow_redirects,
             )
-
         except HTTPClientError:
             raise
-
         except Exception as exc:
             raise HTTPClientError(
                 f"HTTP request failed due to an error: {type(exc).__name__}",
@@ -452,7 +408,6 @@ class HTTPClient(State):
         timeout: float | None = None,
         follow_redirects: bool | None = None,
     ) -> HTTPResponse: ...
-
     @overload
     async def post(
         self,
@@ -464,7 +419,6 @@ class HTTPClient(State):
         timeout: float | None = None,
         follow_redirects: bool | None = None,
     ) -> HTTPResponse: ...
-
     @statemethod
     async def post(
         self,
@@ -477,7 +431,6 @@ class HTTPClient(State):
         follow_redirects: bool | None = None,
     ) -> HTTPResponse:
         """Perform an HTTP POST request.
-
         Parameters
         ----------
         url : str
@@ -492,12 +445,10 @@ class HTTPClient(State):
             Request timeout in seconds.
         follow_redirects : bool | None, optional
             Whether to follow redirects.
-
         Returns
         -------
         HTTPResponse
             The response from the POST request.
-
         Raises
         ------
         HTTPClientError
@@ -513,10 +464,8 @@ class HTTPClient(State):
                 timeout=timeout,
                 follow_redirects=follow_redirects,
             )
-
         except HTTPClientError:
             raise
-
         except Exception as exc:
             raise HTTPClientError(
                 f"HTTP request failed due to an error: {type(exc).__name__}",
@@ -539,7 +488,6 @@ class HTTPClient(State):
         timeout: float | None = None,
         follow_redirects: bool | None = None,
     ) -> HTTPResponse: ...
-
     @overload
     async def request(
         self,
@@ -553,7 +501,6 @@ class HTTPClient(State):
         timeout: float | None = None,
         follow_redirects: bool | None = None,
     ) -> HTTPResponse: ...
-
     @statemethod
     async def request(
         self,
@@ -568,10 +515,8 @@ class HTTPClient(State):
         follow_redirects: bool | None = None,
     ) -> HTTPResponse:
         """Perform an HTTP request with the specified method.
-
         This is the general-purpose method for making HTTP requests. The
         convenience methods (get, post, put) delegate to this method.
-
         Parameters
         ----------
         method : str
@@ -588,17 +533,14 @@ class HTTPClient(State):
             Request timeout in seconds. None uses client default.
         follow_redirects : bool | None, optional
             Whether to follow redirects. None uses client default.
-
         Returns
         -------
         HTTPResponse
             The response from the HTTP request.
-
         Raises
         ------
         HTTPClientError
             If the request fails for any reason.
-
         Examples
         --------
         >>> # Custom HTTP method
@@ -619,10 +561,8 @@ class HTTPClient(State):
                 timeout=timeout,
                 follow_redirects=follow_redirects,
             )
-
         except HTTPClientError:
             raise
-
         except Exception as exc:
             raise HTTPClientError(
                 f"HTTP request failed due to an error: {type(exc).__name__}",

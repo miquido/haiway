@@ -276,17 +276,14 @@ class _LocalCache[**Args, Result]:
             **kwargs,
         )
 
-        match self._cached.get(key):
-            case None:
-                pass
+        entry: _CacheEntry[Result] | None = self._cached.get(key)
+        if entry is not None:
+            if (expire := entry[1]) and expire < monotonic():
+                del self._cached[key]  # continue the same way as if empty
 
-            case entry:
-                if (expire := entry[1]) and expire < monotonic():
-                    del self._cached[key]  # continue the same way as if empty
-
-                else:
-                    self._cached.move_to_end(key)
-                    return entry[0]
+            else:
+                self._cached.move_to_end(key)
+                return entry[0]
 
         result: Result = await self._function(*args, **kwargs)
         self._cached[key] = _CacheEntry(
@@ -390,16 +387,15 @@ class _ExternalCache[**Args, Result, Key: Hashable]:
             **kwargs,
         )
 
-        match await self._read(key):
-            case None:
-                result: Result = await self._function(*args, **kwargs)
-                ctx.spawn(  # write the value asynchronously
-                    self._write,
-                    key=key,
-                    value=result,
-                )
+        entry: Result | None = await self._read(key)
+        if entry is None:
+            result: Result = await self._function(*args, **kwargs)
+            ctx.spawn(  # write the value asynchronously
+                self._write,
+                key=key,
+                value=result,
+            )
 
-                return result
+            return result
 
-            case entry:
-                return entry
+        return entry

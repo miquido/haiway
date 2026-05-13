@@ -31,17 +31,14 @@ class MQMessageRejecting(Protocol):
 @final
 class MQMessage[Content](Immutable):
     """Immutable message wrapper returned by queue consumers.
-
     The message holds the deserialized `content` and accompanying `meta`
     information plus queue-provided `acknowledge` / `reject` callables. It is
     designed for async usage only; acknowledge/reject operations must be awaited
     and are not thread-safe.
-
     When used as an async context manager, exiting the context without an
     exception calls `acknowledge`, while exiting with an exception calls
     `reject`. Either outcome commits the message in the broker so other
     consumers cannot inspect it unless the queue explicitly requeues it.
-
     Parameters
     ----------
     content : Content
@@ -52,20 +49,17 @@ class MQMessage[Content](Immutable):
         Callable invoked to mark the message as failed/undesirable.
     meta : Meta
         Transport-specific metadata attached to the message.
-
     Notes
     -----
     Use the async context manager for straightforward processing where the
     commit decision aligns with success/failure of the wrapped block. If you
     need to inspect the message before deciding, call the provided
     `acknowledge` / `reject` callables manually.
-
     Examples
     --------
     Automatic ack/reject:
         async with message as payload:
             await handle(payload)
-
     Manual decision after inspecting metadata:
         payload = message.content
         if should_retry(payload, message.meta):
@@ -115,7 +109,6 @@ class MQMessage[Content](Immutable):
     ) -> None:
         if exc_val is not None:
             await self._reject()
-
         else:
             await self._acknowledge()
 
@@ -140,13 +133,11 @@ class MQQueueConsuming[Content](Protocol):
 
 class MQQueue[Content](State):
     """Generic message-queue interface binding broker adapters to Haiway state.
-
     `MQQueue` defines the minimal publishing/consuming surface used by Haiway
     helpers and application code. It is parameterized by `Content`, the
     deserialized payload type for a given queue. Concrete adapters embed
     connection details and acknowledge/reject semantics while keeping the
     structured-concurrency lifecycle aligned with `ctx.state` management.
-
     Typical lifecycle: configure a queue adapter as part of the application
     state, publish messages from within scoped tasks, and consume via async
     iteration inside a managed scope so acknowledgements/retries are tied to the
@@ -165,7 +156,6 @@ class MQQueue[Content](State):
         attributes: FlatObject | None = None,
         **extra: Any,
     ) -> None: ...
-
     @overload
     async def publish(
         self,
@@ -175,7 +165,6 @@ class MQQueue[Content](State):
         attributes: FlatObject | None = None,
         **extra: Any,
     ) -> None: ...
-
     @statemethod
     async def publish(
         self,
@@ -186,7 +175,6 @@ class MQQueue[Content](State):
         **extra: Any,
     ) -> None:
         """Publish a message to the queue.
-
         Parameters
         ----------
         message : Content
@@ -197,13 +185,11 @@ class MQQueue[Content](State):
         **extra : Any
             Backend-specific options (e.g., routing keys, delay settings);
             forwarded to the configured adapter untouched.
-
         Returns
         -------
         None
             The message is dispatched asynchronously; success is signaled by the
             absence of an exception.
-
         Notes
         -----
         Decorated with ``@statemethod`` so it can be invoked on the class when
@@ -211,12 +197,10 @@ class MQQueue[Content](State):
         state graph. Prefer the class-level call inside scoped tasks where the
         queue is attached to the active context; use an instance when you have a
         specific queue object already resolved.
-
         Examples
         --------
         Class-level call via state:
             await ctx.state.MQQueue.publish(message=payload, attributes={"k": "v"})
-
         Instance-level call:
             await queue_instance.publish(payload, priority="high")
         """
@@ -232,26 +216,22 @@ class MQQueue[Content](State):
         cls,
         **extra: Any,
     ) -> AsyncIterable[MQMessage[Content]]: ...
-
     @overload
     async def consume(
         self,
         **extra: Any,
     ) -> AsyncIterable[MQMessage[Content]]: ...
-
     @statemethod
     async def consume(
         self,
         **extra: Any,
     ) -> AsyncIterable[MQMessage[Content]]:
         """Consume messages as an async iterator.
-
         Parameters
         ----------
         **extra : Any
             Adapter-specific options (e.g., prefetch limits, timeouts) forwarded
             verbatim to the consuming backend.
-
         Yields
         ------
         AsyncIterator[MQMessage[Content]]
@@ -260,20 +240,17 @@ class MQQueue[Content](State):
             signals completion or the consumer breaks. Exceptions raised inside
             the loop propagate; the adapter is responsible for ensuring in-flight
             messages are settled appropriately.
-
         Notes
         -----
         Use ``async for`` to stream messages; leaving the loop ends consumption
         cleanly. The method is available as a class-level statemethod through
         ``ctx.state.MQQueue`` or as an instance method on a specific queue.
-
         Examples
         --------
         Class-level consumption:
             async for message in ctx.state.MQQueue.consume(prefetch=10):
                 async with message as payload:
                     await handle(payload)
-
         Instance-level consumption:
             async for message in queue_instance.consume():
                 await process(message.content)

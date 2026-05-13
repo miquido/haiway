@@ -26,7 +26,6 @@ class RabbitMQ(State):
         content_decoder: Callable[[BasicObject], Content],
         **extra: Any,
     ) -> AbstractAsyncContextManager[MQQueue[Content]]: ...
-
     @overload
     async def queue[Content](
         self,
@@ -36,7 +35,6 @@ class RabbitMQ(State):
         content_decoder: Callable[[BasicObject], Content],
         **extra: Any,
     ) -> AbstractAsyncContextManager[MQQueue[Content]]: ...
-
     @statemethod
     async def queue[Content](
         self,
@@ -48,7 +46,6 @@ class RabbitMQ(State):
     ) -> AbstractAsyncContextManager[MQQueue[Content]]:
         """
         Acquire an async context manager for a typed RabbitMQ queue bound to the current state.
-
         Parameters
         ----------
         queue : str
@@ -60,16 +57,13 @@ class RabbitMQ(State):
         **extra : Any
             Additional options forwarded to the underlying queue accessor
             (e.g., channel parameters or QoS).
-
         Returns
         -------
         AbstractAsyncContextManager[MQQueue[Content]]
             Context manager yielding an `MQQueue` configured with the provided encoder/decoder.
-
         Notes
         -----
         Typical usage::
-
             async with RabbitMQ.queue(
                 "events",
                 content_encoder=encode_event,
@@ -78,7 +72,6 @@ class RabbitMQ(State):
                 await queue.publish(event)
                 async for message in await queue.consume():
                     ...
-
         The encoder is invoked for every publish and the decoder for every consumed payload.
         Entering the context establishes queue access and ensures clean teardown when
         the block exits.
@@ -103,7 +96,6 @@ class RabbitMQ(State):
         auto_delete: bool = False,
         **extra: Any,
     ) -> None: ...
-
     @overload
     async def declare_queue(
         self,
@@ -116,7 +108,6 @@ class RabbitMQ(State):
         auto_delete: bool = False,
         **extra: Any,
     ) -> None: ...
-
     @statemethod
     async def declare_queue(
         self,
@@ -146,7 +137,6 @@ class RabbitMQ(State):
         /,
         **extra: Any,
     ) -> None: ...
-
     @overload
     async def purge_queue(
         self,
@@ -154,7 +144,6 @@ class RabbitMQ(State):
         /,
         **extra: Any,
     ) -> None: ...
-
     @statemethod
     async def purge_queue(
         self,
@@ -175,7 +164,6 @@ class RabbitMQ(State):
         /,
         **extra: Any,
     ) -> None: ...
-
     @overload
     async def delete_queue(
         self,
@@ -183,7 +171,6 @@ class RabbitMQ(State):
         /,
         **extra: Any,
     ) -> None: ...
-
     @statemethod
     async def delete_queue(
         self,

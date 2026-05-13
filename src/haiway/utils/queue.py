@@ -166,17 +166,19 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         )
 
         if self._waiting is not None and not self._waiting.done():
+            finish_reason: BaseException | None = self._finish_reason
+            assert finish_reason is not None  # nosec: B101
             # checking loop only on finish as the rest of operations
             # should always have a valid loop in a typical environment
             # and we are not supporting multithreading yet
             if get_running_loop() is not self._loop:
                 self._loop.call_soon_threadsafe(
                     self._waiting.set_exception,
-                    self._finish_reason,  # pyright: ignore[reportArgumentType]
+                    finish_reason,
                 )
 
             else:
-                self._waiting.set_exception(self._finish_reason)  # pyright: ignore[reportArgumentType]
+                self._waiting.set_exception(finish_reason)
 
     def cancel(self) -> None:
         """

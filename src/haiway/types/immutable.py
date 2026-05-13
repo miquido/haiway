@@ -22,7 +22,9 @@ __all__ = ("Immutable",)
     field_specifiers=(Default,),
 )
 class ImmutableMeta(type):
+    __ATTRIBUTES__: Mapping[str, DefaultValue | None]
     __slots__: tuple[str, ...]
+    __match_args__: tuple[str, ...]
 
     def __new__(
         mcs,
@@ -44,7 +46,7 @@ class ImmutableMeta(type):
             **kwargs,
         )
 
-        state_type.__ATTRIBUTES__ = _collect_attributes(  # pyright: ignore[reportAttributeAccessIssue]
+        state_type.__ATTRIBUTES__ = _collect_attributes(  # pyright: ignore[reportConstantRedefinition]
             state_type,
             namespace=namespace,
         )
@@ -122,8 +124,6 @@ class Immutable(metaclass=ImmutableMeta):
         If a required attribute is missing or any mutation is attempted after
         initialization.
     """
-
-    __ATTRIBUTES__: ClassVar[Mapping[str, DefaultValue | None]]
 
     def __init__(
         self,
