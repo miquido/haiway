@@ -71,6 +71,7 @@ class StateMeta(type):
     __ALLOWED_FIELDS__: Set[str]
     __SERIALIZABLE__: bool
     __slots__: tuple[str, ...]
+    __match_args__: tuple[str, ...]
 
     def __new__(  # noqa: C901, PLR0912
         mcs,

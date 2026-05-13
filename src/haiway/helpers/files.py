@@ -18,8 +18,6 @@ if sys.platform != "win32":
 
     LOCK_EX: Final[int] = _LOCK_EX
     LOCK_UN: Final[int] = _LOCK_UN
-
-
 else:
     LOCK_EX: Final[int] = 0
     LOCK_UN: Final[int] = 0
@@ -41,7 +39,6 @@ __all__ = (
 class Paths(NamedTuple):
     """
     Traversed filesystem entries grouped by type.
-
     Attributes
     ----------
     files : Sequence[Path]
@@ -58,7 +55,6 @@ class Paths(NamedTuple):
 class FileException(Exception):
     """
     File operation failure.
-
     Raised by file and directory helpers when opening, reading, writing,
     traversing, or closing resources fails.
     """
@@ -68,7 +64,6 @@ class FileException(Exception):
 class DirectoryTraversing(Protocol):
     """
     Protocol for asynchronous directory traversal operations.
-
     Implementations return traversed directory entries for the requested root
     path and traversal mode.
     """
@@ -83,7 +78,6 @@ class DirectoryTraversing(Protocol):
 class PathTraversing(Protocol):
     """
     Protocol for asynchronous directory traversal operations.
-
     Implementations return traversed directory entries for the requested root
     path and traversal mode.
     """
@@ -99,7 +93,6 @@ class PathTraversing(Protocol):
 class FileReading(Protocol):
     """
     Protocol for asynchronous file reading operations.
-
     Implementations read the entire file contents and return them as bytes.
     The file position is managed internally and reading always returns the
     complete file contents from the beginning.
@@ -114,7 +107,6 @@ class FileReading(Protocol):
 class FileWriting(Protocol):
     """
     Protocol for asynchronous file writing operations.
-
     Implementations write the provided content to the file, completely
     replacing any existing content. In the default implementation, writes are
     synchronized only by the per-FileAccessContext lock and become
@@ -135,28 +127,23 @@ class FileWriting(Protocol):
 class FileAccess(Protocol):
     """
     Protocol for file context managers.
-
     Defines the interface for file context managers that handle the opening,
     access, and cleanup of file resources. Implementations ensure proper
     resource management and make file operations available through the File
     state class.
-
     The context manager pattern ensures that file handles are properly closed
     and locks are released even if exceptions occur during file operations.
     """
 
     @property
     def path(self) -> Path: ...
-
     async def __aenter__(self) -> File:
         """
         Enter the file context and return file operations.
-
         Returns
         -------
         File
             A File state instance configured for the opened file
-
         Raises
         ------
         FileException
@@ -172,7 +159,6 @@ class FileAccess(Protocol):
     ) -> None:
         """
         Exit the file context and clean up resources.
-
         Parameters
         ----------
         exc_type : type[BaseException] | None
@@ -189,7 +175,6 @@ class FileAccess(Protocol):
 class FileAccessing(Protocol):
     """
     Protocol for file access implementations.
-
     Defines the interface for creating file context managers with specific
     access patterns. Implementations handle the details of file opening,
     locking, and resource management.
@@ -207,11 +192,9 @@ class FileAccessing(Protocol):
 class File(State):
     """
     State container for file operations within a context scope.
-
     Provides access to file operations after a file has been opened using
     Files within a context scope. Follows Haiway's pattern of accessing
     functionality through class methods that retrieve state from the current context.
-
     The file operations are provided through the reading and writing protocol
     implementations, which are injected when the file is opened.
     """
@@ -221,24 +204,20 @@ class File(State):
     async def read(
         cls,
     ) -> bytes: ...
-
     @overload
     async def read(
         self,
     ) -> bytes: ...
-
     @statemethod
     async def read(
         self,
     ) -> bytes:
         """
         Read the complete contents of the file.
-
         Returns
         -------
         bytes
             The complete file contents as bytes
-
         Raises
         ------
         FileException
@@ -253,14 +232,12 @@ class File(State):
         content: bytes,
         /,
     ) -> None: ...
-
     @overload
     async def write(
         self,
         content: bytes,
         /,
     ) -> None: ...
-
     @statemethod
     async def write(
         self,
@@ -269,12 +246,10 @@ class File(State):
     ) -> None:
         """
         Write content to the file, replacing existing content.
-
         Parameters
         ----------
         content : bytes
             The bytes content to write to the file
-
         Raises
         ------
         FileException
@@ -303,7 +278,6 @@ class File(State):
 class Directory(State):
     """
     State container for traversing a single directory root.
-
     The instance stores a root path and exposes `Directory.traverse()` as a
     context-aware statemethod so callers can list files and directories using
     the active Haiway scope.
@@ -316,14 +290,12 @@ class Directory(State):
         /,
         recursive: bool = False,
     ) -> Sequence[FileAccess | Directory]: ...
-
     @overload
     async def traverse(
         self,
         /,
         recursive: bool = False,
     ) -> Sequence[FileAccess | Directory]: ...
-
     @statemethod
     async def traverse(
         self,
@@ -332,12 +304,10 @@ class Directory(State):
     ) -> Sequence[FileAccess | Directory]:
         """
         Traverse directory entries using configured traversal implementation.
-
         Parameters
         ----------
         recursive : bool, optional
             If True, include nested entries recursively. Default is False
-
         Returns
         -------
         Sequence[FileAccess | Directory]
@@ -385,31 +355,23 @@ def _open_file_handle(
 ) -> int:
     if exclusive and sys.platform == "win32":
         raise FileException("exclusive file locking is not supported on Windows")
-
     try:
         if create:
             path.parent.mkdir(parents=True, exist_ok=True)
             flags: int = os.O_RDWR | os.O_CREAT
-
         else:
             flags = os.O_RDWR
-
         file_handle: int = os.open(path, flags)
-
         if exclusive:
             try:
                 flock(file_handle, LOCK_EX)
-
             except OSError:
                 os.close(file_handle)
                 raise
-
         return file_handle
-
     except OSError as exc:
         if exc.errno == ENOENT and not create:
             raise FileException(f"File does not exist: {path}") from exc
-
         raise FileException(f"Failed to open file: {path}") from exc
 
 
@@ -419,18 +381,14 @@ def _read_file_contents(
 ) -> bytes:
     try:
         os.lseek(file_handle, 0, os.SEEK_SET)
-
         # Read all bytes to EOF, avoiding TOCTOU on externally changing file size.
         chunks: MutableSequence[bytes] = []
         while True:
             chunk: bytes = os.read(file_handle, 64 * 1024)
             if not chunk:
                 break
-
             chunks.append(chunk)
-
         return b"".join(chunks)
-
     except OSError as exc:
         raise FileException("Failed to read file content") from exc
 
@@ -443,19 +401,15 @@ def _write_file_contents(
 ) -> None:
     try:
         os.lseek(file_handle, 0, os.SEEK_SET)
-
         # Write all bytes, handling partial writes
         offset: int = 0
         while offset < len(content):
             bytes_written: int = os.write(file_handle, content[offset:])
             if bytes_written == 0:
                 raise FileException("Failed to write file content")
-
             offset += bytes_written
-
         os.ftruncate(file_handle, len(content))
         os.fsync(file_handle)
-
     except OSError as exc:
         raise FileException("Failed to write file content") from exc
 
@@ -470,19 +424,14 @@ def _close_file_handle(
     if exclusive:
         try:
             flock(file_handle, LOCK_UN)
-
         except OSError as exc:
             unlock_error = exc
-
     try:
         os.close(file_handle)
-
     except OSError as exc:
         if unlock_error is not None:
             exc.add_note("unlock with flock(..., LOCK_UN) failed before close")
-
         raise FileException("Failed to close file handle") from exc
-
     if unlock_error is not None:
         raise FileException("Failed to unlock file handle") from unlock_error
 
@@ -511,7 +460,6 @@ class FileAccessContext:
 
     async def __aenter__(self) -> File:
         assert self._file_handle is None  # nosec: B101
-
         self._file_handle = await _open_file_handle(
             self.path,
             create=self._create,
@@ -551,7 +499,6 @@ class FileAccessContext:
                 self._file_handle,
                 exclusive=self._exclusive,
             )
-
         finally:
             self._file_handle = None
 
@@ -564,49 +511,37 @@ def _traverse_path_contents(  # noqa: C901, PLR0912
     root: Path = Path(path)
     if not root.exists():
         raise FileException(f"Directory does not exist: {root}")
-
     if not root.is_dir():
         raise FileException(f"Path is not a directory: {root}")
-
     files: MutableSequence[Path] = []
     directories: MutableSequence[Path] = []
     try:
         if recursive:
             for current_root, dir_names, file_names in os.walk(root):
                 current: Path = Path(current_root)
-
                 for file_name in file_names:
                     entry: Path = current / file_name
                     if entry.is_symlink():
                         continue  # skip symlinks
-
                     assert entry.is_file()  # nosec: B101
                     files.append(entry)
-
                 for directory in dir_names:
                     entry: Path = current / directory
                     if entry.is_symlink():
                         continue  # skip symlinks
-
                     assert entry.is_dir()  # nosec: B101
                     directories.append(entry)
-
         else:
             for entry in root.iterdir():
                 if entry.is_symlink():
                     continue  # skip symlinks
-
                 elif entry.is_dir():
                     directories.append(entry)
-
                 elif entry.is_file():
                     files.append(entry)
-
                 else:
                     raise RuntimeError(f"Unsupported directory item at {entry}")
-
         return Paths(tuple(files), tuple(directories))
-
     except OSError as exc:
         raise FileException(f"Failed to traverse directory: {root}") from exc
 
@@ -629,7 +564,6 @@ def _directory_contents_traversal(
 class Files(State):
     """
     State container for filesystem traversal and file access helpers.
-
     Provides statemethod APIs for directory traversal and scoped file access.
     The implementation is injected to keep boundaries testable and to allow
     custom adapters.
@@ -644,7 +578,6 @@ class Files(State):
         *,
         recursive: bool = False,
     ) -> Sequence[FileAccess | Directory]: ...
-
     @overload
     async def traverse(
         self,
@@ -653,7 +586,6 @@ class Files(State):
         *,
         recursive: bool = False,
     ) -> Sequence[FileAccess | Directory]: ...
-
     @statemethod
     async def traverse(
         self,
@@ -664,14 +596,12 @@ class Files(State):
     ) -> Sequence[FileAccess | Directory]:
         """
         Traverse directory entries using configured traversal implementation.
-
         Parameters
         ----------
         path : Path | str
             Root directory path to traverse
         recursive : bool, optional
             If True, include nested entries recursively. Default is False
-
         Returns
         -------
         Sequence[FileAccess | Directory]
@@ -706,7 +636,6 @@ class Files(State):
         create: bool = False,
         exclusive: bool = False,
     ) -> FileAccess: ...
-
     @overload
     def access(
         self,
@@ -716,7 +645,6 @@ class Files(State):
         create: bool = False,
         exclusive: bool = False,
     ) -> FileAccess: ...
-
     @statemethod
     def access(
         self,
@@ -728,11 +656,9 @@ class Files(State):
     ) -> FileAccess:
         """
         Prepare access to a file for reading and writing.
-
         Opens a file using the configured file access implementation. The file
         is opened with read and write permissions, and the entire file content
         is available through the File.read() and File.write() methods.
-
         Parameters
         ----------
         path : Path | str
@@ -744,13 +670,11 @@ class Files(State):
             If True, acquire an exclusive lock on the file for the duration of
             the context. This prevents other processes from accessing the file
             concurrently. Default is False
-
         Returns
         -------
         FileAccess
             A file access context manager that manages the file lifecycle and
             provides access to file operations through the File state class.
-
         Raises
         ------
         FileException

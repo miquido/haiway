@@ -824,6 +824,9 @@ class IntegerAttribute(Immutable):
         self,
         value: Any,
     ) -> Any:
+        if isinstance(value, bool):
+            raise TypeError(f"'{value}' is not matching expected type of 'int'")
+
         if isinstance(value, int):
             return self.verifying(value)
 
@@ -919,6 +922,9 @@ class FloatAttribute(Immutable):
         self,
         value: Any,
     ) -> Any:
+        if isinstance(value, bool):
+            raise TypeError(f"'{value}' is not matching expected type of 'float'")
+
         if isinstance(value, float):
             return self.verifying(value)
 
@@ -2703,7 +2709,8 @@ class UnionAttribute(Immutable):
                 errors.append(exc)
 
         raise ExceptionGroup(
-            f"'{value}' is not matching any of the allowed alternatives:",
+            f"'{value}' is not matching any of the allowed alternatives:"
+            f" {' | '.join(alternative.type_name for alternative in self.alternatives)}",
             errors,
         )
 
