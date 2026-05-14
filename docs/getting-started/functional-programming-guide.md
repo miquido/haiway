@@ -36,8 +36,8 @@ Why it matters:
 
 - Thread‑safe sharing by default; easy reasoning and testing
 - `.updating()` copies with structural sharing for performance
-- Collections: prefer `Sequence`/`Mapping`/`Set` (sequences/sets become immutable; mappings stay
-  dicts)
+- Collections: prefer `Sequence`/`Mapping`/`Set` (sequences and sets become immutable; mappings
+  become immutable `Map` objects)
 
 ## 2) Composition over Inheritance (Protocols)
 
@@ -176,17 +176,18 @@ Tests become wiring exercises: build small states and protocols, enter a scope, 
 
 ```python
 import asyncio
-from typing import Sequence
+from typing import Protocol, Sequence, runtime_checkable
 
 from haiway import State, ctx, statemethod
 
 
-# This class defines the "interface" for the dependency.
-class UsersFetching(State):
+# Protocol defines the interface for the dependency.
+@runtime_checkable
+class UsersFetching(Protocol):
     async def __call__(self) -> Sequence[str]: ...
 
 
-# This service depends on an instance of UsersFetching.
+# This service depends on something that satisfies UsersFetching.
 class UsersService(State):
     fetching: UsersFetching
 
@@ -195,12 +196,12 @@ class UsersService(State):
         return await self.fetching()
 
 
-class FakeUsersFetching(UsersFetching):
-    async def __call__(self) -> Sequence[str]:
-        return ("alice", "bob")
+# In tests, pass a plain async function — no subclassing needed.
+async def fake_users_fetching() -> Sequence[str]:
+    return ("alice", "bob")
 
 
-svc = UsersService(fetching=FakeUsersFetching())
+svc = UsersService(fetching=fake_users_fetching)
 
 
 async def main():
