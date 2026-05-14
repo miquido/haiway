@@ -253,7 +253,7 @@ class Config(State):
 # Lists and sets are accepted at runtime and normalized
 config = Config(
     items=["a", "b", "c"],      # Becomes ("a", "b", "c")
-    data={"key": 1},            # Remains {"key": 1}
+    data={"key": 1},            # Becomes immutable Map
     tags={"tag1", "tag2"}       # Becomes frozenset({"tag1", "tag2"})
 )
 
@@ -265,8 +265,8 @@ class ConcreteConfig(State):
 ```
 
 This keeps interfaces flexible while preserving predictable runtime behavior. Sequences and sets are
-wrapped in immutable containers, while mappings stay as plain dicts, so treat them as read-only once
-they cross a State boundary.
+wrapped in immutable containers, and mappings are converted to immutable `Map` objects, so treat them
+as read-only once they cross a State boundary.
 
 A few validation details matter in practice:
 
