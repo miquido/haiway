@@ -42,6 +42,7 @@ class PostgresConnection(State):
         /,
         *args: Any,
     ) -> PostgresRow | None: ...
+
     @overload
     async def fetch_one(
         self,
@@ -49,6 +50,7 @@ class PostgresConnection(State):
         /,
         *args: Any,
     ) -> PostgresRow | None: ...
+
     @statemethod
     async def fetch_one(
         self,
@@ -87,6 +89,7 @@ class PostgresConnection(State):
         /,
         *args: Any,
     ) -> Sequence[PostgresRow]: ...
+
     @overload
     async def fetch(
         self,
@@ -94,6 +97,7 @@ class PostgresConnection(State):
         /,
         *args: Any,
     ) -> Sequence[PostgresRow]: ...
+
     @statemethod
     async def fetch(
         self,
@@ -126,6 +130,7 @@ class PostgresConnection(State):
         /,
         *args: Any,
     ) -> None: ...
+
     @overload
     async def execute(
         self,
@@ -133,6 +138,7 @@ class PostgresConnection(State):
         /,
         *args: Any,
     ) -> None: ...
+
     @statemethod
     async def execute(
         self,
@@ -202,6 +208,7 @@ class Postgres(State):
         """
         if ctx.contains_state(PostgresConnection):
             raise RuntimeError("Recursive Postgres connection acquiring is forbidden")
+
         return self._connection_acquiring()
 
     @overload
@@ -210,13 +217,17 @@ class Postgres(State):
         cls,
         migrations: Sequence[PostgresMigrating] | str,
         /,
+        timeout: int = 300,
     ) -> None: ...
+
     @overload
     async def execute_migrations(
         self,
         migrations: Sequence[PostgresMigrating] | str,
         /,
+        timeout: int = 300,
     ) -> None: ...
+
     @statemethod
     async def execute_migrations(
         self,
@@ -234,11 +245,15 @@ class Postgres(State):
         migrations : Sequence[PostgresMigrating] | str
             Explicit sequence of migration callables or dotted package path used
             for discovery.
+        timeout : int, default=300
+            Seconds to wait when acquiring the advisory lock before raising.
+            Passed directly to PostgreSQL ``SET lock_timeout``.
         Raises
         ------
         ValueError
             If discovered migration modules are not numbered continuously from
-            ``migration_0``.
+            ``migration_0``, or if the recorded database version exceeds the
+            number of available migrations.
         Exception
             Re-raises any exception raised by a migration after logging it.
         """
@@ -256,8 +271,10 @@ class Postgres(State):
                     for name in _validated_migration_names(module=module)
                 ]
                 ctx.log_info(f"...found {len(migration_sequence)} migrations...")
+
             else:
                 migration_sequence = migrations
+
             assert all(isinstance(migration, PostgresMigrating) for migration in migration_sequence)  # nosec: B101
             connection: PostgresConnection = ctx.state(PostgresConnection)
             try:
@@ -275,8 +292,16 @@ class Postgres(State):
                 current_version: int
                 if fetched_version is None:
                     current_version = 0
+
                 else:
                     current_version = fetched_version.get_int("count", default=0)
+
+                if current_version > len(migration_sequence):
+                    raise ValueError(
+                        f"Database version {current_version} exceeds"
+                        f" available migrations {len(migration_sequence)}"
+                    )
+
                 ctx.log_info(
                     f"...current database version: {current_version},"
                     f" migrations to apply: {len(migration_sequence) - current_version}..."
@@ -288,21 +313,26 @@ class Postgres(State):
                         async with connection.transaction():
                             await migration(connection)
                             await connection.execute(MIGRATION_COMPLETION_STATEMENT)
+
                     except Exception as exc:
                         ctx.log_error(
                             f"...migration {current_version + idx} failed...",
                             exception=exc,
                         )
                         raise
+
                     else:
-                        ctx.log_info(f"...migration  {current_version + idx} completed...")
+                        ctx.log_info(f"...migration {current_version + idx} completed...")
+
                 ctx.log_info("...migrations completed successfully!")
+
             finally:
                 try:
                     await connection.execute(
                         MIGRATIONS_ADVISORY_UNLOCK_STATEMENT,
                         MIGRATIONS_ADVISORY_LOCK_KEY,
                     )
+
                 finally:
                     await connection.execute(MIGRATIONS_LOCK_TIMEOUT_RESET_STATEMENT)
 
@@ -314,6 +344,7 @@ class Postgres(State):
         /,
         *args: Any,
     ) -> PostgresRow | None: ...
+
     @overload
     async def fetch_one(
         self,
@@ -321,6 +352,7 @@ class Postgres(State):
         /,
         *args: Any,
     ) -> PostgresRow | None: ...
+
     @statemethod
     async def fetch_one(
         self,
@@ -332,12 +364,39 @@ class Postgres(State):
         When a :class:`PostgresConnection` is already present in context it is
         reused. Otherwise a temporary connection is acquired for the duration of
         the call.
+        Parameters
+        ----------
+        statement : str
+            SQL statement to execute.
+        *args : Any
+            Positional parameters forwarded to the driver.
+        Returns
+        -------
+        PostgresRow | None
+            First returned row, or ``None`` when the result set is empty.
         """
         if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.fetch_one(statement, *args)
 
         async with self.acquire_connection() as connection:
             return await connection.fetch_one(statement, *args)
+
+    @overload
+    @classmethod
+    async def fetch(
+        cls,
+        statement: str,
+        /,
+        *args: Any,
+    ) -> Sequence[PostgresRow]: ...
+
+    @overload
+    async def fetch(
+        self,
+        statement: str,
+        /,
+        *args: Any,
+    ) -> Sequence[PostgresRow]: ...
 
     @statemethod
     async def fetch(
@@ -350,12 +409,39 @@ class Postgres(State):
         When a :class:`PostgresConnection` is already present in context it is
         reused. Otherwise a temporary connection is acquired for the duration of
         the call.
+        Parameters
+        ----------
+        statement : str
+            SQL statement to execute.
+        *args : Any
+            Positional parameters forwarded to the driver.
+        Returns
+        -------
+        Sequence[PostgresRow]
+            Immutable sequence of all returned rows.
         """
         if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.fetch(statement, *args)
 
         async with self.acquire_connection() as connection:
             return await connection.fetch(statement, *args)
+
+    @overload
+    @classmethod
+    async def execute(
+        cls,
+        statement: str,
+        /,
+        *args: Any,
+    ) -> None: ...
+
+    @overload
+    async def execute(
+        self,
+        statement: str,
+        /,
+        *args: Any,
+    ) -> None: ...
 
     @statemethod
     async def execute(
@@ -368,6 +454,12 @@ class Postgres(State):
         When a :class:`PostgresConnection` is already present in context it is
         reused. Otherwise a temporary connection is acquired for the duration of
         the call.
+        Parameters
+        ----------
+        statement : str
+            SQL statement to execute.
+        *args : Any
+            Positional parameters forwarded to the driver.
         """
         if ctx.contains_state(PostgresConnection):
             return await PostgresConnection.execute(statement, *args)
@@ -398,7 +490,7 @@ MIGRATIONS_ADVISORY_UNLOCK_STATEMENT: Final[str] = """\
 SELECT pg_advisory_unlock($1::BIGINT);\
 """
 MIGRATIONS_LOCK_TIMEOUT_STATEMENT: Final[str] = """\
-SET lock_timeout = '%ds';\
+SET lock_timeout = '{}s';\
 """
 MIGRATIONS_LOCK_TIMEOUT_RESET_STATEMENT: Final[str] = """\
 RESET lock_timeout;\
@@ -430,15 +522,20 @@ def _validate_migration_names(
     for module_name in names:
         if not module_name.startswith("migration_"):
             raise ValueError("Migration modules must start with 'migration_'")
+
         suffix: str = module_name[len("migration_") :]
         if not suffix.isdigit():
             raise ValueError(f"Migration module `{module_name}` suffix must be an integer")
+
         number: int = int(suffix)
         if number in discovered:
             raise ValueError("Migration modules must not contain duplicates")
+
         discovered[number] = module_name
+
     for idx in range(len(discovered)):
         if migration := discovered.get(idx):
             yield migration
+
         else:
             raise ValueError("Migrations numbers must use continuous values starting from '0'")
