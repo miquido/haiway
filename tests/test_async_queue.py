@@ -187,3 +187,74 @@ async def test_queue_is_immutable():
 
     with raises(AttributeError):
         del stream._queue  # pyright: ignore[reportAttributeAccessIssue]
+
+
+@mark.asyncio
+async def test_limit_none_when_unbounded():
+    stream: AsyncQueue[int] = AsyncQueue()
+
+    assert stream.limit is None
+
+
+@mark.asyncio
+async def test_limit_property_returns_configured_value():
+    stream: AsyncQueue[int] = AsyncQueue(limit=5)
+
+    assert stream.limit == 5
+
+
+@mark.asyncio
+async def test_drops_oldest_when_limit_exceeded():
+    stream: AsyncQueue[int] = AsyncQueue(limit=3)
+    for i in range(5):
+        stream.enqueue(i)
+    stream.finish()
+
+    elements: list[int] = []
+    async for element in stream:
+        elements.append(element)
+
+    assert elements == [2, 3, 4]
+
+
+@mark.asyncio
+async def test_initial_elements_trimmed_to_limit():
+    stream: AsyncQueue[int] = AsyncQueue(1, 2, 3, 4, 5, limit=3)
+    stream.finish()
+
+    elements: list[int] = []
+    async for element in stream:
+        elements.append(element)
+
+    assert elements == [3, 4, 5]
+
+
+@mark.asyncio
+async def test_waiting_consumer_bypasses_limit():
+    # Elements delivered directly to a waiting consumer do not count against
+    # the limit, so no item should be dropped when the buffer is empty.
+    stream: AsyncQueue[int] = AsyncQueue(limit=1)
+
+    consumer = ctx.spawn(stream.next)
+    await sleep(0)
+
+    stream.enqueue(42)
+
+    assert await consumer == 42
+    # Buffer should still be empty — nothing was dropped.
+    with raises(AsyncQueueEmpty):
+        stream.pending_next()
+
+
+@mark.asyncio
+async def test_limited_queue_does_not_drop_when_below_limit():
+    stream: AsyncQueue[int] = AsyncQueue(limit=3)
+    stream.enqueue(10)
+    stream.enqueue(20)
+    stream.finish()
+
+    elements: list[int] = []
+    async for element in stream:
+        elements.append(element)
+
+    assert elements == [10, 20]

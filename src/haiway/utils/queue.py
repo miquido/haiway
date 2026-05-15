@@ -50,8 +50,10 @@ class AsyncQueue[Element](AsyncIterator[Element]):
     def __init__(
         self,
         *elements: Element,
+        limit: int | None = None,
         loop: AbstractEventLoop | None = None,
     ) -> None:
+        assert limit is None or limit > 0 # nosec: B101
         self._loop: AbstractEventLoop
         object.__setattr__(
             self,
@@ -62,7 +64,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         object.__setattr__(
             self,
             "_queue",
-            deque(elements),
+            deque(elements, maxlen=limit),
         )
         self._waiting: Future[Element] | None
         object.__setattr__(
@@ -107,6 +109,18 @@ class AsyncQueue[Element](AsyncIterator[Element]):
             True if the queue has been finished, False otherwise
         """
         return self._finish_reason is not None
+
+    @property
+    def limit(self) -> int | None:
+        """
+        The maximum number of elements the buffer may hold, or None if unbounded.
+
+        When the buffer is full and a new element is enqueued without a waiting
+        consumer, the oldest buffered element is silently dropped to make room.
+        Elements delivered directly to a waiting consumer never count against
+        this limit.
+        """
+        return self._queue.maxlen
 
     def enqueue(
         self,
