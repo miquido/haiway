@@ -502,6 +502,29 @@ class Meta(dict[str, BasicValue]):
         )
 
     @property
+    def error(self) -> Exception | None:
+        value: BasicValue = self.get("error")
+        if value is None:
+            return value
+
+        if not isinstance(value, str):
+            raise TypeError(f"Unexpected value '{type(value).__name__}' for error, expected 'str'")
+
+        return Exception(value)
+
+    def with_error(
+        self,
+        error: Exception | str,
+        /,
+    ) -> Self:
+        return self.__class__(
+            {
+                **self,
+                "error": str(error),
+            }
+        )
+
+    @property
     def tags(self) -> MetaTags:
         match self.get("tags"):
             case [*tags]:
