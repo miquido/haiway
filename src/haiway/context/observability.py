@@ -48,8 +48,8 @@ type ObservabilityAttribute = (
     | float
     | int
     | bool
-    | None
     | Missing
+    | None
 )
 
 

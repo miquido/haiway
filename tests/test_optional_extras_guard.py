@@ -8,7 +8,7 @@ import pytest
 @pytest.mark.parametrize(
     ("haiway_module", "dependency", "extra_name"),
     [
-        ("haiway.httpx", "httpx", "httpx"),
+        ("haiway.httpx", "httpx2", "httpx"),
         ("haiway.opentelemetry", "opentelemetry", "opentelemetry"),
         ("haiway.postgres", "asyncpg", "postgres"),
         ("haiway.rabbitmq", "pika", "rabbitmq"),
