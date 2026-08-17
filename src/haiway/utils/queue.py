@@ -53,7 +53,7 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         limit: int | None = None,
         loop: AbstractEventLoop | None = None,
     ) -> None:
-        assert limit is None or limit > 0 # nosec: B101
+        assert limit is None or limit > 0  # nosec: B101
         self._loop: AbstractEventLoop
         object.__setattr__(
             self,

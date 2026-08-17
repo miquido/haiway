@@ -3,7 +3,7 @@ from http.cookiejar import CookieJar, DefaultCookiePolicy
 from types import TracebackType
 from typing import Any, final
 
-from httpx import URL, USE_CLIENT_DEFAULT, AsyncClient, Response
+from httpx2 import URL, USE_CLIENT_DEFAULT, AsyncClient, Response
 
 from haiway.helpers import (
     HTTPClient,
