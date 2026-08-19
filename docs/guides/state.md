@@ -96,7 +96,7 @@ validated, exposed, and documented. Combine your base type with one or more anno
 
 ```python
 from typing import Annotated
-from haiway import Alias, Description, Specification, State, Validator
+from haiway import Alias, Description, Sensitive, Specification, State, Validator
 
 def ensure_positive(value: int) -> int:
     if value <= 0:
@@ -108,6 +108,8 @@ class Invoice(State):
     customer: Annotated[str, Alias("customer_id"), Description("Public customer identifier")]
     total_cents: Annotated[int, Specification({"type": "integer", "minimum": 0}), Validator(ensure_positive)]
     notes: Annotated[str | None, Description("Free-form note about the invoice")] = None
+    # Kept out of every rendered representation, including logs.
+    payment_token: Annotated[str, Sensitive()] = ""
 ```
 
 Supported annotations include:
@@ -122,6 +124,14 @@ Supported annotations include:
   validation runs.
 - `Verifier(callable)` — applies an additional check after the base attribute has been validated and
   typed.
+- `Sensitive` — marks the attribute as carrying a secret or personal data. `str()`, `repr()`, and
+  `format_str` render `<redacted>` instead of the value, which keeps it out of logs and
+  observability backends. The class and `Sensitive()` mark the attribute alike; pass a custom marker
+  - `Sensitive(redaction="<api-key>")` - when the shape of the omission is worth keeping.
+
+Marking an attribute sensitive covers rendering only: attribute access, `to_mapping`, `to_json`, and
+the generated JSON schema all keep working on the real value, so persistence and outgoing requests
+are unaffected. Review those call sites separately when handling secrets.
 
 `typing.NotRequired[T]` is most useful inside `TypedDict` definitions embedded in State fields. For
 regular State attributes, prefer an explicit default when a field may be omitted.
@@ -189,6 +199,47 @@ The type parameter is enforced during validation:
 ```python
 int_container.updating(value="string")  # Raises TypeError
 ```
+
+### State Classes Are Final
+
+A `State` class that declares attributes cannot be inherited from:
+
+```python
+class User(State):
+    name: str
+
+class Admin(User):  # TypeError - User declares attributes
+    privileges: Sequence[str]
+```
+
+Slots, defaults, annotations, and type arguments are all resolved once, when the class is created,
+and the nominal identity that equality, instance checks, and schema generation rely on assumes they
+describe the whole class. There are three ways to get what inheritance would have given you:
+
+```python
+# 1. parametrize a generic State to type a variant of it
+class Container[T](State):
+    value: T
+
+IntContainer = Container[int]
+
+# 2. inherit from an attribute-less base to share behavior - this is what
+#    `Configuration` is, and why configuration classes may still subclass it
+class Behavior(State):
+    def described(self) -> str:
+        return f"{self.__class__.__name__}"
+
+class Concrete(Behavior):
+    value: int
+
+# 3. hold an instance as an attribute to reuse its attributes
+class Admin(State):
+    user: User
+    privileges: Sequence[str]
+```
+
+A specialization such as `Container[int]` declares the attributes of its origin, so it is final too
+\- it names a typed variant rather than opening a base to derive from.
 
 ### Conversion to Mappings and JSON
 

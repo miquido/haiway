@@ -1,5 +1,7 @@
 import pytest
 
+pytest.importorskip("asyncpg", reason="requires the postgres extra")
+
 from haiway.postgres.state import _validate_migration_names
 
 

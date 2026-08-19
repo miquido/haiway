@@ -1,4 +1,4 @@
-from asyncio import CancelledError, current_task, sleep
+from asyncio import CancelledError, Event, current_task, sleep, timeout
 from collections import deque
 from collections.abc import AsyncIterator, Iterable
 
@@ -153,9 +153,11 @@ async def test_handles_source_exception():
 async def test_cancels_running_tasks_on_cancellation():
     processed: list[int] = []
     started: list[int] = []
+    first_started = Event()
 
     async def slow_handler(element: int) -> None:
         started.append(element)
+        first_started.set()
         try:
             await sleep(10)  # Long sleep that should be cancelled
             processed.append(element)
@@ -171,8 +173,9 @@ async def test_cancels_running_tasks_on_cancellation():
             Source(range(10)),
             slow_handler,
         )
-        # Give some time for tasks to start
-        await sleep(0)
+        # Wait deterministically until at least one handler actually started
+        async with timeout(5):
+            await first_started.wait()
         # Cancel the main task
         task.cancel()
         await task

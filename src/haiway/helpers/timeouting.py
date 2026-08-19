@@ -1,4 +1,4 @@
-from asyncio import AbstractEventLoop, Future, Task, TimerHandle, get_running_loop
+from asyncio import timeout as async_timeout
 from collections.abc import Callable, Coroutine
 from functools import wraps
 from typing import Any
@@ -34,6 +34,9 @@ def timeout[**Args, Result](
     -----
     - Works only with asynchronous functions.
     - The wrapped function will be properly cancelled when the timeout occurs.
+      TimeoutError is raised only after the cancellation has fully unwound, so
+      the caller can rely on all resources being released once it observes it.
+    - The wrapped function runs within the caller's task, its context is shared.
     - Not thread-safe, should only be used within a single event loop.
     - The original function should handle cancellation properly to ensure
       resources are released when timeout occurs.
@@ -88,51 +91,10 @@ class _AsyncTimeout[**Args, Result]:
         *args: Args.args,
         **kwargs: Args.kwargs,
     ) -> Result:
-        loop: AbstractEventLoop = get_running_loop()
-        future: Future[Result] = loop.create_future()
-        task: Task[Result] = loop.create_task(
-            self._function(
+        # asyncio.timeout awaits the cancellation it triggers before raising,
+        # and takes care of distinguishing it from cancellation coming from outside
+        async with async_timeout(self._timeout):
+            return await self._function(
                 *args,
                 **kwargs,
-            ),
-        )
-
-        def on_timeout(
-            future: Future[Result],
-        ) -> None:
-            if future.done():
-                return  # ignore if already finished
-
-            # result future on its completion will ensure that task will complete
-            future.set_exception(TimeoutError())
-
-        timeout_handle: TimerHandle = loop.call_later(
-            self._timeout,
-            on_timeout,
-            future,
-        )
-
-        def on_completion(
-            task: Task[Result],
-        ) -> None:
-            timeout_handle.cancel()  # at this stage we no longer need timeout to trigger
-
-            if future.done():
-                return  # ignore if already finished
-
-            try:
-                future.set_result(task.result())
-
-            except Exception as exc:
-                future.set_exception(exc)
-
-        task.add_done_callback(on_completion)
-
-        def on_result(
-            future: Future[Result],
-        ) -> None:
-            task.cancel()  # when result future completes make sure that task also completes
-
-        future.add_done_callback(on_result)
-
-        return await future
+            )

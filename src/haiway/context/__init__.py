@@ -4,6 +4,7 @@ from haiway.context.events import ContextEvents, EventsSubscription
 from haiway.context.identifier import ContextIdentifier
 from haiway.context.observability import (
     ContextObservability,
+    LoggerObservability,
     Observability,
     ObservabilityAttribute,
     ObservabilityAttributesRecording,
@@ -14,6 +15,7 @@ from haiway.context.observability import (
     ObservabilityMetricRecording,
     ObservabilityScopeEntering,
     ObservabilityScopeExiting,
+    ObservabilityTraceContextEncoding,
     ObservabilityTraceIdentifying,
 )
 from haiway.context.presets import ContextPresets
@@ -34,6 +36,7 @@ __all__ = (
     "DisposableState",
     "Disposables",
     "EventsSubscription",
+    "LoggerObservability",
     "Observability",
     "ObservabilityAttribute",
     "ObservabilityAttributesRecording",
@@ -44,6 +47,7 @@ __all__ = (
     "ObservabilityMetricRecording",
     "ObservabilityScopeEntering",
     "ObservabilityScopeExiting",
+    "ObservabilityTraceContextEncoding",
     "ObservabilityTraceIdentifying",
     "ctx",
 )

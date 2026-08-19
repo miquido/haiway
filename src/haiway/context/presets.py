@@ -95,7 +95,9 @@ class ContextPresets:
             disposable_state: DisposableState = DisposableState.of(*state)
             return cls(
                 name=name,
-                disposables=(lambda: disposable_state, *disposables),
+                # state goes last to take precedence over preset disposables,
+                # matching `with_state` and the scope level resolution order
+                disposables=(*disposables, lambda: disposable_state),
             )
 
         else:

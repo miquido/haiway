@@ -67,8 +67,15 @@ def test_meta_from_json_valid():
 
 
 def test_meta_from_json_invalid():
-    with raises(ValueError, match="Invalid Meta value json: not an object"):
+    with raises(ValueError, match="Invalid Meta json - decoded 'str', expected object"):
         Meta.from_json('"not an object"')
+
+
+def test_meta_from_json_invalid_does_not_leak_payload():
+    with raises(ValueError) as exception_info:
+        Meta.from_json('"sk-live-SECRET"')
+
+    assert "sk-live-SECRET" not in str(exception_info.value)
 
 
 def test_meta_to_json():
@@ -200,12 +207,33 @@ def test_meta_with_tags_append():
     assert "new" in updated.tags
 
 
+def test_meta_with_tags_accepts_any_collection():
+    meta = Meta({})
+    updated = meta.with_tags({"single"})
+    assert updated.tags == ("single",)
+
+    assert sorted(Meta({}).with_tags(frozenset({"a", "b"})).tags) == ["a", "b"]
+
+
+def test_meta_with_tags_deduplicates_within_argument():
+    assert Meta({}).with_tags(["dup", "dup", "other"]).tags == ("dup", "other")
+    assert Meta({"tags": ["existing"]}).with_tags(["new", "new"]).tags == ("existing", "new")
+
+
+def test_meta_with_tags_validates_elements():
+    with raises(TypeError, match="Unexpected value 'int' for tag, expected 'str'"):
+        _ = Meta({}).with_tags(["valid", 123])  # pyright: ignore[reportArgumentType]
+
+
 def test_meta_has_tags():
     meta = Meta({"tags": ["active", "verified", "premium"]})
     assert meta.has_tags(["active"]) is True
     assert meta.has_tags(["active", "verified"]) is True
     assert meta.has_tags(["nonexistent"]) is False
     assert meta.has_tags(["active", "nonexistent"]) is False
+    assert meta.has_tags([]) is True
+    assert Meta({}).has_tags([]) is True
+    assert Meta({}).has_tags(["any"]) is False
 
 
 def test_meta_created_property():

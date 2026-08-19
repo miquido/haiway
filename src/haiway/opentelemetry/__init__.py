@@ -6,6 +6,9 @@ except ImportError as exc:  # pragma: no cover
         "Install via `pip install haiway[opentelemetry]`."
     ) from exc
 
-from haiway.opentelemetry.observability import OpenTelemetry
+from haiway.opentelemetry.observability import OpenTelemetry, OpenTelemetryException
 
-__all__ = ("OpenTelemetry",)
+__all__ = (
+    "OpenTelemetry",
+    "OpenTelemetryException",
+)

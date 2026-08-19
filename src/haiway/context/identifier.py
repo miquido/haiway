@@ -1,9 +1,11 @@
+from collections.abc import Sequence
 from contextvars import ContextVar, Token
 from types import TracebackType
 from typing import Any, ClassVar, Self, final
 from uuid import UUID, uuid4
 
 from haiway.context.types import ContextMissing
+from haiway.utils.formatting import escape_controls
 
 __all__ = ("ContextIdentifier",)
 
@@ -28,19 +30,23 @@ class ContextIdentifier:
         /,
     ) -> Self:
         try:  # check for current scope
-            return cls(
-                name=name,
-                scope_id=uuid4(),
-                # create nested scope
-                parent_id=cls._context.get().scope_id,
-            )
-
-        except LookupError:  # create root scope when missing
+            current: Self = cls._context.get()
             scope_id: UUID = uuid4()
             return cls(
                 name=name,
                 scope_id=scope_id,
-                parent_id=scope_id,  # own id is parent_id for root
+                # create nested scope
+                parent_id=current.scope_id,
+                path=(*current.path, scope_id),
+            )
+
+        except LookupError:  # create root scope when missing
+            root_id: UUID = uuid4()
+            return cls(
+                name=name,
+                scope_id=root_id,
+                parent_id=root_id,  # own id is parent_id for root
+                path=(root_id,),
             )
 
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextIdentifier")
@@ -49,6 +55,7 @@ class ContextIdentifier:
         "_token",
         "name",
         "parent_id",
+        "path",
         "scope_id",
         "unique_name",
     )
@@ -58,11 +65,16 @@ class ContextIdentifier:
         parent_id: UUID,
         scope_id: UUID,
         name: str,
+        path: Sequence[UUID],
     ) -> None:
         self.parent_id: UUID = parent_id
         self.scope_id: UUID = scope_id
-        self.name: str = name
-        self.unique_name: str = f"[{name}] [{scope_id}]"
+        # identifiers of this scope and all of its ancestors, root first
+        self.path: Sequence[UUID] = path
+        # the name labels every record produced within the scope, so control
+        # characters are escaped here instead of in each observability backend
+        self.name: str = escape_controls(name)
+        self.unique_name: str = f"[{self.name}] [{scope_id}]"
         self._token: Token[ContextIdentifier] | None = None
 
     @property

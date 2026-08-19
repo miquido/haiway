@@ -41,7 +41,7 @@ from typing_extensions import is_typeddict as is_typeddict_ext  # keep this part
 from haiway import types as haiway_types
 from haiway.attributes.validation import (
     Validating,
-    ValidationContext,
+    ValidationError,
     Validator,
     Verifier,
     Verifying,
@@ -53,6 +53,7 @@ from haiway.types import (
     Immutable,
     Map,
     Meta,
+    Sensitive,
     Specification,
     TypeSpecification,
 )
@@ -101,8 +102,52 @@ class NotRequired(Immutable):
 NOT_REQUIRED: Final[NotRequired] = NotRequired()
 
 Annotation = (
-    Alias | Description | Specification | Validator[Any] | Verifier[Any] | Meta | NotRequired | str
+    Alias
+    | Description
+    | Specification
+    | Sensitive
+    # `Sensitive` needs no argument, so the class itself marks an attribute the
+    # same way an instance of it does - see `_annotation_markers`
+    | type[Sensitive]
+    | Validator[Any]
+    | Verifier[Any]
+    | Meta
+    | NotRequired
+    | str
 )
+
+
+def _annotation_markers(
+    annotations: Sequence[Any],
+    /,
+) -> tuple[Any, ...]:
+    """Markers of an ``Annotated``, with the ones written as a class instantiated.
+
+    Parameters
+    ----------
+    annotations : Sequence[Any]
+        Metadata of an ``Annotated``, as declared.
+
+    Returns
+    -------
+    tuple[Any, ...]
+        The same markers, with every one requiring no argument replaced by an
+        instance of it.
+
+    Notes
+    -----
+    ``Sensitive`` carries a default redaction, which makes ``Annotated[str,
+    Sensitive]`` as meaningful to write as ``Annotated[str, Sensitive()]`` - and
+    an easy thing to write by accident. Left as the class it would be no marker
+    at all, and the attribute it was meant to withhold would be rendered in
+    full, which is the one mistake this marker exists to prevent.
+    """
+    if not any(annotation is Sensitive for annotation in annotations):
+        return tuple(annotations)  # nothing to instantiate, by far the common case
+
+    return tuple(
+        Sensitive() if annotation is Sensitive else annotation for annotation in annotations
+    )
 
 
 class AttributeAnnotation(Protocol):
@@ -123,6 +168,10 @@ class AttributeAnnotation(Protocol):
 
     @property
     def meta(self) -> Meta: ...
+
+    # redaction is only ever added by annotating, never annotated away
+    @property
+    def redaction(self) -> str | None: ...
 
     @property
     def required(self) -> bool: ...
@@ -147,6 +196,17 @@ def _no_verify[Type](value: Type) -> Type:
     return value
 
 
+def _iterable_snapshot(value: Any) -> Any:
+    # only unordered or single use iterables need normalization, anything else
+    # is passed through to be validated (or rejected) as a sequence
+    if isinstance(value, Iterable) and not isinstance(
+        value, Sequence | str | bytes | bytearray | memoryview
+    ):
+        return tuple(cast(Iterable[Any], value))
+
+    return cast(Any, value)
+
+
 class AnyAttribute(Immutable):
     type_name: Final[Literal["Any"]] = "Any"
     alias: str | None = None
@@ -155,6 +215,7 @@ class AnyAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> Any:
@@ -172,6 +233,7 @@ class AnyAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -198,6 +260,9 @@ class AnyAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -206,6 +271,7 @@ class AnyAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -217,6 +283,7 @@ class AnyAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -302,6 +369,17 @@ class AliasAttribute(Immutable):
         return self._resolved.meta
 
     @property
+    def redaction(self) -> str | None:
+        if self._resolved is None:
+            for annotation in self.annotations:
+                if isinstance(annotation, Sensitive):
+                    return annotation.redaction
+
+            return None
+
+        return self._resolved.redaction
+
+    @property
     def required(self) -> bool:
         if self._resolved is None:
             return not any(isinstance(annotation, NotRequired) for annotation in self.annotations)
@@ -339,6 +417,10 @@ class AliasAttribute(Immutable):
             )
 
     @property
+    def is_resolved(self) -> bool:
+        return self._resolved is not None
+
+    @property
     def resolved(self) -> AttributeAnnotation:
         if self._resolved is None:
             raise RuntimeError(f"Alias '{self.module}.{self.type_alias}' used before resolution")
@@ -366,6 +448,7 @@ class MissingAttribute(Immutable):
     required: bool = False
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[haiway_types.Missing]:
@@ -383,6 +466,7 @@ class MissingAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -409,6 +493,9 @@ class MissingAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -417,6 +504,7 @@ class MissingAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -428,6 +516,7 @@ class MissingAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -438,10 +527,10 @@ class MissingAttribute(Immutable):
         value: Any,
     ) -> Any:
         if value is MISSING:
-            return value
+            return self.verifying(value)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'Missing'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Missing'")
 
     def check(
         self,
@@ -458,6 +547,7 @@ class NoneAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> None:
@@ -475,6 +565,7 @@ class NoneAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -501,6 +592,9 @@ class NoneAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -509,6 +603,7 @@ class NoneAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -520,6 +615,7 @@ class NoneAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -533,7 +629,7 @@ class NoneAttribute(Immutable):
             return self.verifying(value)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'None'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'None'")
 
     def check(
         self,
@@ -551,6 +647,7 @@ class LiteralAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def type_name(self) -> str:
@@ -568,6 +665,7 @@ class LiteralAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -594,6 +692,9 @@ class LiteralAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -604,6 +705,7 @@ class LiteralAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -617,6 +719,7 @@ class LiteralAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -630,7 +733,7 @@ class LiteralAttribute(Immutable):
             return self.verifying(value)
 
         raise ValueError(
-            f"'{value}' is not matching any of expected literal values"
+            f"'{type(value).__name__}' is not matching any of expected literal values"
             f" [{', '.join(repr(literal) for literal in self.values)}]"
         )
 
@@ -649,6 +752,7 @@ class BoolAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[bool]:
@@ -666,6 +770,7 @@ class BoolAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -692,6 +797,9 @@ class BoolAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -700,6 +808,7 @@ class BoolAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -711,6 +820,7 @@ class BoolAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -733,10 +843,10 @@ class BoolAttribute(Immutable):
             if value.lower() == "false":
                 return self.verifying(False)
 
-            raise ValueError(f"'{value}' is not matching any of expected values [True, False]")
+            raise ValueError("'str' value is not matching any of expected values [True, False]")
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'bool'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'bool'")
 
     def check(
         self,
@@ -753,6 +863,7 @@ class IntegerAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[int]:
@@ -770,6 +881,7 @@ class IntegerAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -796,6 +908,9 @@ class IntegerAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -804,6 +919,7 @@ class IntegerAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -815,6 +931,7 @@ class IntegerAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -825,7 +942,7 @@ class IntegerAttribute(Immutable):
         value: Any,
     ) -> Any:
         if isinstance(value, bool):
-            raise TypeError(f"'{value}' is not matching expected type of 'int'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'int'")
 
         if isinstance(value, int):
             return self.verifying(value)
@@ -834,7 +951,7 @@ class IntegerAttribute(Immutable):
             return self.verifying(int(value))
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'int'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'int'")
 
     def check(
         self,
@@ -851,6 +968,7 @@ class FloatAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[float]:
@@ -868,6 +986,7 @@ class FloatAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -894,6 +1013,9 @@ class FloatAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -902,6 +1024,7 @@ class FloatAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -913,6 +1036,7 @@ class FloatAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -923,7 +1047,7 @@ class FloatAttribute(Immutable):
         value: Any,
     ) -> Any:
         if isinstance(value, bool):
-            raise TypeError(f"'{value}' is not matching expected type of 'float'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'float'")
 
         if isinstance(value, float):
             return self.verifying(value)
@@ -932,7 +1056,7 @@ class FloatAttribute(Immutable):
             return self.verifying(float(value))
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'float'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'float'")
 
     def check(
         self,
@@ -949,6 +1073,7 @@ class BytesAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[bytes]:
@@ -966,6 +1091,7 @@ class BytesAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -992,6 +1118,9 @@ class BytesAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -1000,6 +1129,7 @@ class BytesAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1011,6 +1141,7 @@ class BytesAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1024,7 +1155,7 @@ class BytesAttribute(Immutable):
             return self.verifying(value)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'bytes'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'bytes'")
 
     def check(
         self,
@@ -1041,6 +1172,7 @@ class UUIDAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[uuid.UUID]:
@@ -1058,6 +1190,7 @@ class UUIDAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1084,6 +1217,9 @@ class UUIDAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -1092,6 +1228,7 @@ class UUIDAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1103,6 +1240,7 @@ class UUIDAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1116,14 +1254,17 @@ class UUIDAttribute(Immutable):
             return self.verifying(value)
 
         elif isinstance(value, str):
+            converted: uuid.UUID
             try:
-                return self.verifying(uuid.UUID(value))
+                converted = uuid.UUID(value)
 
             except Exception as exc:
-                raise ValueError(f"'{value}' is not matching expected format of 'UUID'") from exc
+                raise ValueError("'str' value is not matching expected format of 'UUID'") from exc
+
+            return self.verifying(converted)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'UUID'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'UUID'")
 
     def check(
         self,
@@ -1140,6 +1281,7 @@ class StringAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[str]:
@@ -1157,6 +1299,7 @@ class StringAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1183,6 +1326,9 @@ class StringAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -1191,6 +1337,7 @@ class StringAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1202,6 +1349,7 @@ class StringAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1215,7 +1363,7 @@ class StringAttribute(Immutable):
             return self.verifying(value)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'str'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'str'")
 
     def check(
         self,
@@ -1232,6 +1380,7 @@ class DatetimeAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[datetime.datetime]:
@@ -1249,6 +1398,7 @@ class DatetimeAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1275,6 +1425,9 @@ class DatetimeAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -1283,6 +1436,7 @@ class DatetimeAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1294,6 +1448,7 @@ class DatetimeAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1307,16 +1462,19 @@ class DatetimeAttribute(Immutable):
             return self.verifying(value)
 
         elif isinstance(value, str):
+            converted: datetime.datetime
             try:
-                return self.verifying(datetime.datetime.fromisoformat(value))
+                converted = datetime.datetime.fromisoformat(value)
 
             except Exception as exc:
                 raise ValueError(
-                    f"'{value}' is not matching expected ISO format for 'datetime'"
+                    "'str' value is not matching expected ISO format for 'datetime'"
                 ) from exc
 
+            return self.verifying(converted)
+
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'datetime'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'datetime'")
 
     def check(
         self,
@@ -1333,6 +1491,7 @@ class DateAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[datetime.date]:
@@ -1350,6 +1509,7 @@ class DateAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1376,6 +1536,9 @@ class DateAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -1384,6 +1547,7 @@ class DateAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1395,6 +1559,7 @@ class DateAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1408,16 +1573,19 @@ class DateAttribute(Immutable):
             return self.verifying(value)
 
         elif isinstance(value, str):
+            converted: datetime.date
             try:
-                return self.verifying(datetime.date.fromisoformat(value))
+                converted = datetime.date.fromisoformat(value)
 
             except Exception as exc:
                 raise ValueError(
-                    f"'{value}' is not matching expected ISO format for 'date'"
+                    "'str' value is not matching expected ISO format for 'date'"
                 ) from exc
 
+            return self.verifying(converted)
+
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'date'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'date'")
 
     def check(
         self,
@@ -1434,6 +1602,7 @@ class TimeAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[datetime.time]:
@@ -1451,6 +1620,7 @@ class TimeAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1477,6 +1647,9 @@ class TimeAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -1485,6 +1658,7 @@ class TimeAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1496,6 +1670,7 @@ class TimeAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1509,16 +1684,19 @@ class TimeAttribute(Immutable):
             return self.verifying(value)
 
         elif isinstance(value, str):
+            converted: datetime.time
             try:
-                return self.verifying(datetime.time.fromisoformat(value))
+                converted = datetime.time.fromisoformat(value)
 
             except Exception as exc:
                 raise ValueError(
-                    f"'{value}' is not matching expected ISO format for 'time'"
+                    "'str' value is not matching expected ISO format for 'time'"
                 ) from exc
 
+            return self.verifying(converted)
+
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'time'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'time'")
 
     def check(
         self,
@@ -1535,6 +1713,7 @@ class PathAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[pathlib.Path]:
@@ -1552,6 +1731,7 @@ class PathAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1578,6 +1758,9 @@ class PathAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -1586,6 +1769,7 @@ class PathAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1597,6 +1781,7 @@ class PathAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1610,14 +1795,19 @@ class PathAttribute(Immutable):
             return self.verifying(value)
 
         elif isinstance(value, str | os.PathLike):  # pyright: ignore[reportUnknownArgumentType]
+            converted: pathlib.Path
             try:
-                return self.verifying(pathlib.Path(value))  # pyright: ignore[reportUnknownArgumentType]
+                converted = pathlib.Path(value)  # pyright: ignore[reportUnknownArgumentType]
 
             except Exception as exc:
-                raise ValueError(f"'{value}' is not matching expected path format") from exc
+                raise ValueError(
+                    f"'{type(value).__name__}' value is not matching expected path format"  # pyright: ignore[reportUnknownArgumentType]
+                ) from exc
+
+            return self.verifying(converted)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'Path'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Path'")
 
     def check(
         self,
@@ -1636,6 +1826,7 @@ class TupleAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     def annotated(  # noqa: C901
         self,
@@ -1649,6 +1840,7 @@ class TupleAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1675,6 +1867,9 @@ class TupleAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -1685,6 +1880,7 @@ class TupleAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1698,6 +1894,7 @@ class TupleAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1708,28 +1905,39 @@ class TupleAttribute(Immutable):
         value: Any,
     ) -> Any:
         if isinstance(value, str | bytes | bytearray | memoryview):
-            raise TypeError(f"'{value}' is not matching expected type of 'tuple'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'tuple'")  # pyright: ignore[reportUnknownArgumentType]
 
         if isinstance(value, Sequence):
-            if len(value) != len(self.values):  # pyright: ignore[reportUnknownArgumentType]
+            elements_count: int = len(value)  # pyright: ignore[reportUnknownArgumentType]
+            if elements_count != len(self.values):
                 raise ValueError(
-                    f"'{value}' does not match expected tuple length {len(self.values)}"
+                    f"'{type(value).__name__}' of length {elements_count} does not match"  # pyright: ignore[reportUnknownArgumentType]
+                    f" expected tuple length {len(self.values)}"
                 )
 
             def validated() -> Generator[Any]:
                 for idx, element in enumerate(value):  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
-                    with ValidationContext.scope(f"[{idx}]"):
-                        yield self.values[idx].validate(element)
+                    validated_element: Any
+                    try:
+                        validated_element = self.values[idx].validate(element)
+
+                    except Exception as exc:
+                        ValidationError.report(f"[{idx}]", exc)
+
+                    yield validated_element
 
             return self.verifying(tuple(validated()))
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'tuple'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'tuple'")
 
     def check(
         self,
         value: Any,
     ) -> bool:
+        if isinstance(value, str | bytes | bytearray | memoryview):
+            return False
+
         return (
             isinstance(value, Sequence)
             and len(value) == len(self.values)  # pyright: ignore[reportUnknownArgumentType]
@@ -1747,6 +1955,7 @@ class SequenceAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     def annotated(  # noqa: C901
         self,
@@ -1760,6 +1969,7 @@ class SequenceAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1786,6 +1996,9 @@ class SequenceAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -1796,6 +2009,7 @@ class SequenceAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1809,6 +2023,7 @@ class SequenceAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1819,19 +2034,25 @@ class SequenceAttribute(Immutable):
         value: Any,
     ) -> Any:
         if isinstance(value, str | bytes | bytearray | memoryview):
-            raise TypeError(f"'{value}' is not matching expected type of 'Sequence'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Sequence'")  # pyright: ignore[reportUnknownArgumentType]
 
         if isinstance(value, Sequence):
 
             def validated() -> Generator[Any]:
                 for idx, element in enumerate(value):  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
-                    with ValidationContext.scope(f"[{idx}]"):
-                        yield self.values.validate(element)
+                    validated_element: Any
+                    try:
+                        validated_element = self.values.validate(element)
+
+                    except Exception as exc:
+                        ValidationError.report(f"[{idx}]", exc)
+
+                    yield validated_element
 
             return self.verifying(tuple(validated()))
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'Sequence'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Sequence'")
 
     def check(
         self,
@@ -1853,6 +2074,7 @@ class SetAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     def annotated(  # noqa: C901
         self,
@@ -1866,6 +2088,7 @@ class SetAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1892,6 +2115,9 @@ class SetAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -1902,6 +2128,7 @@ class SetAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -1915,6 +2142,7 @@ class SetAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -1925,19 +2153,25 @@ class SetAttribute(Immutable):
         value: Any,
     ) -> Any:
         if isinstance(value, str | bytes | bytearray | memoryview):
-            raise TypeError(f"'{value}' is not matching expected type of 'Set'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Set'")  # pyright: ignore[reportUnknownArgumentType]
 
         if isinstance(value, Iterable):
 
             def validated() -> Generator[Any]:
                 for idx, element in enumerate(value):  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
-                    with ValidationContext.scope(f"[{idx}]"):
-                        yield self.values.validate(element)
+                    validated_element: Any
+                    try:
+                        validated_element = self.values.validate(element)
+
+                    except Exception as exc:
+                        ValidationError.report(f"[{idx}]", exc)
+
+                    yield validated_element
 
             return self.verifying(frozenset(validated()))
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'Set'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Set'")
 
     def check(
         self,
@@ -1957,6 +2191,7 @@ class MappingAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     def annotated(  # noqa: C901
         self,
@@ -1970,6 +2205,7 @@ class MappingAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -1996,6 +2232,9 @@ class MappingAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -2007,6 +2246,7 @@ class MappingAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2021,6 +2261,7 @@ class MappingAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -2034,13 +2275,22 @@ class MappingAttribute(Immutable):
 
             def validated() -> Generator[Any]:
                 for key, element in value.items():  # pyright: ignore[reportUnknownVariableType]
-                    with ValidationContext.scope(f"[{key}]"):
-                        yield (self.keys.validate(key), self.values.validate(element))
+                    validated_item: tuple[Any, Any]
+                    try:
+                        validated_item = (
+                            self.keys.validate(key),
+                            self.values.validate(element),
+                        )
+
+                    except Exception as exc:
+                        ValidationError.report(f"[{key}]", exc)
+
+                    yield validated_item
 
             return self.verifying(Map(validated()))
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'Mapping'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Mapping'")
 
     def check(
         self,
@@ -2060,6 +2310,7 @@ class MetaAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def base(self) -> type[haiway_types.Meta]:
@@ -2077,6 +2328,7 @@ class MetaAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -2103,6 +2355,9 @@ class MetaAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     alias=alias,
@@ -2111,6 +2366,7 @@ class MetaAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2122,6 +2378,7 @@ class MetaAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -2140,7 +2397,7 @@ class MetaAttribute(Immutable):
             return self.verifying(Meta.validate(value))
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of 'Meta'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Meta'")
 
     def check(
         self,
@@ -2178,6 +2435,10 @@ class ValidableAttribute(Immutable):
         return self.attribute.meta
 
     @property
+    def redaction(self) -> str | None:
+        return self.attribute.redaction
+
+    @property
     def required(self) -> bool:
         return self.attribute.required
 
@@ -2206,6 +2467,90 @@ class ValidableAttribute(Immutable):
         return self.attribute.check(value)
 
 
+def attribute_redaction(
+    annotation: AttributeAnnotation,
+    /,
+) -> str | None:
+    """Resolve the redaction of an attribute annotation.
+
+    Parameters
+    ----------
+    annotation : AttributeAnnotation
+        Annotation to inspect, including through wrapping annotations.
+
+    Returns
+    -------
+    str | None
+        Text to render instead of the value when the annotation was marked with
+        ``Sensitive``, otherwise ``None``.
+
+    Notes
+    -----
+    A marker nested within a union or a container makes the whole value
+    sensitive - the concrete runtime value is not known here, so the redaction
+    replaces the entire attribute instead of the sensitive part of it. Redacting
+    more than strictly required keeps a secret out of the output either way,
+    while resolving to ``None`` would leak it.
+    """
+    return _attribute_redaction(annotation, set())
+
+
+def _attribute_redaction(  # noqa: PLR0911
+    annotation: AttributeAnnotation,
+    /,
+    visited_aliases: set[tuple[str, str]],
+) -> str | None:
+    # the marker on the attribute itself, including the one delegated by wrapping annotations
+    if annotation.redaction is not None:
+        return annotation.redaction
+
+    # otherwise it can still be nested within the structure of the attribute
+    match annotation:
+        case ValidableAttribute() as validable:
+            return _attribute_redaction(validable.attribute, visited_aliases)
+
+        case AliasAttribute() as aliased:
+            if not aliased.is_resolved:
+                return None  # an unresolved alias can't be inspected further
+
+            identity: tuple[str, str] = (aliased.module, aliased.type_alias)
+            if identity in visited_aliases:
+                return None  # a recursive alias is already being inspected
+
+            visited_aliases.add(identity)
+            return _attribute_redaction(aliased.resolved, visited_aliases)
+
+        case UnionAttribute() as union:
+            return _any_redaction(union.alternatives, visited_aliases)
+
+        case TupleAttribute() as elements:
+            return _any_redaction(elements.values, visited_aliases)
+
+        case SequenceAttribute() | SetAttribute() as collection:
+            return _attribute_redaction(collection.values, visited_aliases)
+
+        case MappingAttribute() as mapping:
+            return _any_redaction((mapping.keys, mapping.values), visited_aliases)
+
+        case _:
+            return None
+
+
+def _any_redaction(
+    annotations: Iterable[AttributeAnnotation],
+    /,
+    visited_aliases: set[tuple[str, str]],
+) -> str | None:
+    return next(
+        (
+            redaction
+            for annotation in annotations
+            if (redaction := _attribute_redaction(annotation, visited_aliases)) is not None
+        ),
+        None,
+    )
+
+
 class ObjectAttribute(Immutable):
     base: Any
     parameters: Sequence[AttributeAnnotation] = ()
@@ -2216,6 +2561,7 @@ class ObjectAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def type_name(self) -> str:
@@ -2233,6 +2579,7 @@ class ObjectAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -2259,6 +2606,9 @@ class ObjectAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -2270,6 +2620,7 @@ class ObjectAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2284,6 +2635,7 @@ class ObjectAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -2302,7 +2654,9 @@ class ObjectAttribute(Immutable):
             return self.verifying(self.base(**value))
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+            raise TypeError(
+                f"'{type(value).__name__}' is not matching expected type of '{self.base}'"
+            )
 
     def check(
         self,
@@ -2321,6 +2675,7 @@ class TypedDictAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def type_name(self) -> str:
@@ -2338,6 +2693,7 @@ class TypedDictAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -2364,6 +2720,9 @@ class TypedDictAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -2375,6 +2734,7 @@ class TypedDictAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2389,6 +2749,7 @@ class TypedDictAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -2402,17 +2763,30 @@ class TypedDictAttribute(Immutable):
 
             def validated() -> Generator[Any]:
                 for key, attribute in self.attributes.items():
-                    with ValidationContext.scope(f'["{key}"]'):
-                        if key in value:
-                            yield (key, attribute.validate(value[key]))
+                    if key not in value:
+                        if attribute.required:
+                            ValidationError.report(
+                                f'["{key}"]',
+                                KeyError(f"Value for '{key}' is required"),
+                            )
 
-                        elif attribute.required:
-                            raise KeyError(f"Value for '{key}' is required")
+                        continue  # an optional key which was not provided
+
+                    validated_element: Any
+                    try:
+                        validated_element = attribute.validate(value[key])
+
+                    except Exception as exc:
+                        ValidationError.report(f'["{key}"]', exc)
+
+                    yield (key, validated_element)
 
             return self.verifying(Map(validated()))
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+            raise TypeError(
+                f"'{type(value).__name__}' is not matching expected type of '{self.base}'"
+            )
 
     def check(
         self,
@@ -2433,6 +2807,7 @@ class FunctionAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def type_name(self) -> str:
@@ -2450,6 +2825,7 @@ class FunctionAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -2476,6 +2852,9 @@ class FunctionAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -2486,6 +2865,7 @@ class FunctionAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2499,6 +2879,7 @@ class FunctionAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -2513,7 +2894,7 @@ class FunctionAttribute(Immutable):
             return self.verifying(value)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected function type")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected function type")
 
     def check(
         self,
@@ -2530,6 +2911,7 @@ class ProtocolAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def type_name(self) -> str:
@@ -2547,6 +2929,7 @@ class ProtocolAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -2573,6 +2956,9 @@ class ProtocolAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -2582,6 +2968,7 @@ class ProtocolAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2594,6 +2981,7 @@ class ProtocolAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -2607,7 +2995,9 @@ class ProtocolAttribute(Immutable):
             return self.verifying(value)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+            raise TypeError(
+                f"'{type(value).__name__}' is not matching expected type of '{self.base}'"
+            )
 
     def check(
         self,
@@ -2625,6 +3015,7 @@ class UnionAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def type_name(self) -> str:
@@ -2642,6 +3033,7 @@ class UnionAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -2668,6 +3060,9 @@ class UnionAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -2678,6 +3073,7 @@ class UnionAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2691,6 +3087,7 @@ class UnionAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -2701,15 +3098,37 @@ class UnionAttribute(Immutable):
         value: Any,
     ) -> Any:
         errors: MutableSequence[Exception] = []
+        validated: Any
+        # an alternative the value already matches wins over one which would only
+        # convert it - resolving in the declaration order alone would let the
+        # `float` of `str | float | int` turn every int into a float
         for alternative in self.alternatives:
             try:
-                return self.verifying(alternative.validate(value))
+                if not alternative.check(value):
+                    continue
+
+                validated = alternative.validate(value)
 
             except Exception as exc:
                 errors.append(exc)
+                continue
+
+            return self.verifying(validated)
+
+        # nothing matched as is, so the alternatives may convert it now - in the
+        # declaration order, which is what decides between two conversions
+        for alternative in self.alternatives:
+            try:
+                validated = alternative.validate(value)
+
+            except Exception as exc:
+                errors.append(exc)
+                continue
+
+            return self.verifying(validated)
 
         raise ExceptionGroup(
-            f"'{value}' is not matching any of the allowed alternatives:"
+            f"'{type(value).__name__}' is not matching any of the allowed alternatives:"
             f" {' | '.join(alternative.type_name for alternative in self.alternatives)}",
             errors,
         )
@@ -2730,6 +3149,7 @@ class CustomAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def type_name(self) -> str:
@@ -2747,6 +3167,7 @@ class CustomAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -2773,6 +3194,9 @@ class CustomAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -2783,6 +3207,7 @@ class CustomAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2796,6 +3221,7 @@ class CustomAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -2809,7 +3235,9 @@ class CustomAttribute(Immutable):
             return self.verifying(value)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+            raise TypeError(
+                f"'{type(value).__name__}' is not matching expected type of '{self.base}'"
+            )
 
     def check(
         self,
@@ -2826,6 +3254,7 @@ class StrEnumAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def type_name(self) -> str:
@@ -2843,6 +3272,7 @@ class StrEnumAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -2869,6 +3299,9 @@ class StrEnumAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -2878,6 +3311,7 @@ class StrEnumAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2890,6 +3324,7 @@ class StrEnumAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -2903,21 +3338,24 @@ class StrEnumAttribute(Immutable):
             return self.verifying(value)
 
         elif isinstance(value, str):
+            converted: Any
             try:
-                return self.verifying(self.base(value))
+                converted = self.base(value)
 
             except Exception:
                 try:
-                    return self.verifying(self.base[value])
+                    converted = self.base[value]
 
                 except KeyError as exc:
                     allowed_values: str = ", ".join(member.value for member in self.base)
                     raise ValueError(
-                        f"'{value}' is not matching any of expected"
+                        f"'{type(value).__name__}' is not matching any of expected"
                         f" {self.base.__name__} values [{allowed_values}]"
                     ) from exc
 
-        raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+            return self.verifying(converted)
+
+        raise TypeError(f"'{type(value).__name__}' is not matching expected type of '{self.base}'")
 
     def check(
         self,
@@ -2934,6 +3372,7 @@ class IntEnumAttribute(Immutable):
     required: bool = True
     specification: TypeSpecification | None = None
     meta: Meta = Meta.empty
+    redaction: str | None = None
 
     @property
     def type_name(self) -> str:
@@ -2951,6 +3390,7 @@ class IntEnumAttribute(Immutable):
             specification: TypeSpecification | None = self.specification
             validating: Validating[Any] | None = None
             meta: Meta = self.meta
+            redaction: str | None = self.redaction
 
             for annotation in annotations:
                 if isinstance(annotation, str):
@@ -2977,6 +3417,9 @@ class IntEnumAttribute(Immutable):
                 elif isinstance(annotation, Meta):
                     meta = annotation
 
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
             if validating is None:
                 return self.__class__(
                     base=self.base,
@@ -2986,6 +3429,7 @@ class IntEnumAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 )
 
             return ValidableAttribute(
@@ -2998,6 +3442,7 @@ class IntEnumAttribute(Immutable):
                     required=required,
                     specification=specification,
                     meta=meta,
+                    redaction=redaction,
                 ),
             )
 
@@ -3011,33 +3456,41 @@ class IntEnumAttribute(Immutable):
             return self.verifying(value)
 
         elif isinstance(value, int):
+            converted: Any
             try:
-                return self.verifying(self.base(value))
+                converted = self.base(value)
 
             except Exception as exc:
                 allowed_values: str = ", ".join(str(member.value) for member in self.base)
                 raise ValueError(
-                    f"'{value}' is not matching any of expected"
+                    f"'{type(value).__name__}' is not matching any of expected"
                     f" {self.base.__name__} values [{allowed_values}]"
                 ) from exc
 
+            return self.verifying(converted)
+
         elif isinstance(value, str):
+            converted_member: Any
             try:
-                return self.verifying(self.base[value])
+                converted_member = self.base[value]
 
             except KeyError as exc:
                 try:
-                    return self.verifying(self.base(int(value)))
+                    converted_member = self.base(int(value))
 
                 except Exception:
                     allowed_names: str = ", ".join(member.name for member in self.base)
                     raise ValueError(
-                        f"'{value}' is not matching any of expected"
+                        f"'{type(value).__name__}' is not matching any of expected"
                         f" {self.base.__name__} members [{allowed_names}]"
                     ) from exc
 
+            return self.verifying(converted_member)
+
         else:
-            raise TypeError(f"'{value}' is not matching expected type of '{self.base}'")
+            raise TypeError(
+                f"'{type(value).__name__}' is not matching expected type of '{self.base}'"
+            )
 
     def check(
         self,
@@ -3051,6 +3504,13 @@ def resolve_self_attribute(
     /,
     parameters: Mapping[str, Any],
     namespace: Mapping[str, Any] | None = None,
+    # names the class provides a default for - the class itself can't be asked,
+    # since a slot descriptor stands in for every attribute, default or not
+    defaults: Set[str] = frozenset(),
+    # annotations of the class and everything it inherits, resolved by the caller
+    # before the class existed - its namespace would otherwise shadow a type used
+    # as an annotation with the slot descriptor of the same name
+    annotations: Mapping[str, Any] | None = None,
 ) -> ObjectAttribute:
     recursion_guard: MutableMapping[Any, AttributeAnnotation] = {}
     resolved_parameters: Mapping[str, AttributeAnnotation] = {
@@ -3079,18 +3539,21 @@ def resolve_self_attribute(
         )
     ] = self_attribute
 
-    annotations: Mapping[str, Any]
+    resolved_annotations: Mapping[str, Any]
     annotate = (
         annotationlib.get_annotate_from_class_namespace(namespace)
-        if namespace is not None
+        if namespace is not None and annotations is None
         else None
     )
-    if annotate is not None:
-        annotations = {}
+    if annotations is not None:
+        resolved_annotations = annotations
+
+    elif annotate is not None:
+        collected: MutableMapping[str, Any] = {}
         for base in reversed(self_attribute.base.__mro__[1:-1]):
             base_annotate = getattr(base, "__annotate__", None)
             if base_annotate is not None:
-                annotations.update(
+                collected.update(
                     annotationlib.call_annotate_function(
                         base_annotate,
                         annotationlib.Format.FORWARDREF,
@@ -3099,7 +3562,7 @@ def resolve_self_attribute(
                 )
 
             else:
-                annotations.update(
+                collected.update(
                     get_type_hints(
                         base,
                         localns={base.__name__: base},
@@ -3107,16 +3570,17 @@ def resolve_self_attribute(
                     )
                 )
 
-        annotations.update(
+        collected.update(
             annotationlib.call_annotate_function(
                 annotate,
                 annotationlib.Format.FORWARDREF,
                 owner=self_attribute.base,
             )
         )
+        resolved_annotations = collected
 
     else:
-        annotations = get_type_hints(
+        resolved_annotations = get_type_hints(
             self_attribute.base,
             localns={
                 self_attribute.base.__name__: self_attribute.base,
@@ -3124,7 +3588,7 @@ def resolve_self_attribute(
             include_extras=True,
         )
 
-    for key, annotation in annotations.items():
+    for key, annotation in resolved_annotations.items():
         if key.startswith("__"):
             continue  # do not include special items
 
@@ -3138,10 +3602,48 @@ def resolve_self_attribute(
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
         )
-        if hasattr(cls, key) and attribute.required:
+        if key in defaults and attribute.required:
             attribute = attribute.annotated((NOT_REQUIRED,))
 
         attributes[key] = attribute
+
+    return self_attribute
+
+
+def _declared_self_attribute(
+    annotation: Any,
+    /,
+) -> ObjectAttribute | None:
+    """The resolved attribute of a class, when it is the one that class declared.
+
+    Parameters
+    ----------
+    annotation : Any
+        Annotation to inspect - a class above all, anything else resolving to
+        nothing.
+
+    Returns
+    -------
+    ObjectAttribute | None
+        Attribute the class resolved for itself, or ``None`` when it has not
+        resolved one yet.
+
+    Notes
+    -----
+    A class being created has no attribute of its own yet - it is resolved to be
+    assigned, and looking the name up on it reaches the one of its base instead,
+    describing that class rather than the one the annotation refers to. The base
+    of the attribute is what tells the two apart, so a class referring to itself
+    within its own body resolves through the recursion guard, which holds the
+    attribute being built for exactly that.
+    """
+    self_attribute: Any = getattr(annotation, "__SELF_ATTRIBUTE__", None)
+    if self_attribute is None:
+        return None
+
+    assert isinstance(self_attribute, ObjectAttribute)  # nosec: B101
+    if isinstance(annotation, type) and self_attribute.base is not annotation:
+        return None  # inherited from a base - this class has not resolved its own
 
     return self_attribute
 
@@ -3260,7 +3762,10 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
     visited.add(attribute_id)
 
     if isinstance(attribute, AliasAttribute):
-        if attribute.alias == alias_name and attribute.module == alias_module:
+        # the declared alias, never the reported one - `alias` is overridden by an
+        # `Alias(...)` annotation, which would leave an annotated recursive use
+        # unmatched here and unresolved by the time it is validated against
+        if attribute.type_alias == alias_name and attribute.module == alias_module:
             if attribute._resolved is None:  # pyright: ignore[reportPrivateUsage]
                 attribute.resolve(alias_target)
 
@@ -3490,8 +3995,7 @@ def _resolve_generic_alias(
 
     # if we have resolved it use what we got
     if not isinstance(resolved_origin, types.GenericAlias | typing._GenericAlias):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        if specialized_self := getattr(resolved_origin, "__SELF_ATTRIBUTE__", None):
-            assert isinstance(specialized_self, ObjectAttribute)  # nosec: B101
+        if specialized_self := _declared_self_attribute(resolved_origin):
             return specialized_self
 
         return resolve_attribute(
@@ -3726,12 +4230,15 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
         case (
             builtins.set
+            | builtins.frozenset
             | collections_abc.Set
             | collections_abc.MutableSet
             | typing.Set  # noqa: UP006
             | typing.MutableSet
+            | typing.FrozenSet  # noqa: UP006
             | typing_extensions.Set
             | typing_extensions.MutableSet
+            | typing_extensions.FrozenSet
         ):
             values_annotation: Any
             match get_args(annotation):
@@ -3808,9 +4315,41 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 ),
             )
 
+        case (
+            collections_abc.Collection
+            | collections_abc.Iterable
+            | typing.Collection
+            | typing.Iterable
+            | typing_extensions.Collection
+            | typing_extensions.Iterable
+        ):
+            values_annotation: Any
+            match get_args(annotation):
+                case (values,):
+                    values_annotation = values
+
+                case _:
+                    values_annotation = Any
+
+            # unordered and single use iterables are normalized to an immutable
+            # sequence first - the annotation admits them while the stored value
+            # has to be an immutable snapshot of its elements
+            return ValidableAttribute(
+                validating=_iterable_snapshot,
+                attribute=SequenceAttribute(
+                    base=Sequence[values_annotation],
+                    values=resolve_attribute(
+                        values_annotation,
+                        localns=localns,
+                        module=module,
+                        resolved_parameters=resolved_parameters,
+                        recursion_guard=recursion_guard,
+                    ),
+                ),
+            )
+
         case origin:
-            if self_attribute := getattr(annotation, "__SELF_ATTRIBUTE__", None):
-                assert isinstance(self_attribute, ObjectAttribute)  # nosec: B101
+            if self_attribute := _declared_self_attribute(annotation):
                 if validate := getattr(origin, "validate", None):
                     return ValidableAttribute(
                         validating=validate,
@@ -3908,8 +4447,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
             )
-
-            return attribute.annotated(tuple(annotation_args[1:]))
+            return attribute.annotated(_annotation_markers(annotation_args[1:]))
 
         case typing.TypeVar | typing_extensions.TypeVar:
             if resolved := resolved_parameters.get(annotation.__name__):
@@ -4012,7 +4550,11 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 
             return attrbute
 
-        case builtins.str():
+        # a value pattern, not a class pattern - the subject is the type of the
+        # annotation, so `builtins.str()` would ask whether the `str` class is an
+        # instance of `str` and never match, leaving string annotations resolved
+        # as an opaque custom type which fails on the first validation
+        case builtins.str:
             resolved: Any = _evaluate_forward_ref(
                 annotation,
                 localns=localns,

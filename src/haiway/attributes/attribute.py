@@ -17,10 +17,20 @@ class Attribute(Immutable):
     name: str
     annotation: AttributeAnnotation
     default: DefaultValue
+    # text rendered instead of the value when the attribute is marked sensitive,
+    # resolved once from the annotation - the renderers read it on each rendering
+    redaction: str | None = None
 
     @property
     def alias(self) -> str | None:
         return self.annotation.alias
+
+    @property
+    def key(self) -> str:
+        # the name this attribute is keyed by when rendered or serialized - the
+        # alias when one was declared, the declared name otherwise
+        alias: str | None = self.annotation.alias
+        return alias if alias is not None else self.name
 
     @property
     def description(self) -> str | None:
@@ -44,7 +54,7 @@ class Attribute(Immutable):
         /,
     ) -> Any:
         if value is MISSING:
-            return self.annotation.validate(self.default())
+            return self._validated_default()
 
         else:
             return self.annotation.validate(value)
@@ -54,20 +64,27 @@ class Attribute(Immutable):
         mapping: Mapping[str, Any],
         /,
     ) -> Any:
-        value: Any
-        if self.alias is None:
-            value = mapping.get(
-                self.name,
-                self.default(),
-            )
+        if self.alias is not None and self.alias in mapping:
+            return self.annotation.validate(mapping[self.alias])
+
+        elif self.name in mapping:
+            return self.annotation.validate(mapping[self.name])
 
         else:
-            value = mapping.get(
-                self.alias,
-                mapping.get(
-                    self.name,
-                    self.default(),
-                ),
-            )
+            return self._validated_default()
 
-        return self.annotation.validate(value)
+    def _validated_default(self) -> Any:
+        value: Any = self.default()
+        try:
+            return self.annotation.validate(value)
+
+        except Exception as exc:
+            # an environment backed default resolves to MISSING when the variable
+            # is not set - reporting the type mismatch would name the annotation
+            # instead of the variable which actually has to be provided
+            if value is MISSING and self.default.env is not None:
+                raise ValueError(
+                    f"Required environment value `{self.default.env}` is missing!"
+                ) from exc
+
+            raise

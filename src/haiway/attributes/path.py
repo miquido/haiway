@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import copy
 from typing import Any, NoReturn, TypeAliasType, final, get_args, get_origin, overload
 
+from haiway.attributes.annotations import ObjectAttribute
 from haiway.types import MISSING, Missing, not_missing
 
 __all__ = ("AttributePath",)
@@ -822,7 +823,10 @@ class AttributePath[Root, Attribute]:
         ), f"Accessing private/special attribute paths ({name}) is forbidden"
 
         try:
-            annotation: Any = self.__attribute__.__annotations__[name]
+            annotation: Any = _attribute_annotation(
+                self.__attribute__,
+                name=name,
+            )
 
         except Exception as exc:
             raise AttributeError(
@@ -843,7 +847,7 @@ class AttributePath[Root, Attribute]:
             attribute=annotation,
         )
 
-    def __getitem__(  # noqa: C901, PLR0912
+    def __getitem__(
         self,
         key: str | int,
     ) -> Any:
@@ -872,20 +876,7 @@ class AttributePath[Root, Attribute]:
             If the key type is incompatible with the attribute type or if the
             attribute type does not support item access
         """
-        unaliased_attribute: Any = _unaliased(self.__attribute__)
-        if isinstance(unaliased_attribute, types.UnionType) or (
-            get_origin(unaliased_attribute) is typing.Union
-        ):
-            non_optional = tuple(
-                arg for arg in get_args(unaliased_attribute) if arg is not types.NoneType
-            )
-            if len(non_optional) != 1:
-                raise TypeError(
-                    "Unsupported Union type annotation",
-                    self.__attribute__.__name__,
-                )
-
-            unaliased_attribute = _unaliased(non_optional[0])
+        unaliased_attribute: Any = _unaliased_required(self.__attribute__)
 
         match get_origin(unaliased_attribute) or unaliased_attribute:
             case collections_abc.Mapping | typing.Mapping | builtins.dict:
@@ -1071,6 +1062,47 @@ class AttributePath[Root, Attribute]:
             )
 
             return resolved
+
+
+def _attribute_annotation(
+    subject: Any,
+    /,
+    name: str,
+) -> Any:
+    # an optional attribute is traversed through the type it holds when present,
+    # the same way an optional container is indexed through its element type
+    required: Any = _unaliased_required(subject)
+    # a `State` resolved every annotation it declares or inherits when it was
+    # created - reading that resolution instead of `__annotations__` reaches an
+    # inherited attribute, never yields an unevaluated forward reference, and
+    # names the type the attribute actually holds rather than the one it was
+    # declared with, `list[int]` being stored as a tuple above all
+    self_attribute: ObjectAttribute | None = getattr(required, "__SELF_ATTRIBUTE__", None)
+    if self_attribute is not None:
+        return self_attribute.attributes[name].base
+
+    # anything else - a TypedDict or a plain class reached through a container -
+    # is left to answer for its own annotations
+    return required.__annotations__[name]
+
+
+def _unaliased_required(base: Any) -> Any:
+    unaliased: Any = _unaliased(base)
+    if not isinstance(unaliased, types.UnionType) and get_origin(unaliased) is not typing.Union:
+        return unaliased
+
+    required: tuple[Any, ...] = tuple(
+        argument for argument in get_args(unaliased) if argument is not types.NoneType
+    )
+    # a union of several types has no single one to traverse into - only an
+    # optional is resolved here, everything else is ambiguous
+    if len(required) != 1:
+        raise TypeError(
+            "Unsupported Union type annotation",
+            getattr(base, "__name__", str(base)),
+        )
+
+    return _unaliased(required[0])
 
 
 def _unaliased(base: Any) -> Any:

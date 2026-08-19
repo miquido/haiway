@@ -21,14 +21,12 @@ __all__ = ("ContextScope",)
 class ContextScope:
     __slots__ = (
         "_disposables",
-        "_events",
         "_exit_stack",
         "_identifier",
         "_isolated",
         "_observability",
         "_presets",
         "_state",
-        "_task_group",
     )
 
     def __init__(
@@ -54,8 +52,6 @@ class ContextScope:
         self._state: ContextState | None = None
         # prepare for isolation
         self._isolated: bool = isolated or self._identifier.is_root
-        self._task_group: ContextTaskGroup | None = None
-        self._events: ContextEvents | None = None
         self._exit_stack: AsyncExitStack = AsyncExitStack()
 
     async def __aenter__(self) -> str:
@@ -81,10 +77,9 @@ class ContextScope:
                 )
 
             else:
-                presets_disposables: Disposables = presets.resolve()
                 self._state = ContextState.updating(
                     (
-                        *await self._exit_stack.enter_async_context(presets_disposables),
+                        *await self._exit_stack.enter_async_context(presets.resolve()),
                         *await self._exit_stack.enter_async_context(self._disposables),
                     )
                 )
@@ -92,12 +87,16 @@ class ContextScope:
             # and ensure state is used
             self._exit_stack.enter_context(self._state)
 
-            # provide isolation for tasks and events last so they exit first
+            # enter the task group after everything its tasks are given to work
+            # with - it is joined on exit before the state and the disposables
+            # are released, so a task spawned within the scope can't keep running
+            # against a connection pool or a client which was already closed
+            await self._exit_stack.enter_async_context(ContextTaskGroup())
+
+            # provide events last so they exit first - closing the event bus
+            # releases all pending subscribers so the task group can join them
             if self._isolated:
-                self._task_group = ContextTaskGroup()
-                await self._exit_stack.enter_async_context(self._task_group)
-                self._events = ContextEvents(loop=get_running_loop())
-                await self._exit_stack.enter_async_context(self._events)
+                await self._exit_stack.enter_async_context(ContextEvents(loop=get_running_loop()))
 
             return trace_id
 

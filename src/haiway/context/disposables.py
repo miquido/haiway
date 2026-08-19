@@ -1,5 +1,5 @@
-from asyncio import CancelledError, gather
-from collections.abc import Collection, Generator, Iterable, Iterator, MutableSequence, Sequence
+from asyncio import CancelledError, Future, gather, shield, sleep
+from collections.abc import Collection, Iterable, Iterator, MutableSequence, Sequence
 from types import TracebackType
 from typing import Any, NoReturn, Protocol, Self, cast, final, runtime_checkable
 
@@ -36,8 +36,6 @@ class DisposableState:
         cls,
         *state: DisposableStatePreparing | State,
     ) -> Self:
-        # TODO: consider making transformations before actual preparation
-        # to have better performance when preparing state
         async def preparing() -> Iterable[State]:
             results: MutableSequence[State] = []
             for element in state:
@@ -86,10 +84,7 @@ class Disposables:
     ) -> Self:
         return cls(disposables)
 
-    __slots__ = (
-        "_disposables",
-        "_status",
-    )
+    __slots__ = ("_disposables",)
 
     def __init__(
         self,
@@ -99,25 +94,68 @@ class Disposables:
         self._disposables: Collection[Disposable] = tuple(
             disposable for disposable in disposables if disposable is not None
         )
-        self._status: bool = False  # TODO: to be converted to status tracking of partial success
 
     async def __aenter__(self) -> Iterator[State]:
-        assert self._status is False  # nosec: B101
+        if not self._disposables:
+            return iter(())  # nothing to prepare
+
+        # preparation is atomic - either nothing starts or everything gets
+        # prepared, refuse to start when cancellation is already requested
+        # yield to deliver the pending cancellation - raising a fresh one
+        # would leave the task cancellation request unhandled
+        await sleep(0)
+
+        preparation: Future[list[Iterable[State] | State | BaseException]] = gather(
+            *(disposable.__aenter__() for disposable in self._disposables),
+            return_exceptions=True,
+        )
+
+        results: Sequence[Iterable[State] | State | BaseException]
         try:
-            return _collect_state(
-                await gather(
-                    *(disposable.__aenter__() for disposable in self._disposables),
-                    return_exceptions=True,
+            # shield the preparation - cancelling it midway would leave
+            # already prepared elements without anyone to dispose them
+            results = await shield(preparation)
+
+        except BaseException as exc:  # cancelled while preparing
+            # shield the cleanup as well - repeated cancellation
+            # can't be allowed to abandon prepared elements
+            await shield(
+                self._dispose_prepared(
+                    preparation,
+                    cause=exc,
                 )
             )
+            raise  # reraise cancellation
 
-        except BaseException:
-            # TODO: FIXME: dispose only those which succeeded
+        try:
+            return _collect_state(results)  # raises on preparation errors
 
+        except BaseException as exc:
+            await self._dispose_prepared(
+                preparation,
+                cause=exc,
+            )
             raise  # reraise exception
 
-        finally:
-            self._status = True
+    async def _dispose_prepared(
+        self,
+        preparation: Future[list[Iterable[State] | State | BaseException]],
+        /,
+        cause: BaseException,
+    ) -> None:
+        await gather(
+            # dispose items which succeeded, the rest was never prepared
+            *(
+                disposable.__aexit__(type(cause), cause, cause.__traceback__)
+                for disposable, result in zip(
+                    self._disposables,
+                    await preparation,
+                    strict=True,
+                )
+                if not isinstance(result, BaseException)
+            ),
+            return_exceptions=True,  # the cause takes precedence
+        )
 
     async def __aexit__(
         self,
@@ -125,47 +163,27 @@ class Disposables:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert self._status is True  # nosec: B101
-        try:
-            results: Iterable[BaseException | None] = await gather(
-                *(
-                    disposable.__aexit__(exc_type, exc_val, exc_tb)
-                    for disposable in self._disposables
-                ),
-                return_exceptions=True,
-            )
-
-            exceptions: MutableSequence[BaseException] = []
-            for result in results:
-                if isinstance(result, BaseException):
-                    exceptions.append(result)
-
-            if not exceptions:
-                return  # no errors
-
-            if len(exceptions) == 1:
-                raise exceptions[0]  # single error
-
-            if all(isinstance(exception, Exception) for exception in exceptions):
-                raise ExceptionGroup(
-                    "Disposables disposal errors",
-                    cast(Sequence[Exception], exceptions),
+        results: Iterable[BaseException | None] = await gather(
+            *(
+                disposable.__aexit__(
+                    exc_type,
+                    exc_val,
+                    exc_tb,
                 )
+                for disposable in self._disposables
+            ),
+            return_exceptions=True,
+        )
 
-            if all(isinstance(exception, CancelledError) for exception in exceptions):
-                raise CancelledError()  # cancelled
-
-            raise BaseExceptionGroup("Disposables disposal errors", exceptions)
-
-        finally:
-            self._status = False
+        _raise_collected(
+            tuple(result for result in results if isinstance(result, BaseException)),
+            message="Disposables disposal errors",
+        )
 
     def extended(
         self,
         *disposables: Disposable,
     ) -> Self:
-        assert self._status is False  # nosec: B101
-
         if not disposables:
             return self
 
@@ -173,38 +191,6 @@ class Disposables:
 
     def __bool__(self) -> bool:
         return len(self._disposables) > 0
-
-
-def _collect_state(
-    results: Sequence[BaseException | Iterable[State] | State],
-) -> Generator[State]:
-    exceptions: MutableSequence[BaseException] = []
-    for result in results:
-        if isinstance(result, BaseException):
-            exceptions.append(result)
-
-        elif isinstance(result, State):
-            yield result
-
-        else:
-            yield from result
-
-    if not exceptions:
-        return  # no errors
-
-    if len(exceptions) == 1:
-        raise exceptions[0]  # single error
-
-    if all(isinstance(exception, Exception) for exception in exceptions):
-        raise ExceptionGroup(
-            "Disposables preparation errors",
-            cast(Sequence[Exception], exceptions),
-        )
-
-    if all(isinstance(exception, CancelledError) for exception in exceptions):
-        raise CancelledError()  # cancelled
-
-    raise BaseExceptionGroup("Disposables preparation errors", exceptions)
 
 
 @final  # immutable
@@ -297,3 +283,52 @@ class ContextDisposables:
             f"Can't modify immutable {self.__class__.__qualname__}"
             f" attribute - '{name}' cannot be deleted"
         )
+
+
+def _collect_state(
+    results: Sequence[Iterable[State] | State | BaseException],
+    /,
+) -> Iterator[State]:
+    state: MutableSequence[State] = []
+    errors: MutableSequence[BaseException] = []
+    for result in results:
+        if isinstance(result, BaseException):
+            errors.append(result)
+
+        elif isinstance(result, State):
+            state.append(result)
+
+        else:
+            state.extend(result)
+
+    _raise_collected(
+        errors,
+        message="Disposables preparation errors",
+    )
+
+    return iter(state)
+
+
+def _raise_collected(
+    exceptions: Sequence[BaseException],
+    /,
+    message: str,
+) -> None:
+    match exceptions:
+        case ():
+            return  # no errors
+
+        case (exception,):
+            raise exception  # single error
+
+        case _:
+            if all(isinstance(exception, Exception) for exception in exceptions):
+                raise ExceptionGroup(
+                    message,
+                    cast(Sequence[Exception], exceptions),
+                )
+
+            if all(isinstance(exception, CancelledError) for exception in exceptions):
+                raise CancelledError()  # cancelled
+
+            raise BaseExceptionGroup(message, exceptions)

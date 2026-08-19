@@ -59,15 +59,31 @@ from uuid import uuid4
 from haiway import Default, State
 
 class RequestContext(State):
-    request_id: str = Default(default_factory=lambda: uuid4().hex)
+    request_id: str = Default(factory=lambda: uuid4().hex)
     retries: int = Default(3)
+```
+
+Environment-backed defaults name the variable with `env`. `default` is the fallback used when the
+variable is not set, and `mapping` converts the raw string to the type of the field:
+
+```python
+from haiway import Default, State, parse_bool
+
+class ServiceConfig(State):
+    host: str = Default(env="SERVICE_HOST", default="localhost")
+    port: int = Default(env="SERVICE_PORT", mapping=int, default=8080)
+    tracing: bool = Default(env="SERVICE_TRACING", mapping=parse_bool, default=False)
+    token: str = Default(env="SERVICE_TOKEN")  # required - no fallback
 ```
 
 Important behavior:
 
 - Literal defaults are reused as-is
 - Factories are called for each new instance
-- Environment-backed defaults are read during instance construction
+- Environment-backed defaults are read during instance construction, not at import time, so
+  `load_env()` applies regardless of import order
+- Without a `default`, an unset variable makes the field required and construction reports the
+  variable by name
 - `Default(...)` is a field specifier, not a runtime descriptor
 
 ## `Immutable`
@@ -118,10 +134,13 @@ adds:
 
 - validation and normalization through `Meta.of(...)`, `Meta.from_mapping(...)`, and
   `Meta.from_json(...)`
-- convenience accessors such as `.kind`, `.name`, `.description`, `.identifier`, `.created`, and
-  `.tags`
-- builder-style methods such as `.with_tags(...)`, `.with_created(...)`, `.merged_with(...)`, and
-  `.excluding(...)`
+- convenience accessors such as `.kind`, `.name`, `.description`, `.identifier`, `.error`,
+  `.created`, `.last_updated`, and `.tags`
+- typed getters for arbitrary keys - `.get_str(...)`, `.get_int(...)`, `.get_float(...)`,
+  `.get_bool(...)`, `.get_uuid(...)`, and `.get_datetime(...)` - each raising `TypeError` when the
+  stored value has a different type
+- builder-style methods such as `.with_tags(...)`, `.with_error(...)`, `.with_created(...)`,
+  `.merged_with(...)`, and `.excluding(...)`
 
 ```python
 from haiway import Meta
@@ -143,6 +162,17 @@ Normalization rules:
 - invalid values raise `TypeError`
 
 `Meta.empty` is a shared empty instance returned by `Meta.of(None)`.
+
+Accessors normalize on read rather than storing rich types: `.error` stores the stringified message
+under `"error"` and returns it wrapped in a plain `Exception`, so the original exception type does
+not survive a round trip.
+
+```python
+meta = Meta.empty.with_error(ValueError("quota exceeded"))
+
+assert meta["error"] == "quota exceeded"
+assert isinstance(meta.error, Exception)
+```
 
 One subtlety matters: direct `Meta({...})` construction does not recursively validate or normalize
 values on its own. Use the factory helpers when the input comes from user code, JSON, or mutable

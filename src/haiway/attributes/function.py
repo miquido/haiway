@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableSet, Sequence
 from functools import update_wrapper
 from inspect import Parameter as InspectParameter
 from inspect import _empty as INSPECT_EMPTY  # pyright: ignore[reportPrivateUsage]
@@ -7,7 +7,7 @@ from typing import Any, get_type_hints
 
 from haiway.attributes.annotations import AttributeAnnotation, resolve_attribute
 from haiway.attributes.attribute import Attribute
-from haiway.attributes.validation import ValidationContext
+from haiway.attributes.validation import ValidationError
 from haiway.types import MISSING, DefaultValue
 
 __all__ = ("Function",)
@@ -61,11 +61,20 @@ class Function[**Args, Result]:
         self._keyword_arguments: Mapping[str, Attribute] = {}
         self._aliased_keyword_arguments: Mapping[str, Attribute] = {}
         self._variadic_keyword_arguments: Attribute | None = None
+        # names of the parameters declaring `Default(...)` instead of a plain
+        # default - python binds the marker itself for an omitted one, so their
+        # value has to be resolved here before the call. a plain default is left
+        # to python, which already binds the intended value and never validates
+        # it, so resolving one here would coerce a value the caller never passed
+        self._deferred_defaults: MutableSet[str] = set()
         type_hints: Mapping[str, Any] = get_type_hints(
             function,
             include_extras=True,
         )
         for parameter in signature(function).parameters.values():
+            if isinstance(parameter.default, DefaultValue):
+                self._deferred_defaults.add(parameter.name)
+
             match parameter.kind:
                 case InspectParameter.POSITIONAL_ONLY:
                     self._positional_arguments.append(
@@ -128,17 +137,14 @@ class Function[**Args, Result]:
             attribute: Attribute
             if idx < len(self._positional_arguments):
                 attribute = self._positional_arguments[idx]
-                with ValidationContext.scope(f".{attribute.name}"):
-                    validated_args.append(attribute.validate(value))
-
+                validated_args.append(_validated(attribute, attribute.name, value))
                 consumed_args.add(attribute.name)
                 if attribute.alias is not None:
                     consumed_args.add(attribute.alias)
 
             elif self._variadic_positional_arguments is not None:
                 attribute = self._variadic_positional_arguments
-                with ValidationContext.scope(f".{attribute.name}"):
-                    validated_args.append(attribute.validate(value))
+                validated_args.append(_validated(attribute, attribute.name, value))
 
             else:
                 raise TypeError(f"Unexpected positional argument at index {idx}") from None
@@ -149,9 +155,7 @@ class Function[**Args, Result]:
 
             if key in self._keyword_arguments:
                 attribute: Attribute = self._keyword_arguments[key]
-                with ValidationContext.scope(f".{key}"):
-                    validated_kwargs[attribute.name] = attribute.validate(value)
-
+                validated_kwargs[attribute.name] = _validated(attribute, key, value)
                 consumed_args.add(attribute.name)
                 if attribute.alias is not None:
                     consumed_args.add(attribute.alias)
@@ -159,21 +163,63 @@ class Function[**Args, Result]:
             elif key in self._aliased_keyword_arguments:
                 attribute: Attribute = self._aliased_keyword_arguments[key]
                 assert attribute.alias is not None  # nosec: B101
-                with ValidationContext.scope(f".{attribute.name}"):
-                    validated_kwargs[attribute.name] = attribute.validate(value)
+                validated_kwargs[attribute.name] = _validated(
+                    attribute,
+                    attribute.name,
+                    value,
+                )
 
                 consumed_args.add(attribute.name)
                 consumed_args.add(attribute.alias)
 
             elif self._variadic_keyword_arguments is not None:
                 attribute = self._variadic_keyword_arguments
-                with ValidationContext.scope(f".{key}"):
-                    validated_kwargs[key] = attribute.validate(value)
+                validated_kwargs[key] = _validated(attribute, key, value)
 
             else:
                 raise TypeError(f"Unexpected keyword argument '{key}'") from None
 
+        self._fill_deferred_defaults(
+            validated_args,
+            validated_kwargs,
+            provided_positional=len(args),
+            consumed_args=consumed_args,
+        )
+
         return validated_args, validated_kwargs
+
+    def _fill_deferred_defaults(
+        self,
+        validated_args: list[Any],
+        validated_kwargs: dict[str, Any],
+        /,
+        *,
+        provided_positional: int,
+        consumed_args: set[str],
+    ) -> None:
+        if not self._deferred_defaults:
+            return  # nothing declares a marker, python resolves every default
+
+        # a positional only parameter can be filled by position alone, so the
+        # fill stops at the first slot with nothing to provide - appending past
+        # it would bind the value to the wrong parameter. the slots left behind
+        # are the ones python resolves itself, by its default or by raising
+        for index in range(provided_positional, len(self._positional_arguments)):
+            attribute: Attribute = self._positional_arguments[index]
+            if attribute.name in self._keyword_arguments:
+                break  # reached the keyword fillable ones, filled below
+
+            if attribute.name not in self._deferred_defaults:
+                break  # nothing to resolve here, later slots would shift
+
+            validated_args.append(_validated(attribute, attribute.name, MISSING))
+            consumed_args.add(attribute.name)
+
+        for name, attribute in self._keyword_arguments.items():
+            if name in consumed_args or name not in self._deferred_defaults:
+                continue  # already provided, or resolved by python itself
+
+            validated_kwargs[name] = _validated(attribute, name, MISSING)
 
     def __call__(
         self,
@@ -182,6 +228,21 @@ class Function[**Args, Result]:
     ) -> Result:
         validated_args, validated_kwargs = self.validate_arguments(*args, **kwargs)
         return self._call(*validated_args, **validated_kwargs)  # pyright: ignore[reportCallIssue]
+
+
+def _validated(
+    attribute: Attribute,
+    name: str,
+    value: Any,
+    /,
+) -> Any:
+    try:
+        return attribute.validate(value)
+
+    # the position of the failure is spelled out here rather than established
+    # before validating - an argument which validates pays nothing for it
+    except Exception as exc:
+        ValidationError.report(f".{name}", exc)
 
 
 def _resolve_parameter(

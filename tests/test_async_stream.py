@@ -1,4 +1,4 @@
-from asyncio import CancelledError, Task
+from asyncio import CancelledError, Task, sleep
 
 import pytest
 from pytest import raises
@@ -187,3 +187,38 @@ async def test_producer_race_on_same_ready():
 
     # Exactly both values delivered once, in some order
     assert sorted(got) == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_delivers_next_element_when_producer_was_cancelled():
+    stream: AsyncStream[int] = AsyncStream()
+
+    abandoned: Task[None] = ctx.spawn(stream.send, 0)
+    await sleep(0)  # let it park waiting for a consumer
+    delivering: Task[None] = ctx.spawn(stream.send, 1)
+    await sleep(0)  # let it park behind the abandoned one
+
+    abandoned.cancel()
+    with raises(CancelledError):
+        await abandoned
+
+    # the abandoned element is dropped, the next one is still delivered
+    assert await anext(stream) == 1
+    await delivering
+
+
+@pytest.mark.asyncio
+async def test_finishes_when_producer_was_cancelled():
+    stream: AsyncStream[int] = AsyncStream()
+
+    abandoned: Task[None] = ctx.spawn(stream.send, 0)
+    await sleep(0)  # let it park waiting for a consumer
+
+    abandoned.cancel()
+    with raises(CancelledError):
+        await abandoned
+
+    stream.finish()  # releasing an abandoned producer must not fail
+
+    with raises(StopAsyncIteration):
+        await anext(stream)

@@ -1,113 +1,219 @@
-# Haiway Framework
+# Haiway — LLM Usage Guide
 
-Haiway is a functional/async framework built around immutable `State`, context-scoped dependency injection (`ctx`), and structured concurrency. Keep typing strict and behavior explicit.
+Haiway (Python 3.14+) is a strictly typed, functional/async framework. Everything is built from
+three primitives: immutable `State`, the scoped context `ctx`, and structured concurrency. There is
+no DI container and no mutable service objects — behavior is `Protocol`-typed functions held inside
+`State` and resolved from the current scope.
 
-## Core Ideas
-- Immutable data: every domain/config object subclasses `State`; instances cannot be mutated, updates are done via `.updating(...)`.
-- Context-first DI: `async with ctx.scope(name_or_preset, *state, disposables=(...)):` installs state for the lifetime of the scope. `ctx.state(Type)` resolves by type. Priority: explicit state > disposables > preset state > parent scope.
-- Protocol-driven logic: define contracts as `Protocol` and inject implementations as state. Expose public API via `@statemethod` on service `State` containers.
-- Structured concurrency: tasks live inside the current scope task group via `ctx.spawn`. Logging, cancellation, and state all propagate automatically.
-- Observability: never `print`. Use `ctx.log_*` and `ctx.record_*`; `LoggerObservability(...)` provides a standard-logging backend, while `haiway.opentelemetry.OpenTelemetry` provides OpenTelemetry integration.
+`pip install haiway`. Core API lives in the root `haiway` package. Optional integrations require
+extras and are imported from their own subpackage: `haiway[httpx]` -> `haiway.httpx`,
+`haiway[postgres]` -> `haiway.postgres`, `haiway[rabbitmq]` -> `haiway.rabbitmq`,
+`haiway[opentelemetry]` -> `haiway.opentelemetry`.
 
-## Minimal Skeleton
+## Mental Model
+
+1. **Data is immutable.** Domain, config, and service objects subclass `State`. Mutation raises;
+   changes produce new instances via `.updating(...)`.
+2. **Dependencies are contextual state.** `ctx.scope(...)` installs state; `ctx.state(Type)`
+   resolves it by exact concrete type.
+3. **Contracts are Protocols, implementations are plain functions.** A service is a `State` holding
+   those functions and exposing `@statemethod` entry points.
+4. **Concurrency is structured.** Tasks live in the scope's task group; context, logging, and
+   cancellation propagate automatically.
+5. **Never `print`.** Use `ctx.log_*` / `ctx.record_*`.
+
+## Canonical Pattern
+
+Split each functionality into `types.py` (Protocols + payload `State`), `state.py` (service `State`
++ `@statemethod` calls), `implementation.py` (functions + factory).
+
 ```python
-from haiway import State, ctx, statemethod
 from typing import Protocol, runtime_checkable
 from uuid import UUID
+from haiway import State, ctx, statemethod
 
-class User(State):
+class User(State):                          # data
     id: UUID
     name: str
 
-@runtime_checkable
+@runtime_checkable                          # contract — gerund name, fully typed, async for I/O
 class UserFetching(Protocol):
     async def __call__(self, user_id: UUID) -> User: ...
 
-class UserService(State):
+class UserService(State):                   # service container
     fetch: UserFetching
 
-    @statemethod
+    @statemethod                            # public entry point
     async def get(self, user_id: UUID) -> User:
         return await self.fetch(user_id)
 
+async def _fetch_user(user_id: UUID) -> User:   # implementation
+    config = ctx.state(ApiConfig)               # contextual dependencies
+    ...
+
+def user_service() -> UserService:              # implementation factory
+    return UserService(fetch=_fetch_user)
+
 async def handler(user_id: UUID) -> User:
-    async with ctx.scope("request", UserService(fetch=my_impl)):
-        return await UserService.get(user_id)
+    async with ctx.scope("request", user_service()):
+        return await UserService.get(user_id)   # class call resolves via ctx.state(UserService)
 ```
 
-## State Essentials
-- Declare **all attributes with types**. Use `Sequence`/`Mapping`/`Set` (from `collections.abc`), not concrete `list`/`dict`/`set`. Use `| None` instead of `Optional`.
-- Immutability is enforced; sequence/set fields are converted to immutable forms (`tuple`, `frozenset`), while mappings remain dict-like and should be treated as read-only. Mutations raise.
-- Metadata via `typing.Annotated` with `Alias`, `Description`, `Specification`, `Meta`, `Validator`. Example:
+`@statemethod` uses the instance when called on an instance and `ctx.state(cls)` when called on the
+class. Write it with `self` first; both call styles type-check.
+
+## State
+
 ```python
+from collections.abc import Sequence
 from typing import Annotated
-from haiway import Alias, Description, Meta, Specification, State, Validator
+from haiway import Alias, Default, Description, Meta, Sensitive, State, Validator, Verifier
+
+def positive(value: int) -> int:   # verifiers return the value or raise
+    if value <= 0:
+        raise ValueError("Value has to be positive")
+
+    return value
 
 class Invoice(State):
-    total_cents: Annotated[int, Specification({"minimum": 0}), Validator(lambda v: v if v >= 0 else (_ for _ in ()).throw(ValueError(">=0")))]
+    total_cents: Annotated[int, Verifier(positive)]
     customer: Annotated[str, Alias("customer_id"), Description("External ID")]
+    lines: Sequence[str] = ()
+    api_key: Annotated[str, Sensitive()] = Default(env="API_KEY")
     meta: Meta = Meta.of(kind="invoice")
 ```
-- Lazy/default values: wrap in `Default(...)` or `Default(default_factory=...)`; env helpers integrate (`Default(env="API_KEY")`).
-- Conversions: `to_mapping(recursive=True)` returns nested mapping/list structures honoring aliases and metadata.
-- Generics: `class Box[T](State): value: T`; specialization is validated (`Box[int](value=1)` ok, `Box[int](value="x")` raises).
+
+- Annotate **every** attribute. Use `collections.abc` types (`Sequence`, `Mapping`, `Set`), never
+  `list`/`dict`/`set`; use `X | None`, never `Optional[X]`.
+- Values are validated against annotations at construction. Sequences/sets become
+  `tuple`/`frozenset`; mappings stay dict-like and must be treated as read-only.
+- Defaults: `Default(value)`, `Default(default_factory=...)`, `Default(env="VAR")`.
+- `Annotated` metadata: `Alias`, `Description`, `Specification`, `Validator` (pre-validation, may
+  coerce), `Verifier` (post-validation, enforces invariants), `Sensitive` (renders as `<redacted>` in
+  `str`/`repr`/`format_str`, value kept for serialization - use it for every secret).
+- Instances: `.updating(**kwargs)`, `.to_mapping()`, `.to_json()`, `.from_mapping()`,
+  `.from_json()`, `.json_schema()`. Generics are supported and enforced (`class Box[T](State)`).
+- `Immutable` is the lighter, non-validating frozen base for infrastructure objects (clients,
+  responses) that must not propagate as scope state. `Map` is an immutable `dict`.
 
 ## Context & Scopes
-- Enter scopes with a name string or a `ContextPresets` instance. Provide state instances and/or `disposables` (async context managers yielding state). Example:
+
 ```python
-async with ctx.scope(
-    ContextPresets.of("dev", AppConfig(...)),
-    RuntimeConfig(debug=True),
-    disposables=(HTTPXClient(base_url="https://api"),),
-):
+async with ctx.scope("request", RuntimeConfig(debug=True), disposables=(HTTPXClient(),)):
     config = ctx.state(RuntimeConfig)
 ```
-- State lookup: `ctx.state(Type, default=...)`; `ctx.contains_state(Type)` -> bool. Missing raises `ContextStateMissing` if no default or default construction is possible.
-- Presets compose reusable bundles of state + disposables; explicit parameters override preset contents. Use `ctx.presets(...)` to register multiple presets for name-based lookup.
-- Events: `ctx.send(EventState)` publishes to subscribers; `async for e in ctx.subscribe(EventType): ...` consumes. Events are available only in isolated scopes (root scope or `isolated=True`); unsubscribed events are dropped.
 
-## Concurrency Toolkit
-- `ctx.spawn(callable, *args, **kwargs)` spawns in the current scope task group with context propagation; outside a scope it uses the background task group. Use `ctx.spawn_background(...)` to force background tasks. Cancel via `task.cancel()` or cooperative `ctx.check_cancellation()`. Unhandled child task failures are surfaced when the isolated scope exits.
-- Streaming: `async for item in ctx.stream(async_generator_fn, *args): ...` preserves context for generator work.
-- Concurrent helpers (all async-aware, preserve context):
-  - `process_concurrently(source, handler, concurrent_tasks=2, ignore_exceptions=False)` – fire-and-forget per item, no result collection.
-  - `execute_concurrently(handler, elements, concurrent_tasks=2, return_exceptions=False)` – gather ordered results.
-  - `concurrently(*coros)` – lightweight gather wrapper; `stream_concurrently` for generator pipelines.
-  - Rate control: `throttle(limit, interval)`, `timeout(seconds)`, `retry(...)` decorators; `asynchronous` converts sync callables to threads when absolutely needed.
+`ctx.scope(name_or_preset, /, *state, disposables=None, observability=None, isolated=False)` is an
+async context manager yielding the scope trace id. Nested scopes inherit parent state.
 
-## Resource Management
-- Disposables are async context managers yielding `State` instances. They are started when entering the scope and always cleaned up. Use `ctx.disposables(disposable1(), disposable2())` as a helper inside an existing scope.
-- Common disposables: `haiway.httpx.HTTPXClient` (HTTP backend), custom DB connections, etc.
+State priority, highest first: **explicit state -> explicit disposables -> preset state -> parent
+scope state**.
 
-## Functionalities & Services
-- Expose contracts as `Protocol` objects (runtime-checkable only when you need `isinstance`). Name with gerund (`UserFetching`). Every method fully typed; async where I/O occurs.
-- Services are `State` containers bundling protocol implementations. Public methods are `@statemethod` so you call `Service.method(...)` with context lookup, while keeping the instance available inside for multi-method orchestration.
-- Implementations are plain functions operating on context state (`ctx.state(ConfigType)`); keep them pure where possible and translate external errors into typed exceptions.
+- `ctx.state(Type, default=None)` — raises `ContextMissing` outside any scope and
+  `ContextStateMissing` when absent and no default can be constructed.
+- `ctx.contains_state(Type)`; `ctx.updating(*state)` (sync CM) overrides state in place;
+  `ctx.disposables(*disposables)` adds resources inside an existing scope.
+- `isolated=True` gives the scope its own task group and event bus; the root scope is always
+  isolated.
 
-## I/O Helpers
-- **HTTP**: Use `haiway.helpers.HTTPClient` static methods (`get/post/put/delete/request`). Provide an implementation via state, typically `haiway.httpx.HTTPXClient` disposable. Responses are `HTTPResponse` (immutable; `await response.body()` returns bytes). Errors raise `HTTPClientError` (original cause in `__cause__`).
-- **File access**: use `haiway.helpers.Files.access(...)` to create a `FileAccess` disposable; inside the scope, use `haiway.helpers.File.read()` / `File.write()` for typed async operations.
-- **Postgres**: the `haiway.postgres` package offers async client/state helpers aligned with `asyncpg` patterns; configure via state and keep operations async-only.
-- **RabbitMQ**: the `haiway.rabbitmq` package offers async queue access built on `pika`; use `RabbitMQClient` as a disposable and resolve `RabbitMQ`/`MQQueue`/`MQMessage` from context for typed publish/consume flows.
+**Disposables** are async context managers yielding `State`; the state joins the scope and cleanup
+always runs on exit. Use them for every external resource — connection pools, clients, file handles.
 
-## Caching & Resilience
-- Memoization: `cache` (LRU, in-process, async-only) and `cache_externally(make_key, read, write, clear?)` for custom backends. `clear_cache()` available when supported.
-- Retries/timeouts/throttling: decorators from `haiway.helpers` integrate with `ctx.spawn` and preserve typing.
+**Presets** bundle reusable state and disposables: `ContextPresets.of("dev", AppConfig(...))`, passed
+directly to `ctx.scope(preset)` or registered with `ctx.presets(...)` for name-based lookup.
+
+**Events**: `ctx.send(EventState)` / `async for event in ctx.subscribe(EventType)`. Dispatch is by
+exact type to already-existing subscribers; events with no subscriber are dropped. Requires an event
+bus - owned by a root or `isolated=True` scope, and shared by the nested non-isolated scopes below
+it. Delivery goes upwards - the sending scope and every scope enclosing it - so sibling scopes (other
+requests) never observe each other's events; use `ctx.send(event, broadcast=True)` to reach every
+subscriber on the bus. A subscription ends when the scope *owning* the bus exits, draining the events
+which already arrived - so iterate one to exhaustion only in that scope, and take a bounded number of
+events when subscribing in a nested scope.
+
+## Concurrency
+
+- `ctx.spawn(fn, *args, **kwargs)` -> `Task` in the current scope's task group. Every scope owns one,
+  so the task is awaited by the scope it was spawned in - never by an enclosing one. Scope exit
+  awaits spawned tasks rather than cancelling them, so a task must be able to finish on its own: it
+  must not wait for anything signalled after its scope exits, nor iterate a `ctx.subscribe(...)`
+  subscription to exhaustion outside the scope owning the event bus - both deadlock the scope
+  waiting to join it. `ctx.spawn_background(...)` only when work must outlive the scope - such a
+  task runs with an empty context, so `ctx.state(...)`/`ctx.subscribe(...)` raise `ContextMissing`
+  within it.
+- `ctx.stream(async_generator_fn, ...)` iterates a generator with context preserved.
+- `ctx.check_cancellation()` for cooperative cancellation points.
+- `process_concurrently(source, handler, concurrent_tasks=...)` — fire-and-forget, no results.
+- `execute_concurrently(handler, elements, concurrent_tasks=...)` — ordered results.
+- `concurrently(coroutines, ...)` takes an iterable of coroutines (not varargs);
+  `stream_concurrently(a, b)` interleaves two async iterables.
+- `AsyncQueue` / `AsyncStream` bridge producers to consumers; `Paginated`/`Pagination` model paging.
+
+## Helpers
+
+- Resilience decorators: `@cache` (async-only LRU, plus `cache_externally`), `@retry`, `@timeout`,
+  `@throttle`. `@asynchronous` is the only sanctioned bridge for unavoidable sync calls.
+- Configuration: subclass `Configuration` and `await MyConfig.load(...)`; back it with a
+  `ConfigurationRepository` state (`ConfigurationRepository.volatile(...)` in tests). Raises
+  `ConfigurationMissing` / `ConfigurationInvalid`.
+- Files: `async with Files.access(path, create=..., mode=0o600) as file:` then
+  `await file.read()` / `await file.write(content)`. Created files are owner-only unless `mode`
+  says otherwise, symbolic links are refused. Errors raise `FileException`.
+- Env: `getenv`, `getenv_str/int/float/bool/base64`, `load_env()` — never `os.getenv`.
+- Misc: `as_tuple/as_list/as_set/as_dict/as_map`, `without_missing`, `MISSING`/`is_missing`,
+  `setup_logging()`.
 
 ## Observability
-- Logging: `ctx.log_debug/info/warning/error(message, *args, exception=...)`. There is no `ctx.log_critical(...)`. Never log secrets.
-- Metrics/events/attributes: use `ctx.record_debug(...)`, `ctx.record_info(...)`, `ctx.record_warning(...)`, or `ctx.record_error(...)` with either `event=...`, or `metric=..., value=..., kind=..., unit=?`, or `attributes={...}`. There is no generic `ctx.record(...)`. `ctx.trace_id()` surfaces the current trace identifier.
-- For standard logging, wire `LoggerObservability(...)` into the context. For OTLP/OpenTelemetry export, configure and use `haiway.opentelemetry.OpenTelemetry`.
 
-## Configuration & Environment
-- `Configuration`/`ConfigurationRepository` provide typed configs with repository-backed `load(required: bool = False, default: Configuration | None = None)` helpers. With `required=True`, loading falls back to contextual state and then class default instantiation (no-arg constructor) before raising `ConfigurationMissing`. `ConfigurationInvalid` signals validation/loading failures. `ConfigurationRepository.volatile(...)` is handy for tests.
-- Env helpers: `getenv_*` (str/int/float/bool/base64) and `load_env` convert environment variables into typed values; prefer these instead of `os.getenv`.
+- Logs: `ctx.log_debug/info/warning/error(message, *args, exception=...)`. `log_info` takes no
+  `exception`; there is no `ctx.log_critical`.
+- Records: `ctx.record_debug/info/warning/error(...)` with exactly one of `attributes={...}`,
+  `event=...`, or `metric=..., value=..., kind=...` (`"counter" | "histogram" | "gauge"`). There is
+  no generic `ctx.record(...)`. `ctx.trace_id()` returns the current trace id.
+- Install a backend on the root scope: `observability=LoggerObservability(...)`, or
+  `OpenTelemetry.observability(...)` after a one-time `OpenTelemetry.configure(...)` at startup.
+- Never log secrets, credentials, or full request bodies.
 
-## Non-Negotiable Rules for Contributions
-- Full typing everywhere (params, returns, attributes). Avoid `Any`; if unavoidable, keep scope narrow.
-- Use abstract collection types in public APIs; prefer `Mapping/Sequence/Set` over concrete mutables.
-- Stay async throughout; never block the event loop. Use `asynchronous` only for legacy sync bridges.
-- Never mutate `State`; always create new instances.
-- No `print`; use context logging/observability. Do not leak secrets in logs or errors.
-- Translate external exceptions at the boundary into typed, contextual errors (include provider/operation identifiers, redact sensitive payloads).
-- Keep public symbols exported via `src/haiway/__init__.py` when adding new APIs, and add docstrings for public classes/functions in NumPy style.
+## Integrations
+
+Each integration installs its client as a disposable and exposes a `State` with `@statemethod` calls.
+
+```python
+async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConnectionPool())):
+    response = await HTTPClient.get(url="/users")     # get/post/put, request(...) for other verbs
+    body = await response.body()
+    row = await Postgres.fetch_one("SELECT email FROM users WHERE id = $1", user_id)
+    email = None if row is None else row.get_str("email")
+```
+
+- **HTTP** (`haiway.httpx`): `HTTPXClient` disposable provides `HTTPClient`. `HTTPResponse` is
+  immutable; a `stream=True` body must be consumed inside the issuing scope, reads once, and
+  bodies are `bytes` (encode text yourself). Errors: `HTTPClientError` / `HTTPTimeoutError` /
+  `HTTPConnectionError` / `HTTPBodyConsumedError` (a body read twice - never retry it).
+- **Postgres** (`haiway.postgres`): `PostgresConnectionPool` disposable; `Postgres.fetch`,
+  `fetch_one`, and `execute` acquire a connection when needed. Pin one connection with
+  `Postgres.acquire_connection()` plus `PostgresConnection.transaction()`. `PostgresRow` is an
+  immutable mapping with typed accessors. Errors: `PostgresException`.
+- **RabbitMQ** (`haiway.rabbitmq`): `RabbitMQClient` disposable provides `RabbitMQ`; open a typed
+  `MQQueue` via `RabbitMQ.queue(name, content_encoder=..., content_decoder=...)`, then `publish` /
+  `consume`. Consuming is scoped - `async with await queue.consume() as messages:` then
+  `async for message in messages:` - and leaving it cancels the consumer at the broker.
+  `async with message as content:` acks on success and rejects on exception. Consumers are
+  re-established after a channel drop, so handlers must be idempotent. Errors: `RabbitMQException`
+  carrying `retryable` to tell a transient broker failure from one a retry cannot fix.
+
+## Rules
+
+- Fully type every parameter, return, and attribute. Avoid `Any` outside third-party boundaries.
+- Public APIs accept `Mapping`/`Sequence`/`Set`/`Iterable`, never concrete mutables.
+- Never mutate `State`; build new instances. Prefer composition and `final` over inheritance.
+- Async all the way down; never block the event loop.
+- Name contracts with gerunds (`UserFetching`, `ElementCreating`); add `@runtime_checkable` only
+  when `isinstance` is actually needed.
+- Translate provider/SDK exceptions at the boundary into typed errors carrying provider, operation,
+  and identifiers, with secrets redacted. Never raise bare `Exception`.
+- No `print`, no direct `logging`, no `os.getenv`.
+- Export new public symbols from `src/haiway/__init__.py` (or the integration subpackage) and give
+  them NumPy-style docstrings.
+- Tests: `pytest` with `pytest.mark.asyncio`, no network, state wrapped in `ctx.scope`. Gate with
+  `make format`, `make lint`, `make test`.

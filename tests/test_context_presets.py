@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 
 from pytest import mark, raises
@@ -259,14 +259,17 @@ def test_registry_creation():
         assert ContextPresetsRegistry.select("unknown") is None
 
 
-def test_registry_immutable():
-    registry = ContextPresetsRegistry([])
+def test_presets_immutable():
+    # ContextPresetsRegistry is deliberately not covered here: it declares only
+    # __slots__, so assigning an attribute it does own succeeds. ContextPresets
+    # is the type that actually guards mutation.
+    preset = ContextPresets.of("db")
 
     with raises(AttributeError):
-        registry._presets = {}  # type: ignore
+        preset.name = "other"  # type: ignore[misc]
 
     with raises(AttributeError):
-        del registry._presets  # type: ignore
+        del preset.name  # type: ignore[misc]
 
 
 @mark.asyncio
@@ -462,7 +465,9 @@ async def test_preset_with_mixed_state_sources():
         async with ctx.scope("mixed", CacheState(ttl=900)):  # Override one state
             # Should have all states available
             static_config = ctx.state(ConfigState)
-            assert static_config.api_url in ("https://static.com", "https://dynamic.com")
+            # sources are prepared in order and the last one wins, so the async
+            # factory deterministically overrides the static state
+            assert static_config.api_url == "https://dynamic.com"
 
             db = ctx.state(DatabaseState)
             assert db.connection_string == "dynamic-db"
@@ -575,3 +580,26 @@ async def test_direct_preset_none_falls_back_to_registry():
         async with ctx.scope("fallback"):
             config = ctx.state(ConfigState)
             assert config.api_url == "https://registry.com"
+
+
+@mark.asyncio
+async def test_preset_state_takes_precedence_over_preset_disposables() -> None:
+    @asynccontextmanager
+    async def config_disposable() -> AsyncIterator[State]:
+        yield ConfigState(api_url="from-disposable")
+
+    # both construction paths have to resolve state with the same precedence
+    from_of: ContextPresets = ContextPresets.of(
+        "preset",
+        ConfigState(api_url="from-state"),
+        disposables=(config_disposable,),
+    )
+    from_with_state: ContextPresets = ContextPresets.of(
+        "preset",
+        disposables=(config_disposable,),
+    ).with_state(ConfigState(api_url="from-state"))
+
+    for preset in (from_of, from_with_state):
+        with ctx.presets(preset):
+            async with ctx.scope("preset"):
+                assert ctx.state(ConfigState).api_url == "from-state"

@@ -1,11 +1,18 @@
 import asyncio
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from types import TracebackType
+from uuid import UUID, uuid4
 
 from pytest import mark, raises
 
 from haiway import ContextMissing, State, ctx
+from haiway.context import (
+    ContextIdentifier,
+    Observability,
+    ObservabilityLevel,
+)
 from haiway.context import tasks as tasks_module
 from haiway.context.state import ContextState
 from haiway.context.tasks import ContextTaskGroup
@@ -176,13 +183,32 @@ async def test_scope_task_group_waits_for_spawned_tasks():
 
 
 @mark.asyncio
-async def test_nested_scope_reuses_parent_task_group():
+async def test_nested_scope_uses_own_task_group():
     async with ctx.scope("parent"):
         parent_group = ContextTaskGroup._context.get()
 
         async with ctx.scope("child"):
             child_group = ContextTaskGroup._context.get()
-            assert child_group is parent_group
+            assert child_group is not parent_group
+
+        # parent task group context should be restored after nested scope exit
+        assert ContextTaskGroup._context.get() is parent_group
+
+
+@mark.asyncio
+async def test_nested_scope_awaits_own_spawned_tasks():
+    completion = asyncio.Event()
+
+    async def worker() -> None:
+        await asyncio.sleep(0.01)
+        completion.set()
+
+    async with ctx.scope("parent"):
+        async with ctx.scope("child"):
+            ctx.spawn(worker)
+
+        # the nested scope owns the task, so it is joined when that scope exits
+        assert completion.is_set()
 
 
 @mark.asyncio
@@ -386,3 +412,222 @@ async def test_scope_disposables_base_exception_group_contains_all_errors():
     errors = excinfo.value.exceptions
     assert any(isinstance(err, DisposableBaseError) for err in errors)
     assert any(isinstance(err, RuntimeError) for err in errors)
+
+
+@mark.asyncio
+async def test_spawned_task_error_propagates_out_of_scope():
+    async def failing() -> None:
+        raise ValueError("spawned failure")
+
+    async def scope_with_failing_task() -> None:
+        async with ctx.scope("test"):
+            ctx.spawn(failing)
+            # still running when the spawned task fails, so the task group
+            # cancels this body - that cancellation must not replace the error
+            await asyncio.sleep(1)
+
+    with raises(BaseExceptionGroup) as excinfo:
+        await scope_with_failing_task()
+
+    assert any(isinstance(err, ValueError) for err in excinfo.value.exceptions)
+
+
+@mark.asyncio
+async def test_spawned_task_error_is_visible_to_enclosing_task_group():
+    async def failing() -> None:
+        raise ValueError("spawned failure")
+
+    async def scope_with_failing_task() -> None:
+        async with ctx.scope("test"):
+            ctx.spawn(failing)
+            await asyncio.sleep(1)
+
+    # an enclosing task group has to observe the failure instead of
+    # treating the inner task as merely cancelled
+    with raises(BaseExceptionGroup):
+        async with asyncio.TaskGroup() as group:
+            group.create_task(scope_with_failing_task())
+
+
+@mark.asyncio
+async def test_stream_restores_scope_when_closed_early():
+    async def source():
+        for element in range(100):
+            yield element
+
+    async with ctx.scope("test"):
+        outer: ContextIdentifier = ContextIdentifier.current()
+        collected: list[int] = []
+        stream = aiter(ctx.stream(source))
+        async for element in stream:
+            collected.append(element)
+            if len(collected) >= 2:
+                break
+
+        # closing the stream must restore the consuming scope, not merely leave
+        # a trace id that every child scope inherits anyways
+        await stream.aclose()
+        assert collected == [0, 1]
+        assert ContextIdentifier.current().scope_id == outer.scope_id
+
+
+@mark.asyncio
+async def test_stream_provides_scope_state_to_source():
+    async def source():
+        yield ctx.state(ExampleState).state
+
+    async with ctx.scope("test", ExampleState(state="streamed")):
+        assert [element async for element in ctx.stream(source)] == ["streamed"]
+
+
+@mark.asyncio
+async def test_stream_propagates_source_error():
+    async def source():
+        yield 1
+        raise ValueError("source failure")
+
+    async with ctx.scope("test"):
+        with raises(ValueError):
+            async for _ in ctx.stream(source):
+                pass
+
+
+@mark.asyncio
+async def test_stream_does_not_run_ahead_of_consumer():
+    produced: list[int] = []
+
+    async def source():
+        for element in range(100):
+            produced.append(element)
+            yield element
+
+    async with ctx.scope("test"):
+        collected: list[int] = []
+        async for element in ctx.stream(source):
+            collected.append(element)
+            if len(collected) >= 3:
+                break
+
+        # the source is suspended on delivery instead of draining eagerly
+        assert len(produced) < 10
+
+
+@mark.asyncio
+async def test_record_outside_of_scope_is_silent() -> None:
+    records: list[logging.LogRecord] = []
+
+    class CapturingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = CapturingHandler()
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        # recording out of context has no backend to record within,
+        # it has to degrade silently like logging does instead of reporting a failure
+        ctx.record_info(event="event_out_of_context")
+        ctx.record_info(metric="metric_out_of_context", value=1, kind="counter")
+        ctx.record_info(attributes={"attribute": "out_of_context"})
+
+    finally:
+        root.removeHandler(handler)
+
+    assert [record for record in records if record.levelno >= logging.ERROR] == []
+
+
+@mark.asyncio
+async def test_observability_lookup_failures_are_reported() -> None:
+    failures: list[str] = []
+
+    def log_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        message: str,
+        *args: object,
+        exception: BaseException | None,
+    ) -> None:
+        if level >= ObservabilityLevel.ERROR:
+            failures.append(message)
+
+    def failing(*args: object, **kwargs: object) -> None:
+        # LookupError covers KeyError/IndexError, which a backend may raise on
+        # its own - it must not be mistaken for a missing observability context
+        raise KeyError("backend lookup failure")
+
+    def trace_identifying(
+        scope: ContextIdentifier,
+        /,
+    ) -> UUID:
+        return uuid4()
+
+    observability = Observability(
+        trace_identifying=trace_identifying,
+        log_recording=log_recording,
+        metric_recording=failing,
+        event_recording=failing,
+        attributes_recording=failing,
+        scope_entering=lambda scope, /: "trace",
+        scope_exiting=lambda scope, /, *, exception: None,
+    )
+
+    async with ctx.scope("test", observability=observability):
+        ctx.record_info(event="event")
+        ctx.record_info(metric="metric", value=1, kind="counter")
+        ctx.record_info(attributes={"attribute": "value"})
+
+    assert failures == [
+        "Failed to record event: event",
+        "Failed to record metric: metric",
+        "Failed to record attributes",
+    ]
+
+
+def test_trace_context_out_of_context_is_empty() -> None:
+    # like recording, encoding a trace position out of context has no backend to
+    # ask - it degrades silently instead of failing the request being propagated
+    assert ctx.trace_context() == {}
+
+
+@mark.asyncio
+async def test_trace_context_encoding_failure_is_reported() -> None:
+    failures: list[str] = []
+
+    def log_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        message: str,
+        *args: object,
+        exception: BaseException | None,
+    ) -> None:
+        if level >= ObservabilityLevel.ERROR:
+            failures.append(message)
+
+    def failing(scope: ContextIdentifier, /) -> Mapping[str, str]:
+        raise KeyError("backend lookup failure")
+
+    def trace_identifying(
+        scope: ContextIdentifier,
+        /,
+    ) -> UUID:
+        return uuid4()
+
+    observability = Observability(
+        trace_identifying=trace_identifying,
+        log_recording=log_recording,
+        metric_recording=lambda scope, /, level, **kwargs: None,
+        event_recording=lambda scope, /, level, **kwargs: None,
+        attributes_recording=lambda scope, /, level, attributes: None,
+        scope_entering=lambda scope, /: "trace",
+        scope_exiting=lambda scope, /, *, exception: None,
+        trace_context_encoding=failing,
+    )
+
+    async with ctx.scope("test", observability=observability):
+        # propagation is best effort - a failing encoder is reported instead of
+        # taking down the request which asked for it
+        assert ctx.trace_context() == {}
+
+    assert failures == ["Failed to encode trace context"]

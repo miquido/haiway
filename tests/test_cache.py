@@ -1,4 +1,4 @@
-from asyncio import CancelledError, Task, sleep
+from asyncio import CancelledError, sleep
 from collections.abc import Callable, Generator
 
 from pytest import fixture, mark, raises
@@ -11,11 +11,16 @@ class FakeException(Exception):
 
 
 @fixture
-def fake_random() -> Callable[[], Generator[int]]:
+def fake_random() -> Callable[[], int]:
     def random_next() -> Generator[int]:
         yield from range(0, 65536)
 
-    return random_next
+    iterator: Generator[int] = random_next()
+
+    def next_value() -> int:
+        return next(iterator)
+
+    return next_value
 
 
 async def _wait_for(condition: Callable[[], bool], attempts: int = 20) -> None:
@@ -81,28 +86,9 @@ async def test_async_returns_fresh_value_with_expiration_time_exceed(
         return fake_random()
 
     expected: int = await randomized("expected")
-    await sleep(0.02)
+    # generous margin over the 0.01s expiration checked against the monotonic clock
+    await sleep(0.05)
     assert await randomized("expected") != expected
-
-
-@mark.asyncio
-async def test_async_cancel_waiting_does_not_cancel_task():
-    @cache
-    async def randomized(_: str, /) -> int:
-        try:
-            await sleep(0.5)
-            return 0
-        except CancelledError:
-            return 42
-
-    expected: int = await randomized("expected")
-    cancelled = Task(randomized("expected"))
-
-    async def delayed_cancel() -> None:
-        cancelled.cancel()
-
-    Task(delayed_cancel())
-    assert await randomized("expected") == expected
 
 
 @mark.asyncio

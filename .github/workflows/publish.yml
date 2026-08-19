@@ -5,11 +5,16 @@ on:
     types:
       - released
 
+# no job receives a token unless it asks for one
+permissions: {}
+
 jobs:
-  publish:
+  # dependencies and tests run here, where no publishing credential exists
+  verify:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      contents: read
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,5 +36,34 @@ jobs:
         run: uv run pytest --rootdir= ./tests --doctest-modules
           --junitxml=junit/test-results.xml
 
+      - name: Build
+        run: uv build
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  # only this job can mint the PyPI token, and it installs nothing from the
+  # project - it just uploads the artifact built and tested above
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
       - name: Publish
-        run: uv build && uv publish
+        run: uv publish

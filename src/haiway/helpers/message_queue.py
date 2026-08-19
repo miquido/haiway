@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterable, Callable
+from contextlib import AbstractAsyncContextManager
 from types import TracebackType
 from typing import Any, Protocol, final, overload, runtime_checkable
 
@@ -53,8 +54,8 @@ class MQMessage[Content](Immutable):
     -----
     Use the async context manager for straightforward processing where the
     commit decision aligns with success/failure of the wrapped block. If you
-    need to inspect the message before deciding, call the provided
-    `acknowledge` / `reject` callables manually.
+    need to inspect the message before deciding, call the `acknowledge` /
+    `reject` methods manually.
     Examples
     --------
     Automatic ack/reject:
@@ -63,9 +64,13 @@ class MQMessage[Content](Immutable):
     Manual decision after inspecting metadata:
         payload = message.content
         if should_retry(payload, message.meta):
-            await message._reject(reason="transient")
+            await message.reject()
         else:
-            await message._acknowledge()
+            await message.acknowledge()
+
+    Backend-specific settle options are passed as keyword arguments, for
+    example ``await message.reject(requeue=False)`` to dead-letter instead of
+    redelivering. Unsupported options raise rather than being ignored.
     """
 
     content: Content
@@ -98,12 +103,39 @@ class MQMessage[Content](Immutable):
             meta=self.meta,
         )
 
+    async def acknowledge(
+        self,
+        **extra: Any,
+    ) -> None:
+        """Mark the message as handled successfully.
+
+        Parameters
+        ----------
+        **extra : Any
+            Backend-specific settle options. Unsupported options raise.
+        """
+        await self._acknowledge(**extra)
+
+    async def reject(
+        self,
+        **extra: Any,
+    ) -> None:
+        """Mark the message as failed or undesirable.
+
+        Parameters
+        ----------
+        **extra : Any
+            Backend-specific settle options, i.e. ``requeue=False`` to
+            dead-letter instead of redelivering. Unsupported options raise.
+        """
+        await self._reject(**extra)
+
     async def __aenter__(self) -> Content:
         return self.content
 
     async def __aexit__(
         self,
-        exc_type: BaseException | None,
+        exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
@@ -128,7 +160,7 @@ class MQQueueConsuming[Content](Protocol):
     async def __call__(
         self,
         **extra: Any,
-    ) -> AsyncIterable[MQMessage[Content]]: ...
+    ) -> AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]: ...
 
 
 class MQQueue[Content](State):
@@ -183,8 +215,9 @@ class MQQueue[Content](State):
             Transport-specific headers/attributes to accompany the message;
             kept flat to simplify serialization. Defaults to ``None``.
         **extra : Any
-            Backend-specific options (e.g., routing keys, delay settings);
-            forwarded to the configured adapter untouched.
+            Backend-specific options (e.g. ``exchange`` for RabbitMQ); forwarded
+            to the configured adapter, which raises for options it does not
+            support instead of dropping them.
         Returns
         -------
         None
@@ -202,7 +235,7 @@ class MQQueue[Content](State):
         Class-level call via state:
             await ctx.state.MQQueue.publish(message=payload, attributes={"k": "v"})
         Instance-level call:
-            await queue_instance.publish(payload, priority="high")
+            await queue_instance.publish(payload, exchange="events")
         """
         return await self.publishing(
             message=message,
@@ -215,45 +248,54 @@ class MQQueue[Content](State):
     async def consume(
         cls,
         **extra: Any,
-    ) -> AsyncIterable[MQMessage[Content]]: ...
+    ) -> AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]: ...
     @overload
     async def consume(
         self,
         **extra: Any,
-    ) -> AsyncIterable[MQMessage[Content]]: ...
+    ) -> AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]: ...
     @statemethod
     async def consume(
         self,
         **extra: Any,
-    ) -> AsyncIterable[MQMessage[Content]]:
-        """Consume messages as an async iterator.
+    ) -> AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]:
+        """Open a scoped consumer over the queue.
         Parameters
         ----------
         **extra : Any
-            Adapter-specific options (e.g., prefetch limits, timeouts) forwarded
-            verbatim to the consuming backend.
-        Yields
-        ------
-        AsyncIterator[MQMessage[Content]]
-            Each item is an `MQMessage` wrapping the content, metadata, and
-            acknowledge/reject callables. Iteration proceeds until the backend
-            signals completion or the consumer breaks. Exceptions raised inside
-            the loop propagate; the adapter is responsible for ensuring in-flight
-            messages are settled appropriately.
+            Adapter-specific options (e.g. ``requeue_rejected`` or ``exclusive``
+            for RabbitMQ) forwarded verbatim to the consuming backend, which
+            raises for options it does not support instead of dropping them.
+        Returns
+        -------
+        AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]
+            Context manager yielding the stream of messages. Entering registers
+            the consumer with the backend, iterating yields `MQMessage` values
+            wrapping the content, metadata, and acknowledge/reject callables,
+            and exiting cancels the consumer and releases the deliveries it
+            buffered but never handed out.
         Notes
         -----
-        Use ``async for`` to stream messages; leaving the loop ends consumption
-        cleanly. The method is available as a class-level statemethod through
-        ``ctx.state.MQQueue`` or as an instance method on a specific queue.
+        Consumption is scoped on purpose. A consumer keeps holding the messages
+        the backend already handed it, so ending the iteration without telling
+        the backend would strand them until the whole queue access is torn down.
+        Leaving the context is what ends the subscription, whether the loop
+        finished, broke out early, or raised.
+        Exceptions raised inside the loop propagate; messages already handed to
+        the application are the application's to settle, and everything still
+        buffered is released on exit.
         Examples
         --------
         Class-level consumption:
-            async for message in ctx.state.MQQueue.consume(prefetch=10):
-                async with message as payload:
-                    await handle(payload)
-        Instance-level consumption:
-            async for message in queue_instance.consume():
-                await process(message.content)
+            async with await ctx.state.MQQueue.consume() as messages:
+                async for message in messages:
+                    async with message as payload:
+                        await handle(payload)
+        Stopping early:
+            async with await queue_instance.consume() as messages:
+                async for message in messages:
+                    await process(message.content)
+                    break  # the consumer is cancelled on exit
         """
         return await self.consuming(**extra)
 
