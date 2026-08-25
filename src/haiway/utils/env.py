@@ -12,6 +12,7 @@ __all__ = (
     "getenv_int",
     "getenv_str",
     "load_env",
+    "parse_bool",
 )
 
 
@@ -92,6 +93,33 @@ def getenv[Value](
         raise ValueError(f"Failed to transform environment value `{key}`") from exc
 
 
+def parse_bool(
+    value: str,
+    /,
+) -> bool:
+    """
+    Interpret a string as a boolean.
+
+    Parameters
+    ----------
+    value : str
+        Raw value to interpret.
+
+    Returns
+    -------
+    bool
+        ``True`` for ``"true"``, ``"1"``, and ``"t"`` case-insensitively,
+        ``False`` for anything else.
+
+    Notes
+    -----
+    Only an affirmative spelling is ``True``, so a misspelled or unexpected
+    value stays ``False`` instead of failing - the same interpretation
+    ``getenv_bool`` applies.
+    """
+    return value.lower() in ("true", "1", "t")
+
+
 @overload
 def getenv_bool(
     key: str,
@@ -157,7 +185,7 @@ def getenv_bool(
             raise ValueError(f"Required environment value `{key}` is missing!")
         return default
 
-    return value.lower() in ("true", "1", "t")
+    return parse_bool(value)
 
 
 @overload
@@ -441,8 +469,8 @@ def getenv_base64[Value](
 
 
 def load_env(
-    path: str | None = None,
-    override: bool = True,
+    path: str = ".env",
+    override: bool = False,
 ) -> None:
     """
     Load environment variables from a .env file.
@@ -456,14 +484,15 @@ def load_env(
     - Each variable must be on a separate line in the format ``KEY=VALUE``
     - The first ``=`` separates key from value
     - Keys with empty values are ignored
-    - Values are stripped with ``str.strip()``
+    - Both keys and values are stripped with ``str.strip()``
+    - An optional ``export`` prefix on the key is ignored
     - Inline comments, quoting rules, and shell-style expansion are not supported
 
     Parameters
     ----------
-    path : str | None, default=None
+    path : str | None, default=".env"
         Path to the environment file. If None, defaults to '.env'
-    override : bool, default=True
+    override : bool, default=False
         If True, overrides existing environment variables with values from the file.
         If False, only sets variables that don't already exist in the environment.
 
@@ -475,25 +504,17 @@ def load_env(
     """
 
     try:
-        with open(file=path or ".env") as file:
+        with open(file=path) as file:
             for line in file.readlines():
-                if line.startswith("#"):
-                    continue  # ignore commented
+                key, separator, value = line.partition("=")
+                if not separator:
+                    continue  # ignore lines without assignment
 
-                idx: int  # find where key ends
-                for element in enumerate(line):
-                    if element[1] == "=":
-                        idx = element[0]
-                        break
+                key = key.strip().removeprefix("export ").strip()
+                if not key or key.startswith("#"):
+                    continue  # ignore empty keys and commented
 
-                else:  # ignore keys without assignment
-                    continue
-
-                if idx >= len(line):
-                    continue  # ignore keys without values
-
-                key: str = line[0:idx]
-                value: str = line[idx + 1 :].strip()
+                value = value.strip()
                 if value and (override or key not in environ):
                     environ[key] = value
 

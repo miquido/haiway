@@ -23,7 +23,7 @@ For distributed tracing and observability:
 pip install "haiway[opentelemetry]"
 ```
 
-For httpx implementation of http client:
+For the httpx implementation of the http client (installs `httpx2`):
 
 ```bash
 pip install "haiway[httpx]"

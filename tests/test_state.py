@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import (
     Annotated,
     Any,
+    ClassVar,
     Literal,
     NotRequired,
     Protocol,
@@ -21,6 +22,7 @@ from uuid import UUID, uuid4
 from pytest import mark, raises
 
 from haiway import MISSING, Alias, BasicObject, Default, Missing, State, ValidationError, ctx
+from haiway.types import Sensitive
 
 
 def test_basic_initializes_with_arguments() -> None:
@@ -105,7 +107,7 @@ def test_basic_initializes_with_defaults() -> None:
         string: str = ""
         integer: int = 0
         optional: str | None = None
-        unique: UUID = Default(default_factory=uuid4)
+        unique: UUID = Default(factory=uuid4)
         same: UUID = Default(uuid4())
 
     basic = Basics()
@@ -128,18 +130,18 @@ def test_basic_equals_checks_properties() -> None:
 
 
 def test_state_equality_requires_exact_class_match() -> None:
-    class Parent(State):
+    class Left(State):
         required: int
 
-    class Child(Parent):
-        extra: int = 0
+    class Right(State):
+        required: int
 
-    parent = Parent(required=1)
-    child = Child(required=1, extra=0)
+    left = Left(required=1)
+    right = Right(required=1)
 
-    assert parent != child
-    assert child != parent
-    assert hash(parent) != hash(child)
+    assert left != right
+    assert right != left
+    assert hash(left) != hash(right)
 
 
 def test_basic_initializes_with_arguments_and_defaults() -> None:
@@ -210,18 +212,30 @@ def test_dict_skips_missing_properties() -> None:
     assert Basics(string="a", integer=None).to_mapping() == {"string": "a", "integer": None}
 
 
-def test_inherited_fields_are_preserved_in_state_subclasses() -> None:
+def test_state_declaring_attributes_can_not_be_inherited() -> None:
     class Parent(State):
         required: int
 
-    class Child(Parent):
-        extra: int
+    with raises(TypeError, match="can't inherit from Parent"):
 
-    assert [field.name for field in Child.__FIELDS__] == ["required", "extra"]
-    assert Child(required=1, extra=2).to_mapping() == {"required": 1, "extra": 2}
+        class Child(Parent):
+            extra: int
 
-    with raises(ValidationError):
-        Child(extra=2)
+
+def test_attribute_less_state_can_be_inherited() -> None:
+    # the escape hatch `Configuration` relies on - a base contributing behavior
+    # rather than attributes leaves nothing for a subclass to keep consistent
+    class Behavior(State):
+        KIND: ClassVar[str] = "behavior"
+
+        def described(self) -> str:
+            return f"{self.KIND}:{self.__class__.__name__}"
+
+    class Concrete(Behavior):
+        value: int
+
+    assert [field.name for field in Concrete.__FIELDS__] == ["value"]
+    assert Concrete(value=1).described() == "behavior:Concrete"
 
 
 def test_to_mapping_uses_alias_for_nested_states() -> None:
@@ -339,6 +353,29 @@ def test_updating_honors_aliases() -> None:
     assert updated != example
 
 
+def test_updating_rejects_unknown_keys() -> None:
+    class Example(State):
+        value: Annotated[int, Alias("external")]
+        other: str
+
+    example = Example(value=1, other="a")
+
+    # a typo must not silently take the "nothing to update" fast path
+    with raises(TypeError):
+        example.updating(valeu=2)
+
+    # nor be silently dropped alongside valid updates
+    with raises(TypeError):
+        example.updating(valeu=2, other="b")
+
+    # near-miss of an alias is rejected as well
+    with raises(TypeError):
+        example.updating(External=2)
+
+    # empty update still returns the very same instance
+    assert example.updating() is example
+
+
 def test_initialization_handles_conflicting_alias_and_field() -> None:
     class Example(State):
         value: Annotated[int, Alias("external")]
@@ -355,6 +392,33 @@ def test_initialization_allows_missing_properties() -> None:
     assert Basics(**{"string": "a", "integer": 1}) == Basics(string="a", integer=1)
     assert Basics(**{"string": "a", "integer": None}) == Basics(string="a", integer=None)
     assert Basics(**{"string": "a"}) == Basics(string="a", integer=MISSING)
+
+
+def test_updating_clears_attribute_with_missing() -> None:
+    class Basics(State):
+        string: str
+        integer: int | Missing = MISSING
+
+    instance = Basics(string="a", integer=1)
+
+    # an absent key carries the attribute over, `MISSING` is a value like any
+    # other - passing it clears the attribute the same way constructing with it
+    assert instance.updating(string="b") == Basics(string="b", integer=1)
+    assert instance.updating(integer=MISSING) == Basics(string="a", integer=MISSING)
+    assert instance.updating(integer=MISSING).to_mapping() == {"string": "a"}
+
+
+def test_updating_rejects_missing_for_required_attribute() -> None:
+    class Basics(State):
+        integer: int = 7
+
+    # the same refusal the constructor gives it - `updating` does not fall back
+    # to the default of an attribute which was supplied
+    with raises(ValidationError):
+        Basics(integer=1).updating(integer=MISSING)
+
+    with raises(ValidationError):
+        Basics(integer=MISSING)  # pyright: ignore[reportArgumentType]
 
 
 def test_generic_subtypes_validation() -> None:
@@ -713,6 +777,8 @@ async def test_no_deadlock_on_recursive_state_access() -> None:
             # Access another state during initialization
             # This would deadlock with a non-reentrant lock
             ctx.state(DependentState)
+            # attributes live in slots, so a custom init has to fill them
+            super().__init__()
 
     async with ctx.scope("recursive"):
         # This should not deadlock
@@ -741,14 +807,195 @@ def test_serializable_state_path_schema_and_json() -> None:
     class PathState(State, serializable=True):
         path: Path
 
-    payload = PathState(path=Path("/tmp/example")).to_json()
+    # the serialized form is always posix, independently of the host separator
+    source = Path("/tmp/example")
+    payload = PathState(path=source).to_json()
     decoded_json = json.loads(payload)
     assert decoded_json["path"] == "/tmp/example"
 
     decoded = PathState.from_json(payload)
-    assert decoded.path == Path("/tmp/example")
+    assert decoded.path == source
 
     schema = PathState.json_schema(required=True)
     schema_json = json.loads(schema)
     assert "path" in schema_json["properties"]
     assert schema_json["properties"]["path"]["format"] == "path"
+
+
+def test_attributes_are_stored_in_slots() -> None:
+    class Slotted(State):
+        required: int
+        defaulted: str = "default"
+
+    instance = Slotted(required=1)
+
+    assert not hasattr(instance, "__dict__")
+    assert Slotted.__slots__ == ("required", "defaulted")
+    assert Slotted.__match_args__ == ("required", "defaulted")
+    # the declared default is resolved into the field, not left on the class
+    assert instance.defaulted == "default"
+    assert {field.name: field.required for field in Slotted.__FIELDS__} == {
+        "required": True,
+        "defaulted": False,
+    }
+
+    with raises(AttributeError):
+        object.__setattr__(instance, "undeclared", 42)
+
+
+def test_specialized_generic_reuses_slots_of_its_origin() -> None:
+    class Box[Element](State):
+        value: Element
+        label: str = "label"
+
+    specialized = Box[int]
+    instance = specialized(value=3)
+
+    assert not hasattr(instance, "__dict__")
+    # the origin declares the slots, a specialization only reuses them
+    assert specialized.__slots__ == ()
+    assert specialized.__match_args__ == ("value", "label")
+    assert instance.value == 3
+    assert instance.label == "label"
+    assert {field.name: field.required for field in specialized.__FIELDS__} == {
+        "value": True,
+        "label": False,
+    }
+
+    with raises(ValidationError):
+        specialized(value="not an int")
+
+
+def test_attribute_named_after_its_type_resolves_to_the_type() -> None:
+    class Shadowing(State):
+        date: date
+        str: str = "text"
+
+    instance = Shadowing(date="2026-08-24")
+
+    assert instance.date == date(2026, 8, 24)
+    assert instance.str == "text"
+
+    with raises(ValidationError):
+        Shadowing(date=42)
+
+
+def test_to_json_failure_does_not_expose_values() -> None:
+    class Secretive(State):
+        token: Annotated[str, Sensitive()]
+        payload: bytes
+
+    instance = Secretive(token="sk-live-value", payload=b"\x00")
+
+    with raises(ValueError) as exc:
+        instance.to_json()
+
+    assert "sk-live-value" not in str(exc.value)
+    assert exc.value.__cause__ is not None
+    assert isinstance(exc.value.__cause__, TypeError)
+
+
+def test_init_rejects_unknown_attributes():
+    class Selected(State):
+        name: str = "anon"
+        value: int = 0
+
+    with raises(TypeError):
+        Selected(nmae="typo")  # pyright: ignore[reportCallIssue]
+
+    with raises(TypeError):
+        Selected(name="ok", extra=1)  # pyright: ignore[reportCallIssue]
+
+    # the error names every unexpected key, not only the first
+    with raises(TypeError, match=r"'first'.*'second'"):
+        Selected(first=1, second=2)  # pyright: ignore[reportCallIssue]
+
+
+def test_init_accepts_aliases_and_names():
+    class Aliased(State):
+        identifier: Annotated[str, Alias("id")] = "none"
+
+    assert Aliased(identifier="a").identifier == "a"
+    assert Aliased(id="b").identifier == "b"  # pyright: ignore[reportCallIssue]
+
+    with raises(TypeError):
+        Aliased(ident="c")  # pyright: ignore[reportCallIssue]
+
+
+def test_declaring_alias_colliding_with_a_name_fails():
+    # an attribute and an alias share the keys a class is constructed with, so
+    # a collision would silently make one attribute answer for another
+    with raises(TypeError, match="both"):
+
+        class NameFirst(State):
+            identifier: str
+            other: Annotated[str, Alias("identifier")]
+
+    with raises(TypeError, match="both"):
+
+        class AliasFirst(State):
+            other: Annotated[str, Alias("identifier")]
+            identifier: str
+
+    with raises(TypeError, match="both"):
+
+        class DuplicateAlias(State):
+            first: Annotated[str, Alias("shared")]
+            second: Annotated[str, Alias("shared")]
+
+    with raises(TypeError, match="its own name"):
+
+        class SelfAlias(State):
+            identifier: Annotated[str, Alias("identifier")]
+
+
+def test_init_rejection_matches_validate_rejection():
+    class Checked(State):
+        name: str = "anon"
+
+    # both construction paths have to refuse the same input
+    with raises(TypeError):
+        Checked(nmae="typo")  # pyright: ignore[reportCallIssue]
+
+    with raises(TypeError):
+        Checked.validate({"nmae": "typo"})
+
+
+def test_attribute_shadowing_inherited_attribute_is_rejected() -> None:
+    # the name resolves to the inherited method, so no slot can be declared for
+    # it - accepting the declaration leaves the attribute unassignable instead
+    with raises(TypeError, match="shadowing the inherited"):
+
+        class Shadowing(State):
+            validate: str = "text"
+
+
+def test_specialization_can_not_be_inherited() -> None:
+    class Generic[T](State):
+        value: T
+
+    # a specialization declares the attributes of its origin, which makes it as
+    # final as any other class declaring them - `Generic[str]` is how a typed
+    # variant is named, rather than a base to derive one from
+    with raises(TypeError, match=r"can't inherit from Generic\[str\]"):
+
+        class Concrete(Generic[str]): ...
+
+
+def test_optional_unrepresentable_attribute_is_not_serializable() -> None:
+    class Optional(State):
+        value: int
+        handler: Callable[[], None] | None = None
+
+    # a schema without the attribute would refuse it, `additionalProperties`
+    # being off, so there is no schema to produce at all
+    assert not Optional.__SERIALIZABLE__
+    assert Optional.json_schema(required=False) is None
+
+    with raises(TypeError, match="cannot be represented"):
+        Optional.json_schema()
+
+    class Nesting(State):
+        nested: Optional
+
+    assert not Nesting.__SERIALIZABLE__

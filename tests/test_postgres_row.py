@@ -2,7 +2,10 @@ from collections.abc import Iterable, Iterator, Sequence
 from decimal import Decimal
 from typing import Any
 
+import pytest
 from pytest import fail, fixture
+
+pytest.importorskip("asyncpg", reason="requires the postgres extra")
 
 from haiway.postgres import types as postgres_types
 from haiway.postgres.types import PostgresRow, PostgresValue
@@ -117,11 +120,70 @@ def test_postgres_row_supports_mapping_pattern_matching() -> None:
             fail("PostgresRow should match mapping patterns using column names")
 
 
-def test_postgres_row_get_float_accepts_decimal() -> None:
-    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", Decimal("12.5")),))
+def test_postgres_row_get_float_rejects_decimal() -> None:
+    # a NUMERIC column is chosen for exactness a binary float cannot hold, so it
+    # has to be read through get_decimal rather than silently narrowed here
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", Decimal("0.1")),))
     row: PostgresRow = PostgresRow(record)
 
-    assert row.get_float("amount") == 12.5
+    with pytest.raises(TypeError, match="get_decimal"):
+        row.get_float("amount")
+
+
+def test_postgres_row_get_decimal_accepts_decimal() -> None:
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", Decimal("12.50")),))
+    row: PostgresRow = PostgresRow(record)
+
+    assert row.get_decimal("amount") == Decimal("12.50")
+
+
+def test_postgres_row_get_decimal_widens_int_exactly() -> None:
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", 2**60 + 1),))
+    row: PostgresRow = PostgresRow(record)
+
+    assert row.get_decimal("amount") == Decimal(2**60 + 1)
+
+
+def test_postgres_row_get_decimal_parses_str() -> None:
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", "0.1"),))
+    row: PostgresRow = PostgresRow(record)
+
+    assert row.get_decimal("amount") == Decimal("0.1")
+
+
+def test_postgres_row_get_decimal_rejects_malformed_str() -> None:
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", "not a number"),))
+    row: PostgresRow = PostgresRow(record)
+
+    with pytest.raises(ValueError, match="Malformed decimal"):
+        row.get_decimal("amount")
+
+
+def test_postgres_row_get_decimal_rejects_float() -> None:
+    # the float has already lost the exactness the accessor exists to preserve
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", 0.1),))
+    row: PostgresRow = PostgresRow(record)
+
+    with pytest.raises(TypeError, match="expected 'Decimal'"):
+        row.get_decimal("amount")
+
+
+def test_postgres_row_get_decimal_rejects_bool() -> None:
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", True),))
+    row: PostgresRow = PostgresRow(record)
+
+    with pytest.raises(TypeError, match="'bool'"):
+        row.get_decimal("amount")
+
+
+def test_postgres_row_get_decimal_missing_resolves_default() -> None:
+    record: FakeAsyncpgRecord = FakeAsyncpgRecord((("amount", None),))
+    row: PostgresRow = PostgresRow(record)
+
+    assert row.get_decimal("amount") is None
+    assert row.get_decimal("amount", default=Decimal("1")) == Decimal("1")
+    with pytest.raises(ValueError, match="Missing required value"):
+        row.get_decimal("amount", required=True)
 
 
 def test_postgres_row_get_float_accepts_int_as_numeric() -> None:

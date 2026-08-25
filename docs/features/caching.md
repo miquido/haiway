@@ -87,5 +87,6 @@ The default in-memory cache clears entries immediately, while external backends 
 - Decorated functions are per-process. Use `cache_externally` to share results across workers.
 - Because writes happen asynchronously, ensure the current context stays alive long enough for
   spawned write tasks to complete.
-- Combine cache metrics with `ctx.record_event` to instrument cache hits and misses before reporting
-  to observability backends such as OpenTelemetry.
+- Combine cache metrics with `ctx.record_info(event=...)` (or the matching `record_debug` /
+  `record_warning` / `record_error` helpers) to instrument cache hits and misses before reporting to
+  observability backends such as OpenTelemetry.

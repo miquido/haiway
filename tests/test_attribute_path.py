@@ -1,5 +1,7 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from typing import Annotated, cast
+
+from pytest import raises
 
 from haiway import AttributePath, State
 
@@ -238,3 +240,109 @@ def test_id_path_set_updates_self():
     assert path(state, updated=state) == state
     assert path.__repr__() == "ExampleState"
     assert str(path) == ""
+
+
+class TwoAttributeState(State):
+    text: str
+    number: int
+
+
+two_attribute_state: TwoAttributeState = TwoAttributeState(
+    text="text",
+    number=7,
+)
+
+
+class QuotedRecursiveState(State):
+    value: int = 0
+    child: QuotedRecursiveState | None = None
+
+
+quoted_recursive_state: QuotedRecursiveState = QuotedRecursiveState(
+    value=1,
+    child=QuotedRecursiveState(value=2),
+)
+
+
+class MutableContainerState(State):
+    items: list[int]
+    labels: set[str]
+    mapping: dict[str, int]
+
+
+mutable_container_state: MutableContainerState = MutableContainerState(
+    items=[1, 2, 3],
+    labels={"a"},
+    mapping={"key": 1},
+)
+
+
+def test_attribute_path_updates_attribute():
+    path: AttributePath[TwoAttributeState, str] = cast(
+        AttributePath[TwoAttributeState, str],
+        TwoAttributeState._.text,
+    )
+    assert path(two_attribute_state, updated="replaced") == TwoAttributeState(
+        text="replaced",
+        number=7,
+    )
+
+
+def test_quoted_recursive_attribute_path_points_to_attribute():
+    path: AttributePath[QuotedRecursiveState, QuotedRecursiveState | None] = cast(
+        AttributePath[QuotedRecursiveState, QuotedRecursiveState | None],
+        QuotedRecursiveState._.child,
+    )
+    assert path(quoted_recursive_state) == QuotedRecursiveState(value=2)
+    assert path.__repr__() == "QuotedRecursiveState.child"
+
+
+def test_quoted_recursive_nested_attribute_path_points_to_attribute():
+    path: AttributePath[QuotedRecursiveState, int] = cast(
+        AttributePath[QuotedRecursiveState, int],
+        QuotedRecursiveState._.child.value,
+    )
+    assert path(quoted_recursive_state) == 2
+    assert str(path) == "child.value"
+
+
+def test_mutable_sequence_attribute_path_points_to_coerced_value():
+    path: AttributePath[MutableContainerState, Sequence[int]] = cast(
+        AttributePath[MutableContainerState, Sequence[int]],
+        MutableContainerState._.items,
+    )
+    assert path(mutable_container_state) == (1, 2, 3)
+
+
+def test_mutable_sequence_item_path_points_to_item():
+    path: AttributePath[MutableContainerState, int] = cast(
+        AttributePath[MutableContainerState, int],
+        MutableContainerState._.items[1],
+    )
+    assert path(mutable_container_state) == 2
+    assert path(mutable_container_state, updated=9) == MutableContainerState(
+        items=[1, 9, 3],
+        labels={"a"},
+        mapping={"key": 1},
+    )
+
+
+def test_mutable_set_attribute_path_points_to_coerced_value():
+    path: AttributePath[MutableContainerState, Set[str]] = cast(
+        AttributePath[MutableContainerState, Set[str]],
+        MutableContainerState._.labels,
+    )
+    assert path(mutable_container_state) == frozenset(("a",))
+
+
+def test_mutable_mapping_item_path_points_to_item():
+    path: AttributePath[MutableContainerState, int] = cast(
+        AttributePath[MutableContainerState, int],
+        MutableContainerState._.mapping["key"],
+    )
+    assert path(mutable_container_state) == 1
+
+
+def test_missing_attribute_path_raises():
+    with raises(AttributeError):
+        _ = MutableContainerState._.missing  # pyright: ignore[reportAttributeAccessIssue]

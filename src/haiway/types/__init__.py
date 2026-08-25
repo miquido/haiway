@@ -10,6 +10,7 @@ from haiway.types.meta import (
     MetaValues,
 )
 from haiway.types.missing import MISSING, Missing, is_missing, not_missing, unwrap_missing
+from haiway.types.sensitive import Sensitive
 from haiway.types.specification import Specification, TypeSpecification
 
 __all__ = (
@@ -28,6 +29,7 @@ __all__ = (
     "MetaValues",
     "Missing",
     "RawValue",
+    "Sensitive",
     "Specification",
     "TypeSpecification",
     "is_missing",

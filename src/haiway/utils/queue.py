@@ -3,7 +3,10 @@ from collections import deque
 from collections.abc import AsyncIterator, Awaitable
 from typing import Any, NoReturn, cast, final
 
-__all__ = ("AsyncQueue",)
+__all__ = (
+    "AsyncQueue",
+    "AsyncQueueEmpty",
+)
 
 
 @final

@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import NotRequired, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 from haiway.attributes.annotations import (
     AliasAttribute,
@@ -12,9 +12,11 @@ from haiway.attributes.annotations import (
     TypedDictAttribute,
     UnionAttribute,
     ValidableAttribute,
+    resolve_attribute,
     resolve_self_attribute,
 )
 from haiway.attributes.state import State
+from haiway.types import Alias
 
 
 class ParameterArraySpecification(TypedDict, total=False):
@@ -111,3 +113,36 @@ def test_recursive_aliases_are_resolved() -> None:
     assert parameter_aliases  # sanity check: alias exists in the structure
     for alias in parameter_aliases:
         assert isinstance(alias.resolved, UnionAttribute)
+
+
+type AnnotatedTree = Sequence[Annotated["AnnotatedTree", Alias("children")]] | int
+
+
+def test_recursive_alias_annotated_with_alias_is_resolved() -> None:
+    # `Alias(...)` overrides what `AliasAttribute.alias` reports, so resolution
+    # has to match on the declared type alias rather than the exposed name
+    attribute = resolve_attribute(
+        AnnotatedTree,
+        module=__name__,
+        resolved_parameters={},
+        recursion_guard={},
+    )
+
+    assert attribute.validate([[1], 2]) == ((1,), 2)
+
+
+def test_recursive_alias_annotated_with_alias_exposes_alias() -> None:
+    attribute = resolve_attribute(
+        AnnotatedTree,
+        module=__name__,
+        resolved_parameters={},
+        recursion_guard={},
+    )
+    assert isinstance(attribute, UnionAttribute)
+    sequence = next(
+        alternative
+        for alternative in attribute.alternatives
+        if isinstance(alternative, SequenceAttribute)
+    )
+    # the annotation still renames the nested element
+    assert sequence.values.alias == "children"

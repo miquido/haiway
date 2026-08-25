@@ -6,14 +6,30 @@ that model without leaving the framework's context and observability rules.
 
 ## Structured Concurrency Basics
 
-Within Haiway, spawned tasks belong to the nearest isolated scope's task group.
+Within Haiway, every scope owns a task group, so spawned tasks belong to the scope they were spawned
+in.
 
-- `ctx.spawn(...)` keeps work tied to the current scope.
+- `ctx.spawn(...)` keeps work tied to the current scope. A task is awaited by the scope it was
+  spawned in - never by an enclosing one.
 - Scope exit waits for in-scope tasks to settle.
 - Child task failures surface through the task group unless explicitly handled.
-- State, logging, and observability remain available inside spawned tasks.
+- State, logging, and observability remain available inside spawned tasks, and stay valid for as
+  long as the task runs.
+
+Because scope exit joins the tasks spawned within it, such a task must be able to finish on its own.
+Two shapes cannot:
+
+- Waiting for something signalled only after the scope exits - the scope waits for the task while
+  the task waits for the scope.
+- Iterating a `ctx.subscribe(...)` subscription to exhaustion in a nested non-isolated scope. A
+  subscription ends when the scope owning the event bus exits, and a nested non-isolated scope
+  shares the bus of an ancestor, so consume it with a bound or spawn the consumer in the scope
+  owning the bus - a root or `isolated=True` scope.
 
 If work must outlive the current scope, use `ctx.spawn_background(...)` instead of `ctx.spawn(...)`.
+Such a task is fully detached - it runs with an empty context, so `ctx.state(...)` and
+`ctx.subscribe(...)` raise `ContextMissing` within it. Enter a scope inside the task, or pass what
+it needs as arguments.
 
 ## `process_concurrently`
 

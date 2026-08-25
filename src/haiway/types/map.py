@@ -48,7 +48,9 @@ class Map[Key, Element](dict[Key, Element]):
                 return cls(values)
 
             case other:
-                raise ValueError(f"Invalid json: {other}")
+                raise ValueError(
+                    f"Invalid json - decoded '{type(other).__name__}', expected object"
+                )
 
     def to_str(self) -> str:
         """
@@ -155,7 +157,7 @@ class Map[Key, Element](dict[Key, Element]):
         other: Any,
     ) -> Any:
         if not isinstance(other, Mapping):
-            raise NotImplementedError()
+            return NotImplemented
 
         return self.__class__({**self, **other})  # pyright: ignore[reportUnknownArgumentType]
 
@@ -164,7 +166,7 @@ class Map[Key, Element](dict[Key, Element]):
         other: Any,
     ) -> Any:
         if not isinstance(other, Mapping):
-            raise NotImplementedError()
+            return NotImplemented
 
         return self.__class__({**other, **self})  # pyright: ignore[reportUnknownArgumentType]
 

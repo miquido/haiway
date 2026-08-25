@@ -20,15 +20,16 @@ The HTTP client in Haiway follows the framework's core principles:
 
 ### 1. Basic Usage with HTTPX
 
-The HTTPX integration requires the optional `httpx` extra:
+The HTTPX integration requires the optional `httpx` extra, which installs the
+[httpx2](https://github.com/pydantic/httpx2) package:
 
 ```bash
 pip install "haiway[httpx]"
 # or manually:
-pip install httpx
+pip install httpx2
 ```
 
-It provides a production-ready transport adapter that opens an `httpx.AsyncClient` and injects a
+It provides a production-ready transport adapter that opens an `httpx2.AsyncClient` and injects a
 bound `HTTPClient` state into the scope:
 
 ```python
@@ -67,13 +68,13 @@ async def api_operations():
 
         new_user = await HTTPClient.post(
             url="https://api.example.com/users",
-            body=json.dumps({"name": "Alice", "email": "alice@example.com"}),
+            body=json.dumps({"name": "Alice", "email": "alice@example.com"}).encode(),
             headers={"Content-Type": "application/json"},
         )
 
         updated = await HTTPClient.put(
             url="https://api.example.com/users/123",
-            body=json.dumps({"status": "active"}),
+            body=json.dumps({"status": "active"}).encode(),
             headers={"Content-Type": "application/json"},
         )
 
@@ -101,14 +102,25 @@ client = HTTPXClient(
         "Accept": "application/json",
     },
     timeout=30.0,  # Default timeout for all requests
-    # Additional httpx.AsyncClient options
+    follow_redirects=False,  # Default redirect behavior
+    max_redirects=20,  # Client-wide cap on redirect chain length
+    # Additional httpx2.AsyncClient options
     verify=True,  # SSL verification
 )
 ```
 
-`HTTPXClient` always configures `follow_redirects=False` and disables cookies by default. Request
-level `follow_redirects=` can override the redirect behavior per call, and additional `httpx`
-keyword arguments are forwarded via `**extra`.
+`HTTPXClient` disables cookies, and defaults `follow_redirects` to `False`. Request level
+`follow_redirects=` can override the redirect behavior per call, and additional `httpx2` keyword
+arguments are forwarded via `**extra`.
+
+`max_redirects` bounds how far a redirect chain is followed. It is set once per client rather than
+per request - httpx2 accepts the limit only at construction - so it applies to every request that
+follows redirects, including one that opted in per call.
+
+When `timeout=` is omitted it defaults to 5 seconds, matching the httpx2 default, and applies to
+each of the connect, read, write and pool phases separately - not to the request as a whole. A
+single `HTTPXClient` instance owns one connection pool and supports one active scope at a time; use
+a separate instance per concurrent scope.
 
 ### Request-Level Options
 
@@ -123,16 +135,23 @@ response = await HTTPClient.get(
     timeout=60.0,
 )
 
-# Control redirect behavior
+# Control redirect behavior - the chain stays bounded by the client's max_redirects
 response = await HTTPClient.get(
     url="/redirect",
     follow_redirects=True,
+)
+
+# Keep the body as a stream instead of reading it up front
+response = await HTTPClient.get(
+    url="/large-export",
+    stream=True,
 )
 ```
 
 ## Error Handling
 
-Transport and adapter-level failures are wrapped in `HTTPClientError`:
+Transport and adapter-level failures are wrapped in `HTTPClientError`, or one of its more specific
+subclasses:
 
 ```python
 import json
@@ -148,6 +167,28 @@ async def safe_request():
         # Original exception available as e.__cause__
         return None
 ```
+
+Catch `HTTPTimeoutError` or `HTTPConnectionError` to react to the two most common - and most
+retryable - failure modes:
+
+```python
+from haiway import HTTPClient, HTTPConnectionError, HTTPTimeoutError, retry
+
+# retry only the transient failure modes
+@retry(
+    limit=3,
+    delay=1.0,
+    catching=lambda exc: isinstance(exc, HTTPTimeoutError | HTTPConnectionError),
+)
+async def fetch_with_retries():
+    return await HTTPClient.get(url="https://api.example.com/data")
+```
+
+Both derive from `HTTPClientError`, so `except HTTPClientError` still catches everything. Each error
+carries the `method` and `url` of the request it belongs to - both are required, so a failure is
+always attributable - and renders them as a `"{method} {url}|{message}"` prefix, which keeps the
+context readable in logs. The originating backend exception is preserved as `__cause__`. Request
+bodies and headers are deliberately left out so credentials cannot leak into a log line.
 
 `HTTPClient` does not automatically raise on `4xx` or `5xx` responses. Those are returned as a
 normal `HTTPResponse`; `HTTPClientError` is used for transport and adapter-level failures.
@@ -168,7 +209,7 @@ response = await HTTPClient.post(
         "X-Webhook-Signature": "abc123",
         "X-Webhook-Timestamp": "1234567890",
     },
-    body=json.dumps({"event": "user.created"}),
+    body=json.dumps({"event": "user.created"}).encode(),
 )
 ```
 
@@ -209,13 +250,103 @@ elif response.status_code == 404:
     # Not found
     return None
 else:
-    # Handle other status codes
-    raise HTTPClientError(f"Unexpected status: {response.status_code}")
+    # Handle other status codes - method and url are required
+    raise HTTPClientError(
+        f"Unexpected status: {response.status_code}",
+        method="GET",
+        url="/api/data",
+    )
 ```
 
-`HTTPResponse` is immutable, but its body is consumed lazily. `await response.body()` reads the full
-payload and caches it as `bytes`. For streaming use cases, iterate with `response.stream_body()` or
-`response.iter_bytes()` instead of forcing the full body into memory.
+`HTTPResponse` is immutable. By default the payload is read before the request returns, which hands
+the connection back to the pool right away:
+
+```python
+# buffered by default: the payload is already in memory
+data = json.loads(await response.body())
+```
+
+Pass `stream=True` to keep the body as a stream instead - useful for payloads too large to hold in
+memory. A streamed body keeps its connection checked out until it is consumed:
+
+```python
+response = await HTTPClient.get(url="/large-export", stream=True)
+async for chunk in response.stream_body():
+    await sink.write(chunk)
+```
+
+`stream_body()` hands each chunk over without retaining it, so peak memory stays at one chunk no
+matter how large the payload is. Nothing is cached in exchange: a stream reads once, and reading it
+again raises `HTTPBodyConsumedError`. Reach for `body()` instead when the payload has to stay
+re-readable - it buffers the whole thing to cache it, and a buffered payload can then be read any
+number of times through either accessor.
+
+A stream is claimed before it is read, so a read that does not reach the end cannot be resumed by a
+later one - that would hand back the unread remainder as though it were the whole payload:
+
+```python
+response = await HTTPClient.get(url="/report", stream=True)
+async for chunk in response.stream_body():
+    break  # gave up part way
+
+await response.body()  # raises HTTPBodyConsumedError, rather than returning the remainder
+```
+
+`HTTPBodyConsumedError` derives from `HTTPClientError`, so coarse handling still catches it, but it
+reports a caller mistake rather than a transport failure - keep it out of retry predicates, since
+retrying cannot help. It carries no `method` or `url`: an `HTTPResponse` does not know the request
+it came from.
+
+Consuming a streamed body is the caller's responsibility, and it has to happen within the scope that
+issued the request since the connection belongs to that scope's pool. A body that is never read
+keeps its connection checked out until the scope exit closes the pool.
+
+Closing the iterator releases the connection right away - exhausting it does that, and
+`contextlib.aclosing` does it when breaking out early:
+
+```python
+from contextlib import aclosing
+
+async with aclosing(response.stream_body()) as chunks:
+    async for chunk in chunks:
+        if not await sink.write(chunk):
+            break  # the connection goes back to the pool right here
+```
+
+Abandoning the iteration without closing it leaves the release to the garbage collector, and to the
+pool closing on scope exit at the latest. Response headers come from the backend, so lookups are
+case-insensitive and repeated headers are joined with `", "`.
+
+### Streaming Request Bodies
+
+`body` also accepts an async byte iterable, which streams the payload to the server instead of
+holding it in memory:
+
+```python
+import json
+from collections.abc import AsyncIterator
+
+from haiway import HTTPClient
+
+async def encoded_rows(rows: AsyncIterator[dict]) -> AsyncIterator[bytes]:
+    async for row in rows:
+        yield json.dumps(row).encode() + b"\n"
+
+# the payload is never materialized as a whole, on either side of the call
+response = await HTTPClient.put(
+    url="/uploads/events",
+    body=encoded_rows(pending_events()),
+    headers={"Content-Type": "application/x-ndjson"},
+)
+```
+
+A streamed payload has no known length, so it goes out with `Transfer-Encoding: chunked` rather than
+a `Content-Length`. It can be consumed only once, which means it cannot be replayed: a redirect
+preserving the method (307, 308) or a retry fails with `HTTPClientError`. Pass `bytes` instead when
+the request has to survive either.
+
+Buffered payloads are `bytes`, not `str` - `HTTPBody` is `bytes | AsyncIterable[bytes]`, so text is
+encoded at the call site and the charset is never guessed for you.
 
 ### Connection Pooling and Reuse
 
@@ -237,7 +368,77 @@ async with ctx.scope(
 ```
 
 The connection pool lives for the lifetime of the entered scope. Re-entering the same `HTTPXClient`
-instance after it has been closed creates a fresh internal `httpx.AsyncClient`.
+instance after it has been closed creates a fresh internal `httpx2.AsyncClient`. Entering an
+instance that is already open raises `RuntimeError` from the backend.
+
+## Observability
+
+Every request records events within the current scope, whichever backend is bound to
+`HTTPClient.requesting` - including test doubles and custom implementations. Each event carries
+`http.request.method` and `url`, plus:
+
+| Event                | Level | Additional attributes                   |
+| -------------------- | ----- | --------------------------------------- |
+| `http.request`       | debug | `http.request.body.size`                |
+| `http.response`      | debug | `http.response.status_code`, `duration` |
+| `http.request.error` | error | `error.type`, `duration`                |
+
+Each request is also measured into the `http.client.request.duration` histogram, in seconds - at
+info level when it produced a response, at error level when it failed. Its attributes are only the
+ones a metric can afford, since a separate stream is stored per combination of them:
+
+| Attribute                   | Recorded                                      |
+| --------------------------- | --------------------------------------------- |
+| `http.request.method`       | always                                        |
+| `http.response.status_code` | when the request produced a response          |
+| `error.type`                | when it failed instead                        |
+| `server.address`            | when the request URL names a host - see below |
+
+A few properties worth knowing:
+
+- **Credentials never reach the observability backend.** Recorded URLs are stripped of userinfo,
+  query and fragment - all three routinely carry secrets - and neither headers nor bodies are
+  recorded at all.
+- **The URL is recorded as given.** A relative URL stays relative: the `base_url` it resolves
+  against belongs to the backend, which the facade does not see. For the same reason a request made
+  with a relative URL carries no `server.address` on the metric - with one `HTTPXClient` per API,
+  the scope it was made in usually names the same thing.
+- **Events are debug, the metric is info.** Successful traffic leaves no events at a production log
+  level - the histogram is what stays on. Raising the backend level to error narrows it to failures,
+  which are still measured.
+- **`http.request.body.size` is missing for a streamed request body.** Measuring it would mean
+  buffering the payload, which is what streaming avoids.
+- **`duration` is the time until the response was returned.** With `stream=True` that is the time to
+  its headers - the body is transferred afterwards, outside of the call.
+- **4xx and 5xx are not errors here.** They are ordinary responses, recorded as `http.response` with
+  their status code. `http.request.error` is reserved for transport failures, and carries the
+  concrete error type - `HTTPTimeoutError`, `HTTPConnectionError` - rather than the coarse one.
+- **Cancellation is not recorded.** It is routine control flow under structured concurrency, not a
+  request failure.
+
+### Trace Propagation
+
+A request can carry the current trace position, so the called service continues this trace instead
+of starting its own. It is asked for per request, and off by default:
+
+```python
+async with ctx.scope(
+    "api",
+    observability=OpenTelemetry.observability(),
+    disposables=(HTTPXClient(base_url="https://internal.example.com"),),
+):
+    # this request carries `traceparent`, and `tracestate` when present
+    response = await HTTPClient.get(url="/users", trace_propagation=True)
+
+    # this one does not
+    other = await HTTPClient.get(url="/public")
+```
+
+`trace_propagation` is per request, and defaults to `False`, because it exposes internal trace
+identifiers to whoever is called - ask for it towards services you own, not towards third party
+APIs. Since it is decided at the request site, one client can be used for both. Headers passed to
+the request are never overridden, so a caller managing trace context itself keeps control, and a
+backend with no trace position to hand out - the default logger among them - propagates nothing.
 
 ## Testing
 
@@ -246,7 +447,14 @@ Mock HTTP clients for testing:
 ```python
 import json
 
-from haiway import HTTPClient, HTTPHeaders, HTTPQueryParams, HTTPResponse, ctx
+from haiway import (
+    HTTPClient,
+    HTTPHeaders,
+    HTTPQueryParams,
+    HTTPBody,
+    HTTPResponse,
+    ctx,
+)
 
 async def mock_request(
     method: str,
@@ -255,9 +463,10 @@ async def mock_request(
     url: str,
     query: HTTPQueryParams | None = None,
     headers: HTTPHeaders | None = None,
-    body: str | bytes | None = None,
+    body: HTTPBody | None = None,
     timeout: float | None = None,
     follow_redirects: bool | None = None,
+    stream: bool = False,
 ) -> HTTPResponse:
     if url == "/users/123" and method == "GET":
         return HTTPResponse(
@@ -278,7 +487,7 @@ async def test_user_fetching():
 
 ## Best Practices
 
-1. **Use `HTTPXClient` as a scope disposable**: This ensures `httpx.AsyncClient` is opened and
+1. **Use `HTTPXClient` as a scope disposable**: This ensures `httpx2.AsyncClient` is opened and
    closed correctly.
 1. **Set appropriate timeouts**: Prevent hanging requests and override per request only where
    needed.
@@ -286,16 +495,27 @@ async def test_user_fetching():
    validate `response.status_code` explicitly.
 1. **Use `base_url` for related calls**: Keep request sites concise and consistent.
 1. **Reuse a scope for batches**: Requests made inside one scope share the same connection pool.
-1. **Choose between buffered and streamed body access intentionally**: `body()` buffers,
-   `stream_body()` streams.
+1. **Stream only large payloads**: The default buffers the body and frees the connection before
+   returning; reach for `stream=True` when the payload should not be held in memory, and stream the
+   request `body` when the payload being sent should not be either.
+1. **Consume every streamed body inside the issuing scope**: An unread body holds a pool connection
+   until the scope exits, and it cannot be read once the scope is gone.
+1. **Close a streamed body you leave early**: `contextlib.aclosing` hands the connection back at the
+   break instead of leaving it to the garbage collector.
+1. **Do not retry `HTTPBodyConsumedError`**: It reports a body read twice - a caller mistake that a
+   retry cannot fix. Exclude it from retry predicates that catch `HTTPClientError` broadly.
+1. **Send replayable bodies where redirects or retries are expected**: A streamed request body is
+   consumed once and cannot be sent again.
 1. **Mock the `requesting` callable in tests**: Most unit tests do not need a real transport.
+1. **Ask for `trace_propagation` only on requests towards services you own**: It hands internal
+   trace identifiers to whoever is called.
 
 ## Custom Implementations
 
 Create custom HTTP client implementations by implementing the `HTTPRequesting` protocol:
 
 ```python
-from haiway import HTTPClient, HTTPHeaders, HTTPQueryParams, HTTPResponse
+from haiway import HTTPBody, HTTPClient, HTTPHeaders, HTTPQueryParams, HTTPResponse
 
 class CustomHTTPClient:
     async def request(
@@ -306,9 +526,10 @@ class CustomHTTPClient:
         url: str,
         query: HTTPQueryParams | None = None,
         headers: HTTPHeaders | None = None,
-        body: str | bytes | None = None,
+        body: HTTPBody | None = None,
         timeout: float | None = None,
         follow_redirects: bool | None = None,
+        stream: bool = False,
     ) -> HTTPResponse:
         # Your custom implementation
         return HTTPResponse(status_code=200, headers={}, body=b"ok")

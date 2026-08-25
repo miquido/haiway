@@ -1,6 +1,7 @@
-from collections.abc import Callable, Mapping, MutableMapping, MutableSequence
+import re
+from collections.abc import Callable, Mapping, MutableMapping, MutableSequence, Sequence
 from typing import (
-    Literal,
+    Any,
     cast,
 )
 
@@ -33,7 +34,10 @@ from haiway.attributes.annotations import (
 )
 from haiway.types import TypeSpecification
 
-__all__ = ("type_specification",)
+__all__ = (
+    "object_specification",
+    "type_specification",
+)
 
 
 def type_specification(
@@ -54,6 +58,74 @@ def type_specification(
     )
 
 
+def object_specification(
+    annotation: AttributeAnnotation,
+    /,
+    attributes: Sequence[tuple[str, AttributeAnnotation, bool]],
+) -> TypeSpecification | None:
+    """Specification of an object made of the given attributes.
+
+    Parameters
+    ----------
+    annotation : AttributeAnnotation
+        Annotation of the object itself, as resolved for the class declaring it.
+    attributes : Sequence[tuple[str, AttributeAnnotation, bool]]
+        Key to render the attribute under, its annotation, and whether it is
+        required - in the order they should be rendered.
+
+    Returns
+    -------
+    TypeSpecification | None
+        Specification of the object, carrying an anchor when one of its
+        attributes refers back to it, or ``None`` when any of them can't be
+        represented.
+
+    Notes
+    -----
+    The object is entered into the recursion guard before its attributes are
+    resolved, which is what separates this from resolving each of them on its
+    own. An attribute referring back to the object resolves to a reference to it
+    that way, instead of to the specification of the class declaring it - which
+    is not there yet, the class being created around this very call.
+    """
+    recursion_guard: MutableMapping[int, _RecursionGuard] = {}
+    guard: _RecursionGuard = _RecursionGuard(annotation)
+    recursion_guard[id(annotation)] = guard
+
+    required: MutableSequence[str] = []
+    properties: MutableMapping[str, TypeSpecification] = {}
+    for key, element, element_required in attributes:
+        element_specification: TypeSpecification | None = _specification(
+            element,
+            recursion_guard=recursion_guard,
+        )
+        if element_specification is None:
+            return None  # an attribute which can't be represented takes the object with it
+
+        properties[key] = _with_description(
+            element_specification,
+            description=element.description,
+        )
+
+        if element_required:
+            required.append(key)
+
+    specification: TypeSpecification = {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+    if guard.referenced:
+        return _with_anchor(
+            specification,
+            anchor=guard.anchor,
+        )
+
+    return specification
+
+
 class _RecursionGuard:
     __slots__ = (
         "annotation",
@@ -68,92 +140,105 @@ class _RecursionGuard:
         self.referenced: bool = False
 
     @property
-    def name(self) -> str:
-        return self.annotation.type_name
+    def anchor(self) -> str:
+        return _anchor_name(self.annotation.type_name)
 
 
-def _specification(  # noqa: C901, PLR0911, PLR0912
+def _specification(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification | None:
+    # an explicitly declared specification is used as it stands, wherever it is
+    # declared - the attribute of an object and the element of a container alike
+    if declared := annotation.specification:
+        return declared
+
     key: int = id(annotation)
 
     if guard := recursion_guard.get(key):
         guard.referenced = True
-        return {"$ref": f"#{guard.name}"}
+        return {"$ref": f"#{guard.anchor}"}
 
     elif isinstance(annotation, AliasAttribute):
-        recursion_guard[key] = _RecursionGuard(annotation)
-        specification: TypeSpecification | None = _specification(
-            annotation.resolved,
-            recursion_guard,
+        return _guarded_specification(
+            annotation,
+            resolve=lambda: _specification(
+                annotation.resolved,
+                recursion_guard,
+            ),
+            recursion_guard=recursion_guard,
         )
-
-        if specification is None:
-            return None
-
-        if recursion_guard[key].referenced:
-            return _with_identifier(
-                specification,
-                identifier=annotation.type_name,
-            )
-
-        return specification
 
     elif getattr(annotation.base, "__SERIALIZABLE__", False):
-        recursion_guard[key] = _RecursionGuard(annotation)
-        specification: TypeSpecification | None = annotation.base.__SPECIFICATION__
-
-        if specification is None:
-            return None
-
-        if recursion_guard[key].referenced:
-            return _with_identifier(
-                specification,
-                identifier=annotation.type_name,
-            )
-
-        return specification
+        # the class resolved its own specification when it was created, including
+        # the anchor of a reference to itself - there is nothing to resolve here
+        return cast(TypeSpecification | None, annotation.base.__SPECIFICATION__)
 
     elif specification_factory := SPECIFICATIONS.get(type(annotation)):
-        guard = recursion_guard.setdefault(
-            key,
-            _RecursionGuard(annotation),
-        )
-
-        specification: TypeSpecification | None
-        try:
-            specification = specification_factory(
+        return _guarded_specification(
+            annotation,
+            resolve=lambda: specification_factory(
                 annotation,
                 recursion_guard,
-            )
-
-        finally:
-            if not guard.referenced:
-                recursion_guard.pop(key, None)
-
-        if specification is None:
-            return None
-
-        if guard.referenced:
-            return _with_identifier(
-                specification,
-                identifier=guard.name,
-            )
-
-        return specification
+            ),
+            recursion_guard=recursion_guard,
+        )
 
     else:
         return None  # Unsupported type annotation
+
+
+def _guarded_specification(
+    annotation: AttributeAnnotation,
+    /,
+    resolve: Callable[[], TypeSpecification | None],
+    recursion_guard: MutableMapping[int, _RecursionGuard],
+) -> TypeSpecification | None:
+    key: int = id(annotation)
+    guard: _RecursionGuard = recursion_guard.setdefault(
+        key,
+        _RecursionGuard(annotation),
+    )
+
+    specification: TypeSpecification | None
+    try:
+        specification = resolve()
+
+    finally:
+        # the guard is only kept for an annotation which is actually referenced -
+        # the entry would otherwise turn a later, unrelated use of the same
+        # annotation into a reference to an anchor which was never rendered
+        if not guard.referenced:
+            recursion_guard.pop(key, None)
+
+    if specification is None:
+        return None
+
+    if guard.referenced:
+        return _with_anchor(
+            specification,
+            anchor=guard.anchor,
+        )
+
+    return specification
 
 
 def _prepare_specification_of_any(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
+    # `Any` accepts every value, which has to be spelled out - a schema naming a
+    # single type would refuse the values the annotation validates just fine
     return {
-        "type": "object",
-        "additionalProperties": True,
+        "type": [
+            "string",
+            "number",
+            "integer",
+            "boolean",
+            "object",
+            "array",
+            "null",
+        ],
     }
 
 
@@ -179,21 +264,33 @@ def _prepare_specification_of_literal(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
-    literal: LiteralAttribute = cast(LiteralAttribute, annotation)
+    values: Sequence[Any] = list(cast(LiteralAttribute, annotation).values)
 
-    if all(isinstance(element, str) for element in literal.values):
+    # `bool` is checked before `int` - it is a subclass of it, while a JSON
+    # boolean is not a JSON integer, so a schema naming one refuses the other
+    if all(isinstance(element, bool) for element in values):
+        return {
+            "type": "boolean",
+            "enum": values,
+        }
+
+    elif all(isinstance(element, str) for element in values):
         return {
             "type": "string",
-            "enum": literal.values,
+            "enum": values,
         }
 
-    elif all(isinstance(element, int) for element in literal.values):
+    elif all(isinstance(element, int) and not isinstance(element, bool) for element in values):
         return {
             "type": "integer",
-            "enum": literal.values,
+            "enum": values,
         }
 
-    raise TypeError(f"Unsupported literal annotation: {annotation}")
+    # values of more than one JSON type, i.e. `Literal["a", None]` - the enum
+    # names them all, which is what makes naming a single type unnecessary
+    return {
+        "enum": values,
+    }
 
 
 def _prepare_specification_of_sequence(
@@ -266,12 +363,38 @@ def _prepare_specification_of_tuple(
     }
 
 
+_COMPRESSIBLE_TYPES: frozenset[str] = frozenset(
+    (
+        "null",
+        "string",
+        "number",
+        "integer",
+        "boolean",
+    )
+)
+
+
+def _compressed_type(
+    specification: TypeSpecification,
+    /,
+) -> str | None:
+    # an alternative naming nothing but its type joins a list of types instead of
+    # a list of alternatives - anything more than that has to be kept as it is
+    match specification:
+        case {"type": str() as type_name, **tail} if not tail and type_name in _COMPRESSIBLE_TYPES:
+            return type_name
+
+        case _:
+            return None
+
+
 def _prepare_specification_of_union(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification | None:
-    compressed_alternatives: list[Literal["string", "number", "integer", "boolean", "null"]] = []
     alternatives: list[TypeSpecification] = []
+    compressed_alternatives: list[str] = []
+    compressible: bool = True
     for argument in cast(UnionAttribute, annotation).alternatives:
         specification: TypeSpecification | None = _specification(
             argument,
@@ -281,35 +404,36 @@ def _prepare_specification_of_union(
             return None
 
         alternatives.append(specification)
-        match specification:
-            case {"type": "null", **tail} if not tail:
-                compressed_alternatives.append("null")
+        compressed_type: str | None = _compressed_type(specification)
+        if compressed_type is None:
+            compressible = False
 
-            case {"type": "string", **tail} if not tail:
-                compressed_alternatives.append("string")
+        elif compressed_type not in compressed_alternatives:
+            # a type can be named only once within a list of types, while the
+            # alternatives can name it more than once - i.e. `None | Missing`
+            compressed_alternatives.append(compressed_type)
 
-            case {"type": "number", **tail} if not tail:
-                compressed_alternatives.append("number")
+    if alternatives and compressible:
+        if len(compressed_alternatives) == 1:  # alternatives of one and the same type
+            return cast(
+                TypeSpecification,
+                {
+                    "type": compressed_alternatives[0],
+                },
+            )
 
-            case {"type": "integer", **tail} if not tail:
-                compressed_alternatives.append("integer")
-
-            case {"type": "boolean", **tail} if not tail:
-                compressed_alternatives.append("boolean")
-
-            case _:
-                pass
-
-    if alternatives and len(compressed_alternatives) == len(alternatives):
         return cast(
             TypeSpecification,
             {
-                "type": tuple(compressed_alternatives),
+                "type": compressed_alternatives,
             },
         )
 
+    # `anyOf` rather than `oneOf` - more than one alternative can accept the same
+    # value, i.e. the empty array of `Sequence[int] | Sequence[str]`, which the
+    # annotation validates through the first alternative matching it
     return {
-        "oneOf": alternatives,
+        "anyOf": alternatives,
     }
 
 
@@ -471,8 +595,9 @@ def _prepare_specification_of_typed_dict(
 def _with_description(
     specification: TypeSpecification,
     description: str | None,
-) -> TypeSpecification | None:
-    if not description:
+) -> TypeSpecification:
+    # a declared specification describing itself keeps its own description
+    if not description or "description" in specification:
         return specification
 
     return cast(
@@ -484,17 +609,35 @@ def _with_description(
     )
 
 
-def _with_identifier(
+def _with_anchor(
     specification: TypeSpecification,
-    identifier: str,
+    anchor: str,
 ) -> TypeSpecification:
     return cast(
         TypeSpecification,
         {
             **specification,
-            "$id": f"#{identifier}",
+            "$anchor": anchor,
         },
     )
+
+
+_ANCHOR_DISALLOWED: re.Pattern[str] = re.compile(r"[^-A-Za-z0-9._]")
+_ANCHOR_START: re.Pattern[str] = re.compile(r"[A-Za-z_]")
+
+
+def _anchor_name(
+    type_name: str,
+    /,
+) -> str:
+    # an anchor is a plain name - the `<locals>` of a class declared within a
+    # function and the brackets of a specialized generic are not part of one
+    anchor: str = _ANCHOR_DISALLOWED.sub("_", type_name)
+
+    if not anchor or not _ANCHOR_START.match(anchor[0]):
+        return f"_{anchor}"
+
+    return anchor
 
 
 SPECIFICATIONS: Mapping[

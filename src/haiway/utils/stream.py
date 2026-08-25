@@ -122,6 +122,9 @@ class AsyncStream[Element](AsyncIterator[Element]):
 
         while self._pending:
             _, pending = self._pending.popleft()
+            if pending.done():
+                continue
+
             if get_running_loop() is not self._loop:
                 self._loop.call_soon_threadsafe(
                     pending.set_result,
@@ -175,15 +178,22 @@ class AsyncStream[Element](AsyncIterator[Element]):
             raise self._finish_reason
 
         try:
-            if self._pending:  # consume pending values
-                element, future = self._pending.popleft()
-                future.set_result(None)  # notify consumed
+            while self._pending:  # consume pending values
+                element, consumed = self._pending.popleft()
+                if consumed.done():
+                    # the producer was cancelled while waiting for this element
+                    # to be taken - delivering it would leave the consumer with
+                    # a value nobody is waiting to hear was consumed, so the
+                    # abandoned element is dropped in favor of the next one
+                    continue
+
+                consumed.set_result(None)  # notify consumed
                 return element
 
-            else:  # create new waiting future
-                self._waiting = self._loop.create_future()
-                # and wait for the result
-                return await self._waiting
+            # nothing pending - create new waiting future
+            self._waiting = self._loop.create_future()
+            # and wait for the result
+            return await self._waiting
 
         except CancelledError:
             self.cancel()  # when consumer is cancelled, signal producers to stop waiting

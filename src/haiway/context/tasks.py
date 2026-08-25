@@ -35,20 +35,24 @@ class BackgroundTaskGroup:
             context=context,
         )
 
-        loop_tasks: MutableSet[Task[Any]] | None
+        tasks: MutableSet[Task[Any]]
         with cls._lock:
-            loop_tasks = cls._loops_tasks.get(loop)
+            loop_tasks: MutableSet[Task[Any]] | None = cls._loops_tasks.get(loop)
             if loop_tasks is None:
-                loop_tasks = set()
-                cls._loops_tasks[loop] = loop_tasks
+                tasks = set()
+                cls._loops_tasks[loop] = tasks
 
-            loop_tasks.add(task)
+            else:
+                tasks = loop_tasks
+
+            tasks.add(task)
 
         def handle_done(completed: Task[Any]) -> None:
-            loop_tasks.discard(completed)
+            tasks.discard(completed)
 
             try:
                 exception = completed.exception()
+
             except CancelledError:
                 return
 
@@ -97,6 +101,7 @@ class BackgroundTaskGroup:
 
                 try:
                     loop.create_task(drain_tasks())  # noqa: RUF006
+
                 except RuntimeError:
                     pass
 
@@ -142,6 +147,7 @@ for signum in (
 
     try:
         signal.signal(signum, handle_signal)
+
     except OSError, RuntimeError, ValueError:
         pass  # ignore
 
@@ -156,6 +162,7 @@ class ContextTaskGroup:
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
     ) -> Task[Result]:
+        task_group: TaskGroup
         try:
             task_group = cls._context.get()
 
@@ -197,9 +204,12 @@ class ContextTaskGroup:
                 *args, **kwargs
             )
 
+        # detached tasks run outside of any scope - inheriting the spawning
+        # context would bind them to a scope which is free to complete while
+        # they still run, silently voiding their state, events and records
         return BackgroundTaskGroup.create_task(
             coroutine,
-            context=copy_context(),
+            context=Context(),
         )
 
     _context: ClassVar[ContextVar[TaskGroup]] = ContextVar[TaskGroup]("ContextTaskGroup")
@@ -236,13 +246,17 @@ class ContextTaskGroup:
                 exc_tb,
             )
 
-        except ExceptionGroup as exc:  # log before propagation
+        except BaseExceptionGroup as exc:  # log before propagation
             ContextObservability.record_log(
                 ObservabilityLevel.ERROR,
                 "Context task group exit failed",
                 exception=exc,
             )
-            if exc_val is not None:
+            # TaskGroup includes a non-cancellation body exception within its group,
+            # unwrap it to surface the original error instead of the group wrapper.
+            # A cancellation is never included there - it is the task group cancelling
+            # us on child failure, so propagating it would discard all child errors.
+            if exc_val is not None and not isinstance(exc_val, CancelledError):
                 raise exc_val from exc  # reraise currently handled exception
 
             else:

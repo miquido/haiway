@@ -76,7 +76,7 @@ class Meta(dict[str, BasicValue]):
                 return cls({key: _validated_meta_value(element) for key, element in values.items()})
 
             case _:
-                raise TypeError(f"'{value}' is not matching expected type of 'Meta'")
+                raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Meta'")
 
     @overload
     @classmethod
@@ -188,7 +188,9 @@ class Meta(dict[str, BasicValue]):
                 return cls({key: _validated_meta_value(val) for key, val in values.items()})
 
             case other:
-                raise ValueError(f"Invalid Meta value json: {other}")
+                raise ValueError(
+                    f"Invalid Meta json - decoded '{type(other).__name__}', expected object"
+                )
 
     def to_str(self) -> str:
         """
@@ -538,6 +540,10 @@ class Meta(dict[str, BasicValue]):
         tags: MetaTags,
         /,
     ) -> Self:
+        # dict.fromkeys accepts any collection and removes duplicates preserving order
+        added_tags: tuple[str, ...] = tuple(
+            dict.fromkeys(tag for tag in tags if _validate_tag(tag))
+        )
         match self.get("tags"):
             case [*current_tags]:
                 return self.__class__(
@@ -545,11 +551,7 @@ class Meta(dict[str, BasicValue]):
                         **self,
                         "tags": (
                             *current_tags,
-                            *(
-                                _validated_meta_value(tag)
-                                for tag in tags
-                                if tag not in current_tags
-                            ),
+                            *(tag for tag in added_tags if tag not in current_tags),
                         ),
                     }
                 )
@@ -558,7 +560,7 @@ class Meta(dict[str, BasicValue]):
                 return self.__class__(
                     {
                         **self,
-                        "tags": _validated_meta_value(tags),
+                        "tags": added_tags,
                     }
                 )
 
@@ -572,7 +574,7 @@ class Meta(dict[str, BasicValue]):
                 return all(tag in meta_tags for tag in tags)
 
             case _:
-                return False
+                return not tags
 
     @property
     def created(self) -> datetime | None:
@@ -744,7 +746,7 @@ class Meta(dict[str, BasicValue]):
         other: Any,
     ) -> Any:
         if not isinstance(other, Mapping):
-            raise NotImplementedError()
+            return NotImplemented
 
         return self.__class__(
             {
@@ -761,7 +763,7 @@ class Meta(dict[str, BasicValue]):
         other: Any,
     ) -> Any:
         if not isinstance(other, Mapping):
-            raise NotImplementedError()
+            return NotImplemented
 
         return self.__class__(
             {

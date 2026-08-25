@@ -15,8 +15,19 @@ __all__ = (
 )
 
 
+# a specification which recursive references point to carries the anchor naming it,
+# spelled with the functional form - `$anchor` is not a valid identifier
+AnchoredSpecification = TypedDict(
+    "AnchoredSpecification",
+    {
+        "$anchor": NotRequired[str],
+    },
+    total=False,
+)
+
+
 @final
-class AlternativesSpecification(TypedDict, total=False):
+class AlternativesSpecification(AnchoredSpecification, total=False):
     type: Required[
         Sequence[Literal["string", "number", "integer", "boolean", "null", "object", "array"]]
     ]
@@ -24,31 +35,31 @@ class AlternativesSpecification(TypedDict, total=False):
 
 
 @final
-class NoneSpecification(TypedDict, total=False):
+class NoneSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["null"]]
     description: NotRequired[str]
 
 
 @final
-class BoolSpecification(TypedDict, total=False):
+class BoolSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["boolean"]]
     description: NotRequired[str]
 
 
 @final
-class IntegerSpecification(TypedDict, total=False):
+class IntegerSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["integer"]]
     description: NotRequired[str]
 
 
 @final
-class NumberSpecification(TypedDict, total=False):
+class NumberSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["number"]]
     description: NotRequired[str]
 
 
 @final
-class StringSpecification(TypedDict, total=False):
+class StringSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["string"]]
     format: NotRequired[
         Literal[
@@ -64,41 +75,54 @@ class StringSpecification(TypedDict, total=False):
 
 
 @final
-class StringEnumSpecification(TypedDict, total=False):
+class StringEnumSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["string"]]
     enum: Required[Sequence[str]]
     description: NotRequired[str]
 
 
 @final
-class IntegerEnumSpecification(TypedDict, total=False):
+class IntegerEnumSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["integer"]]
     enum: Required[Sequence[int]]
     description: NotRequired[str]
 
 
 @final
-class NumberEnumSpecification(TypedDict, total=False):
+class NumberEnumSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["number"]]
     enum: Required[Sequence[float]]
     description: NotRequired[str]
 
 
 @final
-class UnionSpecification(TypedDict, total=False):
-    oneOf: Required[Sequence[TypeSpecification]]
+class BoolEnumSpecification(AnchoredSpecification, total=False):
+    type: Required[Literal["boolean"]]
+    enum: Required[Sequence[bool]]
     description: NotRequired[str]
 
 
 @final
-class ArraySpecification(TypedDict, total=False):
+class EnumSpecification(AnchoredSpecification, total=False):
+    enum: Required[Sequence[Any]]
+    description: NotRequired[str]
+
+
+@final
+class UnionSpecification(AnchoredSpecification, total=False):
+    anyOf: Required[Sequence[TypeSpecification]]
+    description: NotRequired[str]
+
+
+@final
+class ArraySpecification(AnchoredSpecification, total=False):
     type: Required[Literal["array"]]
     items: NotRequired[TypeSpecification]
     description: NotRequired[str]
 
 
 @final
-class TupleSpecification(TypedDict, total=False):
+class TupleSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["array"]]
     prefixItems: Required[Sequence[TypeSpecification]]
     items: Required[Literal[False]]
@@ -106,7 +130,7 @@ class TupleSpecification(TypedDict, total=False):
 
 
 @final
-class DictSpecification(TypedDict, total=False):
+class DictSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["object"]]
     additionalProperties: Required[TypeSpecification]
     required: NotRequired[Sequence[str]]
@@ -114,7 +138,7 @@ class DictSpecification(TypedDict, total=False):
 
 
 @final
-class ObjectSpecification(TypedDict, total=False):
+class ObjectSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["object"]]
     properties: Required[Mapping[str, TypeSpecification]]
     additionalProperties: Required[Literal[False]]
@@ -124,7 +148,7 @@ class ObjectSpecification(TypedDict, total=False):
 
 
 @final
-class AnyObjectSpecification(TypedDict, total=False):
+class AnyObjectSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["object"]]
     additionalProperties: Required[Literal[True]]
     description: NotRequired[str]
@@ -148,9 +172,11 @@ type TypeSpecification = (
     | StringSpecification
     | IntegerEnumSpecification
     | IntegerSpecification
+    | BoolEnumSpecification
     | NumberEnumSpecification
     | NumberSpecification
     | BoolSpecification
+    | EnumSpecification
     | TupleSpecification
     | ArraySpecification
     | ObjectSpecification

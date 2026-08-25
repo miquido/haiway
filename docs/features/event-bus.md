@@ -191,10 +191,45 @@ async def safe_event_processor():
             # Event processing continues
 ```
 
+### Delivery Scope
+
+Delivery goes upwards through the scope tree. An event reaches the subscribers of the sending scope
+and of every scope enclosing it, up to the nearest isolated context. Subscribers of sibling scopes -
+and of scopes nested below the sender - do not receive it:
+
+```python
+async def per_request_isolation():
+    async with ctx.scope("server"):
+        # a subscriber here observes events of the whole subtree below it
+        subscription = ctx.subscribe(OrderCreated)
+
+        async with ctx.scope("request_a"):
+            # reaches "request_a" and "server", not "request_b"
+            ctx.send(OrderCreated(order_id="a", amount=1.0))
+
+        async with ctx.scope("request_b"):
+            # a subscriber of "request_b" never sees the event above
+            ...
+```
+
+This is what keeps one request from observing another request's events while a service-wide
+subscriber still sees everything happening beneath it.
+
+When a producer and a consumer live in sibling scopes - a pipeline stage subscribing next to the
+stage feeding it - send the event to every subscriber explicitly:
+
+```python
+ctx.send(OrderCreated(order_id="a", amount=1.0), broadcast=True)
+```
+
+`broadcast=True` ignores the scope tree, so unrelated scopes sharing the bus - other requests among
+them - receive the payload as well. Reach for it deliberately, and prefer subscribing in a common
+parent scope when the payload carries anything sensitive.
+
 ### Scope Isolation
 
-Events are scoped to the nearest isolated context (root or `isolated=True`). Nested non-isolated
-scopes share the same event bus:
+The bus itself belongs to the nearest isolated context (root or `isolated=True`). Nested
+non-isolated scopes share it:
 
 ```python
 async def isolated_subsystem():
@@ -208,9 +243,56 @@ async def isolated_subsystem():
 This means:
 
 - A root scope always has an event bus.
-- A nested non-isolated scope reuses the parent's bus.
-- An `isolated=True` scope gets its own independent bus.
+- A nested non-isolated scope reuses the parent's bus, while delivery still follows the scope tree
+  as described above.
+- An `isolated=True` scope gets its own independent bus, so not even `broadcast=True` crosses it.
 - Calling `ctx.send()` or `ctx.subscribe()` without an installed bus raises `ContextMissing`.
+
+### Subscription Lifetime
+
+A subscription ends when the scope owning its event bus exits. The events which already arrived are
+delivered first, so the iteration finishes only once the queued events are drained and exiting the
+scope never discards a payload the subscriber had not picked up yet.
+
+Ownership is what matters here, not nesting. A nested non-isolated scope shares the bus of an
+ancestor, so a subscription created within it stays open past that scope's exit:
+
+```python
+async with ctx.scope("server"):          # owns the bus
+    async with ctx.scope("request"):     # shares it
+        subscription = ctx.subscribe(OrderCreated)
+        # this subscription ends when "server" exits, not when "request" does
+```
+
+Every scope also joins the tasks spawned within it before leaving, which makes the combination below
+hang - `request` waits for the consumer, and the consumer waits for a bus which only `server` can
+close:
+
+```python
+async with ctx.scope("server"):
+    async with ctx.scope("request"):
+        ctx.spawn(consumer)   # async for ... in ctx.subscribe(OrderCreated)
+    # never returns
+```
+
+Consume a subscription unboundedly only in the scope owning the bus:
+
+```python
+async with ctx.scope("server"):
+    ctx.spawn(consumer)       # ends when "server" exits
+```
+
+Within a nested scope, take a bounded number of events instead, so the iteration ends on its own:
+
+```python
+async with ctx.scope("server"):
+    async with ctx.scope("request"):
+        subscription = ctx.subscribe(OrderCreated)
+        first = await asyncio.wait_for(anext(subscription), timeout=5.0)
+```
+
+A subscription created after its bus already closed is not an error - it finishes immediately
+instead of waiting for an event which can never arrive.
 
 ## Integration with Other Features
 

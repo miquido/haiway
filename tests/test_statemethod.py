@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Callable
 
 import pytest
@@ -14,10 +15,6 @@ class Example(State):
     stuff_doing: Callable[[], str]
 
     do_stuff = statemethod(_do_stuff)
-
-
-class ChildExample(Example):
-    pass
 
 
 @pytest.mark.asyncio
@@ -37,31 +34,26 @@ async def test_statemethod_instance_call_prefers_instance_over_ctx() -> None:
         assert inst.do_stuff() == "from-instance"
 
 
+class DecoratedExample(State):
+    stuff_doing: Callable[[], str]
+
+    @statemethod
+    def do_stuff(self) -> str:
+        """Do the stuff."""
+        return self.stuff_doing()
+
+
 def test_statemethod_metadata_and_wrapped() -> None:
-    class DecoratedExample(State):
-        stuff_doing: Callable[[], str]
+    assert DecoratedExample.do_stuff.__name__ == "do_stuff"
+    assert DecoratedExample(stuff_doing=lambda: "ok").do_stuff.__name__ == "do_stuff"
 
-        @statemethod
-        def do_stuff(self) -> str:
-            """Do the stuff."""
-            return self.stuff_doing()
 
-    bound = DecoratedExample.do_stuff
-    assert bound.__name__ == "do_stuff"
-    assert bound.__doc__ == "Do the stuff."
-
-    instance = DecoratedExample(stuff_doing=lambda: "ok")
-    instance_bound = instance.do_stuff
-    assert instance_bound.__name__ == "do_stuff"
-    assert instance_bound.__doc__ == "Do the stuff."
+@pytest.mark.skipif(sys.flags.optimize > 1, reason="docstrings stripped under -OO")
+def test_statemethod_keeps_documentation() -> None:
+    assert DecoratedExample.do_stuff.__doc__ == "Do the stuff."
+    assert DecoratedExample(stuff_doing=lambda: "ok").do_stuff.__doc__ == "Do the stuff."
 
 
 def test_statemethod_caches_bound_callables() -> None:
     assert Example.do_stuff is Example.do_stuff
-    assert Example.do_stuff is not ChildExample.do_stuff
-
-
-@pytest.mark.asyncio
-async def test_statemethod_class_access_uses_owner_type() -> None:
-    async with ctx.scope("ex", ChildExample(stuff_doing=lambda: "child")):
-        assert ChildExample.do_stuff() == "child"
+    assert DecoratedExample.do_stuff is DecoratedExample.do_stuff

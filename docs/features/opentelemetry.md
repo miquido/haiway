@@ -73,24 +73,81 @@ OpenTelemetry.autoconfigure(
 )
 ```
 
+OpenTelemetry providers can only be installed once per process, and each signal has its own global
+slot. `configure()` resolves the tracer, meter, and logger providers independently: any provider
+already installed - by auto-instrumentation, another library, or a previous call - is adopted, while
+the remaining slots get providers built from the passed exporter configuration. This avoids both the
+split state where traces and metrics keep going to existing providers while logs go to newly created
+ones, and the opposite one where a single externally configured signal leaves the others on
+non-exporting proxies.
+
+A slot can also be held by a provider that is neither an SDK instance to adopt nor replaceable, such
+as an explicitly installed no-op. `configure()` verifies that each installation actually took
+effect; a signal whose slot could not be claimed is reported as an error and the provider built for
+it is released right away, so its exporter threads and channels do not linger unused. Nothing is
+retained for such a signal, which keeps `force_flush()` and `shutdown()` from acting on a provider
+telemetry never reaches.
+
+`autoconfigure()` adopts whatever is installed without building anything. When no signal has an SDK
+provider yet, every global one is still a non-exporting proxy - that is reported as a warning rather
+than raised, since providers may be installed later, but until then telemetry is discarded and
+scopes report a zero trace identifier.
+
+Both `configure()` and `autoconfigure()` raise `OpenTelemetryException` when `service` is empty, and
+`observability()` raises it when neither has been called yet.
+
+Telemetry is attributed to an instrumentation scope named after `service`, carrying `version`. The
+service is identified by the resource attributes as well, per the OpenTelemetry specification, which
+is what `autoconfigure()` relies on - there the resource belongs to the externally installed
+providers.
+
+### Flushing and Shutdown
+
+Providers installed by `configure()` register interpreter exit hooks, so telemetry is normally
+flushed automatically. Flush explicitly when exiting through a path that skips those hooks, or when
+asserting on exported telemetry in tests:
+
+```python
+from haiway.opentelemetry import OpenTelemetry
+
+OpenTelemetry.force_flush()          # export what is buffered
+OpenTelemetry.force_flush(5000)      # with a 5 second budget per provider
+
+OpenTelemetry.shutdown()             # flush and stop the providers
+```
+
+Both are safe to call when nothing was configured, and both log failures rather than raising, so
+they never break a shutdown path. `shutdown()` leaves the integration unconfigured, so
+`observability()` raises again afterwards instead of handing out adapters writing into providers
+that no longer export anything.
+
+`configure()` claims its provider slots once per process, and they are never released. Calling it
+again - including after `shutdown()` - raises `OpenTelemetryException` rather than silently keeping
+the earlier configuration or adopting providers which no longer export anything.
+
+`autoconfigure()` stays repeatable, since binding again is how a process picks up providers which
+were installed after the first call. It can not tell a provider which was shut down from a live one,
+so avoid it after `shutdown()`.
+
 ## Configuration Options
 
 ### Basic Configuration
 
-| Parameter     | Type  | Description                                            |
-| ------------- | ----- | ------------------------------------------------------ |
-| `service`     | `str` | Name of your service                                   |
-| `version`     | `str` | Version of your service                                |
-| `environment` | `str` | Deployment environment (e.g., "production", "staging") |
+| Parameter     | Type          | Description                                             |
+| ------------- | ------------- | ------------------------------------------------------- |
+| `service`     | `str`         | Name of your service. Must not be empty.                |
+| `version`     | `str`         | Version of your service                                 |
+| `environment` | `str`         | Deployment environment (e.g., "production", "staging")  |
+| `instance`    | `str \| None` | Instance identifier. Defaults to the current process id |
 
 ### OTLP Export Configuration
 
-| Parameter                | Type                        | Default | Description                                        |
-| ------------------------ | --------------------------- | ------- | -------------------------------------------------- |
-| `otlp_endpoint`          | `str \| None`               | `None`  | OTLP endpoint URL. If None, uses console exporters |
-| `insecure`               | `bool`                      | `True`  | Whether to use insecure connections                |
-| `export_interval_millis` | `int`                       | `5000`  | Metrics export interval in milliseconds            |
-| `attributes`             | `Mapping[str, Any] \| None` | `None`  | Additional resource attributes                     |
+| Parameter                | Type                        | Default | Description                                                    |
+| ------------------------ | --------------------------- | ------- | -------------------------------------------------------------- |
+| `otlp_endpoint`          | `str \| None`               | `None`  | OTLP endpoint. Resolved from the environment when unset        |
+| `insecure`               | `bool \| None`              | `None`  | Insecure connections. Resolved from the environment when unset |
+| `export_interval_millis` | `int`                       | `5000`  | Metrics export interval in milliseconds                        |
+| `attributes`             | `Mapping[str, Any] \| None` | `None`  | Additional resource attributes                                 |
 
 ### 3. Usage with Context
 
@@ -156,7 +213,8 @@ async def process_individual_requests():
 
 ### Console vs OTLP Export
 
-**Console Export**: When no OTLP endpoint is specified, OpenTelemetry console exporters are used.
+**Console Export**: When no OTLP endpoint is given and none is configured in the environment,
+OpenTelemetry console exporters are used.
 
 ```python
 OpenTelemetry.configure(
@@ -168,7 +226,9 @@ OpenTelemetry.configure(
 ```
 
 **OTLP Export**: With an OTLP endpoint provided, telemetry is sent to that endpoint and not mirrored
-to the console.
+to the console. The endpoint may equally come from the standard `OTEL_EXPORTER_OTLP_ENDPOINT` or
+per-signal `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` environment variables, so an
+environment-configured process exports over OTLP without passing the argument.
 
 ```python
 OpenTelemetry.configure(
@@ -178,6 +238,28 @@ OpenTelemetry.configure(
     otlp_endpoint="http://collector:4317"
 )
 ```
+
+### Adapter Reuse
+
+An `Observability` instance may back several independent root scopes, including concurrent ones.
+Each root starts its own span tree and its own trace, and its state is released when that tree
+completes:
+
+```python
+observability = OpenTelemetry.observability()
+
+async def handle(request):
+    # each request is an independent root trace
+    async with ctx.scope("request", observability=observability):
+        await process(request)
+
+await asyncio.gather(*(handle(request) for request in requests))
+```
+
+Nested scopes inherit the span tree of the root they belong to, and share the tracer, meter, logger,
+and metric instruments of the adapter. Entering a scope therefore costs one span and one context. An
+adapter tracks its live scopes in plain dictionaries, so it may be shared across concurrent scopes
+on one event loop, but not across threads - create one adapter per loop instead.
 
 ## Distributed Tracing
 
@@ -201,26 +283,51 @@ async def handle_request():
 Connect to existing distributed traces from other services:
 
 ```python
-# Link to an external trace using a W3C traceparent header
-incoming_traceparent = request.headers.get("traceparent")
-
+# Continue an external trace from the W3C trace context headers
 observability = OpenTelemetry.observability(
-    traceparent=incoming_traceparent
+    traceparent=request.headers.get("traceparent"),
+    tracestate=request.headers.get("tracestate"),
 )
 
 async with ctx.scope("service-handler", observability=observability):
-    # This root span gets a link to the external trace/span context
+    # This root span continues the caller's trace as a child of its span
     await handle_service_request()
 ```
 
-`traceparent=` creates an OpenTelemetry `Link` on the root span. It does not install the remote span
-as the direct parent.
+`traceparent=` installs the decoded span context as the remote parent of the root span, so the
+incoming trace continues as a single trace across services, and `tracestate=` carries the vendor
+trace state along with it. Decoding is delegated to the OpenTelemetry trace context propagator, so
+field lengths, reserved versions, and zeroed identifiers are validated exactly as the W3C
+specification requires. Anything it rejects is ignored with a warning and the scope starts its own
+trace instead. The value is decoded once, when the adapter is created.
+
+The remote parent applies to root scopes only. A nested scope entered within a spawned task stays
+under the span its task inherited, instead of being re-rooted at the remote parent.
 
 To propagate the current active span to another system, use:
 
 ```python
-traceparent = OpenTelemetry.traceparent()
+headers = {"traceparent": OpenTelemetry.traceparent()}
+
+if tracestate := OpenTelemetry.tracestate():
+    headers["tracestate"] = tracestate
 ```
+
+`traceparent()`/`tracestate()` and `observability(traceparent=..., tracestate=...)` are a matching
+pair: the values produced by one service are consumed by the next. Both return `None` when no valid
+span context is active.
+
+`ctx.trace_context()` produces the same carrier without reaching for the integration directly:
+
+```python
+headers = {**ctx.trace_context()}
+```
+
+It encodes the position of the current scope, and returns an empty mapping when the observability
+backend has no trace position to hand out - the default logger among them - or when used out of
+context. That makes it the form to reach for in reusable code, which cannot assume OpenTelemetry is
+the backend in use. It is what `HTTPClient` attaches to a request made with
+`trace_propagation=True`.
 
 ### Trace Context Propagation
 
@@ -277,6 +384,11 @@ ctx.record_info(
 ```
 
 ### Custom Units
+
+An instrument is identified by its kind, name, and unit, and instruments are shared by every scope
+of an adapter. Recording the same metric from a nested scope therefore contributes to one stream,
+while changing the unit of a name records into an instrument of its own rather than being silently
+dropped into the first one.
 
 Specify units for better observability:
 
@@ -369,14 +481,16 @@ ctx.record_info(
 Add service-specific metadata:
 
 ```python
+import os
+
 OpenTelemetry.configure(
     service="payment-service",
     version="2.1.0",
     environment="production",
+    instance=os.environ.get("INSTANCE_ID"),
     otlp_endpoint="http://collector:4317",
     attributes={
         "service.namespace": "payments",
-        "service.instance.id": os.environ.get("INSTANCE_ID"),
         "deployment.version": "v2.1.0-rc.1",
         "team": "payments-team",
         "region": "us-east-1"
@@ -384,22 +498,52 @@ OpenTelemetry.configure(
 )
 ```
 
+`configure()` derives these resource attributes from its own parameters, following the current
+OpenTelemetry semantic conventions:
+
+| Parameter     | Resource attribute            |
+| ------------- | ----------------------------- |
+| `service`     | `service.name`                |
+| `version`     | `service.version`             |
+| `instance`    | `service.instance.id`         |
+| `environment` | `deployment.environment.name` |
+
+Anything passed through `attributes=` is applied last, so it can override these.
+
 ### Error Handling and Status
 
-On scope exit, spans are marked `ERROR` when the scope exits with an exception and `OK` otherwise.
-If you also want the exception attached to the span, log it with `exception=...`:
+On scope exit, spans are marked `ERROR` - described as `TypeName: message` - when the scope exits
+with a regular exception, and left `UNSET` otherwise. `OK` is deliberately not set on success: the
+OpenTelemetry specification reserves it for explicitly asserted success, and the SDK treats it as
+terminal, which would stop a later error from being recorded on the same span.
+
+Cancellation is not an error. A scope exiting with `CancelledError` - or any other `BaseException`
+which is not an `Exception` - leaves the status `UNSET`, since cancellation is routine control flow
+under structured concurrency and marking it would paint whole subtrees red.
+
+Logging with `exception=...` reports the failure through both signals - `exception.type`,
+`exception.message` and `exception.stacktrace` on the log record, and an `exception` event on the
+active span:
 
 ```python
 async with ctx.scope("risky-operation"):
     try:
         await potentially_failing_operation()
-        # Span status: OK
+        # Span status: UNSET
     except Exception as e:
-        # Span status: ERROR
-        # Exception details attached to the active span:
+        # Span status: ERROR, described as "TypeName: message"
+        # Exception details attached to the log record and to the active span:
         ctx.log_error("Operation failed", exception=e)
         raise
 ```
+
+## Span Completion
+
+A span ends only once every scope nested below it has completed, which keeps parent-child lifetimes
+intact regardless of the order they finish in. The span still reports the duration of its own scope:
+the timestamp is captured when the scope exits, not when the last descendant finishes. Since every
+scope joins the tasks spawned within it before leaving, a nested scope always ends before the one it
+was spawned in.
 
 ## Attribute Normalization
 
@@ -408,6 +552,11 @@ Before sending data to OpenTelemetry, Haiway normalizes observability attributes
 - `None` and `MISSING` values are skipped
 - sequences are filtered and exported as tuples
 - mapping values are flattened into dotted keys such as `http.request_id`
+- binary values - `bytes`, `bytearray`, `memoryview` - are rendered as a single string rather than
+  exported byte by byte
+
+Metric values are checked as well: `NaN`, both infinities, and integers too wide to be converted to
+a float are skipped with a warning, since recording them would raise inside the SDK.
 
 Example:
 
@@ -533,6 +682,8 @@ ctx.record_info(
 - Verify OTLP endpoint is reachable
 - Check if OpenTelemetry.configure() was called before creating observability, or if autoconfigure()
   was used when relying on externally configured global providers
+- Look for a logged error naming provider slots held outside of the SDK, or a warning about
+  autoconfigure finding no installed providers - both mean telemetry is being discarded
 - Check that the `haiway[opentelemetry]` extra is installed
 - Ensure proper network connectivity to your observability backend
 
@@ -545,7 +696,8 @@ ctx.record_info(
 **3. Missing trace correlation**
 
 - Ensure observability is properly passed through context scopes
-- Verify the supplied `traceparent` value is a valid W3C traceparent string
+- Verify the supplied `traceparent` value is a valid W3C traceparent string, and that `tracestate`
+  is passed alongside it when the caller sends one
 - Check that async context is properly propagated
 
 ## Further Reading

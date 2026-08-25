@@ -1,3 +1,4 @@
+from asyncio import CancelledError, Event, ensure_future, sleep
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import TracebackType
@@ -162,3 +163,188 @@ async def test_disposables_collects_multiple_states() -> None:
     assert {type(state) for state in collected} == {ExampleState, AnotherExampleState}
     assert next(state for state in collected if isinstance(state, ExampleState)).value == "first"
     assert next(state for state in collected if isinstance(state, AnotherExampleState)).data == 100
+
+
+@mark.asyncio
+async def test_partial_preparation_failure_disposes_prepared() -> None:
+    prepared = MockDisposable(enter_return=ExampleState(value="prepared"))
+    failing = MockDisposable(enter_exception=RuntimeError("cannot prepare"))
+
+    with raises(RuntimeError):
+        async with ctx.disposables(prepared, failing):
+            pass
+
+    # the disposable which was prepared has to be disposed instead of leaking
+    assert prepared.enter_called is True
+    assert prepared.exit_called is True
+    # the one which failed to prepare was never prepared, so it is not disposed
+    assert failing.exit_called is False
+
+
+@mark.asyncio
+async def test_preparation_failure_within_scope_is_not_disposed() -> None:
+    failing = MockDisposable(enter_exception=RuntimeError("cannot prepare"))
+
+    with raises(RuntimeError):
+        async with ctx.scope("test", disposables=(failing,)):
+            pass
+
+    assert failing.enter_called is True
+    assert failing.exit_called is False
+
+
+@mark.asyncio
+async def test_preparation_failure_reports_original_error() -> None:
+    @asynccontextmanager
+    async def failing_disposable() -> AsyncIterator[ExampleState]:
+        raise RuntimeError("original failure")
+        yield ExampleState()  # pragma: no cover
+
+    with raises(RuntimeError, match="original failure"):
+        async with ctx.scope("test", disposables=(failing_disposable(),)):
+            pass
+
+
+@mark.asyncio
+async def test_cancelled_preparation_disposes_prepared() -> None:
+    entered: Event = Event()
+
+    class FastDisposable:
+        def __init__(self) -> None:
+            self.exit_called: bool = False
+
+        async def __aenter__(self) -> Any:
+            entered.set()
+            return ExampleState(value="prepared")
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            self.exit_called = True
+
+    class SlowDisposable:
+        def __init__(self) -> None:
+            self.exit_called: bool = False
+
+        async def __aenter__(self) -> Any:
+            await sleep(0.1)
+            return ExampleState(value="slow")
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            self.exit_called = True
+
+    prepared = FastDisposable()
+    slow = SlowDisposable()
+
+    async def entering() -> None:
+        async with ctx.scope("test", disposables=(prepared, slow)):
+            pass  # pragma: no cover
+
+    task = ensure_future(entering())
+    await entered.wait()  # one is prepared, the other is still preparing
+    task.cancel()
+    with raises(CancelledError):
+        await task
+
+    # preparation is atomic - cancelling it midway completes the preparation
+    # and disposes everything prepared instead of leaking it
+    assert prepared.exit_called is True
+    assert slow.exit_called is True
+
+
+@mark.asyncio
+async def test_cancelled_before_preparation_skips_preparation() -> None:
+    class NeverPreparedDisposable:
+        def __init__(self) -> None:
+            self.enter_called: bool = False
+
+        async def __aenter__(self) -> Any:
+            self.enter_called = True  # pragma: no cover
+            return ExampleState(value="never")  # pragma: no cover
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            pass  # pragma: no cover
+
+    disposable = NeverPreparedDisposable()
+
+    async def entering() -> None:
+        ctx.cancel()  # request cancellation before preparing
+        async with ctx.scope("test", disposables=(disposable,)):
+            pass  # pragma: no cover
+
+    with raises(CancelledError):
+        await ensure_future(entering())
+
+    # preparation is not started when cancellation is already pending
+    assert disposable.enter_called is False
+
+
+@mark.asyncio
+async def test_self_cancelled_preparation_disposes_prepared() -> None:
+    class CancellingDisposable:
+        async def __aenter__(self) -> Any:
+            raise CancelledError
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            pass  # pragma: no cover
+
+    prepared = MockDisposable(enter_return=ExampleState(value="prepared"))
+
+    with raises(CancelledError):
+        async with ctx.disposables(prepared, CancellingDisposable()):
+            pass  # pragma: no cover
+
+    # cancellation of a single preparation cancels the whole preparation
+    assert prepared.exit_called is True
+
+
+@mark.asyncio
+async def test_spawned_tasks_are_joined_before_disposables_are_released() -> None:
+    task_completed: bool = False
+    completed_before_release: bool | None = None
+
+    class TrackedDisposable:
+        async def __aenter__(self) -> ExampleState:
+            return ExampleState(value="tracked")
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            nonlocal completed_before_release
+            completed_before_release = task_completed
+
+    async def work() -> None:
+        nonlocal task_completed
+        for _ in range(4):  # outlive the scope body and any single teardown step
+            await sleep(0)
+
+        # the state provided by the disposable is still available to the task
+        assert ctx.state(ExampleState).value == "tracked"
+        task_completed = True
+
+    async with ctx.scope("ordering", disposables=(TrackedDisposable(),)):
+        ctx.spawn(work)
+
+    assert task_completed is True
+    assert completed_before_release is True

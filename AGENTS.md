@@ -16,7 +16,7 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
   - `attributes/`: Attribute annotations, state objects, and validation helpers.
   - `context/`: Structured-concurrency context management, scopes, and lifecycle utilities.
   - `helpers/`: Cross-cutting helpers for configuration, async orchestration, retries, throttling, HTTP adapters, file access, and message queues.
-  - `httpx/`: Thin wrappers around `httpx.AsyncClient` aligned with haiway abstractions.
+  - `httpx/`: Thin wrappers around `httpx2.AsyncClient` aligned with haiway abstractions.
   - `opentelemetry/`: OpenTelemetry integration and observability backend wiring.
   - `postgres/`: Async Postgres client, configuration, and typed row/state helpers built on top of `asyncpg` patterns.
   - `rabbitmq/`: Async RabbitMQ client/state helpers and typed queue/message abstractions built on top of `pika`.

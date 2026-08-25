@@ -1,3 +1,4 @@
+from haiway.context import LoggerObservability
 from haiway.helpers.asynchrony import asynchronous
 from haiway.helpers.caching import CacheMakeKey, CacheRead, CacheWrite, cache, cache_externally
 from haiway.helpers.concurrent import (
@@ -15,21 +16,26 @@ from haiway.helpers.configuration import (
 from haiway.helpers.files import (
     Directory,
     File,
+    FileAccess,
+    FileAccessing,
     FileException,
     Files,
     Paths,
 )
 from haiway.helpers.http_client import (
+    HTTPBody,
+    HTTPBodyConsumedError,
     HTTPClient,
     HTTPClientError,
+    HTTPConnectionError,
     HTTPHeaders,
     HTTPQueryParams,
     HTTPRequesting,
     HTTPResponse,
     HTTPStatusCode,
+    HTTPTimeoutError,
 )
 from haiway.helpers.message_queue import MQMessage, MQQueue
-from haiway.helpers.observability import LoggerObservability
 from haiway.helpers.retries import retry
 from haiway.helpers.statemethods import statemethod
 from haiway.helpers.throttling import throttle
@@ -45,15 +51,21 @@ __all__ = (
     "ConfigurationRepository",
     "Directory",
     "File",
+    "FileAccess",
+    "FileAccessing",
     "FileException",
     "Files",
+    "HTTPBody",
+    "HTTPBodyConsumedError",
     "HTTPClient",
     "HTTPClientError",
+    "HTTPConnectionError",
     "HTTPHeaders",
     "HTTPQueryParams",
     "HTTPRequesting",
     "HTTPResponse",
     "HTTPStatusCode",
+    "HTTPTimeoutError",
     "LoggerObservability",
     "MQMessage",
     "MQQueue",

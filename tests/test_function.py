@@ -4,7 +4,7 @@ import pytest
 
 from haiway.attributes.function import Function
 from haiway.attributes.validation import ValidationError
-from haiway.types import Alias
+from haiway.types import Alias, Default
 
 
 def test_validate_arguments_skip_consumed_kwargs_in_variadic() -> None:
@@ -178,3 +178,95 @@ def test_validate_arguments_fails_with_alias_and_canonical_for_same_param() -> N
 
     with pytest.raises(TypeError):
         assert parametrized(7, tag="blue", label="green") == (7, "green")
+
+
+def test_resolves_literal_default_marker() -> None:
+    def foo(name: str, greeting: str = Default("hello")) -> str:
+        return f"{greeting}, {name}"
+
+    parametrized = Function(foo)
+
+    assert parametrized("bob") == "hello, bob"
+    assert parametrized("bob", greeting="hi") == "hi, bob"
+    assert parametrized("bob", "hi") == "hi, bob"
+
+
+def test_resolves_factory_default_marker() -> None:
+    produced: list[int] = []
+
+    def next_value() -> int:
+        produced.append(len(produced))
+        return len(produced)
+
+    def foo(value: int = Default(factory=next_value)) -> int:
+        return value
+
+    parametrized = Function(foo)
+
+    # the factory is resolved per call, not once at wrapping
+    assert parametrized() == 1
+    assert parametrized() == 2
+    assert parametrized(10) == 10
+
+
+def test_resolves_env_default_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HAIWAY_TEST_FUNCTION_DEFAULT", "from-env")
+
+    def foo(token: str = Default(env="HAIWAY_TEST_FUNCTION_DEFAULT")) -> str:
+        return token
+
+    parametrized = Function(foo)
+
+    assert parametrized() == "from-env"
+
+
+def test_resolves_keyword_only_default_marker() -> None:
+    def foo(name: str, *, suffix: str = Default("!")) -> str:
+        return f"{name}{suffix}"
+
+    parametrized = Function(foo)
+
+    assert parametrized("bob") == "bob!"
+    assert parametrized("bob", suffix="?") == "bob?"
+
+
+def test_resolves_positional_only_default_marker() -> None:
+    def foo(value: int = Default(7), /) -> int:
+        return value
+
+    parametrized = Function(foo)
+
+    assert parametrized() == 7
+    assert parametrized(1) == 1
+
+
+def test_resolves_aliased_default_marker() -> None:
+    def foo(value: Annotated[int, Alias("val")] = Default(3)) -> int:
+        return value
+
+    parametrized = Function(foo)
+
+    assert parametrized() == 3
+    assert parametrized(val=5) == 5
+
+
+def test_validates_resolved_default_marker() -> None:
+    def foo(value: int = Default("not an int")) -> int:  # pyright: ignore[reportArgumentType]
+        return value
+
+    parametrized = Function(foo)
+
+    with pytest.raises(ValidationError):
+        parametrized()
+
+
+def test_keeps_plain_defaults_untouched() -> None:
+    sentinel: list[int] = []
+
+    def foo(value: list[int] = sentinel) -> list[int]:
+        return value
+
+    parametrized = Function(foo)
+
+    # a plain default is bound by python and is not validated or coerced
+    assert parametrized() is sentinel

@@ -1,11 +1,105 @@
-from collections.abc import ItemsView, Mapping, Sequence, Set
+from collections.abc import ItemsView, Iterable, Mapping, Sequence, Set
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 from uuid import UUID
 
-from haiway.types.missing import MISSING
+from haiway.types import MISSING
 
-__all__ = ("format_str",)
+__all__ = (
+    "escape_controls",
+    "format_log_message",
+    "format_str",
+)
+
+# control characters allow forging additional log records, hiding written text
+# and injecting terminal escape sequences, so they are never emitted verbatim.
+# tab is kept - it cannot start a new record and it keeps output readable
+_LINE_FEED: Final[int] = 0x0A
+_CARRIAGE_RETURN: Final[int] = 0x0D
+_CONTROL_ESCAPES: Final[Mapping[int, str]] = {
+    **{
+        code: f"\\x{code:02x}"
+        for code in (*range(0x00, 0x09), *range(0x0B, 0x20), *range(0x7F, 0xA0))
+    },
+    _LINE_FEED: "\\n",
+    _CARRIAGE_RETURN: "\\r",
+}
+_CONTROL_ESCAPES_KEEPING_NEWLINES: Final[Mapping[int, str]] = {
+    code: escape for code, escape in _CONTROL_ESCAPES.items() if code != _LINE_FEED
+}
+
+
+def escape_controls(
+    text: str,
+    /,
+    *,
+    allow_newlines: bool = False,
+) -> str:
+    """
+    Escape control characters which could tamper with rendered output.
+
+    Parameters
+    ----------
+    text : str
+        Text to escape.
+    allow_newlines : bool, default=False
+        When ``True``, line feeds are preserved - use it for text rendered
+        within an already multiline structure. Carriage returns, terminal escape
+        sequences and other control characters are escaped either way.
+
+    Returns
+    -------
+    str
+        Text with control characters replaced by their escaped representation.
+
+    Notes
+    -----
+    Escaping keeps untrusted content from forging log records - a value
+    containing a line feed would otherwise be written as an additional,
+    seemingly independent line.
+    """
+    return text.translate(_CONTROL_ESCAPES_KEEPING_NEWLINES if allow_newlines else _CONTROL_ESCAPES)
+
+
+def format_log_message(
+    message: str,
+    /,
+    args: Sequence[Any] = (),
+) -> str:
+    """
+    Compose a single line log message out of a format string and its arguments.
+
+    Parameters
+    ----------
+    message : str
+        Message, optionally containing ``%``-style placeholders.
+    args : Sequence[Any], default=()
+        Values substituted into the placeholders.
+
+    Returns
+    -------
+    str
+        Escaped, single line message with the arguments already substituted.
+
+    Notes
+    -----
+    Interpolation happens here instead of within the logging module, so a
+    ``%`` character coming from untrusted content cannot make the standard
+    library drop the whole record. A malformed format string keeps the message
+    and appends the arguments instead of failing.
+    """
+    if not args:
+        return escape_controls(message)
+
+    formatted: str
+    try:
+        formatted = message % args
+
+    except TypeError, ValueError:
+        # a mismatched format string must not lose the record
+        formatted = f"{message} {args!r}"
+
+    return escape_controls(formatted)
 
 
 def format_str(  # noqa: PLR0911 PLR0912 C901
@@ -37,6 +131,7 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
     Notes
     -----
     - Strings are quoted, with multiline strings rendered as indented triple-quoted blocks
+    - Control characters within strings are escaped, keeping line feeds of multiline blocks
     - Bytes-like values are rendered as ``<<<N bytes>>>``
     - Mappings are formatted with rendered keys and values
     - Sequences are formatted with positional indices
@@ -52,19 +147,24 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
         return ""
 
     elif isinstance(value, str):
-        if "\n" in value:
+        # line feeds keep the readable block form, every other control character
+        # is escaped so it can't inject terminal sequences or hide written text
+        escaped_value: str = escape_controls(
+            value,
+            allow_newlines=True,
+        )
+        if "\n" in escaped_value:
             outer_indent = " " * indent
             inner_indent = " " * (indent + 2)
-            indented_value = value.replace("\n", f"\n{inner_indent}")
+            indented_value = escaped_value.replace("\n", f"\n{inner_indent}")
             return f'{outer_indent}"""\n{inner_indent}{indented_value}\n{outer_indent}"""'
 
         else:
-            return f'"{value}"'
+            return f'"{escaped_value}"'
 
+    # bool is a subclass of int, so it is covered here as well - both render
+    # through `str`, which is what the dedicated branch below used to do
     elif isinstance(value, int | float | complex):
-        return str(value)
-
-    elif isinstance(value, bool):
         return str(value)
 
     elif isinstance(value, bytes | bytearray | memoryview):
@@ -131,6 +231,30 @@ def _element_str(
         return f"{indent_str}[{key}]: {value}"
 
 
+def _object_variables(
+    other: object,
+    /,
+) -> Iterable[tuple[str, str | None, Any]] | None:
+    # `State` and `Immutable` keep their values in slots, so the names come from
+    # what the type declares rather than from an instance `__dict__`
+    if fields := getattr(type(other), "__FIELDS__", ()):
+        # an attribute annotated with Sensitive carries the redaction to render
+        # instead of its value, so a secret cannot reach logs through formatting
+        return (
+            (field.name, field.redaction, getattr(other, field.name))
+            for field in fields
+            if hasattr(other, field.name)
+        )
+
+    if attributes := getattr(type(other), "__ATTRIBUTES__", ()):
+        return ((name, None, getattr(other, name)) for name in attributes if hasattr(other, name))
+
+    if hasattr(other, "__dict__"):
+        return ((key, None, value) for key, value in vars(other).items())
+
+    return None  # nothing describes it, it renders through `str` instead
+
+
 def _object_str(
     other: object,
     /,
@@ -138,7 +262,8 @@ def _object_str(
     indent: int,
 ) -> str:
     indent_str: str = " " * indent
-    if not hasattr(other, "__dict__"):
+    variables: Iterable[tuple[str, str | None, Any]] | None = _object_variables(other)
+    if variables is None:
         # Preserve caller indentation across multiline string representations
         raw = str(other)
         lines = raw.splitlines(keepends=True)
@@ -148,17 +273,22 @@ def _object_str(
         head, *tail = lines
         return head + "".join(f"{indent_str}{line}" for line in tail)
 
-    variables: ItemsView[str, Any] = vars(other).items()
     header = f"{indent_str}┍━ {type(other).__name__}:"
     parts: list[str] = [header]
-    for key, value in variables:
+    for key, redaction, value in variables:
         if key.startswith("_"):
             continue  # skip private and dunder
 
-        value_string: str = format_str(
-            value,
-            indent=indent + 2,
-        )
+        value_string: str
+        if redaction is not None:
+            # single line values are indented by the attribute renderer
+            value_string = redaction
+
+        else:
+            value_string = format_str(
+                value,
+                indent=indent + 2,
+            )
 
         if value_string:
             parts.append(

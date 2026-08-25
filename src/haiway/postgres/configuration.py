@@ -1,10 +1,10 @@
 from collections.abc import Sequence
-from typing import Any, cast, final
+from typing import Any, Final, final
 
 from haiway.context import ctx
 from haiway.helpers import ConfigurationRepository, cache
-from haiway.helpers.configuration import Configuration
-from haiway.postgres.state import Postgres, PostgresConnection
+from haiway.helpers.configuration import Configuration, ConfigurationInvalid
+from haiway.postgres.state import Postgres
 from haiway.postgres.types import PostgresRow
 from haiway.types import Meta
 
@@ -27,10 +27,6 @@ class PostgresConfigurationRepository:
         This asynchronous method creates the `configurations` table and
         its supporting index when they do not already exist.
 
-        Parameters
-        ----------
-        None
-
         Returns
         -------
         None
@@ -42,23 +38,8 @@ class PostgresConfigurationRepository:
             Raised when PostgreSQL command execution fails, for example due to
             connection or database-level errors.
         """
-        await PostgresConnection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS configurations (
-                identifier TEXT NOT NULL,
-                name TEXT NOT NULL,
-                content JSONB NOT NULL,
-                created TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (identifier, created)
-            );
-
-            CREATE INDEX IF NOT EXISTS
-                configurations_idx
-
-            ON
-                configurations (identifier, created DESC);
-            """
-        )
+        await Postgres.execute(CONFIGURATIONS_TABLE_CREATE_STATEMENT)
+        await Postgres.execute(CONFIGURATIONS_INDEX_CREATE_STATEMENT)
 
     @staticmethod
     def prepare(
@@ -84,25 +65,15 @@ class PostgresConfigurationRepository:
 
         Notes
         -----
-        Requires the ``configurations`` table to exist; see the schema comment
-        below or apply the appropriate Postgres migration before using this repository.
+        Requires the ``configurations`` table to exist. Call :meth:`migrate` to
+        create it, or apply an equivalent migration - the expected schema is
+        ``CONFIGURATIONS_TABLE_CREATE_STATEMENT`` together with
+        ``CONFIGURATIONS_INDEX_CREATE_STATEMENT``.
 
-        Example schema:
-        ```
-        CREATE TABLE configurations (
-            identifier TEXT NOT NULL,
-            name TEXT NOT NULL,
-            content JSONB NOT NULL,
-            created TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (identifier, created)
-        );
-
-        CREATE INDEX IF NOT EXISTS
-            configurations_idx
-
-        ON
-            configurations (identifier, created DESC);
-        ```
+        The cache is per process and is cleared wholesale on every write, so a
+        write in one process leaves the others serving the previous snapshot
+        until ``cache_expiration`` elapses. Cache keys cover ``**extra`` as
+        well, which therefore has to be hashable.
         """
 
         @cache(
@@ -114,47 +85,17 @@ class PostgresConfigurationRepository:
             **extra: Any,
         ) -> Sequence[str]:
             ctx.log_info("Listing configurations...")
-            results: Sequence[PostgresRow]
-            if config is None:
-                results = await Postgres.fetch(
-                    """
-                    SELECT DISTINCT ON (identifier)
-                        identifier::TEXT
-
-                    FROM
-                        configurations
-
-                    ORDER BY
-                        identifier,
-                        created
-                    DESC;
-                    """
-                )
-                ctx.log_info(f"...{len(results)} configurations found!")
-
-            else:
-                results = await Postgres.fetch(
-                    """
-                    SELECT DISTINCT ON (identifier)
-                        identifier::TEXT
-
-                    FROM
-                        configurations
-
-                    WHERE
-                        name = $1
-
-                    ORDER BY
-                        identifier,
-                        created
-                    DESC;
-                    """,
+            results: Sequence[PostgresRow] = (
+                await Postgres.fetch(CONFIGURATIONS_LIST_STATEMENT)
+                if config is None
+                else await Postgres.fetch(
+                    CONFIGURATIONS_LIST_NAMED_STATEMENT,
                     config.__name__,
                 )
+            )
+            ctx.log_info(f"...{len(results)} configurations found!")
 
-                ctx.log_info(f"...{len(results)} {config.__name__} configurations found!")
-
-            return tuple(cast(str, record["identifier"]) for record in results)
+            return tuple(row.get_str("identifier", required=True) for row in results)
 
         @cache(
             limit=cache_limit,
@@ -167,25 +108,7 @@ class PostgresConfigurationRepository:
         ) -> Config | None:
             ctx.log_info(f"Loading configuration for {identifier}...")
             loaded: PostgresRow | None = await Postgres.fetch_one(
-                """
-                SELECT DISTINCT ON (identifier)
-                    identifier::TEXT,
-                    name::TEXT,
-                    content::JSONB
-
-                FROM
-                    configurations
-
-                WHERE
-                    identifier = $1
-
-                ORDER BY
-                    identifier,
-                    created
-                DESC
-
-                LIMIT 1;
-                """,
+                CONFIGURATION_FETCH_STATEMENT,
                 identifier,
             )
 
@@ -193,10 +116,24 @@ class PostgresConfigurationRepository:
                 ctx.log_info("...configuration not found!")
                 return None
 
-            assert loaded["name"] == config.__name__  # nosec: B101
-            assert isinstance(loaded["content"], str | bytes)  # nosec: B101
+            # validated instead of asserted - the stored name and content shape
+            # come from the database, so `-O` must not skip checking them
+            name: str | None = loaded.get_str("name")
+            if name != config.__name__:
+                raise ConfigurationInvalid(
+                    identifier=identifier,
+                    reason=f"expected '{config.__name__}' configuration, stored is '{name}'",
+                )
+
+            content: Any = loaded["content"]
+            if not isinstance(content, str | bytes):
+                raise ConfigurationInvalid(
+                    identifier=identifier,
+                    reason=f"expected JSON content, got '{type(content).__name__}'",
+                )
+
             ctx.log_info("...configuration loaded!")
-            return config.from_json(cast(str | bytes, loaded["content"]))
+            return config.from_json(content)
 
         async def defining(
             identifier: str,
@@ -205,20 +142,7 @@ class PostgresConfigurationRepository:
         ) -> None:
             ctx.log_info(f"Defining configuration {identifier}...")
             await Postgres.execute(
-                """
-                INSERT INTO
-                    configurations (
-                        identifier,
-                        name,
-                        content
-                    )
-
-                VALUES (
-                    $1::TEXT,
-                    $2::TEXT,
-                    $3::JSONB
-                );
-                """,
+                CONFIGURATION_INSERT_STATEMENT,
                 identifier,
                 value.__class__.__name__,
                 value.to_json(),
@@ -234,13 +158,7 @@ class PostgresConfigurationRepository:
         ) -> None:
             ctx.log_info(f"Removing configuration {identifier}...")
             await Postgres.execute(
-                """
-                DELETE FROM
-                    configurations
-
-                WHERE
-                    identifier = $1;
-                """,
+                CONFIGURATION_DELETE_STATEMENT,
                 identifier,
             )
             ctx.log_info("...clearing cache...")
@@ -255,3 +173,46 @@ class PostgresConfigurationRepository:
             removing=removing,
             meta=Meta.of({"source": "postgres"}),
         )
+
+
+# clock_timestamp() advances within a transaction, unlike CURRENT_TIMESTAMP which
+# is the transaction start time and would collide on (identifier, created) for two
+# snapshots of the same configuration stored within a single transaction
+CONFIGURATIONS_TABLE_CREATE_STATEMENT: Final[str] = """\
+CREATE TABLE IF NOT EXISTS configurations (
+    identifier TEXT NOT NULL,
+    name TEXT NOT NULL,
+    content JSONB NOT NULL,
+    created TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    PRIMARY KEY (identifier, created)
+);\
+"""
+CONFIGURATIONS_INDEX_CREATE_STATEMENT: Final[str] = """\
+CREATE INDEX IF NOT EXISTS configurations_idx ON configurations (identifier, created DESC);\
+"""
+# DISTINCT is sufficient - a filtered listing intentionally reports every
+# identifier which ever held the requested configuration name
+CONFIGURATIONS_LIST_STATEMENT: Final[str] = """\
+SELECT DISTINCT identifier FROM configurations;\
+"""
+CONFIGURATIONS_LIST_NAMED_STATEMENT: Final[str] = """\
+SELECT DISTINCT identifier FROM configurations WHERE name = $1;\
+"""
+# the identifier is pinned by the predicate, so ordering by created alone walks
+# the (identifier, created DESC) index straight to the newest snapshot
+CONFIGURATION_FETCH_STATEMENT: Final[str] = """\
+SELECT name, content
+FROM configurations
+WHERE identifier = $1
+ORDER BY created DESC
+LIMIT 1;\
+"""
+# created is set explicitly so existing tables keep the intended semantics
+# regardless of the column default they were created with
+CONFIGURATION_INSERT_STATEMENT: Final[str] = """\
+INSERT INTO configurations (identifier, name, content, created)
+VALUES ($1::TEXT, $2::TEXT, $3::JSONB, clock_timestamp());\
+"""
+CONFIGURATION_DELETE_STATEMENT: Final[str] = """\
+DELETE FROM configurations WHERE identifier = $1;\
+"""

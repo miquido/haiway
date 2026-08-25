@@ -17,7 +17,8 @@ The public helpers exported from `haiway.helpers` are:
 - `concurrently`, `execute_concurrently`, `process_concurrently`, `stream_concurrently`
 - `Configuration`, `ConfigurationRepository`, `ConfigurationMissing`, `ConfigurationInvalid`
 - `File`, `Files`, `Directory`, `FileException`, `Paths`
-- `HTTPClient`, `HTTPClientError`, `HTTPHeaders`, `HTTPQueryParams`, `HTTPRequesting`,
+- `HTTPClient`, `HTTPClientError`, `HTTPTimeoutError`, `HTTPConnectionError`,
+  `HTTPBodyConsumedError`, `HTTPBody`, `HTTPHeaders`, `HTTPQueryParams`, `HTTPRequesting`,
   `HTTPResponse`, `HTTPStatusCode`
 - `MQMessage`, `MQQueue`
 - `LoggerObservability`
@@ -98,7 +99,9 @@ context state.
 ## Observability
 
 `LoggerObservability(...)` builds a Haiway `Observability` backend backed by the standard `logging`
-module.
+module. It is also the implementation Haiway falls back to when a scope is given no observability at
+all, or is given a `Logger` instead of an `Observability` - so there is a single logger backed
+implementation rather than one for each case.
 
 It tracks:
 
@@ -109,5 +112,18 @@ It tracks:
 - metrics
 - attributes
 
-With `debug_context=True`, it also records a tree-style summary of nested scopes when the root scope
-completes.
+Scope lifecycle - entry, exit and the resulting duration - is recorded at `DEBUG`, since it
+describes the shape of the execution rather than what the application did. Logs, events, metrics and
+attributes are recorded at the level their call site asked for. A scope exiting with a regular
+exception is reported at `ERROR`; cancellation is not, being routine control flow under structured
+concurrency.
+
+With `debug_context=True`, it also retains each scope tree and records a tree-style summary of it
+when its root completes. Turning it off - which is what the implicit fallback uses - leaves only the
+scopes which are still live tracked, so a long lived root scope does not accumulate the ones which
+already finished.
+
+One instance may back several independent scope trees, including concurrent ones, as long as they
+run on a single event loop. Each tree is summarized and released on its own. A scope completes only
+once every scope nested below it completed, so every scope keeps its place in the tree regardless of
+the order they finish in.

@@ -1,17 +1,16 @@
 import json
-import typing
 from collections.abc import (
     Iterable,
     Mapping,
     MutableMapping,
     MutableSequence,
-    MutableSet,
     Sequence,
     Set,
 )
 from copy import deepcopy
-from dataclasses import fields, is_dataclass
-from types import GenericAlias
+from dataclasses import fields as dataclass_fields
+from dataclasses import is_dataclass
+from types import GenericAlias, MemberDescriptorType
 from typing import (
     Any,
     ClassVar,
@@ -26,27 +25,36 @@ from typing import (
     overload,
 )
 
-from haiway.attributes.annotations import ObjectAttribute, resolve_self_attribute
+from haiway.attributes.annotations import (
+    ObjectAttribute,
+    attribute_redaction,
+    resolve_self_attribute,
+)
 from haiway.attributes.attribute import Attribute
 from haiway.attributes.coding import AttributesJSONEncoder
 from haiway.attributes.path import AttributePath
-from haiway.attributes.validation import ValidationContext
+from haiway.attributes.specification import object_specification
+from haiway.attributes.validation import ValidationError
 from haiway.types import (
     MISSING,
-    Default,
     DefaultValue,
     Missing,
     TypeSpecification,
     not_missing,
 )
+from haiway.types.immutable import attribute_names, namespace_annotations
 
 __all__ = ("State",)
 
 
+# Default is deliberately not declared as a field specifier: type checkers
+# match specifier arguments by keyword only, so `Default(value)` would read as
+# supplying no default and every construction would be reported as missing it.
+# Left out, the annotated assignment is checked as an ordinary one, which keeps
+# the type of the default verified and accepts every calling form.
 @dataclass_transform(
     kw_only_default=True,
     frozen_default=True,
-    field_specifiers=(Default,),
 )
 class StateMeta(type):
     """
@@ -66,14 +74,22 @@ class StateMeta(type):
 
     __SELF_ATTRIBUTE__: ObjectAttribute
     __TYPE_PARAMETERS__: Mapping[str, Any] | None
+    __SPECIALIZED__: bool
     __SPECIFICATION__: TypeSpecification
     __FIELDS__: Sequence[Attribute]
     __ALLOWED_FIELDS__: Set[str]
+    __ALIASES__: Mapping[str, str]
     __SERIALIZABLE__: bool
+    __DEFAULTED__: Set[str]
+    __ANNOTATED__: Mapping[str, Any]
     __slots__: tuple[str, ...]
     __match_args__: tuple[str, ...]
+    # declared by a specialization alone - `__SPECIALIZED__` tells whether the
+    # class itself has them, as opposed to inheriting them from one
+    __origin__: type[Any]
+    __args__: tuple[Any, ...]
 
-    def __new__(  # noqa: C901, PLR0912
+    def __new__(
         mcs,
         /,
         name: str,
@@ -83,6 +99,63 @@ class StateMeta(type):
         serializable: bool = False,
         **kwargs: Any,
     ) -> Any:
+        # a class which declares attributes is final. the only thing which
+        # re-declares them is a specialization, and one is created here rather
+        # than by deriving from a class - `type_parameters` tells them apart.
+        # a subclass would have to keep the slots, defaults, annotations and type
+        # arguments of everything above it consistent with its own, and each of
+        # those is resolved once, when the class is created - a base changing
+        # afterwards is not seen. the nominal identity that equality, the
+        # instance checks and the schema are built on stops holding along with it
+        if type_parameters is None:
+            for base in bases:
+                if getattr(base, "__FIELDS__", ()):
+                    raise TypeError(
+                        f"{name} can't inherit from {base.__name__} - a State declaring"
+                        " attributes is final. Parametrize a generic State to type a"
+                        " variant of it, inherit from an attribute-less base to share"
+                        " behavior, or hold an instance as an attribute to reuse its"
+                        " attributes"
+                    )
+
+        # the names are resolved first, so the declared defaults can leave the
+        # namespace before the annotations are resolved against it. resolving them
+        # before the class exists matters for the same reason: either a default or
+        # the slot descriptor replacing it would shadow a same named type used as
+        # an annotation, as in `date: date`.
+        # only the names of this first resolution can be trusted - a class body
+        # annotation resolves through the namespace it is declared in, so a
+        # declared default still standing there answers for the type of the same
+        # name, as in `str: str = "text"` resolving to `"text"`. the keys do not
+        # depend on that, which is why the annotations are resolved again below
+        names: Sequence[str] = attribute_names(namespace_annotations(namespace))
+        # a specialized generic re-collects the fields of its origin, whose
+        # defaults are no longer class attributes - they are carried over from
+        # the fields the origin already resolved them into. a specialization is
+        # the only class with a base declaring fields, and it has exactly one
+        defaults: MutableMapping[str, Any] = {
+            field.name: field.default for base in bases for field in getattr(base, "__FIELDS__", ())
+        }
+        # the declared defaults have to leave the namespace - `type.__new__`
+        # refuses a slot shadowed by a class variable of the same name, and a
+        # surviving one would win over the slot descriptor
+        declared_defaults: Mapping[str, Any] = {
+            key: namespace.pop(key) for key in names if key in namespace
+        }
+        defaults.update(declared_defaults)
+        # resolved again, now that no declared default can answer for a type of
+        # the same name - see the note on the names above
+        declared: Mapping[str, Any] | None = namespace_annotations(namespace)
+        # slots are only ever created by `type.__new__`, so they have to be
+        # declared within the namespace handed to it - assigning `__slots__` to a
+        # finished class defines no descriptors and leaves the instances with a
+        # `__dict__`, which is what the whole slot declaration exists to avoid
+        namespace["__slots__"] = _declared_slots(
+            name,
+            names=names,
+            bases=bases,
+        )
+
         cls = type.__new__(
             mcs,
             name,
@@ -91,14 +164,46 @@ class StateMeta(type):
             **kwargs,
         )
 
+        # with the defaults gone from the namespace and a slot descriptor in place
+        # of each of them, having a default can no longer be told by looking the
+        # name up on the class - it is recorded here and inherited explicitly
+        defaulted: Set[str] = frozenset(declared_defaults.keys()).union(
+            *(getattr(base, "__DEFAULTED__", ()) for base in bases)
+        )
+        cls.__DEFAULTED__ = defaulted  # pyright: ignore[reportConstantRedefinition]
+
+        # a specialized generic declares nothing of its own, so it resolves the
+        # annotations of its origin - which were resolved there before the slots
+        # of that class could shadow them
+        annotations: MutableMapping[str, Any] = {}
+        for base in reversed(bases):
+            annotations.update(getattr(base, "__ANNOTATED__", {}))
+
+        if declared is not None:
+            annotations.update(declared)
+
+        cls.__ANNOTATED__ = annotations  # pyright: ignore[reportConstantRedefinition]
+
+        # a specialization is the only class binding type parameters, and the
+        # only one whose annotations are written in terms of them - one can't be
+        # inherited from, and an attribute-less base has no annotation to carry
+        parameters: Mapping[str, Any] | None = type_parameters or None
+
+        # the annotations are always resolved here, so the namespace is not
+        # handed over - it would only be used to resolve them in place of it
         self_attribute: ObjectAttribute = resolve_self_attribute(
             cls,
-            namespace=namespace,
-            parameters=type_parameters or {},
+            parameters=parameters or {},
+            defaults=defaulted,
+            annotations=annotations,
         )
 
         cls.__SELF_ATTRIBUTE__ = self_attribute  # pyright: ignore[reportConstantRedefinition]
-        cls.__TYPE_PARAMETERS__ = type_parameters  # pyright: ignore[reportConstantRedefinition]
+        cls.__TYPE_PARAMETERS__ = parameters  # pyright: ignore[reportConstantRedefinition]
+        # only a class created as a specialization checks its type arguments -
+        # `__origin__` and `__args__` reach a subclass of one through inheritance,
+        # which would otherwise make it interchangeable with each of its siblings
+        cls.__SPECIALIZED__ = type_parameters is not None  # pyright: ignore[reportConstantRedefinition]
         cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
 
         if not bases:  # handle base class - no fields specified
@@ -111,57 +216,42 @@ class StateMeta(type):
             }
             cls.__FIELDS__ = ()  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
             cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
+            cls.__ALIASES__ = {}  # pyright: ignore[reportConstantRedefinition]
             cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
-            cls.__slots__ = ()  # pyright: ignore[reportAttributeAccessIssue]
-            cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
+            cls.__match_args__ = ()  # pyright: ignore[reportAttributeAccessIssue]
 
             return cls  # early exit - base class
 
-        specification_fields: MutableMapping[str, TypeSpecification] | None = {}
-        required_fields: MutableSequence[str] = []
-        allowed_fields: MutableSet[str] = set()
-        fields: MutableSequence[Attribute] = []
-        for key, attribute in self_attribute.attributes.items():
-            field: Attribute = Attribute(
+        fields: Sequence[Attribute] = tuple(
+            Attribute(
                 name=key,
                 annotation=attribute,
-                default=_resolve_default(getattr(cls, key, MISSING)),
+                default=_resolve_default(defaults.get(key, MISSING)),
+                redaction=attribute_redaction(attribute),
             )
-            assert key not in allowed_fields  # nosec: B101
-            allowed_fields.add(key)
-            if attribute.alias:
-                assert attribute.alias not in allowed_fields  # nosec: B101
-                allowed_fields.add(attribute.alias)
+            for key, attribute in self_attribute.attributes.items()
+        )
+        # every key an attribute can be provided under, refusing a collision
+        allowed_fields: Mapping[str, str] = _allowed_fields(
+            name,
+            fields=fields,
+        )
 
-            fields.append(field)
+        # resolved in one call rather than attribute by attribute - the class is
+        # entered into the recursion guard of that call, which is the only way an
+        # attribute referring back to it can resolve to a reference instead of to
+        # the specification of the class, which is not there yet.
+        # an attribute which can't be represented leaves the class without a
+        # specification at all, whether or not it is required - a schema which
+        # silently omits it would describe an object refusing the very attribute
+        # this class accepts, `additionalProperties` being off
+        specification: TypeSpecification | None = object_specification(
+            self_attribute,
+            attributes=tuple((field.key, field.annotation, field.required) for field in fields),
+        )
 
-            if specification_fields is None:
-                continue  # skip specification if it already failed
-
-            if field.specification is None:
-                # there will be no specification at all
-                if field.required:
-                    specification_fields = None
-
-                # else continue skipping this field
-
-            elif field.alias is not None:
-                specification_fields[field.alias] = field.specification
-                if field.required:
-                    required_fields.append(field.alias)
-
-            else:
-                specification_fields[field.name] = field.specification
-                if field.required:
-                    required_fields.append(field.name)
-
-        if specification_fields is not None:  # it is technically not serializable otherwise
-            cls.__SPECIFICATION__ = {  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
-                "type": "object",
-                "properties": specification_fields,
-                "required": required_fields,
-                "additionalProperties": False,
-            }
+        if specification is not None:  # it is technically not serializable otherwise
+            cls.__SPECIFICATION__ = specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
             cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
 
         elif serializable:
@@ -171,34 +261,36 @@ class StateMeta(type):
             cls.__SERIALIZABLE__ = False  # pyright: ignore[reportConstantRedefinition]
             cls.__SPECIFICATION__ = _no_specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
 
-        cls.__FIELDS__ = tuple(fields)  # pyright: ignore[reportConstantRedefinition]
+        cls.__FIELDS__ = fields  # pyright: ignore[reportConstantRedefinition]
         cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
-        cls.__slots__ = tuple(  # pyright: ignore[reportAttributeAccessIssue]
+        # resolved here so that updates can be normalized to canonical names
+        # without rebuilding this mapping of the class on each of them
+        cls.__ALIASES__ = {  # pyright: ignore[reportConstantRedefinition]
+            field.alias: field.name for field in fields if field.alias is not None
+        }
+        # every field, unlike `__slots__` which holds the names declared here - a
+        # specialized generic declares none of them and matches all of them
+        cls.__match_args__ = tuple(  # pyright: ignore[reportAttributeAccessIssue]
             field.name for field in fields
         )
-        cls.__match_args__ = cls.__slots__  # pyright: ignore[reportAttributeAccessIssue]
 
         return cls
-
-    def validate(
-        cls,
-        value: Any,
-    ) -> Any: ...
 
     def __instancecheck__(
         self,
         instance: Any,
     ) -> bool:
-        instance_type: type[Any] = type(instance)  # pyright: ignore[reportUnknownVariableType]
-        if not self.__subclasscheck__(instance_type):
+        # only a specialization has type arguments to check the values against,
+        # and it is the only reason to look at them at all
+        if not self.__SPECIALIZED__:
+            return type.__instancecheck__(self, instance)
+
+        if not self.__subclasscheck__(type(instance)):  # pyright: ignore[reportUnknownArgumentType]
             return False
 
-        if hasattr(self, "__origin__") or hasattr(instance_type, "__origin__"):
-            return all(
-                field.annotation.check(getattr(instance, field.name)) for field in self.__FIELDS__
-            )
-
-        return True
+        return all(
+            field.annotation.check(getattr(instance, field.name)) for field in self.__FIELDS__
+        )
 
     def __subclasscheck__(
         self,
@@ -207,16 +299,23 @@ class StateMeta(type):
         if self is subclass:
             return True
 
-        self_origin: type[Any] = getattr(self, "__origin__", self)
-
-        # Handle case where we're checking not parameterized type
-        if self_origin is self:
+        # a class which is not a specialization is a nominal type of its own,
+        # even when it inherits the `__origin__` and `__args__` of one - comparing
+        # those instead would make every subclass of a single specialization a
+        # subclass of each of its siblings
+        if not self.__SPECIALIZED__:
             return type.__subclasscheck__(self, subclass)
 
-        subclass_origin: type[Any] = getattr(subclass, "__origin__", subclass)
+        self_origin: type[Any] = self.__origin__
+        if getattr(subclass, "__SPECIALIZED__", False):
+            # both are specializations - only the arguments of the same generic
+            # can be compared, they are positional
+            if subclass.__origin__ is not self_origin:  # pyright: ignore[reportAttributeAccessIssue]
+                return False
 
-        # Both must be based on the same generic class
-        if self_origin is not subclass_origin:
+        # otherwise it matches whatever the origin matches, narrowed down by the
+        # arguments it carries over from the specialization it derives from
+        elif not type.__subclasscheck__(self_origin, subclass):
             return False
 
         return self._check_type_parameters(subclass)
@@ -225,27 +324,23 @@ class StateMeta(type):
         self,
         subclass: type[Any],
     ) -> bool:
-        self_args: Sequence[Any] | None = getattr(
-            self,
-            "__args__",
-            None,
-        )
+        # only a specialization reaches here, and one always carries arguments
+        self_args: Sequence[Any] = self.__args__
         subclass_args: Sequence[Any] | None = getattr(
             subclass,
             "__args__",
             None,
         )
 
-        if self_args is None and subclass_args is None:
+        # nothing to narrow down when the subclass carries no arguments - it
+        # matches whatever its unparametrized origin matches
+        if subclass_args is None:
             return True
 
-        if self_args is None:
-            assert subclass_args is not None  # nosec: B101
-            self_args = tuple(Any for _ in subclass_args)
-
-        elif subclass_args is None:
-            assert self_args is not None  # nosec: B101
-            subclass_args = tuple(Any for _ in self_args)
+        # arguments of a differently parameterized generic - reached through a
+        # class deriving from a specialization of one - do not map onto ours
+        if len(self_args) != len(subclass_args):
+            return False
 
         # Check if the type parameters are compatible (covariant)
         for self_arg, subclass_arg in zip(
@@ -253,15 +348,89 @@ class StateMeta(type):
             subclass_args,
             strict=True,
         ):
-            if self_arg is Any or subclass_arg is Any:
+            if self_arg is Any or subclass_arg is Any or self_arg == subclass_arg:
                 continue
 
             # For covariance: GenericState[Child] should be subclass of GenericState[Parent]
             # This means subclass_param should be a subclass of self_param
-            if not issubclass(subclass_arg, self_arg):
+            try:
+                if not issubclass(subclass_arg, self_arg):
+                    return False
+
+            except TypeError:
+                # an argument which is not a class - a parameterized generic, a
+                # union, a literal - has no subclass relation to resolve, so it
+                # only ever matches the equal argument admitted above
                 return False
 
         return True
+
+
+def _declared_slots(
+    name: str,
+    /,
+    names: Sequence[str],
+    bases: tuple[type, ...],
+) -> tuple[str, ...]:
+    slots: MutableSequence[str] = []
+    for key in names:
+        inherited: Any = MISSING
+        for base in bases:
+            inherited = getattr(base, key, MISSING)
+            if inherited is not MISSING:
+                break
+
+        if inherited is MISSING:
+            slots.append(key)  # nothing above declares it, this class owns the slot
+            continue
+
+        if isinstance(inherited, MemberDescriptorType):
+            continue  # a name a base already declared keeps using the slot defined there
+
+        # anything else inherited under that name is not a slot to reuse -
+        # declaring one here would shadow it, while leaving it out makes the
+        # attribute unassignable, failing only when the first instance is built
+        raise TypeError(
+            f"{name} declares attribute '{key}' shadowing the inherited"
+            f" {type(inherited).__name__} of the same name"
+        )
+
+    return tuple(slots)
+
+
+def _allowed_fields(
+    name: str,
+    /,
+    fields: Sequence[Attribute],
+) -> Mapping[str, str]:
+    """Keys the attributes of a class can be provided under, by attribute name.
+
+    A name and an alias share a single namespace - the constructor, ``validate``
+    and ``to_mapping`` all key an attribute by either of them - so a collision
+    would silently make one attribute answer for the value given to another.
+    """
+    allowed: MutableMapping[str, str] = {}
+    for field in fields:
+        alias: str | None = field.alias
+        # an alias equal to the name declares the same key twice - `validate`
+        # would read a single occurrence of it as the attribute provided under
+        # both of its keys, refusing every input naming the attribute at all
+        if alias == field.name:
+            raise TypeError(f"{name} declares '{field.name}' aliased as its own name")
+
+        for key in (field.name, alias):
+            if key is None:
+                continue  # no alias declared
+
+            if (claiming := allowed.get(key)) is not None:
+                raise TypeError(
+                    f"{name} allows '{key}' for both '{claiming}' and '{field.name}'"
+                    " - an attribute name and an alias can't collide within a class"
+                )
+
+            allowed[key] = field.name
+
+    return allowed
 
 
 def _resolve_default(
@@ -270,10 +439,16 @@ def _resolve_default(
     if isinstance(value, DefaultValue):
         return value
 
-    return DefaultValue(
-        default=value,
-        default_factory=MISSING,
-        env=MISSING,
+    return DefaultValue(default=value)
+
+
+def _unexpected_attributes(
+    cls: type[Any],
+    /,
+    keys: Set[str],
+) -> TypeError:
+    return TypeError(
+        f"{cls.__name__} has no attribute {', '.join(repr(key) for key in sorted(keys))}"
     )
 
 
@@ -336,6 +511,36 @@ class State(metaclass=StateMeta):
     ```python
     updated_user = user.updating(age=31)
     ```
+
+    A class which declares attributes is final - it can't be inherited from:
+
+    ```python
+    class Admin(User):  # TypeError
+        privileges: Sequence[str]
+    ```
+
+    A generic ``State`` is parametrized instead of derived from, an
+    attribute-less class can still be inherited to share behavior the way
+    ``Configuration`` does, and attributes are reused by holding an instance
+    rather than by extending its class:
+
+    ```python
+    class Box[T](State):
+        value: T
+
+    IntBox = Box[int]  # a typed variant of the same class
+
+    class Admin(State):
+        user: User  # reused by composition
+        privileges: Sequence[str]
+    ```
+
+    Notes
+    -----
+    Instances are not weak referenceable - attributes are held in slots and no
+    slot list declares ``__weakref__``, keeping instances as small as they can
+    be. A ``State`` can't be held by ``weakref.ref`` or a ``WeakValueDictionary``
+    because of that.
     """
 
     _: ClassVar[Self]
@@ -360,8 +565,10 @@ class State(metaclass=StateMeta):
         type[Self]
             A specialized version of the class
         """
+        # the parameters bound by a specialization above are inherited, so only
+        # being a specialization rules out specializing this class again
+        assert not cls.__SPECIALIZED__, "Can't specialize already specialized type!"  # nosec: B101
         assert Generic in cls.__bases__, "Can't specialize non generic type!"  # nosec: B101
-        assert cls.__TYPE_PARAMETERS__ is None, "Can't specialize already specialized type!"  # nosec: B101
 
         type_arguments: tuple[type[Any], ...]
         match type_argument:
@@ -379,15 +586,15 @@ class State(metaclass=StateMeta):
             cls.__type_params__
         ), "Type arguments count has to match type parameters count"
 
-        if cached := _types_cache.get((cls, type_arguments)):
+        if (cached := _types_cache.get((cls, type_arguments))) is not None:
             return cached
 
         type_parameters: dict[str, Any] = {
             parameter.__name__: argument
             for (parameter, argument) in zip(
-                cls.__type_params__ or (),
-                type_arguments or (),
-                strict=False,
+                cls.__type_params__,
+                type_arguments,
+                strict=True,
             )
         }
 
@@ -399,19 +606,20 @@ class State(metaclass=StateMeta):
             )
             for argument in type_arguments
         )
-        name: str = f"{cls.__name__}[{parameter_names}]"
-        bases: tuple[type[Self]] = (cls,)
-
         parametrized_type: type[Self] = StateMeta.__new__(
             cls.__class__,
-            name=name,
-            bases=bases,
-            namespace={"__module__": cls.__module__},
+            name=f"{cls.__name__}[{parameter_names}]",
+            bases=(cls,),
+            # the origin and the arguments the subclass checks are made of are
+            # declared within the namespace rather than assigned afterwards -
+            # the class is asked about them as soon as it exists
+            namespace={
+                "__module__": cls.__module__,
+                "__origin__": cls,
+                "__args__": type_arguments,
+            },
             type_parameters=type_parameters,
         )
-        # Set origin for subclass checks
-        parametrized_type.__origin__ = cls  # pyright: ignore[reportAttributeAccessIssue]
-        parametrized_type.__args__ = type_arguments  # pyright: ignore[reportAttributeAccessIssue]
         _types_cache[(cls, type_arguments)] = parametrized_type
         return parametrized_type
 
@@ -441,25 +649,24 @@ class State(metaclass=StateMeta):
         if isinstance(value, cls):
             return value
 
-        elif isinstance(value, Mapping | typing.Mapping):
+        elif isinstance(value, Mapping):
             for key in cast(Mapping[Any, Any], value.keys()):
                 if key not in cls.__ALLOWED_FIELDS__:
                     raise TypeError(f"Unexpected attribute '{key}' for {cls.__name__}")
 
-            for field in cls.__FIELDS__:
-                if field.alias is None:
-                    continue
-
-                if field.alias in value and field.name in value:
+            # only an aliased attribute can be provided twice, under both of its
+            # keys - the mapping of aliases is empty for most of the classes
+            for alias, field_name in cls.__ALIASES__.items():
+                if alias in value and field_name in value:
                     raise TypeError(
-                        f"Duplicate attribute '{field.name}'"
-                        f" with alias '{field.alias}' for {cls.__name__}"
+                        f"Duplicate attribute '{field_name}'"
+                        f" with alias '{alias}' for {cls.__name__}"
                     )
 
             return cls(**value)
 
         else:
-            raise TypeError(f"'{value}' is not matching expected type of '{cls}'")
+            raise TypeError(f"'{type(value).__name__}' is not matching expected type of '{cls}'")
 
     @classmethod
     def from_mapping(
@@ -650,7 +857,9 @@ class State(metaclass=StateMeta):
         Raises
         ------
         ValueError
-            If encoding fails.
+            If encoding fails. The message names the type only - the values are
+            left to the cause, so a payload which failed to encode cannot carry
+            a redacted attribute into a log through the error path.
         """
         mapping: Mapping[str, Any] = self.to_mapping(recursive=True)
         try:
@@ -661,9 +870,10 @@ class State(metaclass=StateMeta):
             )
 
         except Exception as exc:
-            raise ValueError(
-                f"Failed to encode {self.__class__.__name__} to json:\n{mapping}"
-            ) from exc
+            # `to_mapping` returns the actual values, redaction included, so the
+            # mapping must not reach the message - the encoder already names the
+            # type it could not serialize
+            raise ValueError(f"Failed to encode {self.__class__.__name__} to json") from exc
 
     def __init__(
         self,
@@ -679,21 +889,38 @@ class State(metaclass=StateMeta):
         Parameters
         ----------
         **kwargs : Any
-            Attribute values for the new instance
+            Attribute values for the new instance. Both canonical field names
+            and aliases are accepted.
 
         Raises
         ------
+        TypeError
+            If any key does not match a field name or alias
         Exception
             If validation fails for any attribute
         """
+        # an unmatched key is a mistake rather than an extra - accepting it would
+        # construct a plausible instance out of a misspelled attribute, which the
+        # defaults then hide. `validate` refuses the same input for a mapping
+        if unexpected := kwargs.keys() - self.__ALLOWED_FIELDS__:
+            raise _unexpected_attributes(self.__class__, unexpected)
 
         for field in self.__FIELDS__:
-            with ValidationContext.scope(f".{field.name}"):
-                object.__setattr__(
-                    self,  # pyright: ignore[reportUnknownArgumentType]
-                    field.name,
-                    field.validate_from(kwargs),
-                )
+            validated: Any
+            try:
+                validated = field.validate_from(kwargs)
+
+            # the position of the failure is spelled out here rather than
+            # established before validating - a validation which succeeds, by far
+            # the common case, is left with nothing to pay for it
+            except Exception as exc:
+                ValidationError.report(f".{field.name}", exc)
+
+            object.__setattr__(
+                self,  # pyright: ignore[reportUnknownArgumentType]
+                field.name,
+                validated,
+            )
 
     def updating(
         self,
@@ -714,6 +941,11 @@ class State(metaclass=StateMeta):
         -------
         Self
             A new instance with updated values
+
+        Raises
+        ------
+        TypeError
+            If any key does not match a field name or alias
         """
         return self.__replace__(**kwargs)
 
@@ -726,7 +958,7 @@ class State(metaclass=StateMeta):
         str
             A string representation of this instance
         """
-        return self.__str__()
+        return str(self)
 
     def to_mapping(
         self,
@@ -748,20 +980,10 @@ class State(metaclass=StateMeta):
             canonical field names. Values equal to ``MISSING`` are omitted.
         """
         dict_result: MutableMapping[str, Any] = {}
-        if recursive:
-            for field in self.__FIELDS__:
-                key: str = field.alias if field.alias is not None else field.name
-                value: Any | Missing = getattr(self, field.name, MISSING)
-
-                if not_missing(value):
-                    dict_result[key] = _recursive_mapping(value)
-
-        else:
-            for field in self.__FIELDS__:
-                key: str = field.alias if field.alias is not None else field.name
-                value: Any | Missing = getattr(self, field.name, MISSING)
-                if not_missing(value):
-                    dict_result[key] = value
+        for field in self.__FIELDS__:
+            value: Any | Missing = getattr(self, field.name, MISSING)
+            if not_missing(value):
+                dict_result[field.key] = _recursive_mapping(value) if recursive else value
 
         return dict_result
 
@@ -775,10 +997,9 @@ class State(metaclass=StateMeta):
             A string representation in the format "ClassName(attr1: value1, attr2: value2)"
         """
         attributes: str = ", ".join(
-            [
-                f"{field.alias or field.name}: {getattr(self, field.name)}"
-                for field in self.__class__.__FIELDS__
-            ]
+            f"{field.key}:"
+            f" {getattr(self, field.name) if field.redaction is None else field.redaction}"
+            for field in self.__FIELDS__
         )
         return f"{self.__class__.__name__}({attributes})"
 
@@ -791,8 +1012,7 @@ class State(metaclass=StateMeta):
         str
             ``repr`` string mirroring ``__str__`` for readability.
         """
-        attributes: str = ", ".join(f"{name}: {getattr(self, name)}" for name in self.__slots__)
-        return f"{self.__class__.__name__}({attributes})"
+        return str(self)
 
     def __eq__(
         self,
@@ -933,7 +1153,7 @@ class State(metaclass=StateMeta):
 
         deep_copy: Self = object.__new__(self.__class__)
         memo[id(self)] = deep_copy
-        for field in self.__class__.__FIELDS__:
+        for field in self.__FIELDS__:
             object.__setattr__(
                 deep_copy,
                 field.name,
@@ -966,44 +1186,54 @@ class State(metaclass=StateMeta):
         -------
         Self
             A new instance with replaced values
+
+        Raises
+        ------
+        TypeError
+            If any key does not match a field name or alias
         """
         if not kwargs:
             return self  # do not make a copy when nothing will be updated
 
-        fields: Sequence[Attribute] = self.__class__.__FIELDS__
-        alias_to_name: Mapping[str, str] = {
-            field.alias if field.alias is not None else field.name: field.name for field in fields
-        }
-        valid_keys: Set[str] = set(alias_to_name.keys()) | set(alias_to_name.values())
+        if unexpected := kwargs.keys() - self.__ALLOWED_FIELDS__:
+            raise _unexpected_attributes(self.__class__, unexpected)
 
-        if kwargs.keys().isdisjoint(valid_keys):
-            return self  # do not make a copy when nothing will be updated
-
-        canonical_updates: MutableMapping[str, Any] = {}
-        for key, value in kwargs.items():
-            if key in valid_keys:
-                canonical_updates[alias_to_name.get(key, key)] = value
-
-        if not canonical_updates:
-            return self
+        # both names and aliases are accepted, the aliases are the only keys
+        # which have to be normalized - and only when the class declares any
+        aliases: Mapping[str, str] = self.__ALIASES__
+        canonical_updates: Mapping[str, Any] = (
+            {aliases.get(key, key): value for key, value in kwargs.items()} if aliases else kwargs
+        )
 
         updated: Self = object.__new__(self.__class__)
-        for field in fields:
-            update: Any | Missing = canonical_updates.get(field.name, MISSING)
-            if update is MISSING:  # reuse missing elements
+        for field in self.__FIELDS__:
+            # an absent key is what carries an attribute over, rather than a
+            # `MISSING` value standing for one - `MISSING` is the value of an
+            # attribute typed `| Missing`, and passing it has to clear that
+            # attribute the same way constructing the instance with it does
+            if field.name not in canonical_updates:
                 object.__setattr__(
                     updated,
                     field.name,
                     getattr(self, field.name),
                 )
+                continue
 
-            else:  # and validate updates
-                with ValidationContext.scope(f".{field.name}"):
-                    object.__setattr__(
-                        updated,
-                        field.name,
-                        field.validate(update),
-                    )
+            validated: Any
+            try:
+                # validated through the annotation rather than the field, the
+                # way a supplied attribute is on construction - the default of
+                # the field answers for an attribute which was not supplied
+                validated = field.annotation.validate(canonical_updates[field.name])
+
+            except Exception as exc:
+                ValidationError.report(f".{field.name}", exc)
+
+            object.__setattr__(
+                updated,
+                field.name,
+                validated,
+            )
 
         return updated
 
@@ -1019,13 +1249,14 @@ def _recursive_mapping(  # noqa: PLR0911
 
     elif is_dataclass(value):
         return {
-            field.name: _recursive_mapping(getattr(value, field.name)) for field in fields(value)
+            field.name: _recursive_mapping(getattr(value, field.name))
+            for field in dataclass_fields(value)
         }
 
-    elif isinstance(value, Mapping | typing.Mapping):
+    elif isinstance(value, Mapping):
         return {key: _recursive_mapping(element) for key, element in value.items()}  # pyright: ignore[reportUnknownVariableType]
 
-    elif isinstance(value, Iterable | typing.Iterable):
+    elif isinstance(value, Iterable):
         return [_recursive_mapping(element) for element in value]  # pyright: ignore[reportUnknownVariableType]
 
     elif hasattr(value, "to_mapping") and callable(value.to_mapping):

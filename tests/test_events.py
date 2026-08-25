@@ -1,11 +1,30 @@
 import asyncio
 from asyncio import Task, get_running_loop
+from collections.abc import Callable
 
 from pytest import mark, raises
 
 from haiway import ContextMissing, State, ctx
 from haiway.context import EventsSubscription
 from haiway.context.events import ContextEvents
+
+
+async def _until(
+    condition: Callable[[], bool],
+    /,
+    *,
+    timeout: float = 5.0,
+) -> None:
+    """
+    Wait for a condition instead of guessing how many loop iterations it needs.
+
+    A fixed count of ``await sleep(0)`` happens to be enough only for the
+    current arrangement of await points - one more hop anywhere upstream and the
+    barrier silently stops holding. The timeout only guards against a hang.
+    """
+    async with asyncio.timeout(timeout):
+        while not condition():
+            await asyncio.sleep(0)
 
 
 class OrderCreated(State):
@@ -166,12 +185,13 @@ async def test_event_ordering_is_fifo():
 @mark.asyncio
 async def test_no_subscribers_no_memory_leak():
     async with ctx.scope("test"):
-        # Send events without any subscribers
-        for i in range(100_000):
+        events: ContextEvents = ContextEvents._context.get()
+
+        for i in range(10_000):
             ctx.send(OrderCreated(order_id=str(i), amount=float(i)))
 
-        # Events should be discarded immediately
-        # No way to directly verify, but this shouldn't consume memory
+        # events without subscribers are discarded instead of being retained
+        assert events._threads == {}
 
 
 @mark.asyncio
@@ -244,17 +264,23 @@ async def test_subscription_cleanup_on_cancel():
     async with ctx.scope("test"):
         tasks: list[Task] = []
         subscriptions = []
+        primed: list[int] = []
 
         # Create subscriptions before spawning tasks
-        for _ in range(5):
+        for index in range(5):
             subscription = ctx.subscribe(OrderCreated)
             subscriptions.append(subscription)
 
-            async def subscriber(sub=subscription):
+            async def subscriber(sub=subscription, index=index):
                 async for _ in sub:
-                    pass  # Just consume events
+                    primed.append(index)
 
             tasks.append(ctx.spawn(subscriber))
+
+        # receiving a priming event proves every subscriber reached its
+        # subscription and looped back to awaiting the next one
+        ctx.send(OrderCreated(order_id="priming", amount=0.0))
+        await _until(lambda: len(primed) == 5)
 
         # Cancel all tasks
         for task in tasks:
@@ -269,6 +295,63 @@ async def test_subscription_cleanup_on_cancel():
 
         # Send event - should not cause issues even though subscribers are gone
         ctx.send(OrderCreated(order_id="after_cancel", amount=0.0))
+
+
+@mark.asyncio
+async def test_cancelled_subscriber_keeps_delivery_for_others():
+    async with ctx.scope("test"):
+        cancelled_subscription = ctx.subscribe(OrderCreated)
+        kept_subscription = ctx.subscribe(OrderCreated)
+        received: list[OrderCreated] = []
+        cancelled_received: list[OrderCreated] = []
+
+        async def cancelled_subscriber():
+            async for event in cancelled_subscription:
+                cancelled_received.append(event)
+
+        async def kept_subscriber():
+            async for event in kept_subscription:
+                received.append(event)
+
+        cancelled_task: Task = ctx.spawn(cancelled_subscriber)
+        kept_task: Task = ctx.spawn(kept_subscriber)
+
+        # a priming event both subscribers observe proves they are awaiting the
+        # shared future before it gets cancelled out from under one of them
+        ctx.send(OrderCreated(order_id="priming", amount=0.0))
+        await _until(lambda: len(cancelled_received) == 1 and len(received) == 1)
+
+        cancelled_task.cancel()
+        try:
+            await cancelled_task
+        except asyncio.CancelledError:
+            pass
+
+        # cancelling one subscriber must not break the shared event delivery
+        ctx.send(OrderCreated(order_id="after_cancel", amount=1.0))
+        await _until(lambda: len(received) == 2)
+
+        assert [event.order_id for event in received] == ["priming", "after_cancel"]
+
+        kept_task.cancel()
+
+
+@mark.asyncio
+async def test_subscription_after_close_does_not_block():
+    async def scope_with_late_subscriber() -> None:
+        async with ctx.scope("test"):
+
+            async def late_subscriber():
+                # subscribe once the scope body already completed
+                await asyncio.sleep(0.01)
+                async for _ in ctx.subscribe(OrderCreated):
+                    pass
+
+            ctx.spawn(late_subscriber)
+
+    # a subscription created after the event bus closed has to finish
+    # immediately instead of waiting for an event that can never arrive
+    await asyncio.wait_for(scope_with_late_subscriber(), timeout=1.0)
 
 
 @mark.asyncio
@@ -305,6 +388,7 @@ async def test_concurrent_send_and_receive():
         assert received_count == 100
 
 
+@mark.skipif(not __debug__, reason="assertions are stripped in optimized builds")
 @mark.asyncio
 async def test_reentrant_context_not_allowed():
     events_ctx = ContextEvents(loop=get_running_loop())
@@ -350,7 +434,9 @@ async def test_events_with_subscribers_joining_late():
         ctx.send(OrderCreated(order_id="1", amount=10.0))
         ctx.send(OrderCreated(order_id="2", amount=20.0))
 
-        await asyncio.sleep(0.01)
+        # the late subscription starts at the current tail either way, but wait
+        # for the early subscriber so the test states what it actually relies on
+        await _until(lambda: len(early_events) == 2)
 
         # Create late subscription before spawning task
         late_subscription = ctx.subscribe(OrderCreated)
@@ -378,3 +464,217 @@ async def test_events_with_subscribers_joining_late():
         assert len(late_events) == 2
         assert late_events[0].order_id == "3"
         assert late_events[1].order_id == "4"
+
+
+async def _received_within(
+    subscription: EventsSubscription[OrderCreated],
+    timeout: float,
+) -> OrderCreated | None:
+    try:
+        return await asyncio.wait_for(anext(subscription), timeout)
+
+    except TimeoutError:
+        return None
+
+
+# a delivery which is expected gets a generous bound - ordering is established
+# through the ready events below, so the timeout only guards against a hang
+_DELIVERED_TIMEOUT: float = 5.0
+# a delivery which must not happen can only be observed by waiting for it
+_SKIPPED_TIMEOUT: float = 0.25
+
+
+@mark.asyncio
+async def test_events_are_not_delivered_to_sibling_scopes():
+    received: dict[str, OrderCreated | None] = {}
+    subscribed = asyncio.Event()
+
+    async def consumer() -> None:
+        async with ctx.scope("request-consumer"):
+            subscription = ctx.subscribe(OrderCreated)
+            subscribed.set()
+            received["consumer"] = await _received_within(subscription, _SKIPPED_TIMEOUT)
+
+    async def producer() -> None:
+        await subscribed.wait()
+        async with ctx.scope("request-producer"):
+            ctx.send(OrderCreated(order_id="sibling", amount=1.0))
+
+    async with ctx.scope("server"):
+        await asyncio.gather(consumer(), producer())
+
+    assert received["consumer"] is None
+
+
+@mark.asyncio
+async def test_broadcast_events_reach_sibling_scopes():
+    received: dict[str, OrderCreated | None] = {}
+    subscribed = asyncio.Event()
+
+    async def consumer() -> None:
+        async with ctx.scope("request-consumer"):
+            subscription = ctx.subscribe(OrderCreated)
+            subscribed.set()
+            received["consumer"] = await _received_within(subscription, _DELIVERED_TIMEOUT)
+
+    async def producer() -> None:
+        await subscribed.wait()
+        async with ctx.scope("request-producer"):
+            ctx.send(
+                OrderCreated(order_id="broadcast", amount=2.0),
+                broadcast=True,
+            )
+
+    async with ctx.scope("server"):
+        await asyncio.gather(consumer(), producer())
+
+    assert received["consumer"] == OrderCreated(order_id="broadcast", amount=2.0)
+
+
+@mark.asyncio
+async def test_broadcast_events_do_not_cross_isolated_scopes():
+    received: dict[str, OrderCreated | None] = {}
+    subscribed = asyncio.Event()
+
+    async def consumer() -> None:
+        # an isolated scope gets its own event bus - nothing from the outer bus
+        # can reach it, not even a broadcast
+        async with ctx.scope("request-consumer", isolated=True):
+            subscription = ctx.subscribe(OrderCreated)
+            subscribed.set()
+            received["consumer"] = await _received_within(subscription, _SKIPPED_TIMEOUT)
+
+    async def producer() -> None:
+        await subscribed.wait()
+        async with ctx.scope("request-producer"):
+            ctx.send(
+                OrderCreated(order_id="broadcast", amount=2.0),
+                broadcast=True,
+            )
+
+    async with ctx.scope("server"):
+        await asyncio.gather(consumer(), producer())
+
+    assert received["consumer"] is None
+
+
+@mark.asyncio
+async def test_events_are_delivered_to_enclosing_scopes():
+    async with ctx.scope("server"):
+        subscription = ctx.subscribe(OrderCreated)
+
+        async def producer() -> None:
+            async with ctx.scope("request"), ctx.scope("worker"):
+                ctx.send(OrderCreated(order_id="nested", amount=3.0))
+
+        # spawned through the scope so a failing assertion cannot leak the task
+        # into loop teardown
+        task: Task[None] = ctx.spawn(producer)
+        received = await _received_within(subscription, _DELIVERED_TIMEOUT)
+        await task
+
+    assert received == OrderCreated(order_id="nested", amount=3.0)
+
+
+@mark.asyncio
+async def test_events_are_not_delivered_to_nested_scopes():
+    received: dict[str, OrderCreated | None] = {}
+    subscribed = asyncio.Event()
+
+    async def consumer() -> None:
+        async with ctx.scope("worker"):
+            subscription = ctx.subscribe(OrderCreated)
+            subscribed.set()
+            received["worker"] = await _received_within(subscription, _SKIPPED_TIMEOUT)
+
+    async with ctx.scope("server"):
+
+        async def producer() -> None:
+            await subscribed.wait()
+            ctx.send(OrderCreated(order_id="downwards", amount=4.0))
+
+        await asyncio.gather(consumer(), producer())
+
+    assert received["worker"] is None
+
+
+@mark.asyncio
+async def test_events_are_delivered_within_spawned_tasks():
+    async with ctx.scope("server"):
+        subscription = ctx.subscribe(OrderCreated)
+
+        async def producer() -> None:
+            ctx.send(OrderCreated(order_id="spawned", amount=5.0))
+
+        ctx.spawn(producer)
+        received = await _received_within(subscription, _DELIVERED_TIMEOUT)
+
+    assert received == OrderCreated(order_id="spawned", amount=5.0)
+
+
+@mark.asyncio
+async def test_skipped_events_do_not_block_later_delivery():
+    received: dict[str, OrderCreated | None] = {}
+    subscribed = asyncio.Event()
+
+    async def consumer() -> None:
+        async with ctx.scope("request-consumer"):
+            subscription = ctx.subscribe(OrderCreated)
+            subscribed.set()
+            received["consumer"] = await _received_within(subscription, _DELIVERED_TIMEOUT)
+
+    async def producer() -> None:
+        await subscribed.wait()
+        async with ctx.scope("request-producer"):
+            # not addressed to the sibling consumer
+            ctx.send(OrderCreated(order_id="skipped", amount=6.0))
+            ctx.send(
+                OrderCreated(order_id="delivered", amount=7.0),
+                broadcast=True,
+            )
+
+    async with ctx.scope("server"):
+        await asyncio.gather(consumer(), producer())
+
+    assert received["consumer"] == OrderCreated(order_id="delivered", amount=7.0)
+
+
+@mark.asyncio
+async def test_subscription_ends_when_isolated_scope_exits():
+    # the nested scope owns both the bus and the task consuming the subscription,
+    # so closing the bus on its exit is what lets the task group join that task
+    subscribed = asyncio.Event()
+    ended = asyncio.Event()
+
+    async def consumer() -> None:
+        async for _ in ctx.subscribe(OrderCreated):
+            pass  # pragma: no cover - no event is ever sent
+
+        ended.set()
+
+    async with ctx.scope("root"):
+        async with ctx.scope("nested", isolated=True):
+            ctx.spawn(consumer)
+            subscribed.set()
+            await _until(subscribed.is_set)
+
+        # exiting the nested scope ended the subscription made within it
+        assert ended.is_set()
+
+
+@mark.asyncio
+async def test_subscription_delivers_pending_event_before_ending():
+    # a scope exiting must not discard an event which already arrived
+    received: list[OrderCreated] = []
+
+    async def consumer() -> None:
+        async for event in ctx.subscribe(OrderCreated):
+            received.append(event)
+
+    async with ctx.scope("root"):
+        async with ctx.scope("nested", isolated=True):
+            ctx.spawn(consumer)
+            await _until(lambda: ContextEvents._context.get()._threads != {})
+            ctx.send(OrderCreated(order_id="delivered", amount=1.0))
+
+    assert received == [OrderCreated(order_id="delivered", amount=1.0)]

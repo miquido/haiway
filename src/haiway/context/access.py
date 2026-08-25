@@ -30,10 +30,7 @@ from haiway.context.observability import (
 from haiway.context.presets import ContextPresets, ContextPresetsRegistry
 from haiway.context.scope import ContextScope
 from haiway.context.state import ContextState
-from haiway.context.tasks import (
-    BackgroundTaskGroup,
-    ContextTaskGroup,
-)
+from haiway.context.tasks import BackgroundTaskGroup, ContextTaskGroup
 
 __all__ = ("ctx",)
 
@@ -49,15 +46,40 @@ class ctx:
         """
         Get the trace identifier of the current scope.
 
-        The trace identifier is a unique identifier that can be used to correlate
-        logs, events, and metrics across different components and services.
+        The trace identifier is shared by the whole scope tree - a root creates
+        it and every scope nested below it inherits it - so logs, events and
+        metrics recorded anywhere within it correlate. It is rendered as unpadded
+        lowercase hex, the form trace backends display and query by, and is the
+        same value ``ctx.scope(...)`` yields when entered.
 
         Returns
         -------
         str
-            The string representation of the current trace ID
+            The current trace identifier, as 32 lowercase hex characters. All
+            zeros when the observability backend has no trace to report.
         """
         return ContextObservability.trace_id()
+
+    @staticmethod
+    def trace_context() -> Mapping[str, str]:
+        """
+        Encode the current trace position for propagation to another service.
+
+        The result is intended to be attached to an outgoing request - as HTTP
+        headers or message metadata - so the receiving service can continue this
+        trace instead of starting its own. With the OpenTelemetry integration it
+        contains the W3C ``traceparent``, and ``tracestate`` when vendor trace
+        state is present.
+
+        Returns
+        -------
+        Mapping[str, str]
+            Carrier entries identifying the current scope within its trace.
+            Empty when used out of context, or when the current observability
+            backend has no trace position to hand out - propagation is best
+            effort and never raises.
+        """
+        return ContextObservability.trace_context()
 
     @staticmethod
     def presets(
@@ -170,10 +192,12 @@ class ctx:
             otherwise a logger with the scope name will be requested and used.
 
         isolated: bool = False
-            controls whether task and event handling are isolated from the parent scope.
-            When set to True, the scope uses its own TaskGroup and event bus. State inheritance
-            still flows from parent to child when the scope is entered, but updates remain local
-            to the child scope. Root scope is always isolated.
+            controls whether event handling is isolated from the parent scope. When set to
+            True, the scope uses its own event bus, so events sent within it do not reach
+            the subscribers of enclosing scopes. Every scope owns its TaskGroup regardless
+            of this flag. State inheritance still flows from parent to child when the scope
+            is entered, but updates remain local to the child scope. Root scope is always
+            isolated.
 
         Returns
         -------
@@ -304,13 +328,21 @@ class ctx:
         Spawn an async task within current scope context task group.
 
         Spawned tasks inherit the current context snapshot via ``contextvars`` at
-        spawn time. When called outside of a scope task group, this falls back to
-        the global background task group instead.
+        spawn time. When called outside of any scope, this falls back to the global
+        background task group instead.
 
-        Tasks created inside a scope are awaited by the owning task group on scope
-        exit. They are not automatically cancelled on a healthy scope exit; use
+        Every scope owns a task group, so a task is awaited by the scope it was
+        spawned in when that scope exits - never by an enclosing one. This keeps the
+        scope, its state and its observability records alive for as long as the task
+        runs. Tasks are not automatically cancelled on a healthy scope exit; use
         ``task.cancel()`` or ``ctx.spawn_background(...)`` when different lifetime
         semantics are required.
+
+        A task consuming ``ctx.subscribe(...)`` has to be spawned in the scope
+        owning the event bus - a root or ``isolated=True`` scope - because a
+        subscription ends only when that scope exits. Spawning such a task in a
+        nested non isolated scope makes its exit wait for a subscription which
+        cannot end yet.
 
         Parameters
         ----------
@@ -357,9 +389,16 @@ class ctx:
         """
         Spawn an async task within background task group.
 
-        Background tasks inherit the current context snapshot via ``contextvars``
-        at spawn time, but they are detached from the current scope's task group
-        and may outlive that scope. Use ``ctx.shutdown_background_tasks()`` for
+        Background tasks are fully detached - they run with an empty context instead
+        of a snapshot of the current one, and may outlive the scope they were spawned
+        in. Inheriting that snapshot would bind them to a scope which is free to
+        complete while they still run, silently voiding their state, events and
+        observability records.
+
+        As a consequence ``ctx.state(...)`` and ``ctx.subscribe(...)`` raise
+        ``ContextMissing`` within a background task, and records go to the root
+        logger. Enter a scope within the task, or pass what it needs as arguments,
+        when either is required. Use ``ctx.shutdown_background_tasks()`` for
         best-effort cleanup during shutdown or tests.
 
         Parameters
@@ -564,18 +603,31 @@ class ctx:
     def send(
         event: State,
         /,
+        *,
+        broadcast: bool = False,
     ) -> None:
         """
-        Send an event to all active subscribers within the current context.
+        Send an event to the subscribers of its type within the current scope tree.
 
         Events are dispatched based on their exact type - subscribers must
         subscribe to the specific State type to receive events. Only subscribers
         that already exist receive the event.
 
+        Delivery goes upwards: an event reaches the subscribers of the sending
+        scope and of every scope enclosing it, up to the nearest isolated scope.
+        Subscribers of sibling scopes and of scopes nested below the sender do not
+        receive it, so one request cannot observe the events of another.
+
         Parameters
         ----------
         event : State
             The event payload to send. Must be a State instance.
+        broadcast : bool, default=False
+            When ``True``, the event reaches every subscriber of its type sharing
+            the event bus, regardless of the scope it was subscribed in. Use it
+            for a producer and a consumer living in sibling scopes, keeping in
+            mind that unrelated scopes - other requests among them - receive the
+            payload as well.
 
         Raises
         ------
@@ -597,8 +649,20 @@ class ctx:
         >>> async def process_order():
         ...     # Send event after order creation
         ...     ctx.send(OrderCreated(order_id="12345", amount=99.99))
+
+        Reaching a consumer subscribed in a sibling scope:
+
+        >>> async def notify_pipeline():
+        ...     ctx.send(OrderCreated(order_id="12345", amount=99.99), broadcast=True)
+
+        See Also
+        --------
+        ctx.subscribe : For receiving events
         """
-        ContextEvents.send(event)
+        ContextEvents.send(
+            event,
+            broadcast=broadcast,
+        )
 
     @staticmethod
     def subscribe[Event: State](
@@ -607,9 +671,21 @@ class ctx:
         """
         Subscribe to events of a specific type within the current context.
 
-        Creates a subscription that receives all events of the specified type
-        sent after the subscription is created. Delivery is FIFO for a given event
-        type within the current scope and event loop.
+        Creates a subscription that receives events of the specified type sent
+        after the subscription is created. Delivery is FIFO for a given event type
+        within the current scope and event loop.
+
+        The subscription receives events sent within the scope it was created in
+        and within every scope nested below it. Events of sibling scopes are not
+        delivered unless they were sent with ``broadcast=True``.
+
+        The subscription ends when the scope owning the event bus exits - a root
+        or ``isolated=True`` scope - delivering the events which already arrived
+        before finishing. A nested non isolated scope shares the bus of such an
+        ancestor, so a subscription created within it stays open past its exit.
+        Iterating one to exhaustion within a nested scope, or in a task spawned
+        there, therefore blocks that scope from leaving - consume it with a bound
+        instead, or subscribe in the scope owning the bus.
 
         Parameters
         ----------

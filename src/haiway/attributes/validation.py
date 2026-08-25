@@ -1,9 +1,6 @@
 from collections.abc import Sequence
-from contextvars import ContextVar, Token
-from types import TracebackType
 from typing import (
     Any,
-    ClassVar,
     NoReturn,
     Protocol,
     Self,
@@ -13,7 +10,6 @@ from typing import (
 
 __all__ = (
     "Validating",
-    "ValidationContext",
     "ValidationError",
     "Validator",
     "Verifier",
@@ -53,66 +49,21 @@ class Verifying[Type](Protocol):
     ) -> Type: ...
 
 
-@final
-class ValidationContext:
-    _context: ClassVar[ContextVar[Sequence[str]]] = ContextVar[Sequence[str]]("ValidationContext")
-
-    @classmethod
-    def scope(
-        cls,
-        name: str,
-        /,
-    ) -> Self:
-        try:
-            context: Sequence[str] = cls._context.get()
-            return cls((*context, name))
-
-        except LookupError:
-            return cls((name,))
-
-    __slots__ = (
-        "_path",
-        "_token",
-    )
-
-    def __init__(
-        self,
-        path: Sequence[str],
-    ) -> None:
-        self._path: Sequence[str] = path
-        self._token: Token[Sequence[str]] | None = None
-
-    def __str__(self) -> str:
-        return "".join(self._path)
-
-    def __enter__(self) -> None:
-        assert self._token is None, "ValidatorContext reentrance is not allowed"  # nosec: B101
-        self._token = ValidationContext._context.set(self._path)
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
-
-        ValidationContext._context.reset(self._token)
-        self._token = None
-
-        if isinstance(exc_val, Exception) and not isinstance(exc_val, ValidationError):
-            raise ValidationError(
-                path=self._path,
-                cause=exc_val,
-            ) from exc_val
-
-
 class ValidationError(Exception):
     """
     Exception raised when validation fails.
 
     This exception wraps the original validation error together with the nested
     attribute path at which the failure occurred.
+
+    Attributes
+    ----------
+    path : Sequence[str]
+        Position of the failure within the validated structure, outermost
+        segment first, rendered by joining the segments - ``.field[2].nested``.
+    cause : Exception
+        The failure itself, always the original one rather than another
+        ``ValidationError`` reporting it from further in.
     """
 
     __slots__ = (
@@ -129,6 +80,84 @@ class ValidationError(Exception):
         super().__init__(f"Validation of {''.join(path)} failed: {cause}")
         self.path: Sequence[str] = path
         self.cause: Exception = cause
+
+    def prefixed(
+        self,
+        name: str,
+        /,
+    ) -> Self:
+        """
+        Report this failure from one position further out.
+
+        Parameters
+        ----------
+        name : str
+            Path segment enclosing the one already reported.
+
+        Returns
+        -------
+        Self
+            New error reporting the same cause at the extended path.
+        """
+        return self.__class__(
+            path=(name, *self.path),
+            cause=self.cause,
+        )
+
+    @classmethod
+    def report(
+        cls,
+        name: str,
+        /,
+        cause: Exception,
+    ) -> NoReturn:
+        """
+        Raise a failure as coming from the given position.
+
+        Always raises - call it from the ``except`` clause of the validation
+        which failed, so the position is spelled out only when there is a
+        failure to report it for.
+
+        Haiway reports its own attributes and elements through this. Reach for
+        it within a ``Validating`` or ``Verifying`` callable of your own, where
+        the nested position of a failure would otherwise be lost.
+
+        Parameters
+        ----------
+        name : str
+            Path segment naming the position which failed, i.e. ``".field"`` or
+            ``"[2]"``.
+        cause : Exception
+            The failure to report.
+
+        Raises
+        ------
+        ValidationError
+            Reporting ``cause`` at ``name``, or at ``name`` followed by the path
+            it was already reported at from further in.
+
+        Examples
+        --------
+        >>> def validated_items(value: Any) -> Sequence[Item]:
+        ...     items: list[Item] = []
+        ...     for index, element in enumerate(value):
+        ...         try:
+        ...             items.append(Item.validate(element))
+        ...
+        ...         except Exception as exc:
+        ...             ValidationError.report(f"[{index}]", exc)
+        ...
+        ...     return items
+        """
+        if isinstance(cause, cls):
+            # already reported from further in - extend that path instead of
+            # nesting another report of the same failure within it
+            raise cause.prefixed(name) from cause.cause
+
+        raise cls(
+            path=(name,),
+            cause=cause,
+        ) from cause
 
 
 @final
@@ -206,5 +235,5 @@ class Verifier[Type]:
     def __delattr__(
         self,
         __name: str,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError("Verifier can't be modified")

@@ -1,10 +1,10 @@
 from asyncio import CancelledError, Task, sleep
-from time import time
 from unittest import TestCase
 
-from pytest import mark, raises
+from pytest import MonkeyPatch, mark, raises
 
 from haiway import retry
+from haiway.helpers import retries
 
 
 class FakeException(Exception):
@@ -236,8 +236,15 @@ async def test_async_fails_when_cancelled():
 
 
 @mark.asyncio
-async def test_async_uses_delay_with_errors():
+async def test_async_uses_delay_with_errors(monkeypatch: MonkeyPatch):
     executions: int = 0
+    delays: list[float] = []
+
+    async def record_delay(delay: float, /) -> None:
+        delays.append(delay)
+
+    # assert the requested delays instead of measuring wall clock time
+    monkeypatch.setattr(retries, "sleep", record_delay)
 
     @retry(limit=2, delay=0.05)
     async def compute(value: str, /) -> str:
@@ -245,16 +252,22 @@ async def test_async_uses_delay_with_errors():
         executions += 1
         raise FakeException()
 
-    time_start: float = time()
     with raises(FakeException):
         await compute("expected")
-    assert (time() - time_start) >= 0.1
+    assert delays == [0.05, 0.05]
     assert executions == 3
 
 
 @mark.asyncio
-async def test_async_uses_computed_delay_with_errors():
+async def test_async_uses_computed_delay_with_errors(monkeypatch: MonkeyPatch):
     executions: int = 0
+    delays: list[float] = []
+
+    async def record_delay(delay: float, /) -> None:
+        delays.append(delay)
+
+    # assert the requested delays instead of measuring wall clock time
+    monkeypatch.setattr(retries, "sleep", record_delay)
 
     @retry(limit=2, delay=lambda attempt, _: attempt * 0.035)
     async def compute(value: str, /) -> str:
@@ -262,10 +275,9 @@ async def test_async_uses_computed_delay_with_errors():
         executions += 1
         raise FakeException()
 
-    time_start: float = time()
     with raises(FakeException):
         await compute("expected")
-    assert (time() - time_start) >= 0.1
+    assert delays == [0.035, 0.07]
     assert executions == 3
 
 

@@ -91,13 +91,26 @@ Configure file access behavior:
 Files.access(
     path="data/file.txt",      # Path as string or Path object
     create=False,              # Create file if it doesn't exist
-    exclusive=False            # Use exclusive locking (Unix/Linux/macOS)
+    exclusive=False,           # Use exclusive locking (Unix/Linux/macOS)
+    mode=0o600,                # Permissions of a created file - owner only by default
 )
 ```
 
 - **path**: File path to open (absolute or relative)
 - **create**: If True, creates the file and parent directories if needed
-- **exclusive**: If True, acquires an exclusive lock (prevents other processes from accessing)
+- **exclusive**: If True, acquires an exclusive `flock` for the duration of the context, waiting for
+  a conflicting holder to release it. The lock is advisory - it excludes other holders of the same
+  lock, not every access to the file - and it is unavailable on Windows
+- **mode**: Permission bits applied to a file created by this call. Defaults to `0o600` - readable
+  and writable by the current user only. Parent directories created along the way receive the same
+  permissions extended with search access wherever read or write is granted, so `mode=0o640` creates
+  `0o750` directories. Permissions of an existing file are never modified.
+
+Symbolic links are refused rather than followed: opening a path which is a link raises
+`FileException`, so a link planted at the target cannot redirect reads or writes to another file.
+Only regular files are accepted, so a fifo or a device planted at the target is refused as well.
+Path components are not normalized - a `..` in the path still leads out of the directory preceding
+it.
 
 ## Error Handling
 
@@ -200,6 +213,9 @@ async def manage_config():
 Writes are in-place with `os.write` followed by `fsync`; they are **not** copy-on-write or rename
 atomic. Use exclusive locks plus your own temp-file strategy if you need atomic replacement.
 
+Contents are always read in full and written in full, so a file has to fit in memory twice over -
+this interface is meant for configuration and small payloads rather than for streaming.
+
 ```python
 async def atomic_update():
     async with ctx.scope(
@@ -222,13 +238,15 @@ async def atomic_update():
 Mock file operations for testing:
 
 ```python
-from haiway import State
-from haiway.helpers import File, FileReading, FileWriting
+from pathlib import Path
+
+from haiway import ctx
+from haiway.helpers import File, FileException
 
 # Create mock implementations
 class MockFileStorage:
-    def __init__(self):
-        self.files = {}
+    def __init__(self) -> None:
+        self.files: dict[str, bytes] = {}
 
     async def read_file(self, path: str) -> bytes:
         if path not in self.files:
@@ -245,8 +263,9 @@ async def test_file_processing():
 
     # Create mock file state
     file_state = File(
+        path=Path("input.txt"),
         reading=lambda: storage.read_file("input.txt"),
-        writing=lambda content: storage.write_file("output.txt", content)
+        writing=lambda content: storage.write_file("output.txt", content),
     )
 
     async with ctx.scope("test", file_state):
@@ -257,6 +276,10 @@ async def test_file_processing():
         await File.write(b"processed data")
         assert storage.files["output.txt"] == b"processed data"
 ```
+
+`File` is constructed with the `reading` and `writing` protocol implementations - `FileReading` and
+`FileWriting` from `haiway.helpers.files` when you need to type them explicitly - which is what
+`Files.access(...)` injects for real files.
 
 ## Best Practices
 
@@ -272,13 +295,19 @@ async def test_file_processing():
 ### Unix/Linux/macOS
 
 - Full support for exclusive file locking via fcntl
-- In-place writes with proper fsync
-- File permissions respected
+- In-place writes with proper fsync, and a directory fsync when a file is created, so a new entry
+  survives a crash along with its contents
+- Created files and directories receive the requested `mode` (narrowed by the process umask),
+  restricted to the owner by default
+- Symbolic links are refused through `O_NOFOLLOW`, irregular files through a `S_ISREG` check
 
 ### Windows
 
-- No exclusive locking (fcntl not available)
-- Still provides in-place writes with fsync
+- No exclusive locking (fcntl not available) - `exclusive=True` raises `FileException`
+- Still provides in-place writes with fsync, but a newly created directory entry is only as durable
+  as the platform makes it
+- Parent directories are not verified component by component, so only the file itself is checked for
+  being a link
 - File handles properly managed
 
 ## Implementation Details
@@ -286,16 +315,52 @@ async def test_file_processing():
 The file access system uses:
 
 - **OS-level file operations**: Direct use of os.open, os.read, os.write for efficiency
-- **Exclusive locking**: fcntl.flock on supported platforms
+- **Exclusive locking**: `fcntl.flock` on supported platforms, acquired by polling its non-blocking
+  variant from the event loop so that waiting for it stays cancellable
 - **Durable writes**: In-place writes, truncate, and fsync ensure durability
-- **Async wrappers**: File I/O operations run in thread pool to avoid blocking
+- **Async wrappers**: File I/O operations run in thread pool to avoid blocking. An operation whose
+  caller stopped waiting still runs to completion, and the file is not closed underneath it
 
 ## Custom Implementations
 
-Create custom file access implementations by implementing the protocols:
+Create custom file access implementations by implementing the protocols. `File`, `Files`,
+`Directory`, `FileException`, and `Paths`.
 
 ```python
-from haiway.helpers import FileAccess, FileAccessing, File
+from pathlib import Path
+from types import TracebackType
+
+from haiway import ctx
+from haiway.helpers import File, FileAccess, Files
+
+class RemoteFileContext:
+    def __init__(
+        self,
+        server_url: str,
+        path: Path | str,
+        create: bool,
+        exclusive: bool,
+        mode: int,
+    ) -> None:
+        self.server_url = server_url
+        self._path = Path(path)
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    async def __aenter__(self) -> File:
+        # Open the remote resource and expose it through File reading/writing
+        ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        # Flush pending changes and release the remote resource
+        ...
 
 class RemoteFileAccess:
     def __init__(self, server_url: str):
@@ -306,9 +371,10 @@ class RemoteFileAccess:
         path: Path | str,
         create: bool,
         exclusive: bool,
+        mode: int,
     ) -> FileAccess:
         # Return a context manager that provides File operations
-        return RemoteFileContext(self.server_url, path, create, exclusive)
+        return RemoteFileContext(self.server_url, path, create, exclusive, mode)
 
 # Use custom implementation
 async with ctx.scope(

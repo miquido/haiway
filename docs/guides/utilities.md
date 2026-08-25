@@ -4,8 +4,8 @@ Haiway exposes a small set of utility primitives for common application needs: d
 environment loading, logging bootstrap, pagination state, and async producer-consumer coordination.
 
 Most utilities described here are publicly exported from `haiway`. A few narrower helpers are kept
-under submodules, such as `format_str` in `haiway.utils.formatting` and `AsyncQueueEmpty` in
-`haiway.utils.queue`.
+under submodules, such as `format_str`, `format_log_message`, and `escape_controls` in
+`haiway.utils.formatting`.
 
 ## Collection Helpers
 
@@ -109,17 +109,68 @@ feature-rich env parsers.
 ```python
 from haiway import setup_logging
 
-setup_logging("uvicorn", "httpx")
+setup_logging("uvicorn", "httpx2")
 ```
 
 ### Behavior
 
 - Configures the root logger and any explicitly named loggers.
-- Uses `INFO` by default, or `DEBUG` when `DEBUG_LOGGING` is enabled.
-- Includes timestamps by default and can disable them with `time=False`.
+- Emits `DEBUG` or `INFO` depending on the `debug=` flag. Its default is resolved once, when
+  `haiway.utils.logs` is imported, from the `DEBUG_LOGGING` environment variable, falling back to
+  `__debug__` - so unoptimized runs default to `DEBUG` and `python -O` defaults to `INFO`. Pass
+  `debug=False` to pin the level regardless of the environment.
+- Formats records with default formatter, which includes timestamps with the local timezone offset.
 - Disables previously created loggers by default via `disable_existing_loggers=True`.
 
-This helper should normally be called once during application startup.
+### Custom Formatter
+
+Pass any `logging.Formatter` instance through `formatter=` to apply it to all configured loggers:
+
+```python
+from logging import Formatter
+
+from haiway import setup_logging
+
+setup_logging("uvicorn", formatter=Formatter("[%(levelname)-4s] [%(name)s] %(message)s"))
+```
+
+The example above is also how timestamps are omitted - there is no separate flag for it.
+
+### JSON Logs
+
+`JSONLogFormatter` renders every record as a single-line JSON object, suitable for log ingestion
+pipelines:
+
+```python
+from haiway import JSONLogFormatter, setup_logging
+
+setup_logging("uvicorn", formatter=JSONLogFormatter())
+```
+
+- Every record attribute becomes a field under its original name (`name`, `levelname`, `module`,
+  `lineno`, `taskName`, ...), including everything passed through `extra=`. Nothing is filtered out
+  or renamed, only `time` and `message` are rendered on top.
+- `time` defaults to ISO-8601 with milliseconds and a timezone offset, or follows `datefmt` when
+  provided.
+- Fields holding `None` are omitted, keeping records free of empty noise like `exc_text` or
+  `taskName` outside of a task.
+- `exc_info` holds the formatted traceback instead of its raw contents.
+- Values which are not JSON serializable are resolved to readable strings without memory addresses:
+  exceptions to their message, types to their qualified name, tracebacks to their formatted frames
+  and anything else through `str`. Logging never fails because of an unexpected payload.
+- An `extra` field named like a record attribute is already a `KeyError` raised by `logging` itself.
+  An `extra` field named `time` or `message` trips a debug-only assertion; optimized builds
+  (`python -O`) carry none of that check and let the field win instead.
+
+```python
+from logging import getLogger
+
+logger = getLogger("app")
+logger.info("processed %d items", 42, extra={"request_id": "req-7"})
+# {"time": "2026-08-20T13:09:56.123+02:00", "message": "processed 42 items", "name": "app",
+#  "msg": "processed %d items", "args": [42], "levelname": "INFO", "levelno": 20,
+#  "module": "app", "funcName": "run", "lineno": 12, ..., "request_id": "req-7"}
+```
 
 ## Pagination Primitives
 
@@ -198,12 +249,33 @@ Key behavior:
 
 - `enqueue()` immediately delivers to a waiting consumer or appends to an internal buffer.
 - `pending_next()` returns a buffered item synchronously.
-- `pending_next()` raises `AsyncQueueEmpty` from `haiway.utils.queue` when the queue is open but
-  currently empty.
+- `pending_next()` raises `AsyncQueueEmpty` when the queue is open but currently empty.
 - `finish()` stops future `enqueue()` calls and ends iteration after buffered items are drained.
 - `finish(exception)` re-raises that exception on the consumer after buffered items are drained.
 - `cancel()` is shorthand for finishing with `CancelledError`.
 - `clear()` drops only currently buffered items and leaves a waiting consumer intact.
+
+#### Bounding the Buffer
+
+The buffer is unbounded by default. Pass `limit=` to cap it:
+
+```python
+queue: AsyncQueue[int] = AsyncQueue(limit=2)
+queue.enqueue(1)
+queue.enqueue(2)
+queue.enqueue(3)  # drops 1 - the oldest buffered element
+queue.finish()
+
+items = [item async for item in queue]  # [2, 3]
+```
+
+- Overflow drops the oldest buffered element silently; `enqueue()` never blocks or raises.
+- Elements handed straight to a waiting consumer never enter the buffer, so they never count against
+  the limit.
+- `limit` must be positive when provided, and the effective value is readable through the `.limit`
+  property (`None` when unbounded).
+- Reach for `AsyncStream` instead when producers must be slowed down rather than have their oldest
+  items discarded.
 
 ### `AsyncStream`
 
@@ -238,7 +310,8 @@ Key behavior:
 
 ### Choosing between them
 
-- Use `AsyncQueue` for buffered handoff.
+- Use `AsyncQueue` for buffered handoff, optionally bounded with `limit=` when dropping the oldest
+  items is preferable to unbounded growth.
 - Use `AsyncStream` for back-pressure and producer-consumer pacing.
 - Both support exactly one active consumer at a time.
 
@@ -262,6 +335,7 @@ Formatting rules include:
 
 - strings are quoted
 - multiline strings use an indented triple-quoted block
+- control characters within strings are escaped, keeping the line feeds of multiline blocks
 - mappings and sequences are rendered with indentation
 - bytes-like values are rendered as `<<<N bytes>>>`
 - `datetime` values use ISO 8601
@@ -269,3 +343,29 @@ Formatting rules include:
 - `MISSING` renders as an empty value and is skipped inside nested structures
 
 This function is primarily useful for human-readable diagnostics rather than stable serialization.
+
+Attributes annotated with `Sensitive` are rendered as their redaction instead of their value, so a
+`State` carrying credentials can be formatted without leaking them.
+
+### Keeping Log Records Intact
+
+Untrusted text reaching a log line can otherwise forge additional records or inject terminal escape
+sequences. Two helpers from `haiway.utils.formatting` guard against it, and both built-in
+observability backends already apply them:
+
+```python
+from haiway.utils.formatting import escape_controls, format_log_message
+
+escape_controls("alice\n2026-08-20 [ERROR] AUDIT: root logged in")
+# 'alice\\n2026-08-20 [ERROR] AUDIT: root logged in'
+
+format_log_message("processed %d of %s", (3, "items"))
+# 'processed 3 of items'
+```
+
+- `escape_controls(text, allow_newlines=False)` escapes control characters. Pass
+  `allow_newlines=True` for text rendered within an already multiline structure - carriage returns
+  and escape sequences are escaped either way.
+- `format_log_message(message, args)` interpolates `%`-style arguments and escapes the result. A
+  mismatched format string keeps the message and appends the arguments instead of losing the record,
+  which is what the standard library does when interpolation fails.

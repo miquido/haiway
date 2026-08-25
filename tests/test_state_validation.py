@@ -1,5 +1,6 @@
 import re
-from collections.abc import Callable, Mapping, Sequence
+import typing
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from enum import Enum, StrEnum
 from pathlib import Path
@@ -17,7 +18,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from haiway import MISSING, Missing, State, ValidationError
+from haiway import MISSING, BasicObject, Missing, State, ValidationError
 
 
 class Color(Enum):
@@ -56,6 +57,16 @@ class SequenceState(State):
 class SetState(State):
     tags: set[str]
     ids: set[int]
+
+
+class FrozenSetState(State):
+    tags: frozenset[str]
+    ids: typing.FrozenSet[int]  # noqa: UP006 - the deprecated alias has to resolve as well
+
+
+class IterableState(State):
+    items: Iterable[int]
+    values: Collection[str]
 
 
 class MappingState(State):
@@ -333,6 +344,44 @@ def test_set_validation() -> None:
     with pytest.raises(ValidationError) as exc:
         SetState(tags=["x"], ids="not-set")
     assert exc.value.path == (".ids",)
+
+
+def test_frozen_set_validation() -> None:
+    instance = FrozenSetState(tags={"x", "y"}, ids={1, 2})
+    assert instance.tags == frozenset({"x", "y"})
+    assert instance.ids == frozenset({1, 2})
+
+    # any iterable of matching elements is normalized to a frozenset
+    converted = FrozenSetState(tags=["x", "x"], ids=(1, 1))
+    assert converted.tags == frozenset({"x"})
+    assert converted.ids == frozenset({1})
+
+    with pytest.raises(ValidationError) as exc:
+        FrozenSetState(tags=[1], ids=[1, 2])
+    assert exc.value.path == (".tags", "[0]")
+
+    with pytest.raises(ValidationError) as exc:
+        FrozenSetState(tags=["x"], ids="not-set")
+    assert exc.value.path == (".ids",)
+
+
+def test_iterable_validation() -> None:
+    instance = IterableState(items=[1, 2], values=("a", "b"))
+    assert instance.items == (1, 2)
+    assert instance.values == ("a", "b")
+
+    # unordered and single use iterables are snapshot into an immutable sequence
+    snapshot = IterableState(items=(number for number in (1, 2)), values={"a"})
+    assert snapshot.items == (1, 2)
+    assert snapshot.values == ("a",)
+
+    with pytest.raises(ValidationError) as exc:
+        IterableState(items=["a"], values=["a"])
+    assert exc.value.path == (".items", "[0]")
+
+    with pytest.raises(ValidationError) as exc:
+        IterableState(items=[1], values="not-iterable-of-str")
+    assert exc.value.path == (".values",)
 
 
 def test_mapping_validation() -> None:
@@ -701,3 +750,114 @@ def test_validation_error_paths() -> None:
             },
         )
     assert exc.value.path == (".level1", ".nested", ".value")
+
+
+class QuotedState(State):
+    plain: "int"  # noqa: UP037 - the quoting is what is under test
+    listed: list["str"]  # noqa: UP037 - the quoting is what is under test
+
+
+class QuotedSelfReferenceState(State):
+    child: "QuotedSelfReferenceState | None" = None  # noqa: UP037 - quoting under test
+
+
+type QuotedTree = dict[str, "QuotedTree | str"]
+
+
+class QuotedAliasState(State):
+    tree: QuotedTree
+
+
+def test_quoted_annotation_validation() -> None:
+    instance = QuotedState(plain=1, listed=["a"])
+    assert instance.plain == 1
+    assert instance.listed == ("a",)
+
+    with pytest.raises(ValidationError) as exc:
+        QuotedState(plain="nope", listed=["a"])
+    assert exc.value.path == (".plain",)
+
+    with pytest.raises(ValidationError) as exc:
+        QuotedState(plain=1, listed=[2])
+    assert exc.value.path == (".listed", "[0]")
+
+
+def test_quoted_self_reference_validation() -> None:
+    instance = QuotedSelfReferenceState(child=QuotedSelfReferenceState())
+    assert instance.child is not None
+    assert instance.child.child is None
+
+    with pytest.raises(ValidationError) as exc:
+        QuotedSelfReferenceState(child=42)
+    assert exc.value.path == (".child",)
+
+
+def test_quoted_recursive_alias_validation() -> None:
+    instance = QuotedAliasState(tree={"a": {"b": "c"}})
+    assert instance.tree["a"]["b"] == "c"
+
+    with pytest.raises(ValidationError) as exc:
+        QuotedAliasState(tree={"a": 1})
+    assert exc.value.path == (".tree", "[a]")
+
+
+class NumericUnionState(State):
+    int_first: int | float
+    float_first: float | int
+    with_str: str | int
+    with_bool: int | bool
+    optional_float: float | None = None
+
+
+def test_union_prefers_matching_alternative_over_conversion() -> None:
+    instance = NumericUnionState(
+        int_first=5,
+        float_first=5,
+        with_str="5",
+        with_bool=True,
+    )
+    # the declaration order of the alternatives must not decide the type
+    assert instance.int_first == 5
+    assert isinstance(instance.int_first, int)
+    assert instance.float_first == 5
+    assert isinstance(instance.float_first, int)
+    assert instance.with_str == "5"
+    assert instance.with_bool is True
+
+    instance = NumericUnionState(
+        int_first=5.5,
+        float_first=5.5,
+        with_str=7,
+        with_bool=3,
+    )
+    assert instance.int_first == 5.5
+    assert isinstance(instance.int_first, float)
+    assert instance.float_first == 5.5
+    assert isinstance(instance.float_first, float)
+    assert instance.with_str == 7
+    assert instance.with_bool == 3
+    assert instance.with_bool is not True
+
+
+def test_union_still_converts_when_nothing_matches() -> None:
+    instance = NumericUnionState(
+        int_first=1,
+        float_first=1,
+        with_str="1",
+        with_bool=1,
+        optional_float=5,
+    )
+    assert instance.optional_float == 5.0
+    assert isinstance(instance.optional_float, float)
+
+
+def test_basic_value_preserves_numeric_types() -> None:
+    class BasicState(State):
+        data: BasicObject
+
+    instance = BasicState(data={"integer": 5, "number": 2.5, "text": "x", "flag": True})
+    assert instance.data["integer"] == 5
+    assert isinstance(instance.data["integer"], int)
+    assert isinstance(instance.data["number"], float)
+    assert instance.data["text"] == "x"
+    assert instance.data["flag"] is True
