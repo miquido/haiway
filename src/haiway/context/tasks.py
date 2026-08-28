@@ -30,7 +30,7 @@ class BackgroundTaskGroup:
     ) -> Task[Result]:
         loop: AbstractEventLoop = get_running_loop()
 
-        task: Task[Any] = loop.create_task(
+        task: Task[Result] = loop.create_task(
             coroutine,
             context=context,
         )
@@ -90,11 +90,15 @@ class BackgroundTaskGroup:
                 for task in loop_tasks:
                     try:
                         task.cancel()
+
                     except RuntimeError:
                         pass
 
             async def drain_tasks() -> None:
-                await gather(*loop_tasks, return_exceptions=True)
+                await gather(
+                    *loop_tasks,
+                    return_exceptions=True,
+                )
 
             def schedule_cleanup() -> None:
                 cancel_tasks()
@@ -107,6 +111,7 @@ class BackgroundTaskGroup:
 
             try:
                 loop.call_soon_threadsafe(schedule_cleanup)
+
             except RuntimeError:
                 cancel_tasks()
 
@@ -247,15 +252,27 @@ class ContextTaskGroup:
             )
 
         except BaseExceptionGroup as exc:  # log before propagation
+            # TaskGroup includes a non-cancellation body exception within its group,
+            # twice when the body reraised the error of a failed child. When the group
+            # holds nothing else - a closing `GeneratorExit` or that single error -
+            # there is no failure to report beyond the exception already propagating,
+            # which was logged where it was raised.
+            if (
+                exc_val is not None
+                and not isinstance(exc_val, CancelledError)
+                and all(error is exc_val for error in exc.exceptions)
+            ):
+                raise exc_val from None  # reraise it without the group wrapper
+
             ContextObservability.record_log(
                 ObservabilityLevel.ERROR,
                 "Context task group exit failed",
                 exception=exc,
             )
-            # TaskGroup includes a non-cancellation body exception within its group,
-            # unwrap it to surface the original error instead of the group wrapper.
-            # A cancellation is never included there - it is the task group cancelling
-            # us on child failure, so propagating it would discard all child errors.
+            # unwrap the body exception to surface the original error instead of the
+            # group wrapper. A cancellation is never included there - it is the task
+            # group cancelling us on child failure, so propagating it would discard
+            # all child errors.
             if exc_val is not None and not isinstance(exc_val, CancelledError):
                 raise exc_val from exc  # reraise currently handled exception
 

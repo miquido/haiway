@@ -96,7 +96,7 @@ class PostgresConnectionPool(Immutable):
         Size of the per-connection prepared statement cache, defaulting to
         ``POSTGRES_STATEMENT_CACHE`` or ``100``, matching ``asyncpg``; ``0``
         disables it, which is required behind a proxy pooling by transaction.
-    initialize : Callable[[Connection], Coroutine[Any, Any, None]] | None, optional
+    initialize : Callable[[Connection], Coroutine[None, None, None]] | None, optional
         Async hook executed by ``asyncpg`` for every newly created connection.
 
     Notes
@@ -128,7 +128,7 @@ class PostgresConnectionPool(Immutable):
     # the whole configuration lives in these closures - see the note above
     _prepare_pool: Callable[[], Pool]
     _prepare_connection_context: Callable[[Pool], PostgresConnectionContext]
-    _close_pool: Callable[[Pool], Coroutine[Any, Any, None]]
+    _close_pool: Callable[[Pool], Coroutine[None, None, None]]
 
     @classmethod
     def of(
@@ -140,7 +140,7 @@ class PostgresConnectionPool(Immutable):
         command_timeout: float | Missing = MISSING,
         close_timeout: float | Missing = MISSING,
         statement_cache: int | Missing = MISSING,
-        initialize: Callable[[Connection], Coroutine[Any, Any, None]] | None = None,
+        initialize: Callable[[Connection], Coroutine[None, None, None]] | None = None,
     ) -> Self:
         """Create a pool connecting through the given dsn.
 
@@ -160,7 +160,7 @@ class PostgresConnectionPool(Immutable):
         statement_cache : int, optional
             Size of the per-connection prepared statement cache; ``0`` disables
             it, which is required behind a proxy pooling by transaction.
-        initialize : Callable[[Connection], Coroutine[Any, Any, None]] | None, default=None
+        initialize : Callable[[Connection], Coroutine[None, None, None]] | None, default=None
             Optional async hook executed by ``asyncpg`` for every newly created
             connection.
 
@@ -225,7 +225,7 @@ class PostgresConnectionPool(Immutable):
         command_timeout: float | Missing = MISSING,
         close_timeout: float | Missing = MISSING,
         statement_cache: int | Missing = MISSING,
-        initialize: Callable[[Connection], Coroutine[Any, Any, None]] | None = None,
+        initialize: Callable[[Connection], Coroutine[None, None, None]] | None = None,
         _dsn: str | None = None,  # provided by `of`, which owns the dsn path
     ) -> None:
         connection_arguments: Mapping[str, Any]

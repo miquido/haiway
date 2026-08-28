@@ -5,13 +5,12 @@ from asyncio import (
 )
 from collections.abc import (
     AsyncGenerator,
-    AsyncIterable,
     Callable,
     Coroutine,
     Iterable,
     Mapping,
 )
-from contextlib import AbstractAsyncContextManager, AbstractContextManager
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, aclosing
 from logging import Logger
 from typing import Any, NoReturn, final, overload
 
@@ -304,14 +303,14 @@ class ctx:
     @overload
     @staticmethod
     def spawn[Result](
-        coro: Coroutine[Any, Any, Result],
+        coro: Coroutine[None, None, Result],
         /,
     ) -> Task[Result]: ...
 
     @overload
     @staticmethod
     def spawn[Result, **Arguments](
-        coro: Callable[Arguments, Coroutine[Any, Any, Result]],
+        coro: Callable[Arguments, Coroutine[None, None, Result]],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
@@ -319,7 +318,7 @@ class ctx:
 
     @staticmethod
     def spawn[Result, **Arguments](
-        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result],
+        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
@@ -338,15 +337,15 @@ class ctx:
         ``task.cancel()`` or ``ctx.spawn_background(...)`` when different lifetime
         semantics are required.
 
-        A task consuming ``ctx.subscribe(...)`` has to be spawned in the scope
-        owning the event bus - a root or ``isolated=True`` scope - because a
-        subscription ends only when that scope exits. Spawning such a task in a
-        nested non isolated scope makes its exit wait for a subscription which
-        cannot end yet.
+        A task consuming ``ctx.subscribe(...)`` ends together with the scope the
+        subscription was created in, including a nested non isolated one sharing
+        the event bus of an ancestor. That scope completes its closing future
+        while unwinding, before joining its tasks, which ends the pending
+        iteration - so such a task never blocks the scope it was spawned in.
 
         Parameters
         ----------
-        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result]
+        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result]
             function or coroutine to be called within the task group
 
         *args: Arguments.args
@@ -366,14 +365,14 @@ class ctx:
     @overload
     @staticmethod
     def spawn_background[Result](
-        coro: Coroutine[Any, Any, Result],
+        coro: Coroutine[None, None, Result],
         /,
     ) -> Task[Result]: ...
 
     @overload
     @staticmethod
     def spawn_background[Result, **Arguments](
-        coro: Callable[Arguments, Coroutine[Any, Any, Result]],
+        coro: Callable[Arguments, Coroutine[None, None, Result]],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
@@ -381,7 +380,7 @@ class ctx:
 
     @staticmethod
     def spawn_background[Result, **Arguments](
-        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result],
+        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result],
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
@@ -403,7 +402,7 @@ class ctx:
 
         Parameters
         ----------
-        coro: Callable[Arguments, Coroutine[Any, Any, Result]] | Coroutine[Any, Any, Result]
+        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result]
             function or coroutine to be called within the task group
 
         *args: Arguments.args
@@ -436,7 +435,7 @@ class ctx:
         /,
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
-    ) -> AsyncIterable[Element]:
+    ) -> AsyncGenerator[Element]:
         """
         Stream results produced by a generator within the proper context state.
 
@@ -457,18 +456,65 @@ class ctx:
 
         Returns
         -------
-        AsyncIterable[Element]
-            iterator for accessing generated elements
+        AsyncGenerator[Element]
+            generator for accessing produced elements
+
+        Notes
+        -----
+        The scope lives inside the returned generator, so it is released when the
+        generator ends - by exhausting it, or by closing it. Wrap it in
+        ``ctx.closing`` when the iteration may be left early: an abandoned
+        generator is finalized by the garbage collector in a fresh context, where
+        the scope can no longer be released.
         """
 
-        scope = ctx.scope("stream")  # prepare scope before generator
-
         async def stream() -> AsyncGenerator[Element]:
-            async with scope:
-                async for result in source(*args, **kwargs):
-                    yield result
+            async with ctx.scope("stream"):
+                generator: AsyncGenerator[Element] = source(*args, **kwargs)
+                try:
+                    async for result in generator:
+                        yield result
+
+                finally:
+                    await generator.aclose()
 
         return stream()
+
+    @staticmethod
+    def closing[Element](
+        generator: AsyncGenerator[Element],
+        /,
+    ) -> AbstractAsyncContextManager[AsyncGenerator[Element]]:
+        """
+        Ensure a generator is closed when leaving its iteration.
+
+        Wraps an async generator in a context manager closing it on exit, so that
+        its cleanup runs where the iteration ends instead of whenever the garbage
+        collector reaches it. Leaving a generator to the collector is unreliable
+        in general, and unsound for generators which manage a context scope -
+        ``ctx.stream`` and ``stream_concurrently`` among them: the collector
+        finalizes a generator in a fresh context, where the scope it opened can no
+        longer be released, so the teardown fails and the error is only logged.
+
+        Parameters
+        ----------
+        generator: AsyncGenerator[Element]
+            generator to be closed on leaving the context
+
+        Returns
+        -------
+        AbstractAsyncContextManager[AsyncGenerator[Element]]
+            context manager providing the generator and closing it on exit
+
+        Examples
+        --------
+        >>> async with ctx.closing(ctx.stream(produce)) as stream:
+        ...     async for element in stream:
+        ...         if not await handle(element):
+        ...             break  # the stream scope is released right here
+        """
+
+        return aclosing(generator)
 
     @staticmethod
     def check_cancellation() -> None:
@@ -679,13 +725,31 @@ class ctx:
         and within every scope nested below it. Events of sibling scopes are not
         delivered unless they were sent with ``broadcast=True``.
 
-        The subscription ends when the scope owning the event bus exits - a root
-        or ``isolated=True`` scope - delivering the events which already arrived
-        before finishing. A nested non isolated scope shares the bus of such an
-        ancestor, so a subscription created within it stays open past its exit.
-        Iterating one to exhaustion within a nested scope, or in a task spawned
-        there, therefore blocks that scope from leaving - consume it with a bound
-        instead, or subscribe in the scope owning the bus.
+        The subscription is bound to the scope which created it, captured on
+        subscribing and never on iterating - a scope entered and left around the
+        iteration does not affect it. It ends when that scope begins closing, or
+        when the scope owning the event bus - a root or ``isolated=True`` scope -
+        exits, whichever comes first, delivering the events which already arrived
+        before finishing. A scope completes its closing before joining its tasks,
+        so a task spawned there can iterate the subscription to exhaustion without
+        ever blocking the scope it was spawned in from leaving.
+
+        Iterating a subscription to exhaustion directly within the body of the scope
+        which created it deadlocks instead - that scope begins closing only once its
+        body returns, so the iteration waits for an end which can never come. Consume
+        such a subscription in a spawned task, or leave the loop on a condition of
+        its own.
+
+        The subscription is an async generator, so closing it ends the iteration
+        where it stands - releasing the events chain it holds and any ``__anext__``
+        waiting on it. Wrap it in ``ctx.closing`` when the iteration is left before
+        its scope ends, instead of leaving the chain pinned until the garbage
+        collector reaches it.
+
+        Only one iteration may run at a time, as with any async generator - a second
+        concurrent ``__anext__`` raises ``RuntimeError`` instead of delivering the
+        same event twice. Subscribe once per consumer to fan an event type out to
+        several of them.
 
         Parameters
         ----------
@@ -695,7 +759,7 @@ class ctx:
         Returns
         -------
         EventsSubscription[Event]
-            An async iterator that yields events of the specified type
+            An async generator yielding events of the specified type
 
         Raises
         ------
@@ -727,10 +791,19 @@ class ctx:
         ...         ctx.log_info("Payment processing stopped")
         ...         raise
 
+        Leaving the iteration early:
+
+        >>> async def await_confirmation(order_id: str):
+        ...     async with ctx.closing(ctx.subscribe(OrderConfirmed)) as confirmations:
+        ...         async for confirmation in confirmations:
+        ...             if confirmation.order_id == order_id:
+        ...                 return confirmation  # the subscription ends right here
+
         See Also
         --------
         ctx.send : For sending events
-        EventsSubscription : The subscription iterator
+        ctx.closing : For ending a subscription left before its scope
+        EventsSubscription : The subscription generator
         """
         return ContextEvents.subscribe(event)
 

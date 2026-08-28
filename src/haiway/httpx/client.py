@@ -1,7 +1,7 @@
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from types import TracebackType
-from typing import Any, final
+from typing import Any, Self, final
 
 from httpx2 import (
     URL,
@@ -23,6 +23,7 @@ from haiway.helpers import (
     HTTPTimeoutError,
 )
 from haiway.types import Immutable
+from haiway.utils.exceptions import thrown_exception
 
 __all__ = ("HTTPXClient",)
 
@@ -111,7 +112,7 @@ class HTTPXClient(Immutable):
       keeps its connection checked out until the body is read or closed, and
       one that is never read holds it until the pool is closed on scope exit at
       the latest.
-    - A request ``body`` given as an async byte iterable is streamed to the
+    - A request ``body`` given as an async byte generator is streamed to the
       server with chunked transfer encoding rather than buffered. httpx2
       cannot replay it, so a redirect which preserves the method - and any
       retry - fails with ``HTTPClientError``. Buffered payloads are ``bytes``;
@@ -251,8 +252,9 @@ class HTTPXClient(Immutable):
             Request headers. Merged with default headers.
         body : HTTPBody | None, optional
             Request body content. ``bytes`` are sent with a ``Content-Length``;
-            an async byte iterable is streamed with chunked transfer encoding
-            instead of being buffered.
+            an async byte generator is streamed with chunked transfer encoding
+            instead of being buffered. The `HTTPClient` facade closes it once
+            the request is done with it, so this method does not.
         timeout : float | None, optional
             Request timeout. Overrides default timeout if specified.
         follow_redirects : bool | None, optional
@@ -317,7 +319,7 @@ class HTTPXClient(Immutable):
                 return HTTPResponse(
                     status_code=response.status_code,
                     headers=response.headers,
-                    body=_ResponseStream(response=response),
+                    body=_ResponseStream(response),
                 )
 
             else:
@@ -349,36 +351,119 @@ class HTTPXClient(Immutable):
             ) from exc
 
 
+def _streaming_error(
+    response: Response,
+    exc: Exception,
+) -> HTTPClientError:
+    if isinstance(exc, TimeoutException):
+        return HTTPTimeoutError(
+            message="HTTP request timed out",
+            method=response.request.method,
+            url=str(response.request.url),
+        )
+
+    elif isinstance(exc, NetworkError):
+        return HTTPConnectionError(
+            message="HTTP connection failed",
+            method=response.request.method,
+            url=str(response.request.url),
+        )
+
+    else:
+        return HTTPClientError(
+            message="HTTP request failed",
+            method=response.request.method,
+            url=str(response.request.url),
+        )
+
+
 @final
-class _ResponseStream(Immutable):
-    response: Response
+class _ResponseStream(AsyncGenerator[bytes]):
+    """Streams a response body, owning the connection behind it.
 
-    async def __aiter__(self) -> AsyncIterator[bytes]:
+    Holding the response here, instead of only within the generator frame
+    reading it, is what keeps ``aclose`` releasing the connection before the
+    first chunk was requested: a generator frame which never started does not
+    run on close, so the release within it would not happen either.
+    """
+
+    __slots__ = ("_generator", "_response")
+
+    def __init__(
+        self,
+        response: Response,
+    ) -> None:
+        self._response: Response = response
+        self._generator: AsyncGenerator[bytes] = self._chunks()
+
+    async def _chunks(self) -> AsyncGenerator[bytes]:
+        chunks: AsyncGenerator[bytes] = self._response.aiter_bytes()
         try:
+            while True:
+                chunk: bytes
+                try:
+                    chunk = await anext(chunks)
+
+                except StopAsyncIteration:
+                    break
+
+                except Exception as exc:  # a failed read is a transport failure
+                    raise _streaming_error(self._response, exc) from exc
+
+                # handed over outside of the translation above on purpose: an
+                # exception thrown in at this point comes from the consumer, and
+                # reporting it as a transport failure would misattribute it
+                yield chunk
+
+        finally:  # ensure the connection is released in all cases
             try:
-                async for chunk in self.response.aiter_bytes():
-                    yield chunk
+                try:
+                    # releases the connection through httpx2's own path when the
+                    # read was left part way, and is a no-op once it ran to its end
+                    await chunks.aclose()
 
-            finally:  # ensure the connection is released in all cases
-                await self.response.aclose()
+                finally:
+                    # ...and directly when the read never started, where the frame
+                    # holding that release never runs. already closed by the above
+                    # otherwise, which httpx2 makes a no-op
+                    await self._response.aclose()
 
-        except TimeoutException as exc:
-            raise HTTPTimeoutError(
-                message="HTTP request timed out",
-                method=self.response.request.method,
-                url=str(self.response.request.url),
-            ) from exc
+            except Exception as exc:
+                # a backend failing to release the connection is still a
+                # connection error, so closing is translated as well
+                raise _streaming_error(self._response, exc) from exc
 
-        except NetworkError as exc:
-            raise HTTPConnectionError(
-                message="HTTP connection failed",
-                method=self.response.request.method,
-                url=str(self.response.request.url),
-            ) from exc
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self.asend(None)
+
+    async def asend(
+        self,
+        value: None = None,
+        /,
+    ) -> bytes:
+        return await self._generator.asend(value)
+
+    async def athrow(
+        self,
+        typ: type[BaseException] | BaseException,
+        val: object = None,
+        tb: TracebackType | None = None,
+        /,
+    ) -> bytes:
+        return await self._generator.athrow(thrown_exception(typ, val, tb))
+
+    async def aclose(self) -> None:
+        await self._generator.aclose()
+        if self._response.is_closed:
+            return  # the stream was read, releasing the connection on its way
+
+        # closing a stream which was never read does not run the frame above,
+        # leaving the connection checked out - release it here instead
+        try:
+            await self._response.aclose()
 
         except Exception as exc:
-            raise HTTPClientError(
-                message="HTTP request failed",
-                method=self.response.request.method,
-                url=str(self.response.request.url),
-            ) from exc
+            raise _streaming_error(self._response, exc) from exc

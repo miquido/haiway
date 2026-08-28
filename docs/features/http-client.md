@@ -285,9 +285,12 @@ A stream is claimed before it is read, so a read that does not reach the end can
 later one - that would hand back the unread remainder as though it were the whole payload:
 
 ```python
+from contextlib import aclosing
+
 response = await HTTPClient.get(url="/report", stream=True)
-async for chunk in response.stream_body():
-    break  # gave up part way
+async with aclosing(response.stream_body()) as chunks:
+    async for chunk in chunks:
+        break  # gave up part way
 
 await response.body()  # raises HTTPBodyConsumedError, rather than returning the remainder
 ```
@@ -301,8 +304,10 @@ Consuming a streamed body is the caller's responsibility, and it has to happen w
 issued the request since the connection belongs to that scope's pool. A body that is never read
 keeps its connection checked out until the scope exit closes the pool.
 
-Closing the iterator releases the connection right away - exhausting it does that, and
-`contextlib.aclosing` does it when breaking out early:
+Requesting the stream is what claims it, so a stream that is closed without being read counts as
+consumed just the same. Closing the generator releases the connection right away - exhausting it
+does that, `contextlib.aclosing` does it when breaking out early, and so does closing before the
+first chunk was requested:
 
 ```python
 from contextlib import aclosing
@@ -319,16 +324,16 @@ case-insensitive and repeated headers are joined with `", "`.
 
 ### Streaming Request Bodies
 
-`body` also accepts an async byte iterable, which streams the payload to the server instead of
+`body` also accepts an async byte generator, which streams the payload to the server instead of
 holding it in memory:
 
 ```python
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 
 from haiway import HTTPClient
 
-async def encoded_rows(rows: AsyncIterator[dict]) -> AsyncIterator[bytes]:
+async def encoded_rows(rows: AsyncGenerator[dict[str, Any]]) -> AsyncGenerator[bytes]:
     async for row in rows:
         yield json.dumps(row).encode() + b"\n"
 
@@ -345,8 +350,11 @@ a `Content-Length`. It can be consumed only once, which means it cannot be repla
 preserving the method (307, 308) or a retry fails with `HTTPClientError`. Pass `bytes` instead when
 the request has to survive either.
 
-Buffered payloads are `bytes`, not `str` - `HTTPBody` is `bytes | AsyncIterable[bytes]`, so text is
-encoded at the call site and the charset is never guessed for you.
+Buffered payloads are `bytes`, not `str` - `HTTPBody` is `AsyncGenerator[bytes] | bytes`, so text is
+encoded at the call site and the charset is never guessed for you. It has to be a full async
+generator rather than any async iterable, because a streamed body is closed once it is read or
+abandoned and only a generator has `aclose`. Wrap a bare async iterator in an `async def` generator
+that yields from it.
 
 ### Connection Pooling and Reuse
 

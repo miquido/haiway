@@ -1,17 +1,18 @@
 from collections.abc import (
-    AsyncIterable,
-    AsyncIterator,
+    AsyncGenerator,
     Mapping,
     MutableSequence,
     Sequence,
 )
 from time import monotonic
-from typing import Protocol, cast, final, overload, runtime_checkable
+from types import TracebackType
+from typing import NoReturn, Protocol, Self, cast, final, overload, runtime_checkable
 
 from haiway.attributes import State
 from haiway.context import ctx
 from haiway.helpers.statemethods import statemethod
 from haiway.types import MISSING, Immutable, Missing
+from haiway.utils.exceptions import thrown_exception
 
 __all__ = (
     "HTTPBody",
@@ -32,9 +33,13 @@ type HTTPQueryParams = Mapping[
     str,
     Sequence[str] | Sequence[float] | Sequence[int] | Sequence[bool] | str | float | int | bool,
 ]
-type HTTPBody = bytes | AsyncIterable[bytes]
+type HTTPBody = AsyncGenerator[bytes] | bytes
 """Payload of a request or a response - buffered as ``bytes``, or streamed as
-an async byte iterable.
+an async byte generator.
+
+A full generator is required, not any async iterable: a streamed body is closed
+once it is read or abandoned, which needs ``aclose``. Wrap a bare async iterator
+in a generator (``async def gen(): ...`` yielding from it) to pass one.
 
 A streamed request payload has no known length, so it is sent with chunked
 transfer encoding, and it can be consumed only once, which means it cannot be
@@ -43,19 +48,108 @@ replayed across a redirect or a retry. Text has to be encoded by the caller -
 
 
 @final
-class _ConsumedBody(Immutable):
+class _ConsumedBody(AsyncGenerator[bytes]):
     """Stands in for a response body stream which was already consumed.
 
     Iterating it raises instead of yielding nothing, so a consumed stream cannot
     read back as an empty - or truncated - payload. It raises on every attempt
-    rather than only the first.
+    rather than only the first, which an exhausted generator could not do.
     """
 
-    def __aiter__(self) -> AsyncIterator[bytes]:
+    __slots__ = ()
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> NoReturn:
         raise HTTPBodyConsumedError()
 
+    async def asend(
+        self,
+        value: None = None,
+        /,
+    ) -> NoReturn:
+        raise HTTPBodyConsumedError()
 
-_CONSUMED_BODY: AsyncIterable[bytes] = _ConsumedBody()
+    async def athrow(
+        self,
+        typ: type[BaseException] | BaseException,
+        val: object = None,
+        tb: TracebackType | None = None,
+        /,
+    ) -> NoReturn:
+        raise HTTPBodyConsumedError()
+
+    async def aclose(self) -> None:
+        pass  # there is nothing left to release
+
+
+_CONSUMED_BODY: AsyncGenerator[bytes] = _ConsumedBody()
+
+
+async def _buffered_body(body: bytes) -> AsyncGenerator[bytes]:
+    """Streams an already buffered payload, which has nothing to release.
+
+    An empty payload is no chunks rather than one empty chunk, matching what a
+    streamed body of the same size hands over - a consumer counting chunks, or
+    forwarding them on, sees the two alike.
+    """
+    if body:
+        yield body
+
+
+@final
+class _StreamedBody(AsyncGenerator[bytes]):
+    """Hands over the chunks of a body stream, owning the generator behind it.
+
+    Delegating to the backend generator, instead of iterating it within a
+    generator function, is what keeps ``aclose`` effective before the first
+    chunk was requested: the frame of a generator function which never started
+    does not run on close, so the release within it would not happen either.
+    """
+
+    __slots__ = ("_generator",)
+
+    def __init__(
+        self,
+        generator: AsyncGenerator[bytes],
+    ) -> None:
+        self._generator: AsyncGenerator[bytes] = generator
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self.asend(None)
+
+    async def asend(
+        self,
+        value: None = None,
+        /,
+    ) -> bytes:
+        try:
+            return await self._generator.asend(value)
+
+        except BaseException:  # release the backend also when the stream ends or fails
+            await self._generator.aclose()
+            raise
+
+    async def athrow(
+        self,
+        typ: type[BaseException] | BaseException,
+        val: object = None,
+        tb: TracebackType | None = None,
+        /,
+    ) -> bytes:
+        try:
+            return await self._generator.athrow(thrown_exception(typ, val, tb))
+
+        except BaseException:  # release the backend also when the stream ends or fails
+            await self._generator.aclose()
+            raise
+
+    async def aclose(self) -> None:
+        await self._generator.aclose()
 
 
 @final
@@ -66,7 +160,8 @@ class HTTPResponse(Immutable):
     request.
 
     The body may be supplied either as already-buffered ``bytes`` or as an
-    async byte stream. Buffered access is available through ``body()``, while
+    async byte generator - not any async iterable, since a streamed body has to be
+    closable. Buffered access is available through ``body()``, while
     ``stream_body()`` preserves streaming semantics.
 
     Attributes
@@ -80,7 +175,7 @@ class HTTPResponse(Immutable):
     -------
     body() -> bytes
         Asynchronously read and cache the full response body content.
-    stream_body() -> AsyncIterable[bytes]
+    stream_body() -> AsyncGenerator[bytes]
         Hand over body chunks without retaining them.
 
     Notes
@@ -101,9 +196,9 @@ class HTTPResponse(Immutable):
     end cannot be resumed by a later one. That is deliberate: resuming would
     hand back the unread remainder as though it were the whole payload.
 
-    Both accessors release the iterator behind a streamed body when they are
+    Both accessors close the generator behind a streamed body when they are
     done with it, whether they reached the end or were abandoned - closing a
-    ``stream_body()`` iterator, by exhausting it or through
+    ``stream_body()`` generator, by exhausting it or through
     ``contextlib.aclosing``, releases the backend resources right away.
 
     Examples
@@ -142,8 +237,8 @@ class HTTPResponse(Immutable):
 
         Notes
         -----
-        When the body is backed by an async iterator, this method consumes the
-        iterator to completion, releases it, and caches the resulting bytes for
+        When the body is backed by an async generator, this method consumes the
+        generator to completion, closes it, and caches the resulting bytes for
         later reuse - so a buffered payload can be read any number of times,
         through this method or through ``stream_body()``.
 
@@ -155,9 +250,7 @@ class HTTPResponse(Immutable):
         if isinstance(self._body, bytes):
             return self._body
 
-        # claim the stream before reading it - a read which does not reach the
-        # end must not leave a partially consumed iterator to be resumed later
-        iterator: AsyncIterator[bytes] = aiter(self._body)
+        generator: AsyncGenerator[bytes] = self._body
         object.__setattr__(
             self,
             "_body",
@@ -165,12 +258,11 @@ class HTTPResponse(Immutable):
         )
         parts: MutableSequence[bytes] = []
         try:
-            async for part in iterator:
+            async for part in generator:
                 parts.append(part)
 
         finally:  # release the backend also when the read is abandoned
-            if hasattr(iterator, "aclose"):
-                await iterator.aclose()  # pyright: ignore[reportUnknownMemberType,  reportAttributeAccessIssue]
+            await generator.aclose()
 
         object.__setattr__(
             self,
@@ -179,12 +271,12 @@ class HTTPResponse(Immutable):
         )
         return cast(bytes, self._body)
 
-    async def stream_body(self) -> AsyncIterable[bytes]:
+    def stream_body(self) -> AsyncGenerator[bytes]:
         """Iterate over response body chunks.
 
-        Yields
-        ------
-        bytes
+        Returns
+        -------
+        AsyncGenerator[bytes]
             Subsequent chunks from the response body.
 
         Notes
@@ -196,28 +288,25 @@ class HTTPResponse(Immutable):
         `HTTPBodyConsumedError` on the first step. A payload the backend already
         buffered is yielded whole instead, and stays re-readable.
 
-        Closing the iterator - by exhausting it, or through
+        A streamed body is claimed here rather than on the first chunk, so
+        requesting the stream is what consumes it - even when it is then closed
+        without being read.
+
+        Closing the generator - by exhausting it, or through
         `contextlib.aclosing` when leaving early - releases the backend
-        resources behind it right away.
+        resources behind it right away, including when it is closed before the
+        first chunk was requested.
         """
         if isinstance(self._body, bytes):
-            yield self._body
-            return
+            return _buffered_body(self._body)
 
-        # claim the stream before reading it, as `body` does
-        iterator: AsyncIterator[bytes] = aiter(self._body)
+        generator: AsyncGenerator[bytes] = self._body
         object.__setattr__(
             self,
             "_body",
             _CONSUMED_BODY,
         )
-        try:
-            async for part in iterator:
-                yield part
-
-        finally:  # release the backend also when the stream is abandoned
-            if hasattr(iterator, "aclose"):
-                await iterator.aclose()  # pyright: ignore[reportUnknownMemberType,  reportAttributeAccessIssue]
+        return _StreamedBody(generator)
 
 
 @runtime_checkable
@@ -238,7 +327,7 @@ class HTTPRequesting(Protocol):
     headers : HTTPHeaders | None
         HTTP headers to include in the request.
     body : HTTPBody | None
-        Request body content - buffered `bytes`, or an async byte iterable
+        Request body content - buffered `bytes`, or an async byte generator
         streamed with chunked transfer encoding.
     timeout : float | None
         Request timeout in seconds. None uses client default.
@@ -461,6 +550,65 @@ def _recorded_host(
     return host.partition(":")[0]
 
 
+async def _release_body(
+    body: HTTPBody | None,
+    /,
+) -> None:
+    """Release a streamed request payload the backend may have left open.
+
+    A backend releases a streamed payload only when it began reading it - a
+    request failing before that, or a server answering before the upload
+    finished, would leave the caller's generator open. Closing an exhausted
+    generator does nothing, so the usual path is unaffected. Done here rather
+    than per backend, so the promise of ``HTTPBody`` holds for every
+    ``HTTPRequesting`` implementation.
+
+    A failure closing it is logged rather than raised: it would displace the
+    in-flight error, hiding the timeout or connection failure retries are keyed
+    on, or discard an already obtained response. Cancellation is not a failure
+    and does propagate - what it takes with it is handled at the call site.
+    """
+    if not isinstance(body, AsyncGenerator):
+        return  # buffered, or absent - nothing to release
+
+    try:
+        await body.aclose()
+
+    except Exception as exc:
+        ctx.log_warning(
+            "HTTP request body failed to close",
+            exception=exc,
+        )
+
+
+async def _release_response(
+    response: HTTPResponse,
+    /,
+) -> None:
+    """Discard a response which has to be dropped after it was obtained.
+
+    Cancellation reaching the release of a streamed request payload is the one
+    place that happens. Without this a streamed body would keep holding its
+    connection until the pool is closed.
+
+    Claiming the body through the same accessor a reader would use is what keeps
+    this from drifting from it: a buffered payload holds nothing and stays
+    readable, while a streamed one is claimed, so a later read fails with
+    ``HTTPBodyConsumedError`` rather than reading as empty.
+
+    A failure closing it is logged rather than raised - this runs while another
+    failure unwinds, and must not replace it.
+    """
+    try:
+        await response.stream_body().aclose()
+
+    except Exception as exc:
+        ctx.log_warning(
+            "HTTP response body failed to close",
+            exception=exc,
+        )
+
+
 def _record_failure(
     exception: Exception,
     /,
@@ -552,11 +700,13 @@ class HTTPClient(State):
       keeps a connection checked out until read to the end, so read it within
       the scope that issued the request. `HTTPResponse.stream_body()` retains
       nothing, which is what bounds its memory use.
-    - Request bodies stream too: pass an async byte iterable as `body` to send
+    - Request bodies stream too: pass an async byte generator as `body` to send
       a payload without holding it in memory. Such a payload is sent with
       chunked transfer encoding and cannot be replayed, so it does not survive
-      a redirect or a retry. Buffered payloads are `bytes` - encode text
-      yourself rather than relying on a guessed charset.
+      a redirect or a retry. It is closed once the request is done with it,
+      however it ended, so a payload abandoned by a failed request does not
+      outlive the call. Buffered payloads are `bytes` - encode text yourself
+      rather than relying on a guessed charset.
 
     Examples
     --------
@@ -574,7 +724,7 @@ class HTTPClient(State):
     ... )
     ...
     >>> # Streaming an upload without buffering it
-    >>> async def chunks() -> AsyncIterator[bytes]:
+    >>> async def chunks() -> AsyncGenerator[bytes]:
     ...     async for chunk in source.read():
     ...         yield chunk
     ...
@@ -713,7 +863,8 @@ class HTTPClient(State):
             HTTP headers to include in the request.
         body : HTTPBody | None, optional
             Request body content - buffered `bytes`, or an async byte
-            iterable to stream the payload instead of holding it in memory.
+            generator to stream the payload instead of holding it in memory.
+            A streamed payload is closed once the request is done with it.
         timeout : float | None, optional
             Request timeout in seconds.
         follow_redirects : bool | None, optional
@@ -799,7 +950,8 @@ class HTTPClient(State):
             HTTP headers to include in the request.
         body : HTTPBody | None, optional
             Request body content - buffered `bytes`, or an async byte
-            iterable to stream the payload instead of holding it in memory.
+            generator to stream the payload instead of holding it in memory.
+            A streamed payload is closed once the request is done with it.
         timeout : float | None, optional
             Request timeout in seconds.
         follow_redirects : bool | None, optional
@@ -895,7 +1047,8 @@ class HTTPClient(State):
             HTTP headers to include in the request.
         body : HTTPBody | None, optional
             Request body content - buffered `bytes`, or an async byte
-            iterable to stream the payload instead of holding it in memory.
+            generator to stream the payload instead of holding it in memory.
+            A streamed payload is closed once the request is done with it.
         timeout : float | None, optional
             Request timeout in seconds. None uses client default.
         follow_redirects : bool | None, optional
@@ -974,16 +1127,34 @@ class HTTPClient(State):
         started: float = monotonic()
         response: HTTPResponse
         try:
-            response = await self.requesting(
-                method,
-                url=url,
-                query=query,
-                headers=self._propagated_headers(headers) if trace_propagation else headers,
-                body=body,
-                timeout=timeout,
-                follow_redirects=follow_redirects,
-                stream=stream,
-            )
+            try:
+                response = await self.requesting(
+                    method,
+                    url=url,
+                    query=query,
+                    headers=self._propagated_headers(headers) if trace_propagation else headers,
+                    body=body,
+                    timeout=timeout,
+                    follow_redirects=follow_redirects,
+                    stream=stream,
+                )
+
+            except BaseException:
+                # nothing was obtained, so there is no response to protect - release
+                # the payload and let the failure through unchanged
+                await _release_body(body)
+                raise
+
+            try:
+                await _release_body(body)
+
+            except BaseException:
+                # a failure closing the payload is swallowed there, so only
+                # cancellation reaches here - and it takes the response with it.
+                # release it rather than leaving a streamed body holding its
+                # connection until the pool is closed
+                await _release_response(response)
+                raise
 
         except HTTPClientError as exc:
             _record_failure(

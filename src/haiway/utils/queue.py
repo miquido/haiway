@@ -1,7 +1,10 @@
 from asyncio import AbstractEventLoop, CancelledError, Future, get_running_loop
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncGenerator, Awaitable
+from types import TracebackType
 from typing import Any, NoReturn, cast, final
+
+from haiway.utils.exceptions import thrown_exception
 
 __all__ = (
     "AsyncQueue",
@@ -20,7 +23,7 @@ class AsyncQueueEmpty(Exception):
 
 
 @final
-class AsyncQueue[Element](AsyncIterator[Element]):
+class AsyncQueue[Element](AsyncGenerator[Element]):
     """
     Asynchronous queue supporting iteration and finishing.
 
@@ -167,6 +170,9 @@ class AsyncQueue[Element](AsyncIterator[Element]):
         the consumer receives the provided exception or ``StopAsyncIteration``.
         If the queue is already finished, this method does nothing.
 
+        This is the producer side of ending a queue and it keeps the buffer - use
+        ``aclose()`` to end the iteration itself, which drops it.
+
         Parameters
         ----------
         exception : BaseException | None, default=None
@@ -278,6 +284,97 @@ class AsyncQueue[Element](AsyncIterator[Element]):
                 "_waiting",
                 None,
             )
+
+    async def asend(
+        self,
+        value: None = None,
+        /,
+    ) -> Element:
+        """
+        Resume the iteration, conforming to the async generator protocol.
+
+        This is not the producer side of the queue - use :meth:`enqueue` to add
+        elements. Only None can be sent, exactly like resuming a generator which
+        does not use the value of its yield expression.
+
+        Parameters
+        ----------
+        value : None, default=None
+            Must be None - there is nothing within the queue to receive it.
+
+        Returns
+        -------
+        Element
+            The next available element
+
+        Raises
+        ------
+        TypeError
+            If a value other than None was sent
+        BaseException
+            Re-raises the finish reason when the queue has been finished
+        """
+        if value is not None:
+            raise TypeError("AsyncQueue can't receive values, use `enqueue` to add elements")
+
+        return await self.__anext__()
+
+    async def athrow(
+        self,
+        typ: type[BaseException] | BaseException,
+        val: object = None,
+        tb: TracebackType | None = None,
+        /,
+    ) -> NoReturn:
+        """
+        Throw an exception into the queue, finishing it.
+
+        Nothing within the queue can handle the exception - it finishes the queue
+        with it, the same way an exception raised within a generator frame would
+        end it, and propagates to the caller. Buffered elements are dropped, as
+        they are by aclose(): ending the iteration where it stands leaves nothing
+        to deliver them to.
+
+        Parameters
+        ----------
+        typ : type[BaseException] | BaseException
+            Exception type or instance to throw into the queue
+        val : object, default=None
+            Exception instance or its argument when a type was provided
+        tb : TracebackType | None, default=None
+            Optional traceback to attach to the exception
+
+        Raises
+        ------
+        BaseException
+            Always - the exception which was thrown in
+        """
+        exception: BaseException = thrown_exception(typ, val, tb)
+
+        self.finish(exception=exception)
+        self._queue.clear()  # the consumer is gone - buffered elements have nowhere to go
+        raise exception
+
+    async def aclose(self) -> None:
+        """
+        Close the queue, ending the iteration immediately.
+
+        Finishes the queue and drops whatever it still holds, so every subsequent
+        iteration raises the finish reason - closing a generator ends it, and a
+        closed one cannot hand out elements. That reason is ``StopAsyncIteration``
+        unless the queue was already finished, which keeps whichever reason ended
+        it: a queue closed after ``cancel()`` keeps raising ``CancelledError``
+        rather than reporting a clean end.
+
+        Use ``finish()`` instead to stop accepting elements while leaving the
+        buffered ones available: a producer which has nothing more to send is not
+        asking the consumer to stop reading, and finishing that way costs no
+        element which was already accepted.
+        """
+        self.finish()
+        # dropped after finishing - a waiting consumer was already released with the
+        # finish reason, so there is nobody left to deliver the buffer to
+        self._queue.clear()
 
     def clear(self) -> None:
         """

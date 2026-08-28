@@ -149,16 +149,16 @@ async def data_service():
 async def make_request(query: str) -> Any:
     request_id = generate_id()
 
-    # Subscribe before sending to avoid race condition
-    response_sub = ctx.subscribe(DataResponse)
+    # Subscribe before sending to avoid a race condition, and close the
+    # subscription where the wait ends rather than leaving it to the collector
+    async with ctx.closing(ctx.subscribe(DataResponse)) as responses:
+        # Send request
+        ctx.send(DataRequest(request_id=request_id, query=query))
 
-    # Send request
-    ctx.send(DataRequest(request_id=request_id, query=query))
-
-    # Wait for matching response
-    async for response in response_sub:
-        if response.request_id == request_id:
-            return response.result
+        # Wait for matching response
+        async for response in responses:
+            if response.request_id == request_id:
+                return response.result
 ```
 
 ## Best Practices
@@ -173,9 +173,9 @@ async def make_request(query: str) -> Any:
 
 - Events without subscribers are never stored and are dropped immediately.
 - Events are garbage collected as soon as all subscribers consume them.
-- Subscriptions are lightweight but currently keep an internal future alive; if you abandon a
-  subscription without iterating it, the head entry stays in memory. Call `break`/`return` after the
-  `async for` loop or drop the subscription only after finishing iteration.
+- Subscriptions are lightweight but keep an internal future alive while open, so an abandoned one
+  holds the head of the chain in memory. Iterating to the end releases it, and so does closing -
+  wrap the subscription in `ctx.closing(...)` whenever the iteration is left early.
 
 ### Error Handling
 
@@ -250,49 +250,56 @@ This means:
 
 ### Subscription Lifetime
 
-A subscription ends when the scope owning its event bus exits. The events which already arrived are
-delivered first, so the iteration finishes only once the queued events are drained and exiting the
-scope never discards a payload the subscriber had not picked up yet.
+A subscription ends when the scope it was created in exits, or when the scope owning its event bus
+exits, whichever comes first. The events which already arrived are delivered before it finishes, so
+exiting a scope never discards a payload the subscriber had not picked up yet.
 
-Ownership is what matters here, not nesting. A nested non-isolated scope shares the bus of an
-ancestor, so a subscription created within it stays open past that scope's exit:
+The subscribing scope is captured when `ctx.subscribe(...)` is called, never when the subscription
+is iterated - so a scope entered and left around the iteration does not affect it:
 
 ```python
 async with ctx.scope("server"):          # owns the bus
     async with ctx.scope("request"):     # shares it
         subscription = ctx.subscribe(OrderCreated)
-        # this subscription ends when "server" exits, not when "request" does
+        # this subscription ends when "request" exits, whether or not "server" is still open
 ```
 
-Every scope also joins the tasks spawned within it before leaving, which makes the combination below
-hang - `request` waits for the consumer, and the consumer waits for a bus which only `server` can
-close:
+That is what makes a subscription safe to consume unboundedly in any scope, including a task spawned
+in one. A scope completes its closing before joining its tasks, so the pending iteration ends first
+and the join never waits on it:
 
 ```python
 async with ctx.scope("server"):
     async with ctx.scope("request"):
         ctx.spawn(consumer)   # async for ... in ctx.subscribe(OrderCreated)
-    # never returns
-```
-
-Consume a subscription unboundedly only in the scope owning the bus:
-
-```python
-async with ctx.scope("server"):
-    ctx.spawn(consumer)       # ends when "server" exits
-```
-
-Within a nested scope, take a bounded number of events instead, so the iteration ends on its own:
-
-```python
-async with ctx.scope("server"):
-    async with ctx.scope("request"):
-        subscription = ctx.subscribe(OrderCreated)
-        first = await asyncio.wait_for(anext(subscription), timeout=5.0)
+    # "request" exits, ending the subscription and then joining the consumer
 ```
 
 A subscription created after its bus already closed is not an error - it finishes immediately
 instead of waiting for an event which can never arrive.
+
+### Ending a Subscription Early
+
+A subscription is an async generator, so closing it ends the iteration where it stands. Reach for
+`ctx.closing(...)` whenever the iteration is left before its scope ends - taking one event, breaking
+out on a match, returning from the loop - so the subscription is released at that point rather than
+whenever the garbage collector reaches it:
+
+```python
+async with ctx.closing(ctx.subscribe(OrderCreated)) as orders:
+    async for order in orders:
+        if order.order_id == awaited_id:
+            return order  # the subscription ends right here
+```
+
+Closing also releases an `anext(...)` which is still waiting, so a bounded read needs no cleanup of
+its own - leaving the block ends the subscription whether the read returned, timed out, or was
+cancelled:
+
+```python
+async with ctx.closing(ctx.subscribe(OrderCreated)) as orders:
+    first = await asyncio.wait_for(anext(orders), timeout=5.0)
+```
 
 ## Integration with Other Features
 

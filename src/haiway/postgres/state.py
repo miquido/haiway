@@ -7,7 +7,7 @@ from pathlib import Path
 from random import uniform
 from time import monotonic
 from types import ModuleType
-from typing import Any, Final, NamedTuple
+from typing import Final, NamedTuple
 
 from haiway.attributes import State
 from haiway.context import ctx
@@ -69,7 +69,7 @@ def _record_returned_rows(
 
 
 async def _executed[Result](
-    statement_calling: Callable[..., Coroutine[Any, Any, Result]],
+    statement_calling: Callable[..., Coroutine[None, None, Result]],
     statement: str,
     args: tuple[PostgresValue, ...],
     retries: int,
@@ -112,7 +112,7 @@ async def _executed[Result](
 
 
 async def _attempted[Result](
-    statement_calling: Callable[..., Coroutine[Any, Any, Result]],
+    statement_calling: Callable[..., Coroutine[None, None, Result]],
     statement: str,
     args: tuple[PostgresValue, ...],
     retries: int,

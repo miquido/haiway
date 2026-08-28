@@ -222,3 +222,101 @@ async def test_finishes_when_producer_was_cancelled():
 
     with raises(StopAsyncIteration):
         await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_aclose_ends_the_iteration():
+    stream: AsyncStream[int] = AsyncStream()
+
+    await stream.aclose()
+
+    with raises(StopAsyncIteration):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_aclose_releases_a_waiting_consumer():
+    stream: AsyncStream[int] = AsyncStream()
+
+    consuming: Task[int] = ctx.spawn(anext, stream)
+    await sleep(0)  # let it park waiting for an element
+
+    await stream.aclose()
+
+    with raises(StopAsyncIteration):
+        await consuming
+
+
+@pytest.mark.asyncio
+async def test_aclose_releases_a_waiting_producer():
+    stream: AsyncStream[int] = AsyncStream()
+
+    delivering: Task[None] = ctx.spawn(stream.send, 0)
+    await sleep(0)  # let it park waiting for a consumer
+
+    await stream.aclose()
+    await delivering  # a released producer completes instead of hanging
+
+    with raises(StopAsyncIteration):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_aclose_is_idempotent():
+    stream: AsyncStream[int] = AsyncStream()
+
+    await stream.aclose()
+    await stream.aclose()
+
+    with raises(StopAsyncIteration):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_athrow_finishes_the_stream():
+    stream: AsyncStream[int] = AsyncStream()
+
+    with raises(FakeException):
+        await stream.athrow(FakeException())
+
+    # an exception ends the iteration where it stands, as it would a generator
+    with raises(FakeException):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_athrow_normalizes_a_type_with_a_value_like_a_generator():
+    stream: AsyncStream[int] = AsyncStream()
+
+    # `Generator.throw` instantiates the type with the value unless the value is
+    # already an instance of it - `ValueError, TypeError("boom")` is a ValueError
+    with raises(ValueError):
+        await stream.athrow(ValueError, TypeError("boom"))
+
+    with raises(ValueError):
+        await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_asend_resumes_iteration_and_rejects_values():
+    stream: AsyncStream[int] = AsyncStream()
+
+    delivering: Task[None] = ctx.spawn(stream.send, 7)
+    assert await stream.asend() == 7
+    await delivering
+
+    with raises(TypeError):
+        await stream.asend(1)  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.asyncio
+async def test_aclosing_ends_the_stream():
+    stream: AsyncStream[int] = AsyncStream()
+
+    async with ctx.closing(stream) as elements:
+        delivering: Task[None] = ctx.spawn(stream.send, 1)
+        assert await elements.asend() == 1
+        await delivering
+
+    with raises(StopAsyncIteration):
+        await anext(stream)

@@ -258,3 +258,95 @@ async def test_limited_queue_does_not_drop_when_below_limit():
         elements.append(element)
 
     assert elements == [10, 20]
+
+
+@mark.asyncio
+async def test_aclose_ends_the_iteration():
+    queue: AsyncQueue[int] = AsyncQueue(1, 2, 3)
+
+    await queue.aclose()
+
+    # closing a generator ends it - a closed queue hands out nothing more
+    elements: list[int] = []
+    async for element in queue:
+        elements.append(element)
+
+    assert elements == []
+    assert queue.is_finished
+
+    with raises(StopAsyncIteration):
+        await queue.next()
+
+
+@mark.asyncio
+async def test_finish_keeps_buffered_elements_available():
+    queue: AsyncQueue[int] = AsyncQueue(1, 2, 3)
+
+    # unlike `aclose`, finishing is the producer saying it has nothing more to
+    # send - what the consumer was already given stays deliverable
+    queue.finish()
+
+    elements: list[int] = []
+    async for element in queue:
+        elements.append(element)
+
+    assert elements == [1, 2, 3]
+    assert queue.is_finished
+
+
+@mark.asyncio
+async def test_aclose_rejects_further_elements():
+    queue: AsyncQueue[int] = AsyncQueue()
+
+    await queue.aclose()
+
+    with raises(RuntimeError):
+        queue.enqueue(1)
+
+
+@mark.asyncio
+async def test_aclose_is_idempotent():
+    queue: AsyncQueue[int] = AsyncQueue(1)
+
+    await queue.aclose()
+    await queue.aclose()
+
+    with raises(StopAsyncIteration):
+        await queue.next()
+
+
+@mark.asyncio
+async def test_athrow_drops_buffered_elements():
+    queue: AsyncQueue[int] = AsyncQueue(1, 2, 3)
+
+    with raises(FakeException):
+        await queue.athrow(FakeException())
+
+    # an exception ends the iteration where it stands - nothing is left to
+    # deliver the buffered elements to
+    with raises(FakeException):
+        await queue.next()
+
+
+@mark.asyncio
+async def test_asend_resumes_iteration_and_rejects_values():
+    queue: AsyncQueue[int] = AsyncQueue(7)
+
+    assert await queue.asend() == 7
+
+    with raises(TypeError):
+        await queue.asend(1)  # pyright: ignore[reportArgumentType]
+
+
+@mark.asyncio
+async def test_aclosing_ends_the_queue():
+    queue: AsyncQueue[int] = AsyncQueue(1, 2)
+
+    async with ctx.closing(queue) as elements:
+        assert await elements.asend() == 1
+
+    assert queue.is_finished
+    # leaving the iteration drops the element which was left buffered - there is
+    # no consumer left to deliver it to
+    with raises(StopAsyncIteration):
+        queue.pending_next()

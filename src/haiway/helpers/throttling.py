@@ -5,16 +5,16 @@ from datetime import timedelta
 from functools import wraps
 from inspect import iscoroutinefunction
 from time import monotonic
-from typing import Any, overload
+from typing import overload
 
 __all__ = ("throttle",)
 
 
 @overload
 def throttle[**Args, Result](
-    function: Callable[Args, Coroutine[Any, Any, Result]],
+    function: Callable[Args, Coroutine[None, None, Result]],
     /,
-) -> Callable[Args, Coroutine[Any, Any, Result]]: ...
+) -> Callable[Args, Coroutine[None, None, Result]]: ...
 
 
 @overload
@@ -23,21 +23,21 @@ def throttle[**Args, Result](
     limit: int = 1,
     period: timedelta | float = 1,
 ) -> Callable[
-    [Callable[Args, Coroutine[Any, Any, Result]]], Callable[Args, Coroutine[Any, Any, Result]]
+    [Callable[Args, Coroutine[None, None, Result]]], Callable[Args, Coroutine[None, None, Result]]
 ]: ...
 
 
 def throttle[**Args, Result](
-    function: Callable[Args, Coroutine[Any, Any, Result]] | None = None,
+    function: Callable[Args, Coroutine[None, None, Result]] | None = None,
     *,
     limit: int = 1,
     period: timedelta | float = 1,
 ) -> (
     Callable[
-        [Callable[Args, Coroutine[Any, Any, Result]]],
-        Callable[Args, Coroutine[Any, Any, Result]],
+        [Callable[Args, Coroutine[None, None, Result]]],
+        Callable[Args, Coroutine[None, None, Result]],
     ]
-    | Callable[Args, Coroutine[Any, Any, Result]]
+    | Callable[Args, Coroutine[None, None, Result]]
 ):
     """
     Rate-limit asynchronous function calls.
@@ -51,7 +51,7 @@ def throttle[**Args, Result](
 
     Parameters
     ----------
-    function: Callable[Args, Coroutine[Any, Any, Result]] | None
+    function: Callable[Args, Coroutine[None, None, Result]] | None
         The async function to throttle. When used as a simple decorator,
         this parameter is provided automatically.
     limit: int
@@ -90,8 +90,8 @@ def throttle[**Args, Result](
     """
 
     def _wrap(
-        function: Callable[Args, Coroutine[Any, Any, Result]],
-    ) -> Callable[Args, Coroutine[Any, Any, Result]]:
+        function: Callable[Args, Coroutine[None, None, Result]],
+    ) -> Callable[Args, Coroutine[None, None, Result]]:
         assert iscoroutinefunction(function)  # nosec: B101
         entries: deque[float] = deque()
         lock: Lock = Lock()

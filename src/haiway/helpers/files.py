@@ -6,7 +6,7 @@ from errno import ELOOP, EMLINK, ENOENT, ENOTDIR
 from pathlib import Path
 from stat import S_ISLNK, S_ISREG
 from types import TracebackType
-from typing import Any, Final, NamedTuple, Protocol, final, overload, runtime_checkable
+from typing import Final, NamedTuple, Protocol, final, overload, runtime_checkable
 
 from haiway.attributes import State
 from haiway.helpers.asynchrony import asynchronous
@@ -743,7 +743,7 @@ class FileAccessContext:
 
     async def _exclusively[Result](
         self,
-        operation: Coroutine[Any, Any, Result],
+        operation: Coroutine[None, None, Result],
         /,
     ) -> Result:
         # the descriptor carries a single shared offset, and an operation which

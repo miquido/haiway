@@ -52,7 +52,8 @@ await process_concurrently(
 
 Behavior:
 
-- Accepts `Iterable` and `AsyncIterable`.
+- Accepts `Iterable` and `AsyncGenerator` - not any async iterable: the source is closed when
+  consumption ends, which needs `aclose`.
 - Runs at most `concurrent_tasks` handlers at once.
 - Raises the first handler exception by default.
 - With `ignore_exceptions=True`, logs handler failures and keeps going.
@@ -77,7 +78,7 @@ results = await execute_concurrently(
 Key details:
 
 - Result order matches input order, not completion order.
-- Supports both `Iterable` and `AsyncIterable`.
+- Supports both `Iterable` and `AsyncGenerator`, on the same terms as `process_concurrently`.
 - `return_exceptions=True` returns exception objects in-place instead of raising.
 
 ## `concurrently`
@@ -105,13 +106,13 @@ applying a single handler over elements.
 
 ## `stream_concurrently`
 
-`stream_concurrently(...)` merges two async iterables and yields items as soon as either source
+`stream_concurrently(...)` merges two async generators and yields items as soon as either source
 produces them.
 
 ```python
 import asyncio
 
-from haiway import stream_concurrently
+from haiway import ctx, stream_concurrently
 
 async def numbers():
     for i in range(3):
@@ -123,8 +124,9 @@ async def letters():
         await asyncio.sleep(0.15)
         yield letter
 
-async for item in stream_concurrently(numbers(), letters(), exhaustive=True):
-    print(item)
+async with ctx.closing(stream_concurrently(numbers(), letters(), exhaustive=True)) as merged:
+    async for item in merged:
+        print(item)
 ```
 
 Important semantics:
@@ -134,6 +136,44 @@ Important semantics:
 - Yielded order depends on arrival timing.
 - Exceptions from either source are propagated.
 - Cancelling the consumer cancels the producer tasks created for both sources.
+- Both sources are closed when the merged stream ends, however it ends - exhausted, failed, or
+  abandoned. Close the merged stream itself with `contextlib.aclosing` when leaving early, so that
+  happens at the break rather than whenever the garbage collector gets to it.
+
+## Closing Generator Sources
+
+Every helper here closes an async generator source it consumed, however the consumption ended -
+exhausted, failed, or cancelled. That is why they take an `AsyncGenerator` rather than any async
+iterable: without `aclose` there is no way to release the source. The generators these helpers
+*return* are the caller's to close, and `ctx.closing(...)` does it where the iteration ends:
+
+```python
+from haiway import ctx
+
+async with ctx.closing(stream_concurrently(numbers(), letters())) as merged:
+    async for item in merged:
+        if not await handle(item):
+            break  # both sources are closed right here
+```
+
+This matters more than the usual "release resources promptly" argument. `ctx.stream(...)` and
+`stream_concurrently(...)` open a context scope inside the generator, and an abandoned generator is
+finalized by the garbage collector in a *fresh* context - one where the scope it opened can no
+longer be released. The teardown fails there and the error is only logged, so an unclosed stream
+degrades quietly rather than raising where the mistake was made:
+
+```python
+stream = ctx.stream(produce)
+async for element in stream:
+    break  # walking away here leaves the scope to the collector, which cannot release it
+```
+
+Closing is also what ends a pushed source: `ctx.closing(queue)` and `ctx.closing(stream)` end an
+`AsyncQueue` or an `AsyncStream` for good, dropping whatever they still hold. When the *producer* is
+done but the consumer should still drain what was accepted, call `queue.finish()` instead - that is
+the one path which keeps the buffer.
+
+`ctx.closing` is `contextlib.aclosing` typed for async generators; either works.
 
 ## Cancellation and Failure Semantics
 
@@ -150,4 +190,4 @@ That gives them predictable behavior:
 - `process_concurrently(...)`: side effects only
 - `execute_concurrently(...)`: apply one handler and collect ordered results
 - `concurrently(...)`: run pre-created coroutines and collect ordered results
-- `stream_concurrently(...)`: merge two async iterables into one stream
+- `stream_concurrently(...)`: merge two async generators into one stream

@@ -1,6 +1,6 @@
 from asyncio import CancelledError, Event, current_task, sleep, timeout
 from collections import deque
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, Iterable
 
 from pytest import mark, raises
 
@@ -12,26 +12,16 @@ class FakeException(Exception):
     pass
 
 
-class Source:
-    def __init__(
-        self,
-        elements: Iterable[int] | None = None,
-        exception: Exception | None = None,
-    ) -> None:
-        self.elements = deque(elements or [])
-        self.exception = exception
+async def elements_source(
+    elements: Iterable[int] | None = None,
+    exception: Exception | None = None,
+) -> AsyncGenerator[int]:
+    pending = deque(elements or [])
+    while pending:
+        yield pending.popleft()
 
-    def __aiter__(self) -> AsyncIterator[int]:
-        return self
-
-    async def __anext__(self) -> int:
-        if not self.elements:
-            if self.exception:
-                raise self.exception
-
-            raise StopAsyncIteration
-
-        return self.elements.popleft()
+    if exception is not None:
+        raise exception
 
 
 @mark.asyncio
@@ -41,7 +31,7 @@ async def test_processes_all_elements():
     async def handler(element: int) -> None:
         processed.append(element)
 
-    source = Source(range(10))
+    source = elements_source(range(10))
     await process_concurrently(source, handler)
     assert sorted(processed) == list(range(10))
 
@@ -57,7 +47,7 @@ async def test_processes_elements_concurrently():
         processed.append(element)
         completion_order.append(element)
 
-    source = Source(range(10))
+    source = elements_source(range(10))
     await process_concurrently(source, handler, concurrent_tasks=3)
     assert sorted(processed) == list(range(10))
     # Odd numbers should complete before even numbers due to sleep times
@@ -71,7 +61,7 @@ async def test_handles_empty_source():
     async def handler(element: int) -> None:
         processed.append(element)
 
-    source = Source([])
+    source = elements_source([])
     await process_concurrently(source, handler)
     assert processed == []
 
@@ -82,7 +72,7 @@ async def test_propagates_handler_exceptions():
         if element == 3:
             raise FakeException("Test exception")
 
-    source = Source(range(10))
+    source = elements_source(range(10))
     with raises(FakeException):
         await process_concurrently(source, handler)
 
@@ -113,7 +103,7 @@ async def test_ignores_handler_exceptions_when_configured():
             raise FakeException("Test exception")
         processed.append(element)
 
-    source = Source([0, 1, 2, 3, 4, 5])
+    source = elements_source([0, 1, 2, 3, 4, 5])
     await process_concurrently(source, handler, ignore_exceptions=True)
     assert sorted(processed) == [0, 1, 2, 4, 5]
 
@@ -127,7 +117,7 @@ async def test_ignore_exceptions_inside_scope_task_group():
             raise FakeException("odd")
         processed.append(element)
 
-    source = Source(range(10))
+    source = elements_source(range(10))
     async with ctx.scope("tg_process"):
         await process_concurrently(source, handler, ignore_exceptions=True)
 
@@ -142,7 +132,7 @@ async def test_handles_source_exception():
     async def handler(element: int) -> None:
         processed.append(element)
 
-    source = Source([1, 2], FakeException("Source exception"))
+    source = elements_source([1, 2], FakeException("Source exception"))
 
     with raises(FakeException):
         await process_concurrently(source, handler)
@@ -170,7 +160,7 @@ async def test_cancels_running_tasks_on_cancellation():
     with raises(CancelledError):
         task = ctx.spawn(
             process_concurrently,
-            Source(range(10)),
+            elements_source(range(10)),
             slow_handler,
         )
         # Wait deterministically until at least one handler actually started
@@ -199,7 +189,7 @@ async def test_respects_concurrency_limit():
         currently_running.remove(element)
         processed.append(element)
 
-    source = Source(range(10))
+    source = elements_source(range(10))
     await process_concurrently(source, tracking_handler, concurrent_tasks=3)
     assert max_concurrent <= 3
     assert sorted(processed) == list(range(10))
@@ -224,3 +214,112 @@ async def test_processes_elements_from_queue():
     queue.finish()
     await task
     assert sorted(processed) == list(range(1, 6))
+
+
+@mark.asyncio
+async def test_closes_the_source_when_exhausted():
+    closed: list[str] = []
+
+    async def tracked_source() -> AsyncGenerator[int]:
+        try:
+            for element in range(3):
+                yield element
+
+        finally:
+            closed.append("source")
+
+    async def handler(element: int) -> None:
+        pass
+
+    await process_concurrently(tracked_source(), handler)
+    assert closed == ["source"]
+
+
+@mark.asyncio
+async def test_closes_the_source_when_a_handler_fails():
+    closed: list[str] = []
+
+    async def tracked_source() -> AsyncGenerator[int]:
+        try:
+            for element in range(100):
+                yield element
+
+        finally:
+            closed.append("source")
+
+    async def handler(element: int) -> None:
+        raise FakeException("Test exception")
+
+    with raises(FakeException):
+        await process_concurrently(tracked_source(), handler)
+
+    # the source is released where the processing stopped, not left to the
+    # collector - it is what makes an `AsyncGenerator` source a requirement
+    assert closed == ["source"]
+
+
+@mark.asyncio
+async def test_closes_the_source_when_cancelled():
+    closed: list[str] = []
+    started = Event()
+
+    async def tracked_source() -> AsyncGenerator[int]:
+        try:
+            for element in range(100):
+                yield element
+
+        finally:
+            closed.append("source")
+
+    async def slow_handler(element: int) -> None:
+        started.set()
+        await sleep(10)
+
+    async with ctx.scope("cancelled_source"):
+        task = ctx.spawn(process_concurrently, tracked_source(), slow_handler)
+        await started.wait()
+        task.cancel()
+        with raises(CancelledError):
+            await task
+
+    assert closed == ["source"]
+
+
+@mark.asyncio
+async def test_rejects_source_which_can_not_be_released():
+    class AsyncIterableSource:
+        """An async source without `aclose`, which could not be released."""
+
+        def __aiter__(self) -> AsyncIterableSource:
+            return self
+
+        async def __anext__(self) -> int:
+            return 1
+
+    async def handler(element: int) -> None:
+        pass
+
+    with raises(TypeError):
+        await process_concurrently(
+            AsyncIterableSource(),  # pyright: ignore[reportArgumentType]
+            handler,
+        )
+
+
+@mark.asyncio
+async def test_raises_handler_error_while_awaiting_a_slow_source():
+    async def slow_source() -> AsyncGenerator[int]:
+        for element in range(10):
+            await sleep(0.01)  # suspends between the elements
+            yield element
+
+    async def handler(element: int) -> None:
+        if element == 0:
+            raise FakeException("handler failed")
+
+        await sleep(10)  # keep the remaining slots busy
+
+    # the task group aborts on the failure while the source is awaited, and the
+    # handler error has to surface instead of that cancellation or an exception group
+    with raises(FakeException, match="handler failed"):
+        await process_concurrently(slow_source(), handler, concurrent_tasks=4)

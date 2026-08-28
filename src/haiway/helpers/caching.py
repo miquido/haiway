@@ -6,7 +6,7 @@ from functools import (
 )
 from inspect import iscoroutinefunction
 from time import monotonic
-from typing import Any, NamedTuple, Protocol, overload
+from typing import NamedTuple, Protocol, overload
 
 from haiway.context.access import ctx
 
@@ -116,7 +116,7 @@ class CachedExternally[**Args, Result, Key: Hashable](Protocol):
 
 @overload
 def cache[**Args, Result](
-    function: Callable[Args, Coroutine[Any, Any, Result]],
+    function: Callable[Args, Coroutine[None, None, Result]],
     /,
 ) -> Cached[Args, Result]: ...
 
@@ -126,16 +126,16 @@ def cache[**Args, Result](
     *,
     limit: int | None = None,
     expiration: float | None = None,
-) -> Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result]]: ...
+) -> Callable[[Callable[Args, Coroutine[None, None, Result]]], Cached[Args, Result]]: ...
 
 
 def cache[**Args, Result](
-    function: Callable[Args, Coroutine[Any, Any, Result]] | None = None,
+    function: Callable[Args, Coroutine[None, None, Result]] | None = None,
     *,
     limit: int | None = None,
     expiration: float | None = None,
 ) -> (
-    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result]]
+    Callable[[Callable[Args, Coroutine[None, None, Result]]], Cached[Args, Result]]
     | Cached[Args, Result]
 ):
     """
@@ -149,7 +149,7 @@ def cache[**Args, Result](
 
     Parameters
     ----------
-    function : Callable[Args, Coroutine[Any, Any, Result]] | None
+    function : Callable[Args, Coroutine[None, None, Result]] | None
         Coroutine function to memoize when ``cache`` is used directly as ``@cache``.
         Omit this parameter when supplying configuration options so that ``cache``
         returns a decorator.
@@ -161,7 +161,7 @@ def cache[**Args, Result](
 
     Returns
     -------
-    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Cached[Args, Result]]
+    Callable[[Callable[Args, Coroutine[None, None, Result]]], Cached[Args, Result]]
         When used with configuration arguments, returns a decorator that will memoize
         the target coroutine. When ``function`` is supplied positionally, the memoized
         coroutine is returned immediately.
@@ -196,7 +196,7 @@ def cache[**Args, Result](
     """
 
     def _wrap(
-        function: Callable[Args, Coroutine[Any, Any, Result]],
+        function: Callable[Args, Coroutine[None, None, Result]],
     ) -> Cached[Args, Result]:
         assert iscoroutinefunction(function)  # nosec: B101
         cached = _LocalCache(
@@ -233,12 +233,12 @@ def _default_make_key[**Args](
 class _LocalCache[**Args, Result]:
     def __init__(
         self,
-        function: Callable[Args, Coroutine[Any, Any, Result]],
+        function: Callable[Args, Coroutine[None, None, Result]],
         /,
         limit: int,
         expiration: float | None,
     ) -> None:
-        self._function: Callable[Args, Coroutine[Any, Any, Result]] = function
+        self._function: Callable[Args, Coroutine[None, None, Result]] = function
         self._cached: OrderedDict[Hashable, _CacheEntry[Result]] = OrderedDict()
         self._limit: int = limit
 
@@ -259,7 +259,7 @@ class _LocalCache[**Args, Result]:
         instance: object | None,
         owner: type | None = None,
         /,
-    ) -> Callable[Args, Coroutine[Any, Any, Result]]:
+    ) -> Callable[Args, Coroutine[None, None, Result]]:
         assert instance is None, "cache does not work for classes"  # nosec: B101
         return self
 
@@ -303,7 +303,7 @@ def cache_externally[**Args, Result, Key: Hashable](
     read: CacheRead[Key, Result],
     write: CacheWrite[Key, Result],
     clear: CacheClear[Key] | None = None,
-) -> Callable[[Callable[Args, Coroutine[Any, Any, Result]]], CachedExternally[Args, Result, Key]]:
+) -> Callable[[Callable[Args, Coroutine[None, None, Result]]], CachedExternally[Args, Result, Key]]:
     """
     Memoize coroutine results using a caller-supplied cache backend.
 
@@ -326,7 +326,7 @@ def cache_externally[**Args, Result, Key: Hashable](
 
     Returns
     -------
-    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], CachedExternally[Args, Result, Key]]
+    Callable[[Callable[Args, Coroutine[None, None, Result]]], CachedExternally[Args, Result, Key]]
         Decorator that wraps coroutine functions with external cache integration.
 
     Notes
@@ -336,7 +336,7 @@ def cache_externally[**Args, Result, Key: Hashable](
     """
 
     def _wrap(
-        function: Callable[Args, Coroutine[Any, Any, Result]],
+        function: Callable[Args, Coroutine[None, None, Result]],
     ) -> CachedExternally[Args, Result, Key]:
         assert iscoroutinefunction(function)  # nosec: B101
         cached = _ExternalCache(
@@ -355,14 +355,14 @@ def cache_externally[**Args, Result, Key: Hashable](
 class _ExternalCache[**Args, Result, Key: Hashable]:
     def __init__(
         self,
-        function: Callable[Args, Coroutine[Any, Any, Result]],
+        function: Callable[Args, Coroutine[None, None, Result]],
         /,
         make_key: CacheMakeKey[Args, Key],
         read: CacheRead[Key, Result],
         write: CacheWrite[Key, Result],
         clear: CacheClear[Key] | None,
     ) -> None:
-        self._function: Callable[Args, Coroutine[Any, Any, Result]] = function
+        self._function: Callable[Args, Coroutine[None, None, Result]] = function
         self._make_key: CacheMakeKey[Args, Key] = make_key
         self._read: CacheRead[Key, Result] = read
         self._write: CacheWrite[Key, Result] = write
