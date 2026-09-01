@@ -1,7 +1,6 @@
 from asyncio import timeout as async_timeout
 from collections.abc import Callable, Coroutine
 from functools import wraps
-from typing import Any
 
 __all__ = ("timeout",)
 
@@ -10,8 +9,8 @@ def timeout[**Args, Result](
     timeout: float,
     /,
 ) -> Callable[
-    [Callable[Args, Coroutine[Any, Any, Result]]],
-    Callable[Args, Coroutine[Any, Any, Result]],
+    [Callable[Args, Coroutine[None, None, Result]]],
+    Callable[Args, Coroutine[None, None, Result]],
 ]:
     """
     Add a timeout to an asynchronous function.
@@ -27,7 +26,7 @@ def timeout[**Args, Result](
 
     Returns
     -------
-    Callable[[Callable[Args, Coroutine[Any, Any, Result]]], Callable[Args, Coroutine[Any, Any, Result]]]
+    Callable[[Callable[Args, Coroutine[None, None, Result]]], Callable[Args, Coroutine[None, None, Result]]]
         A decorator that can be applied to an async function to add timeout behavior
 
     Notes
@@ -50,8 +49,8 @@ def timeout[**Args, Result](
     """  # noqa: E501
 
     def _wrap(
-        function: Callable[Args, Coroutine[Any, Any, Result]],
-    ) -> Callable[Args, Coroutine[Any, Any, Result]]:
+        function: Callable[Args, Coroutine[None, None, Result]],
+    ) -> Callable[Args, Coroutine[None, None, Result]]:
         return wraps(function)(
             _AsyncTimeout(
                 function,
@@ -79,11 +78,11 @@ class _AsyncTimeout[**Args, Result]:
 
     def __init__(
         self,
-        function: Callable[Args, Coroutine[Any, Any, Result]],
+        function: Callable[Args, Coroutine[None, None, Result]],
         /,
         timeout: float,
     ) -> None:
-        self._function: Callable[Args, Coroutine[Any, Any, Result]] = function
+        self._function: Callable[Args, Coroutine[None, None, Result]] = function
         self._timeout: float = timeout
 
     async def __call__(

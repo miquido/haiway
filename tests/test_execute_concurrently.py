@@ -1,5 +1,5 @@
 from asyncio import CancelledError, current_task, sleep
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
 from pytest import mark, raises
@@ -249,3 +249,84 @@ async def test_exception_details_preserved():
     assert results[1].code == 404
     assert str(results[1]) == "Not found"
     assert results[2] == 3
+
+
+@mark.asyncio
+async def test_closes_the_source_when_exhausted():
+    closed: list[str] = []
+
+    async def tracked_elements() -> AsyncGenerator[int]:
+        try:
+            for element in range(3):
+                yield element
+
+        finally:
+            closed.append("source")
+
+    async def handler(element: int) -> int:
+        return element
+
+    assert list(await execute_concurrently(handler, tracked_elements())) == [0, 1, 2]
+    assert closed == ["source"]
+
+
+@mark.asyncio
+async def test_closes_the_source_when_a_handler_fails():
+    closed: list[str] = []
+
+    async def tracked_elements() -> AsyncGenerator[int]:
+        try:
+            for element in range(100):
+                yield element
+
+        finally:
+            closed.append("source")
+
+    async def handler(element: int) -> int:
+        raise FakeException("Test exception")
+
+    with raises(FakeException):
+        await execute_concurrently(handler, tracked_elements())
+
+    assert closed == ["source"]
+
+
+@mark.asyncio
+async def test_rejects_elements_which_can_not_be_released():
+    class AsyncIterableSource:
+        """An async source without `aclose`, which could not be released."""
+
+        def __aiter__(self) -> AsyncIterableSource:
+            return self
+
+        async def __anext__(self) -> int:
+            return 1
+
+    async def handler(element: int) -> int:
+        return element
+
+    with raises(TypeError):
+        await execute_concurrently(
+            handler,
+            AsyncIterableSource(),  # pyright: ignore[reportArgumentType]
+        )
+
+
+@mark.asyncio
+async def test_raises_handler_error_while_awaiting_a_slow_source():
+    async def slow_source() -> AsyncGenerator[int]:
+        for element in range(10):
+            await sleep(0.01)  # suspends between the elements
+            yield element
+
+    async def handler(element: int) -> int:
+        if element == 0:
+            raise FakeException("handler failed")
+
+        await sleep(10)  # keep the remaining slots busy
+        return element
+
+    # the task group aborts on the failure while the source is awaited, and the
+    # handler error has to surface instead of that cancellation or an exception group
+    with raises(FakeException, match="handler failed"):
+        await execute_concurrently(handler, slow_source(), concurrent_tasks=4)

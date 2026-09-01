@@ -1,5 +1,7 @@
 from asyncio import CancelledError, sleep
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+from types import TracebackType
+from typing import NoReturn
 
 from pytest import mark, raises
 
@@ -15,7 +17,7 @@ async def async_range(
     start: int,
     stop: int,
     delay: float = 0,
-) -> AsyncIterator[int]:
+) -> AsyncGenerator[int]:
     for i in range(start, stop):
         await sleep(delay)
         yield i
@@ -24,7 +26,7 @@ async def async_range(
 async def async_letters(
     letters: str,
     delay: float = 0,
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str]:
     for letter in letters:
         await sleep(delay)
         yield letter
@@ -71,7 +73,7 @@ async def test_interleaves_based_on_timing():
 async def test_handles_empty_iterators():
     items: list[int | str] = []
 
-    async def empty_iter() -> AsyncIterator[int]:
+    async def empty_iter() -> AsyncGenerator[int]:
         return
         yield  # Make it a generator
 
@@ -142,7 +144,7 @@ async def test_handles_different_lengths():
 
 @mark.asyncio
 async def test_propagates_exceptions_from_source_a():
-    async def failing_iter_a() -> AsyncIterator[int]:
+    async def failing_iter_a() -> AsyncGenerator[int]:
         yield 1
         raise FakeException("Source A failed")
 
@@ -157,7 +159,7 @@ async def test_propagates_exceptions_from_source_a():
 
 @mark.asyncio
 async def test_propagates_exceptions_from_source_b():
-    async def failing_iter_b() -> AsyncIterator[str]:
+    async def failing_iter_b() -> AsyncGenerator[str]:
         yield "x"
         raise FakeException("Source B failed")
 
@@ -177,7 +179,7 @@ async def test_cancellation_cancels_both_sources():
     cancelled_a = False
     cancelled_b = False
 
-    async def tracked_iter_a() -> AsyncIterator[int]:
+    async def tracked_iter_a() -> AsyncGenerator[int]:
         nonlocal started_a, cancelled_a
         started_a = True
         try:
@@ -188,7 +190,7 @@ async def test_cancellation_cancels_both_sources():
             cancelled_a = True
             raise
 
-    async def tracked_iter_b() -> AsyncIterator[str]:
+    async def tracked_iter_b() -> AsyncGenerator[str]:
         nonlocal started_b, cancelled_b
         started_b = True
         try:
@@ -219,13 +221,13 @@ async def test_cancellation_cancels_both_sources():
 
 @mark.asyncio
 async def test_works_with_different_types():
-    async def fibonacci() -> AsyncIterator[int]:
+    async def fibonacci() -> AsyncGenerator[int]:
         a, b = 0, 1
         for _ in range(5):
             yield a
             a, b = b, a + b
 
-    async def words() -> AsyncIterator[str]:
+    async def words() -> AsyncGenerator[str]:
         for word in ["hello", "world", "test"]:
             yield word
 
@@ -257,12 +259,12 @@ async def test_works_with_different_types():
 async def test_immediate_yield():
     """Test that items are yielded as soon as they're available."""
 
-    async def slow_numbers() -> AsyncIterator[int]:
+    async def slow_numbers() -> AsyncGenerator[int]:
         for i in range(3):
             await sleep(0.2)  # Increased delay for more reliable timing
             yield i
 
-    async def fast_letters() -> AsyncIterator[str]:
+    async def fast_letters() -> AsyncGenerator[str]:
         for c in "abc":
             await sleep(0.01)  # Smaller delay
             yield c
@@ -294,7 +296,7 @@ async def test_immediate_yield():
 async def test_concurrent_execution():
     execution_order: list[str] = []
 
-    async def iter_a() -> AsyncIterator[str]:
+    async def iter_a() -> AsyncGenerator[str]:
         execution_order.append("a_start")
         await sleep(0.1)  # Increased for more reliable timing
         execution_order.append("a_yield_1")
@@ -303,7 +305,7 @@ async def test_concurrent_execution():
         execution_order.append("a_yield_2")
         yield "a2"
 
-    async def iter_b() -> AsyncIterator[str]:
+    async def iter_b() -> AsyncGenerator[str]:
         execution_order.append("b_start")
         await sleep(0.01)  # Much smaller delay
         execution_order.append("b_yield_1")
@@ -330,11 +332,11 @@ async def test_concurrent_execution():
 
 @mark.asyncio
 async def test_early_completion_does_not_raise_cancellation_error():
-    async def fast_iter() -> AsyncIterator[int]:
+    async def fast_iter() -> AsyncGenerator[int]:
         yield 1
         yield 2
 
-    async def slow_iter() -> AsyncIterator[str]:
+    async def slow_iter() -> AsyncGenerator[str]:
         for i in range(100):
             await sleep(0.1)  # Very slow
             yield f"item_{i}"
@@ -357,12 +359,12 @@ async def test_task_group_integration_with_early_completion():
     results = []
 
     async def consumer():
-        async def numbers() -> AsyncIterator[int]:
+        async def numbers() -> AsyncGenerator[int]:
             for i in range(3):
                 await sleep(0.01)
                 yield i
 
-        async def letters() -> AsyncIterator[str]:
+        async def letters() -> AsyncGenerator[str]:
             for c in "abcdefghijklmnopqrstuvwxyz":  # Long stream
                 await sleep(0.05)  # Slower than numbers
                 yield c
@@ -388,7 +390,7 @@ async def test_task_group_integration_with_early_completion():
 async def test_cleanup_awaits_cancelled_tasks():
     cleanup_completed = False
 
-    async def slow_stream() -> AsyncIterator[int]:
+    async def slow_stream() -> AsyncGenerator[int]:
         try:
             for i in range(1000):
                 await sleep(0.1)
@@ -400,7 +402,7 @@ async def test_cleanup_awaits_cancelled_tasks():
             cleanup_completed = True
             raise
 
-    async def fast_stream() -> AsyncIterator[str]:
+    async def fast_stream() -> AsyncGenerator[str]:
         yield "done"
 
     items = []
@@ -421,11 +423,11 @@ async def test_multiple_stream_concurrently_in_task_group():
     items_1 = []
     items_2 = []
 
-    async def nums() -> AsyncIterator[int]:
+    async def nums() -> AsyncGenerator[int]:
         for i in [1, 2]:
             yield i
 
-    async def slow() -> AsyncIterator[str]:
+    async def slow() -> AsyncGenerator[str]:
         for _ in range(100):
             await sleep(0.1)
             yield "slow"
@@ -444,3 +446,167 @@ async def test_multiple_stream_concurrently_in_task_group():
 
     assert 1 in items_1 and 2 in items_1
     assert 1 in items_2 and 2 in items_2
+
+
+@mark.asyncio
+async def test_closes_both_sources_when_left_early():
+    closed: list[str] = []
+
+    def tracked(name: str, delay: float) -> AsyncGenerator[str]:
+        async def generator() -> AsyncGenerator[str]:
+            try:
+                for index in range(100):
+                    await sleep(delay)
+                    yield f"{name}{index}"
+
+            finally:
+                closed.append(name)
+
+        return generator()
+
+    async with ctx.closing(stream_concurrently(tracked("a", 0.01), tracked("b", 0.015))) as merged:
+        async for _ in merged:
+            break
+
+    # closing the merged stream joins both producers and releases both sources
+    assert sorted(closed) == ["a", "b"]
+
+
+@mark.asyncio
+async def test_closes_both_sources_when_exhausted():
+    closed: list[str] = []
+
+    def tracked(name: str, count: int) -> AsyncGenerator[str]:
+        async def generator() -> AsyncGenerator[str]:
+            try:
+                for index in range(count):
+                    yield f"{name}{index}"
+
+            finally:
+                closed.append(name)
+
+        return generator()
+
+    async for _ in stream_concurrently(tracked("a", 2), tracked("b", 2), exhaustive=True):
+        pass
+
+    assert sorted(closed) == ["a", "b"]
+
+
+@mark.asyncio
+async def test_closes_the_other_source_when_one_fails_to_close():
+    closed: list[str] = []
+
+    class FailingToClose(AsyncGenerator[int]):
+        """A source whose own release fails, unlike its iteration."""
+
+        async def __anext__(self) -> int:
+            await sleep(0.01)
+            return 1
+
+        async def asend(self, value: None = None, /) -> int:
+            return await self.__anext__()
+
+        async def athrow(
+            self,
+            typ: type[BaseException] | BaseException,
+            val: object = None,
+            tb: TracebackType | None = None,
+            /,
+        ) -> NoReturn:
+            raise FakeException("cleanup failed")
+
+        async def aclose(self) -> None:
+            raise FakeException("cleanup failed")
+
+    async def tracked() -> AsyncGenerator[str]:
+        try:
+            while True:
+                await sleep(0.01)
+                yield "b"
+
+        finally:
+            closed.append("b")
+
+    with raises(FakeException):
+        async with ctx.closing(stream_concurrently(FailingToClose(), tracked())) as merged:
+            async for _ in merged:
+                break
+
+    # the sources are closed nested, so one failing to close does not strand the other
+    assert closed == ["b"]
+
+
+@mark.asyncio
+async def test_closes_both_sources_when_never_iterated():
+    closed: list[str] = []
+
+    class Tracked(AsyncGenerator[str]):
+        """A source tracking its release, which an unstarted generator could not."""
+
+        def __init__(self, name: str) -> None:
+            self.name: str = name
+
+        async def __anext__(self) -> str:
+            await sleep(0.01)
+            return self.name
+
+        async def asend(self, value: None = None, /) -> str:
+            return await self.__anext__()
+
+        async def athrow(
+            self,
+            typ: type[BaseException] | BaseException,
+            val: object = None,
+            tb: TracebackType | None = None,
+            /,
+        ) -> NoReturn:
+            raise FakeException("thrown")
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    merged: AsyncGenerator[str] = stream_concurrently(Tracked("a"), Tracked("b"))
+    # closing a merged stream which was never started does not run its frame,
+    # so the sources have to be released by the stream itself
+    await merged.aclose()
+
+    assert sorted(closed) == ["a", "b"]
+
+
+@mark.asyncio
+async def test_closes_both_sources_when_thrown_into_before_started():
+    closed: list[str] = []
+
+    class Tracked(AsyncGenerator[str]):
+        """A source tracking its release, which an unstarted generator could not."""
+
+        def __init__(self, name: str) -> None:
+            self.name: str = name
+
+        async def __anext__(self) -> str:
+            await sleep(0.01)
+            return self.name
+
+        async def asend(self, value: None = None, /) -> str:
+            return await self.__anext__()
+
+        async def athrow(
+            self,
+            typ: type[BaseException] | BaseException,
+            val: object = None,
+            tb: TracebackType | None = None,
+            /,
+        ) -> NoReturn:
+            raise FakeException("thrown")
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    merged: AsyncGenerator[str] = stream_concurrently(Tracked("a"), Tracked("b"))
+    # throwing into a merged stream which was never started does not run its frame,
+    # so the sources have to be released by the stream itself
+    with raises(FakeException, match="thrown in"):
+        await merged.athrow(FakeException("thrown in"))
+
+    assert sorted(closed) == ["a", "b"]

@@ -1,5 +1,5 @@
 from asyncio import AbstractEventLoop, Future, Lock, get_running_loop, sleep, timeout
-from collections.abc import AsyncIterable, Callable, Coroutine, Mapping, MutableMapping
+from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, MutableMapping
 from contextlib import AbstractAsyncContextManager
 from functools import partial
 from types import TracebackType
@@ -997,14 +997,14 @@ class _Consumption[Content]:
         self,
         *,
         messages: AsyncQueue[MQMessage[Content]],
-        starting: Callable[[], Coroutine[Any, Any, None]],
-        stopping: Callable[[], Coroutine[Any, Any, None]],
+        starting: Callable[[], Coroutine[None, None, None]],
+        stopping: Callable[[], Coroutine[None, None, None]],
     ) -> None:
         self._messages: AsyncQueue[MQMessage[Content]] = messages
-        self._starting: Callable[[], Coroutine[Any, Any, None]] = starting
-        self._stopping: Callable[[], Coroutine[Any, Any, None]] = stopping
+        self._starting: Callable[[], Coroutine[None, None, None]] = starting
+        self._stopping: Callable[[], Coroutine[None, None, None]] = stopping
 
-    async def __aenter__(self) -> AsyncIterable[MQMessage[Content]]:
+    async def __aenter__(self) -> AsyncGenerator[MQMessage[Content]]:
         await self._starting()
 
         return self._messages
@@ -1051,7 +1051,7 @@ class _QueueAccess[Content]:
         queue: str,
         content_encoder: Callable[[Content], bytes],
         content_decoder: Callable[[bytes], Content],
-        opening: Callable[[], Coroutine[Any, Any, _ChannelState]],
+        opening: Callable[[], Coroutine[None, None, _ChannelState]],
         blocked: Callable[[], str | None],
         operation_timeout: float,
         publish_timeout: float,
@@ -1064,7 +1064,7 @@ class _QueueAccess[Content]:
         self._queue: str = queue
         self._content_encoder: Callable[[Content], bytes] = content_encoder
         self._content_decoder: Callable[[bytes], Content] = content_decoder
-        self._opening: Callable[[], Coroutine[Any, Any, _ChannelState]] = opening
+        self._opening: Callable[[], Coroutine[None, None, _ChannelState]] = opening
         self._blocked: Callable[[], str | None] = blocked
         self._operation_timeout: float = operation_timeout
         self._publish_timeout: float = publish_timeout
@@ -1460,7 +1460,7 @@ class _QueueAccess[Content]:
         exclusive: bool = False,
         arguments: Mapping[str, Any] | None = None,
         **extra: Any,
-    ) -> AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]:
+    ) -> AbstractAsyncContextManager[AsyncGenerator[MQMessage[Content]]]:
         if extra:
             # auto_ack in particular would invalidate every ack/reject
             raise RabbitMQException(

@@ -678,3 +678,222 @@ async def test_subscription_delivers_pending_event_before_ending():
             ctx.send(OrderCreated(order_id="delivered", amount=1.0))
 
     assert received == [OrderCreated(order_id="delivered", amount=1.0)]
+
+
+@mark.asyncio
+async def test_subscription_ends_gracefully_outside_of_any_scope() -> None:
+    subscription: EventsSubscription[OrderCreated]
+
+    async with ctx.scope("scope"):
+        subscription = ctx.subscribe(OrderCreated)
+
+    # the subscription outlived every scope - a finished generator ends its
+    # iteration, it does not fail for the lack of a context to end within
+    with raises(StopAsyncIteration):
+        await anext(subscription)
+
+
+@mark.asyncio
+async def test_subscription_is_bound_to_the_subscribing_scope() -> None:
+    received: list[str] = []
+
+    async def consume() -> None:
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+        # a nested scope opening and closing beside the subscription must not end
+        # it - the scope which created it is the one which owns it
+        async with ctx.scope("nested"):
+            pass
+
+        received.append((await anext(subscription)).order_id)
+
+    async with ctx.scope("scope"):
+        task: Task[None] = ctx.spawn(consume)
+        await _until(lambda: bool(ContextEvents._context.get()._threads))
+        ctx.send(OrderCreated(order_id="order", amount=42.0))
+        await task
+
+    assert received == ["order"]
+
+
+@mark.asyncio
+async def test_subscription_athrow_rejects_malformed_calls_without_ending() -> None:
+    async with ctx.scope("scope"):
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+
+        with raises(TypeError):
+            await subscription.athrow(ValueError("exception"), "value")
+
+        # the call was rejected before anything was thrown, so the subscription
+        # is still the usable one it was before
+        ctx.send(OrderCreated(order_id="order", amount=42.0))
+        assert (await anext(subscription)).order_id == "order"
+
+
+@mark.asyncio
+async def test_subscription_aclose_releases_a_waiting_iteration() -> None:
+    outcome: list[str] = []
+
+    async with ctx.scope("scope"):
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+
+        suspended = asyncio.Event()
+
+        async def consume() -> None:
+            suspended.set()
+            try:
+                await anext(subscription)
+
+            except StopAsyncIteration:
+                outcome.append("ended")
+
+        waiting: Task[None] = ctx.spawn(consume)
+        # `suspended` is set right before `anext` with no await in between, so the
+        # task can only hand control back from within the iteration it started -
+        # one which is not done here is parked on the futures that call races
+        await suspended.wait()
+        assert not waiting.done()
+
+        # a suspended `__anext__` keeps the futures it races as locals, so closing
+        # has to release it rather than only clearing what the subscription holds
+        await subscription.aclose()
+        async with asyncio.timeout(5.0):  # a close which does not release it hangs
+            await waiting
+
+    assert outcome == ["ended"]
+
+
+@mark.asyncio
+async def test_subscription_aclose_ends_further_iteration() -> None:
+    async with ctx.scope("scope"):
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+
+        await subscription.aclose()
+        await subscription.aclose()  # closing twice is not an error
+
+        # a pending event is not delivered to a subscription which was closed
+        ctx.send(OrderCreated(order_id="order", amount=42.0))
+        with raises(StopAsyncIteration):
+            await anext(subscription)
+
+
+@mark.asyncio
+async def test_aclosing_ends_the_subscription() -> None:
+    received: list[str] = []
+
+    async with ctx.scope("scope"):
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+
+        async with ctx.closing(subscription) as orders:
+            ctx.send(OrderCreated(order_id="order", amount=42.0))
+            async for order in orders:
+                received.append(order.order_id)
+                break  # left early - the subscription is released right here
+
+        with raises(StopAsyncIteration):
+            await anext(subscription)
+
+    assert received == ["order"]
+
+
+@mark.asyncio
+async def test_skipped_event_does_not_discard_pending_delivery_on_closing() -> None:
+    # a consumer busy elsewhere while the events arrive finds them queued behind
+    # one which is not addressed to it - a scope closing must deliver the rest
+    # instead of ending on the first skipped event
+    received: list[str] = []
+    subscribed = asyncio.Event()
+    sent = asyncio.Event()
+    resumed = asyncio.Event()
+
+    async def producer() -> None:
+        await subscribed.wait()
+        async with ctx.scope("request-producer"):  # sibling of the consumer scope
+            # not addressed to the sibling consumer
+            ctx.send(OrderCreated(order_id="skipped", amount=6.0))
+            ctx.send(
+                OrderCreated(order_id="delivered", amount=7.0),
+                broadcast=True,
+            )
+
+        sent.set()
+
+    async def consumer() -> None:
+        async with ctx.scope("request-consumer"):
+            subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+
+            async def consume() -> None:
+                await resumed.wait()  # busy elsewhere while both events arrive
+                async for event in subscription:
+                    received.append(event.order_id)
+
+            ctx.spawn(consume)
+            subscribed.set()
+            await sent.wait()
+            # the task may only resume when the scope is already closing
+            resumed.set()
+
+    async with ctx.scope("server"):
+        await asyncio.gather(consumer(), producer())
+
+    assert received == ["delivered"]
+
+
+@mark.asyncio
+async def test_events_arrived_before_closing_are_delivered_after_it() -> None:
+    # the subscribing scope has already left - everything which arrived before
+    # is still delivered, and only a skipped tail ends the iteration
+    received: list[str] = []
+
+    async with ctx.scope("server"):
+        subscription: EventsSubscription[OrderCreated]
+        async with ctx.scope("request-consumer"):
+            subscription = ctx.subscribe(OrderCreated)
+
+        async with ctx.scope("request-producer"):  # sibling of the consumer scope
+            ctx.send(OrderCreated(order_id="skipped", amount=6.0))
+            ctx.send(
+                OrderCreated(order_id="delivered", amount=7.0),
+                broadcast=True,
+            )
+
+        async for event in subscription:
+            received.append(event.order_id)
+
+    assert received == ["delivered"]
+
+
+@mark.asyncio
+async def test_subscription_rejects_concurrent_iteration() -> None:
+    async with ctx.scope("scope"):
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+        first: Task[OrderCreated] = asyncio.ensure_future(anext(subscription))
+        await _until(lambda: not first.done() and subscription._running)
+
+        # the chain position is shared - a second iteration would deliver the
+        # very same event instead of the next one
+        with raises(RuntimeError):
+            await anext(subscription)
+
+        with raises(RuntimeError):
+            await subscription.asend(None)
+
+        ctx.send(OrderCreated(order_id="order", amount=42.0))
+
+        assert await first == OrderCreated(order_id="order", amount=42.0)
+        # the guard is released with the iteration - the next one proceeds
+        ctx.send(OrderCreated(order_id="next", amount=43.0))
+        assert await anext(subscription) == OrderCreated(order_id="next", amount=43.0)
+
+
+@mark.asyncio
+async def test_subscription_aclose_is_allowed_during_iteration() -> None:
+    # unlike iterating, ending a running subscription is what releases it
+    async with ctx.scope("scope"):
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+        iteration: Task[OrderCreated] = asyncio.ensure_future(anext(subscription))
+        await _until(lambda: not iteration.done() and subscription._running)
+
+        await subscription.aclose()
+
+        with raises(StopAsyncIteration):
+            await iteration

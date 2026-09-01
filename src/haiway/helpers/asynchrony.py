@@ -14,7 +14,7 @@ __all__ = ("asynchronous",)
 @overload
 def asynchronous[**Args, Result]() -> Callable[
     [Callable[Args, Result]],
-    Callable[Args, Coroutine[Any, Any, Result]],
+    Callable[Args, Coroutine[None, None, Result]],
 ]: ...
 
 
@@ -25,7 +25,7 @@ def asynchronous[**Args, Result](
     executor: Executor | Missing = MISSING,
 ) -> Callable[
     [Callable[Args, Result]],
-    Callable[Args, Coroutine[Any, Any, Result]],
+    Callable[Args, Coroutine[None, None, Result]],
 ]: ...
 
 
@@ -33,7 +33,7 @@ def asynchronous[**Args, Result](
 def asynchronous[**Args, Result](
     function: Callable[Args, Result],
     /,
-) -> Callable[Args, Coroutine[Any, Any, Result]]: ...
+) -> Callable[Args, Coroutine[None, None, Result]]: ...
 
 
 def asynchronous[**Args, Result](
@@ -45,9 +45,9 @@ def asynchronous[**Args, Result](
 ) -> (
     Callable[
         [Callable[Args, Result]],
-        Callable[Args, Coroutine[Any, Any, Result]],
+        Callable[Args, Coroutine[None, None, Result]],
     ]
-    | Callable[Args, Coroutine[Any, Any, Result]]
+    | Callable[Args, Coroutine[None, None, Result]]
 ):
     """
     Convert a synchronous function to an asynchronous one that runs in an executor.
@@ -103,7 +103,7 @@ def asynchronous[**Args, Result](
 
     def wrap(
         wrapped: Callable[Args, Result],
-    ) -> Callable[Args, Coroutine[Any, Any, Result]]:
+    ) -> Callable[Args, Coroutine[None, None, Result]]:
         assert not iscoroutinefunction(wrapped), "Cannot wrap async function in executor"  # nosec: B101
 
         async def asynchronous(
@@ -129,8 +129,8 @@ def asynchronous[**Args, Result](
 def _mimic_async[**Args, Result](
     function: Callable[Args, Result],
     /,
-    within: Callable[..., Coroutine[Any, Any, Result]],
-) -> Callable[Args, Coroutine[Any, Any, Result]]:
+    within: Callable[..., Coroutine[None, None, Result]],
+) -> Callable[Args, Coroutine[None, None, Result]]:
     try:
         annotations: Any = getattr(  # noqa: B009
             function,
@@ -141,7 +141,7 @@ def _mimic_async[**Args, Result](
             "__annotations__",
             {
                 **annotations,
-                "return": Coroutine[Any, Any, annotations.get("return", Any)],
+                "return": Coroutine[None, None, annotations.get("return", Any)],
             },
         )
 
@@ -183,6 +183,6 @@ def _mimic_async[**Args, Result](
     )
 
     return cast(
-        Callable[Args, Coroutine[Any, Any, Result]],
+        Callable[Args, Coroutine[None, None, Result]],
         within,
     )

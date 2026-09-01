@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager
 from types import TracebackType
 from typing import Any, Protocol, final, overload, runtime_checkable
@@ -160,7 +160,7 @@ class MQQueueConsuming[Content](Protocol):
     async def __call__(
         self,
         **extra: Any,
-    ) -> AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]: ...
+    ) -> AbstractAsyncContextManager[AsyncGenerator[MQMessage[Content]]]: ...
 
 
 class MQQueue[Content](State):
@@ -248,17 +248,17 @@ class MQQueue[Content](State):
     async def consume(
         cls,
         **extra: Any,
-    ) -> AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]: ...
+    ) -> AbstractAsyncContextManager[AsyncGenerator[MQMessage[Content]]]: ...
     @overload
     async def consume(
         self,
         **extra: Any,
-    ) -> AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]: ...
+    ) -> AbstractAsyncContextManager[AsyncGenerator[MQMessage[Content]]]: ...
     @statemethod
     async def consume(
         self,
         **extra: Any,
-    ) -> AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]:
+    ) -> AbstractAsyncContextManager[AsyncGenerator[MQMessage[Content]]]:
         """Open a scoped consumer over the queue.
         Parameters
         ----------
@@ -268,7 +268,7 @@ class MQQueue[Content](State):
             raises for options it does not support instead of dropping them.
         Returns
         -------
-        AbstractAsyncContextManager[AsyncIterable[MQMessage[Content]]]
+        AbstractAsyncContextManager[AsyncGenerator[MQMessage[Content]]]
             Context manager yielding the stream of messages. Entering registers
             the consumer with the backend, iterating yields `MQMessage` values
             wrapping the content, metadata, and acknowledge/reject callables,

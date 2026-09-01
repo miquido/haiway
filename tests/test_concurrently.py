@@ -1,4 +1,5 @@
 from asyncio import CancelledError, current_task, sleep
+from collections.abc import AsyncGenerator, Coroutine
 
 from pytest import mark, raises
 
@@ -320,3 +321,83 @@ async def test_all_coroutines_fail_with_return_exceptions():
     for i, result in enumerate(results):
         assert isinstance(result, FakeException)
         assert str(result) == f"Error {i}"
+
+
+@mark.asyncio
+async def test_closes_the_source_when_exhausted():
+    closed: list[str] = []
+
+    async def value(element: int) -> int:
+        return element
+
+    async def tracked_coroutines() -> AsyncGenerator[Coroutine[None, None, int]]:
+        try:
+            for element in range(3):
+                yield value(element)
+
+        finally:
+            closed.append("source")
+
+    assert list(await concurrently(tracked_coroutines())) == [0, 1, 2]
+    assert closed == ["source"]
+
+
+@mark.asyncio
+async def test_closes_the_source_when_a_coroutine_fails():
+    closed: list[str] = []
+
+    async def failing() -> int:
+        raise FakeException("Test exception")
+
+    async def tracked_coroutines() -> AsyncGenerator[Coroutine[None, None, int]]:
+        try:
+            while True:
+                yield failing()
+
+        finally:
+            closed.append("source")
+
+    with raises(FakeException):
+        await concurrently(tracked_coroutines())
+
+    assert closed == ["source"]
+
+
+@mark.asyncio
+async def test_rejects_coroutines_which_can_not_be_released():
+    async def coro() -> int:
+        return 1
+
+    class AsyncIterableSource:
+        """An async source without `aclose`, which could not be released."""
+
+        def __aiter__(self) -> AsyncIterableSource:
+            return self
+
+        async def __anext__(self) -> Coroutine[None, None, int]:
+            return coro()
+
+    with raises(TypeError):
+        await concurrently(
+            AsyncIterableSource(),  # pyright: ignore[reportArgumentType]
+        )
+
+
+@mark.asyncio
+async def test_raises_coroutine_error_while_awaiting_a_slow_source():
+    async def handler(element: int) -> int:
+        if element == 0:
+            raise FakeException("coroutine failed")
+
+        await sleep(10)  # keep the remaining slots busy
+        return element
+
+    async def slow_source() -> AsyncGenerator[Coroutine[None, None, int]]:
+        for element in range(10):
+            await sleep(0.01)  # suspends between the elements
+            yield handler(element)
+
+    # the task group aborts on the failure while the source is awaited, and the
+    # coroutine error has to surface instead of that cancellation or an exception group
+    with raises(FakeException, match="coroutine failed"):
+        await concurrently(slow_source(), concurrent_tasks=4)

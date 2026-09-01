@@ -1,21 +1,22 @@
 from asyncio import (
     FIRST_COMPLETED,
     AbstractEventLoop,
-    CancelledError,
     Future,
     InvalidStateError,
     get_running_loop,
     wait,
 )
-from collections.abc import AsyncIterator, MutableMapping, Sequence
+from collections.abc import AsyncGenerator, MutableMapping, Sequence
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Any, ClassVar, Self, final
+from typing import Any, ClassVar, NoReturn, Self, final
 from uuid import UUID
 
 from haiway.attributes import State
+from haiway.context.closing import ContextClosing
 from haiway.context.identifier import ContextIdentifier
 from haiway.context.types import ContextMissing
+from haiway.utils.exceptions import thrown_exception
 
 __all__ = (
     "ContextEvents",
@@ -45,50 +46,140 @@ class Event[Payload: State]:
 
 
 @final  # consider immutable
-class EventsSubscription[Payload: State](AsyncIterator[Payload]):
+class EventsSubscription[Payload: State](AsyncGenerator[Payload]):
     __slots__ = (
+        "_finished",
         "_future_event",
+        "_running",
+        "_scope_closing",
         "_scope_id",
-        "_termination",
     )
 
     def __init__(
         self,
         scope_id: UUID,
+        scope_closing: Future[None],
         future_event: Future[Event[Payload]],
-        termination: Future[None],
     ) -> None:
-        self._future_event: Future[Event[Payload]] = future_event
+        # cleared when the subscription finishes - it releases the events chain
+        # and makes all subsequent iterations end immediately, the same way an
+        # exhausted generator frame would
+        self._future_event: Future[Event[Payload]] | None = future_event
         # scope this subscription belongs to - events sent below or beside it
         # are skipped unless they were sent to every subscriber. required, so
         # filtering can never be disabled by omitting it
         self._scope_id: UUID = scope_id
-        # completed when the subscribing scope exits - the bus can live in an
-        # ancestor scope and outlive it, so waiting only for the bus to close
-        # would keep this subscriber running past the scope owning its task
-        self._termination: Future[None] = termination
+        # completed when that same scope begins closing - captured here instead of
+        # on each iteration, so the subscription ends with the scope which owns it
+        # and not with whichever scope happens to be current at a given step. also
+        # cleared when the subscription finishes - it can hold the exception which
+        # ended the scope, and there is nothing left to deliver it to
+        self._scope_closing: Future[None] | None = scope_closing
+        # completed when the subscription itself finishes - a suspended `__anext__`
+        # keeps the futures it races as locals, so clearing them can't release it
+        self._finished: Future[None] = scope_closing.get_loop().create_future()
+        # set for as long as an iteration is in progress - guards the position
+        # within the events chain the same way a generator frame guards itself
+        self._running: bool = False
+
+    def _finish(self) -> None:
+        self._future_event = None
+        self._scope_closing = None
+        if not self._finished.done():
+            self._finished.set_result(None)
 
     async def __anext__(self) -> Payload:
-        while True:
-            await wait(  # race the event against the subscribing scope exiting
-                (self._future_event, self._termination),
-                return_when=FIRST_COMPLETED,
-            )
-            if self._future_event.done():
-                # raises StopAsyncIteration when the events context was closed
-                event: Event[Payload] = self._future_event.result()
-                self._future_event = event.next
-                if not event.path:
-                    return event.payload  # sent to every subscriber
+        future_event: Future[Event[Payload]] | None = self._future_event
+        scope_closing: Future[None] | None = self._scope_closing
+        if future_event is None or scope_closing is None:
+            raise StopAsyncIteration  # already finished
 
-                # delivery goes upwards - the sending scope and all of its ancestors
-                if self._scope_id in event.path:
-                    return event.payload
+        # an iteration advances the position within the events chain, so concurrent
+        # iterations would each deliver the same event - refused exactly the way an
+        # async generator frame refuses to be resumed while it is already running
+        if self._running:
+            raise RuntimeError("EventsSubscription is already running")
 
-                # not addressed to this subscription - wait for the next one or terminate
+        self._running = True
+        try:
+            finished: Future[None] = self._finished
+            while True:
+                try:
+                    await wait(  # race the event against the subscription or its scope ending
+                        (future_event, scope_closing, finished),
+                        return_when=FIRST_COMPLETED,
+                    )
 
-            if self._termination.done():
-                raise StopAsyncIteration
+                    if finished.done():
+                        # closing ends the iteration where it stands, exactly as a
+                        # `GeneratorExit` would within a generator frame - a pending
+                        # event is not delivered to a subscription which was closed
+                        raise StopAsyncIteration
+
+                    if future_event.done():
+                        # raises StopAsyncIteration when the events context was closed
+                        event: Event[Payload] = future_event.result()
+                        future_event = event.next
+                        self._future_event = future_event
+                        if not event.path:
+                            return event.payload  # sent to every subscriber
+
+                        # delivery goes upwards - the sending scope and all of its ancestors
+                        if self._scope_id in event.path:
+                            return event.payload
+
+                        # not addressed to this subscription - wait for the next or terminate
+
+                except BaseException:
+                    # ending or cancelling finishes the subscription, the same way an
+                    # exception raised within a generator frame would finish it
+                    self._finish()
+                    raise
+
+                # a closing scope ends the subscription only after everything which
+                # already arrived was delivered - checked on the updated chain position,
+                # so an event skipped by the path filtering can't discard the next one
+                if scope_closing.done() and not future_event.done():
+                    self._finish()
+                    raise StopAsyncIteration
+
+        finally:
+            # released on every exit - a subscription which ended its iteration
+            # can be iterated again, it just finishes immediately
+            self._running = False
+
+    async def asend(
+        self,
+        value: None = None,
+        /,
+    ) -> Payload:
+        # there is nothing to receive the value - only resuming is supported
+        if value is not None:
+            raise TypeError("EventsSubscription can't receive values")
+
+        return await self.__anext__()
+
+    async def athrow(
+        self,
+        typ: type[BaseException] | BaseException,
+        val: object = None,
+        tb: TracebackType | None = None,
+        /,
+    ) -> NoReturn:
+        # resolved before finishing - a malformed call is rejected without
+        # ending a subscription which is still perfectly usable
+        exception: BaseException = thrown_exception(typ, val, tb)
+
+        # nothing within can handle it - throwing always finishes the
+        # subscription and propagates the exception to the caller
+        self._finish()
+
+        raise exception
+
+    async def aclose(self) -> None:
+        # there is no cleanup to run within - closing only finishes the iteration,
+        # releasing an `__anext__` which is suspended waiting for the next event
+        self._finish()
 
 
 @final  # consider immutable
@@ -129,13 +220,15 @@ class ContextEvents:
         return events._subscribe(
             event,
             scope_id=ContextIdentifier.current().scope_id,
+            # bound to the scope subscribing, not to the one iterating - the two
+            # can differ and only the subscribing scope owns this subscription
+            scope_closing=ContextClosing.current(),
         )
 
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextEvents")
 
     __slots__ = (
         "_loop",
-        "_terminated",
         "_threads",
         "_token",
     )
@@ -146,7 +239,6 @@ class ContextEvents:
     ) -> None:
         self._loop: AbstractEventLoop = loop
         self._threads: MutableMapping[type[State], Future[Event[Any]]] = {}
-        self._terminated: Future[None] = loop.create_future()
         self._token: Token[ContextEvents] | None = None
 
     def _send(
@@ -177,6 +269,7 @@ class ContextEvents:
         payload: type[Payload],
         *,
         scope_id: UUID,
+        scope_closing: Future[None],
     ) -> EventsSubscription[Payload]:
         assert self._loop == get_running_loop()  # nosec: B101
 
@@ -186,8 +279,8 @@ class ContextEvents:
             closed_future.exception()  # silence runtime warning
             return EventsSubscription(
                 scope_id=scope_id,
+                scope_closing=scope_closing,
                 future_event=closed_future,
-                termination=self._terminated,
             )
 
         current: Future[Event[Payload]] | None = self._threads.get(payload)
@@ -197,8 +290,8 @@ class ContextEvents:
 
         return EventsSubscription(
             scope_id=scope_id,
+            scope_closing=scope_closing,
             future_event=current,
-            termination=self._terminated,
         )
 
     def _close(self) -> None:
@@ -218,9 +311,6 @@ class ContextEvents:
             except InvalidStateError:
                 pass  # already done by concurrent send
 
-        # set termination future to cancelled
-        self._terminated.set_exception(CancelledError())
-        self._terminated.exception()  # silence runtime warning
         # clear all references to allow garbage collection
         self._threads.clear()
 

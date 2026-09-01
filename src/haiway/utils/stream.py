@@ -5,14 +5,17 @@ from asyncio import (
     get_running_loop,
 )
 from collections import deque
-from collections.abc import AsyncIterator
-from typing import final
+from collections.abc import AsyncGenerator
+from types import TracebackType
+from typing import NoReturn, final
+
+from haiway.utils.exceptions import thrown_exception
 
 __all__ = ("AsyncStream",)
 
 
 @final
-class AsyncStream[Element](AsyncIterator[Element]):
+class AsyncStream[Element](AsyncGenerator[Element]):
     """
     An asynchronous stream implementation supporting push-based async iteration.
 
@@ -172,7 +175,7 @@ class AsyncStream[Element](AsyncIterator[Element]):
             The exception provided to finish(), or StopAsyncIteration if
             finish() was called without an exception
         """
-        assert self._waiting is None, "AsyncStream can't be reused"  # nosec: B101
+        assert self._waiting is None, "Only a single stream consumer is supported!"  # nosec: B101
 
         if self._finish_reason:
             raise self._finish_reason
@@ -202,3 +205,84 @@ class AsyncStream[Element](AsyncIterator[Element]):
         finally:
             # cleanup waiting future
             self._waiting = None
+
+    async def asend(
+        self,
+        value: None = None,
+        /,
+    ) -> Element:
+        """
+        Resume the iteration, conforming to the async generator protocol.
+
+        This is not the producer side of the stream - use :meth:`send` to deliver
+        elements. Only None can be sent, exactly like resuming a generator which
+        does not use the value of its yield expression.
+
+        Parameters
+        ----------
+        value : None, default=None
+            Must be None - there is nothing within the stream to receive it.
+
+        Returns
+        -------
+        Element
+            The next element from the stream
+
+        Raises
+        ------
+        TypeError
+            If a value other than None was sent
+        BaseException
+            The exception provided to finish(), or StopAsyncIteration if
+            finish() was called without an exception
+        """
+        if value is not None:
+            raise TypeError("AsyncStream can't receive values, use `send` to deliver elements")
+
+        return await self.__anext__()
+
+    async def athrow(
+        self,
+        typ: type[BaseException] | BaseException,
+        val: object = None,
+        tb: TracebackType | None = None,
+        /,
+    ) -> NoReturn:
+        """
+        Throw an exception into the stream, finishing it.
+
+        Nothing within the stream can handle the exception - it finishes the
+        stream with it, the same way an exception raised within a generator frame
+        would end it, and propagates to the caller. Waiting producers are released.
+
+        Parameters
+        ----------
+        typ : type[BaseException] | BaseException
+            Exception type or instance to throw into the stream
+        val : object, default=None
+            Exception instance or its argument when a type was provided
+        tb : TracebackType | None, default=None
+            Optional traceback to attach to the exception
+
+        Raises
+        ------
+        BaseException
+            Always - the exception which was thrown in
+        """
+        exception: BaseException = thrown_exception(typ, val, tb)
+
+        self.finish(exception=exception)
+        raise exception
+
+    async def aclose(self) -> None:
+        """
+        Finish the stream, ending the iteration.
+
+        Equivalent to calling finish() without an exception - waiting producers
+        are released, not yet consumed elements are dropped and all subsequent
+        iterations raise StopAsyncIteration. Doing nothing when already finished,
+        which preserves the existing finish reason - when cancel(), athrow() or
+        finish() finished the stream first, subsequent iterations keep raising
+        that original exception instead of StopAsyncIteration.
+        """
+        self.finish()

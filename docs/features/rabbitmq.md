@@ -63,7 +63,7 @@ async with ctx.scope("mq", disposables=(RabbitMQClient(),)):
 - `await queue.publish(message, attributes=...)` publishes one typed payload; `attributes` become
   AMQP headers on the message. Pass `exchange=` to publish through a named exchange and
   `routing_key=` to route on something other than the queue name
-- `await queue.consume()` returns an async context manager yielding an async iterable of
+- `await queue.consume()` returns an async context manager yielding an async generator of
   `MQMessage[Content]`; each call registers its own consumer with its own buffer, so several
   concurrent consumers are supported
 - leaving the consume context cancels that one consumer at the broker and requeues the deliveries it
@@ -264,13 +264,13 @@ Keep tests at the `MQQueue` or `RabbitMQ` protocol boundary by injecting fake qu
 instead of reaching a real broker.
 
 ```python
-from collections.abc import AsyncIterable
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from haiway import MQMessage
+from haiway import MQMessage, ctx
 
 
-async def one_message() -> AsyncIterable[MQMessage[dict[str, str]]]:
+async def one_message() -> AsyncGenerator[MQMessage[dict[str, str]]]:
     # both settle callables accept backend-specific keyword options
     async def acknowledge(**_: object) -> None:
         return None
@@ -287,9 +287,11 @@ async def one_message() -> AsyncIterable[MQMessage[dict[str, str]]]:
 
 
 @asynccontextmanager
-async def consume_once(**_: object) -> AsyncIterable[AsyncIterable[MQMessage[dict[str, str]]]]:
-    # consuming is scoped, so the fake is a context manager as well
-    yield one_message()
+async def consume_once(**_: object) -> AsyncGenerator[AsyncGenerator[MQMessage[dict[str, str]]]]:
+    # consuming is scoped, so the fake is a context manager as well - and leaving
+    # it ends the message stream, exactly as cancelling a real consumer does
+    async with ctx.closing(one_message()) as messages:
+        yield messages
 ```
 
 For application tests, prefer wiring a fake `RabbitMQ` state into `ctx.scope(...)` and asserting on

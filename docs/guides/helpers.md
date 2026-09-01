@@ -62,7 +62,7 @@ The helpers in `haiway.helpers.concurrent` all integrate with Haiway task manage
 - `process_concurrently` is for side effects only.
 - `execute_concurrently` applies one async handler to elements and returns results in input order.
 - `concurrently` runs pre-created coroutine objects and also preserves input order.
-- `stream_concurrently` merges two async iterables and yields items as they arrive.
+- `stream_concurrently` merges two async generators and yields items as they arrive.
 
 Important details:
 
@@ -70,6 +70,7 @@ Important details:
 - `execute_concurrently` and `concurrently` preserve input order, not completion order.
 - `stream_concurrently(..., exhaustive=False)` stops when either source ends.
 - `stream_concurrently(..., exhaustive=True)` continues until both sources end.
+- Every helper closes an async generator source it consumed, however the consumption ended.
 
 See [Concurrent Processing](concurrent.md) for usage details.
 

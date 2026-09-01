@@ -127,27 +127,38 @@ exact type to already-existing subscribers; events with no subscriber are droppe
 bus - owned by a root or `isolated=True` scope, and shared by the nested non-isolated scopes below
 it. Delivery goes upwards - the sending scope and every scope enclosing it - so sibling scopes (other
 requests) never observe each other's events; use `ctx.send(event, broadcast=True)` to reach every
-subscriber on the bus. A subscription ends when the scope *owning* the bus exits, draining the events
-which already arrived - so iterate one to exhaustion only in that scope, and take a bounded number of
-events when subscribing in a nested scope.
+subscriber on the bus. A subscription ends when the scope which *created* it exits - or the scope
+owning the bus, whichever comes first - draining the events which already arrived, so it is safe to
+iterate one to exhaustion in any scope. It is an async generator: wrap it in `ctx.closing(...)` when
+the iteration is left early.
 
 ## Concurrency
 
 - `ctx.spawn(fn, *args, **kwargs)` -> `Task` in the current scope's task group. Every scope owns one,
   so the task is awaited by the scope it was spawned in - never by an enclosing one. Scope exit
   awaits spawned tasks rather than cancelling them, so a task must be able to finish on its own: it
-  must not wait for anything signalled after its scope exits, nor iterate a `ctx.subscribe(...)`
-  subscription to exhaustion outside the scope owning the event bus - both deadlock the scope
-  waiting to join it. `ctx.spawn_background(...)` only when work must outlive the scope - such a
+  must not wait for anything signalled after its scope exits. Iterating a `ctx.subscribe(...)`
+  subscription to exhaustion is fine anywhere - a scope completes its closing before joining its
+  tasks, which ends the iteration first. `ctx.spawn_background(...)` only when work must outlive the
+  scope - such a
   task runs with an empty context, so `ctx.state(...)`/`ctx.subscribe(...)` raise `ContextMissing`
   within it.
 - `ctx.stream(async_generator_fn, ...)` iterates a generator with context preserved.
+- `ctx.closing(generator)` closes an async generator on leaving its iteration - required for
+  `ctx.stream(...)`/`stream_concurrently(...)` left early, since the collector finalizes a
+  generator in a fresh context where the scope it opened can no longer be released. Use it for a
+  `ctx.subscribe(...)` subscription left early too, to release the events chain it holds.
 - `ctx.check_cancellation()` for cooperative cancellation points.
 - `process_concurrently(source, handler, concurrent_tasks=...)` — fire-and-forget, no results.
 - `execute_concurrently(handler, elements, concurrent_tasks=...)` — ordered results.
 - `concurrently(coroutines, ...)` takes an iterable of coroutines (not varargs);
-  `stream_concurrently(a, b)` interleaves two async iterables.
-- `AsyncQueue` / `AsyncStream` bridge producers to consumers; `Paginated`/`Pagination` model paging.
+  `stream_concurrently(a, b)` interleaves two async generators. These helpers require an
+  `AsyncGenerator` (or a sync `Iterable`), not any async iterable - they close the source they
+  consumed, so it needs `aclose`.
+- `AsyncQueue` / `AsyncStream` bridge producers to consumers and are async generators - `aclose()`
+  and `athrow()` end the iteration dropping whatever is buffered; `AsyncQueue.finish()` is the one
+  way to stop accepting elements while leaving buffered ones deliverable.
+  `Paginated`/`Pagination` model paging.
 
 ## Helpers
 

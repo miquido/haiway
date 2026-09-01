@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator, MutableSequence
 from typing import Any
 
@@ -8,6 +9,7 @@ pytest.importorskip("httpx2")
 from httpx2 import (
     AsyncBaseTransport,
     AsyncByteStream,
+    CloseError,
     ConnectError,
     MockTransport,
     ReadTimeout,
@@ -40,9 +42,11 @@ class _TrackingStream(AsyncByteStream):
     def __init__(
         self,
         chunks: tuple[bytes, ...],
+        close_error: Exception | None = None,
     ) -> None:
         self.chunks = chunks
         self.closed = False
+        self.close_error = close_error
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self.chunks:
@@ -50,6 +54,29 @@ class _TrackingStream(AsyncByteStream):
 
     async def aclose(self) -> None:
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class _BlockingStream(_TrackingStream):
+    """Tracking stream which parks forever on a chosen chunk."""
+
+    def __init__(
+        self,
+        chunks: tuple[bytes, ...],
+        block_at: int,
+    ) -> None:
+        super().__init__(chunks)
+        self.block_at = block_at
+        self.parked = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for index, chunk in enumerate(self.chunks):
+            if index == self.block_at:
+                self.parked.set()
+                await asyncio.Event().wait()
+
+            yield chunk
 
 
 class _TrackingTransport(AsyncBaseTransport):
@@ -643,6 +670,23 @@ async def test_abandoned_stream_releases_connection_immediately() -> None:
 
 
 @mark.asyncio
+async def test_stream_closed_before_read_releases_connection() -> None:
+    stream = _TrackingStream((b"alpha", b"beta", b"gamma"))
+    client = HTTPXClient(
+        base_url="https://api.test",
+        transport=_TrackingTransport(stream),
+    )
+
+    async with client:
+        response = await _request(client, stream=True)
+        body = response.stream_body()
+        # the connection is checked out by the response, not by reading it, so
+        # closing without requesting a chunk has to release it as well
+        await body.aclose()
+        assert stream.closed is True
+
+
+@mark.asyncio
 async def test_exhausted_stream_releases_connection_within_scope() -> None:
     stream = _TrackingStream((b"alpha", b"beta", b"gamma"))
     client = HTTPXClient(
@@ -690,6 +734,60 @@ async def test_streaming_network_failure_is_translated() -> None:
 
 
 @mark.asyncio
+async def test_streaming_close_failure_is_translated() -> None:
+    stream = _TrackingStream(
+        (b"alpha", b"beta", b"gamma"),
+        close_error=CloseError("release failed"),
+    )
+    client = HTTPXClient(
+        base_url="https://api.test",
+        transport=_TrackingTransport(stream),
+    )
+
+    async with client:
+        response = await _request(client, stream=True)
+        body = response.stream_body()
+        async for chunk in body:
+            assert chunk == b"alpha"
+            break  # abandon the stream so releasing happens on close
+
+        # releasing the connection is part of reading the body, so failing to
+        # release surfaces as a typed error rather than a backend one
+        with raises(HTTPConnectionError) as exc_info:
+            await body.aclose()
+
+        # the backend release is still attempted despite failing
+        assert stream.closed is True
+
+    error = exc_info.value
+    assert isinstance(error.__cause__, CloseError)
+    assert error.method == "GET"
+    assert error.url == "https://api.test/resource"
+
+
+@mark.asyncio
+async def test_buffered_read_close_failure_is_translated() -> None:
+    stream = _TrackingStream(
+        (b"alpha", b"beta"),
+        close_error=CloseError("release failed"),
+    )
+    client = HTTPXClient(
+        base_url="https://api.test",
+        transport=_TrackingTransport(stream),
+    )
+
+    async with client:
+        response = await _request(client, stream=True)
+        # the payload arrives in full, only releasing the connection fails
+        with raises(HTTPConnectionError) as exc_info:
+            await response.body()
+
+        assert stream.closed is True
+
+    assert isinstance(exc_info.value.__cause__, CloseError)
+
+
+@mark.asyncio
 async def test_unexpected_streaming_failure_falls_back_to_base_error() -> None:
     def handler(request: Request) -> Response:
         async def stream() -> AsyncIterator[bytes]:
@@ -727,3 +825,101 @@ async def test_base_url_is_exposed() -> None:
     # and it survives the pool being rebuilt on a later scope
     async with client:
         assert str(client.base_url) == "https://api.test/v1/"
+
+
+@mark.asyncio
+async def test_thrown_exception_is_not_translated() -> None:
+    stream = _TrackingStream((b"alpha", b"beta", b"gamma"))
+    client = HTTPXClient(
+        base_url="https://api.test",
+        transport=_TrackingTransport(stream),
+    )
+
+    async with client:
+        response = await _request(client, stream=True)
+        body = response.stream_body()
+        assert await anext(body) == b"alpha"
+
+        # an exception thrown in comes from the consumer, not from the transport,
+        # so reporting it as a request failure would misattribute it
+        with raises(ValueError) as exc_info:
+            await body.athrow(ValueError("consumer failed"))
+
+        assert not isinstance(exc_info.value, HTTPClientError)
+        # the connection is released regardless of where the failure came from
+        assert stream.closed is True
+
+
+@mark.asyncio
+async def test_cancellation_is_not_translated_into_a_client_error() -> None:
+    stream = _BlockingStream((b"alpha", b"beta"), block_at=1)
+    client = HTTPXClient(
+        base_url="https://api.test",
+        transport=_TrackingTransport(stream),
+    )
+
+    async with client:
+        response = await _request(client, stream=True)
+        body = response.stream_body()
+        assert await anext(body) == b"alpha"
+
+        task = asyncio.ensure_future(anext(body))
+        # wait until the read is actually parked on the blocked chunk, so the
+        # cancellation lands on the pending read rather than before it started
+        await stream.parked.wait()
+
+        task.cancel()
+        # cancellation is routine control flow under structured concurrency, not
+        # a transport failure - translating it would hide it from the outer
+        # timeout or task group it belongs to
+        with raises(asyncio.CancelledError) as exc_info:
+            await task
+
+        assert not isinstance(exc_info.value, HTTPClientError)
+        # ...and the connection is still released rather than held to pool close
+        assert stream.closed is True
+
+
+@mark.asyncio
+async def test_cancelled_buffered_read_releases_the_connection() -> None:
+    stream = _BlockingStream((b"alpha", b"beta"), block_at=1)
+    client = HTTPXClient(
+        base_url="https://api.test",
+        transport=_TrackingTransport(stream),
+    )
+
+    async with client:
+        response = await _request(client, stream=True)
+        task = asyncio.ensure_future(response.body())
+        # same as above - the buffered read has to be parked mid-body before
+        # cancelling, otherwise the test would not exercise the abandoned read
+        await stream.parked.wait()
+
+        task.cancel()
+        with raises(asyncio.CancelledError):
+            await task
+
+        assert stream.closed is True
+        # the stream was claimed before it was read, so the abandoned read
+        # cannot be resumed into a truncated payload
+        with raises(HTTPBodyConsumedError):
+            await response.body()
+
+
+@mark.asyncio
+async def test_timeout_around_a_streamed_read_releases_the_connection() -> None:
+    stream = _BlockingStream((b"alpha", b"beta"), block_at=1)
+    client = HTTPXClient(
+        base_url="https://api.test",
+        transport=_TrackingTransport(stream),
+    )
+
+    async with client:
+        response = await _request(client, stream=True)
+        # an outer deadline rather than the client's own - it arrives as
+        # cancellation, and has to release the connection all the same
+        with raises(TimeoutError):
+            async with asyncio.timeout(0.01):
+                await response.body()
+
+        assert stream.closed is True

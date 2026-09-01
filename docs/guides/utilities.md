@@ -225,12 +225,14 @@ results may exist" when a page is full.
 
 ## Async Producer-Consumer Primitives
 
-Haiway ships two related async iterators for single-consumer workflows: `AsyncQueue` and
-`AsyncStream`.
+Haiway ships two related async generators for single-consumer workflows: `AsyncQueue` and
+`AsyncStream`. Both implement the full async generator protocol - including `aclose()` ending the
+iteration for good - so they can be passed anywhere a generator source is expected and closed with
+`contextlib.aclosing`.
 
 ### `AsyncQueue`
 
-`AsyncQueue` is a buffered async iterator.
+`AsyncQueue` is a buffered async generator.
 
 ```python
 from haiway import AsyncQueue
@@ -253,7 +255,21 @@ Key behavior:
 - `finish()` stops future `enqueue()` calls and ends iteration after buffered items are drained.
 - `finish(exception)` re-raises that exception on the consumer after buffered items are drained.
 - `cancel()` is shorthand for finishing with `CancelledError`.
-- `clear()` drops only currently buffered items and leaves a waiting consumer intact.
+- `clear()` drops currently buffered items, and does nothing at all while a consumer is waiting, so
+  a queued wake-up is never disrupted.
+- `aclose()` ends the iteration: it finishes the queue *and* drops what it still holds, so every
+  later step raises the finish reason. Closing a generator ends it, and a closed one cannot hand out
+  elements. That reason is `StopAsyncIteration` unless the queue was already finished, which keeps
+  whichever reason ended it - a queue closed after `cancel()` keeps raising `CancelledError`. This
+  is what `ctx.closing(queue)` and the generator consumers in `haiway.helpers.concurrent` call, so a
+  queue closed early does not keep delivering.
+- Reach for `finish()` rather than `aclose()` when the *producer* is done but the consumer should
+  still drain what was accepted - that is the difference between the two, and it is why `finish()`
+  keeps the buffer.
+- `asend(None)` is `__anext__()`; sending any other value raises `TypeError`, since `enqueue()` is
+  the producer side.
+- `athrow()` finishes the queue with the exception and drops buffered items, as `aclose()` does -
+  ending the iteration where it stands leaves nothing to deliver them to.
 
 #### Bounding the Buffer
 
@@ -279,7 +295,7 @@ items = [item async for item in queue]  # [2, 3]
 
 ### `AsyncStream`
 
-`AsyncStream` is a flow-controlled async iterator with back-pressure.
+`AsyncStream` is a flow-controlled async generator with back-pressure.
 
 ```python
 from haiway import AsyncStream, ctx
@@ -307,6 +323,10 @@ Key behavior:
 - `cancel()` is shorthand for finishing with `CancelledError`.
 - `send()` to a finished stream is ignored.
 - Pending producers are released when the stream finishes.
+- `aclose()` is `finish()` without an exception - not yet consumed elements are dropped and further
+  iteration ends.
+- `asend(None)` is `__anext__()`; sending any other value raises `TypeError`, since `send()` is the
+  producer side. `athrow()` finishes the stream with the exception.
 
 ### Choosing between them
 
@@ -314,6 +334,8 @@ Key behavior:
   items is preferable to unbounded growth.
 - Use `AsyncStream` for back-pressure and producer-consumer pacing.
 - Both support exactly one active consumer at a time.
+- Both are async generators, so wrap either in `ctx.closing(...)` when the iteration may be left
+  early. See [Closing Generator Sources](concurrent.md#closing-generator-sources).
 
 ## Formatting Values for Diagnostics
 
