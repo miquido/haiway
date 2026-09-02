@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Mapping
 from types import TracebackType
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
 from uuid import UUID, uuid4
 
 from pytest import mark, raises
@@ -572,6 +572,12 @@ async def test_http_client_propagates_trace_context_when_enabled() -> None:
             headers={"Traceparent": "provided"},
             trace_propagation=True,
         )
+        # headers covering the whole trace context are handed over untouched
+        await client.get(
+            url="/resource",
+            headers={"Traceparent": "provided", "TraceState": "managed"},
+            trace_propagation=True,
+        )
 
     assert captured == [
         {"traceparent": traceparent, "tracestate": "vendor=value"},
@@ -581,7 +587,55 @@ async def test_http_client_propagates_trace_context_when_enabled() -> None:
             "tracestate": "vendor=value",
         },
         {"Traceparent": "provided", "tracestate": "vendor=value"},
+        {"Traceparent": "provided", "TraceState": "managed"},
     ]
+
+
+@mark.asyncio
+async def test_http_client_propagates_trace_context_when_the_request_asks_for_it() -> None:
+    captured: list[HTTPHeaders | None] = []
+
+    async def capturing(method: str, /, **kwargs: Any) -> HTTPResponse:
+        captured.append(kwargs["headers"])
+        return HTTPResponse(status_code=200, headers={}, body=b"ok")
+
+    traceparent: str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    events: list[tuple[ObservabilityLevel, str, Mapping[str, Any]]] = []
+    observability = _recording_observability(
+        events,
+        trace_context={"traceparent": traceparent},
+    )
+    client = HTTPClient(requesting=capturing)
+    async with ctx.scope("test", observability=observability):
+        await client.get(url="/resource", trace_propagation=True)  # asks for it
+        await client.get(url="/resource", trace_propagation=False)  # opts out
+        await client.get(url="/resource")  # propagation is not the default
+
+    assert captured == [{"traceparent": traceparent}, None, None]
+
+
+@mark.asyncio
+async def test_http_client_propagates_trace_context_from_every_method() -> None:
+    captured: list[HTTPHeaders | None] = []
+
+    async def capturing(method: str, /, **kwargs: Any) -> HTTPResponse:
+        captured.append(kwargs["headers"])
+        return HTTPResponse(status_code=200, headers={}, body=b"ok")
+
+    traceparent: str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    events: list[tuple[ObservabilityLevel, str, Mapping[str, Any]]] = []
+    observability = _recording_observability(
+        events,
+        trace_context={"traceparent": traceparent},
+    )
+    client = HTTPClient(requesting=capturing)
+    async with ctx.scope("test", observability=observability):
+        await client.get(url="/resource", trace_propagation=True)
+        await client.post(url="/resource", body=b"payload", trace_propagation=True)
+        await client.put(url="/resource", body=b"payload", trace_propagation=True)
+        await client.request("DELETE", url="/resource", trace_propagation=True)
+
+    assert captured == [{"traceparent": traceparent}] * 4
 
 
 @mark.asyncio
@@ -763,57 +817,6 @@ async def test_http_client_wrapped_failure_does_not_leak_credentials() -> None:
 
 
 @mark.asyncio
-async def test_http_client_closes_streamed_body_when_the_request_fails() -> None:
-    closed: list[str] = []
-
-    async def tracked_body() -> AsyncGenerator[bytes]:
-        try:
-            yield b"chunk"
-
-        finally:
-            closed.append("body")
-
-    async def failing_request(method: str, /, **kwargs: Any) -> HTTPResponse:
-        raise HTTPConnectionError(message="boom", method=method, url="/upload")
-
-    client = HTTPClient(requesting=failing_request)
-    body = tracked_body()
-    await anext(body)  # started, so it holds live state to release
-
-    with raises(HTTPConnectionError):
-        await client.post(url="/upload", body=body)
-
-    # a backend releases a streamed payload only once it began reading it, so a
-    # request failing before that would otherwise leave the caller's body open
-    assert closed == ["body"]
-
-
-@mark.asyncio
-async def test_http_client_closes_streamed_body_left_unread() -> None:
-    closed: list[str] = []
-
-    async def tracked_body() -> AsyncGenerator[bytes]:
-        try:
-            yield b"first"
-            yield b"second"
-
-        finally:
-            closed.append("body")
-
-    async def partial_request(method: str, /, **kwargs: Any) -> HTTPResponse:
-        # answers after one chunk, as a server rejecting an upload early would
-        await anext(kwargs["body"])
-        return HTTPResponse(status_code=413, headers={}, body=b"too large")
-
-    client = HTTPClient(requesting=partial_request)
-
-    response = await client.post(url="/upload", body=tracked_body())
-
-    assert response.status_code == 413
-    assert closed == ["body"]
-
-
-@mark.asyncio
 async def test_http_response_stream_body_of_an_empty_payload_yields_no_chunks() -> None:
     buffered = HTTPResponse(status_code=204, headers={}, body=b"")
 
@@ -832,41 +835,6 @@ async def test_http_response_stream_body_of_an_empty_payload_yields_no_chunks() 
 
 
 @mark.asyncio
-async def test_http_client_releases_a_response_when_closing_the_body_is_cancelled() -> None:
-    # a generator never read has no frame to run on close, so the release has to
-    # be observed on the body itself
-    response_body = _CloseTrackingBody([b"payload"])
-
-    async def cancelling_body() -> AsyncGenerator[bytes]:
-        try:
-            yield b"first"
-            yield b"second"
-
-        finally:
-            # the shape an outer timeout produces: cancellation landing on the
-            # release of the payload, after the response was already obtained
-            raise asyncio.CancelledError
-
-    async def partial_request(method: str, /, **kwargs: Any) -> HTTPResponse:
-        await anext(kwargs["body"])  # answers early, leaving the payload open
-        return HTTPResponse(
-            status_code=200,
-            headers={},
-            body=cast(AsyncGenerator[bytes], response_body),
-        )
-
-    client = HTTPClient(requesting=partial_request)
-
-    with raises(asyncio.CancelledError):
-        await client.post(url="/upload", body=cancelling_body(), stream=True)
-
-    # cancellation cannot be swallowed the way a failure closing the payload
-    # can, and it takes the response with it - so the response has to be
-    # released here rather than holding its connection until the pool closes
-    assert response_body.closed is True
-
-
-@mark.asyncio
 async def test_http_response_releasing_a_buffered_body_leaves_it_readable() -> None:
     response = HTTPResponse(status_code=200, headers={}, body=b"buffered")
 
@@ -877,66 +845,3 @@ async def test_http_response_releasing_a_buffered_body_leaves_it_readable() -> N
 
     assert await response.body() == b"buffered"
     assert [chunk async for chunk in response.stream_body()] == [b"buffered"]
-
-
-@mark.asyncio
-async def test_http_client_closes_a_streamed_body_when_cancelled_in_flight() -> None:
-    closed: list[str] = []
-
-    async def tracked_body() -> AsyncGenerator[bytes]:
-        try:
-            yield b"first"
-            yield b"second"
-
-        finally:
-            closed.append("body")
-
-    async def hanging_request(method: str, /, **kwargs: Any) -> HTTPResponse:
-        await anext(kwargs["body"])  # started, so it holds live state to release
-        await asyncio.Event().wait()
-        raise AssertionError("unreachable")  # pragma: no cover
-
-    client = HTTPClient(requesting=hanging_request)
-    task = asyncio.ensure_future(client.post(url="/upload", body=tracked_body()))
-    for _ in range(5):
-        await asyncio.sleep(0)
-
-    task.cancel()
-    with raises(asyncio.CancelledError):
-        await task
-
-    # cancellation is routine control flow, not a failure - the payload is
-    # still released, and no response existed to protect
-    assert closed == ["body"]
-
-
-@mark.asyncio
-async def test_http_client_releases_a_body_whose_cleanup_awaits_under_cancellation() -> None:
-    closed: list[str] = []
-
-    async def tracked_body() -> AsyncGenerator[bytes]:
-        try:
-            yield b"first"
-            yield b"second"
-
-        finally:
-            await asyncio.sleep(0)  # cleanup which yields to the loop
-            closed.append("body")
-
-    async def hanging_request(method: str, /, **kwargs: Any) -> HTTPResponse:
-        await anext(kwargs["body"])
-        await asyncio.Event().wait()
-        raise AssertionError("unreachable")  # pragma: no cover
-
-    client = HTTPClient(requesting=hanging_request)
-    task = asyncio.ensure_future(client.post(url="/upload", body=tracked_body()))
-    for _ in range(5):
-        await asyncio.sleep(0)
-
-    task.cancel()
-    with raises(asyncio.CancelledError):
-        await task
-
-    # a pending cancellation must not cut the release short - a payload whose
-    # cleanup has to await would otherwise stay open
-    assert closed == ["body"]

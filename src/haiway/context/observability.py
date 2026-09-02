@@ -304,13 +304,14 @@ class ScopeStore:
     __slots__ = (
         "_completed",
         "_exited",
+        "_prefix",
         "entered",
         "identifier",
         "logger",
         "nested",
         "pending",
-        "prefix",
         "store",
+        "trace_hex",
         "trace_id",
     )
 
@@ -326,9 +327,10 @@ class ScopeStore:
         # by their root, so concurrent trees are told apart the same way they are
         # under a tracing backend
         self.trace_id: UUID = trace_id
-        # every record produced within the scope carries the same prefix, so it is
-        # rendered once. unpadded hex is the form trace backends expect
-        self.prefix: str = f"[{trace_id.hex}] {identifier.unique_name}"
+        # unpadded hex is the form trace backends expect, and it is what every
+        # record within the scope is prefixed with - render it once
+        self.trace_hex: str = trace_id.hex
+        self._prefix: str | None = None
         # resolved per tree, so concurrent roots keep their own logger
         self.logger: Logger = logger
         # only populated when a summary is going to be rendered - the tree is
@@ -343,6 +345,17 @@ class ScopeStore:
         # check constant time instead of walking the whole subtree
         self.pending: int = 0
         self.store: list[str] = []
+
+    @property
+    def prefix(self) -> str:
+        # every record produced within the scope carries the same prefix, so it is
+        # rendered once, and only when something is actually recorded
+        prefix: str | None = self._prefix
+        if prefix is None:
+            prefix = f"[{self.trace_hex}] {self.identifier.unique_name}"
+            self._prefix = prefix
+
+        return prefix
 
     @property
     def time(self) -> float:
@@ -415,13 +428,15 @@ def LoggerObservability(  # noqa: C901, PLR0915
     The duration reported is the one of the scope itself, not of its longest
     descendant.
     """
-    scopes: dict[UUID, ScopeStore] = {}
+    # keyed by the raw integer of the scope UUID - hashing an int is done in C,
+    # while hashing a UUID goes through a Python level `__hash__` on every lookup
+    scopes: dict[int, ScopeStore] = {}
 
     def trace_identifying(
         scope: ContextIdentifier,
         /,
     ) -> UUID:
-        store: ScopeStore | None = scopes.get(scope.scope_id)
+        store: ScopeStore | None = scopes.get(scope.scope_id.int)
         if store is None:
             # an untracked scope belongs to no tree known here - reporting the
             # zero identifier keeps resolving one from failing, the same way
@@ -438,7 +453,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         *args: Any,
         exception: BaseException | None,
     ) -> None:
-        store: ScopeStore | None = scopes.get(scope.scope_id)
+        store: ScopeStore | None = scopes.get(scope.scope_id.int)
         if store is None:
             return  # skip without store
 
@@ -461,7 +476,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         event: str,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        store: ScopeStore | None = scopes.get(scope.scope_id)
+        store: ScopeStore | None = scopes.get(scope.scope_id.int)
         if store is None:
             return  # skip without store
 
@@ -488,7 +503,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         kind: ObservabilityMetricKind,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        store: ScopeStore | None = scopes.get(scope.scope_id)
+        store: ScopeStore | None = scopes.get(scope.scope_id.int)
         if store is None:
             return  # skip without store
 
@@ -521,7 +536,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         if not attributes:
             return  # skip empty
 
-        store: ScopeStore | None = scopes.get(scope.scope_id)
+        store: ScopeStore | None = scopes.get(scope.scope_id.int)
         if store is None:
             return  # skip without store
 
@@ -541,11 +556,11 @@ def LoggerObservability(  # noqa: C901, PLR0915
         scope: ContextIdentifier,
         /,
     ) -> str:
-        assert scope.scope_id not in scopes  # nosec: B101
+        assert scope.scope_id.int not in scopes  # nosec: B101
         # a root scope is its own parent, so the lookup misses and it starts a
         # tree of its own. it also misses for a nested scope entered after the
         # scope it belongs to already completed
-        parent: ScopeStore | None = scopes.get(scope.parent_id)
+        parent: ScopeStore | None = scopes.get(scope.parent_id.int)
         store: ScopeStore = ScopeStore(
             scope,
             # one trace per tree - a root starts it, everything below inherits it
@@ -558,13 +573,38 @@ def LoggerObservability(  # noqa: C901, PLR0915
 
             parent.pending += 1
 
-        scopes[scope.scope_id] = store
-        store.logger.log(
-            ObservabilityLevel.DEBUG,
-            f"{store.prefix} Entering scope: {scope.name}",
-        )
+        scopes[scope.scope_id.int] = store
+        if store.logger.isEnabledFor(ObservabilityLevel.DEBUG):
+            store.logger.log(
+                ObservabilityLevel.DEBUG,
+                f"{store.prefix} Entering scope: {scope.name}",
+            )
 
-        return store.trace_id.hex
+        return store.trace_hex
+
+    def record_completion(
+        store: ScopeStore,
+        /,
+    ) -> None:
+        debug_enabled: bool = store.logger.isEnabledFor(ObservabilityLevel.DEBUG)
+        if not debug_context and not debug_enabled:
+            return  # nothing to summarize and nothing to write - skip formatting
+
+        if debug_enabled:
+            store.logger.log(
+                ObservabilityLevel.DEBUG,
+                f"{store.prefix} Exiting scope: {store.identifier.name}",
+            )
+
+        metric_str: str = f"Metric - scope_time:{store.time:.3f}s"
+        if debug_context:  # store only for summary
+            store.store.append(metric_str)
+
+        if debug_enabled:
+            store.logger.log(
+                ObservabilityLevel.DEBUG,
+                f"{store.prefix} {metric_str}",
+            )
 
     def scope_exiting(
         scope: ContextIdentifier,
@@ -572,7 +612,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         *,
         exception: BaseException | None,
     ) -> None:
-        store: ScopeStore | None = scopes.get(scope.scope_id)
+        store: ScopeStore | None = scopes.get(scope.scope_id.int)
         if store is None:
             return  # skip without store
 
@@ -593,24 +633,13 @@ def LoggerObservability(  # noqa: C901, PLR0915
         # complete the scope and every ancestor which was waiting for it
         while store.try_complete():
             identifier: ContextIdentifier = store.identifier
-            store.logger.log(
-                ObservabilityLevel.DEBUG,
-                f"{store.prefix} Exiting scope: {identifier.name}",
-            )
-            metric_str: str = f"Metric - scope_time:{store.time:.3f}s"
-            if debug_context:  # store only for summary
-                store.store.append(metric_str)
-
-            store.logger.log(
-                ObservabilityLevel.DEBUG,
-                f"{store.prefix} {metric_str}",
-            )
+            record_completion(store)
 
             # a root scope is its own parent, so the lookup finds itself
-            parent: ScopeStore | None = scopes.get(identifier.parent_id)
+            parent: ScopeStore | None = scopes.get(identifier.parent_id.int)
             # a completed scope is never recorded into again - unlink it here,
             # the summary reaches it through the tree its root retained
-            del scopes[identifier.scope_id]
+            del scopes[identifier.scope_id.int]
             if parent is None or parent is store:
                 if debug_context:
                     store.logger.log(

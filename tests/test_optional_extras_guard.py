@@ -8,10 +8,12 @@ import pytest
 @pytest.mark.parametrize(
     ("haiway_module", "dependency", "extra_name"),
     [
+        ("haiway.fastapi", "fastapi", "fastapi"),
         ("haiway.httpx", "httpx2", "httpx"),
         ("haiway.opentelemetry", "opentelemetry", "opentelemetry"),
         ("haiway.postgres", "asyncpg", "postgres"),
         ("haiway.rabbitmq", "pika", "rabbitmq"),
+        ("haiway.starlette", "starlette", "starlette"),
     ],
 )
 def test_optional_extra_guard_message(

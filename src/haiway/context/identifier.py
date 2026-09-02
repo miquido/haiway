@@ -53,11 +53,11 @@ class ContextIdentifier:
 
     __slots__ = (
         "_token",
+        "_unique_name",
         "name",
         "parent_id",
         "path",
         "scope_id",
-        "unique_name",
     )
 
     def __init__(
@@ -74,8 +74,19 @@ class ContextIdentifier:
         # the name labels every record produced within the scope, so control
         # characters are escaped here instead of in each observability backend
         self.name: str = escape_controls(name)
-        self.unique_name: str = f"[{self.name}] [{scope_id}]"
+        self._unique_name: str | None = None
         self._token: Token[ContextIdentifier] | None = None
+
+    @property
+    def unique_name(self) -> str:
+        # built on demand and kept - only log prefixes and error messages need it,
+        # so a scope which records nothing never pays for formatting the UUID
+        unique_name: str | None = self._unique_name
+        if unique_name is None:
+            unique_name = f"[{self.name}] [{self.scope_id}]"
+            self._unique_name = unique_name
+
+        return unique_name
 
     @property
     def is_root(self) -> bool:

@@ -910,6 +910,27 @@ def test_configure_after_shutdown_is_rejected(monkeypatch: MonkeyPatch) -> None:
         OpenTelemetry.configure(service="restarting", version="1", environment="test")
 
 
+def test_configured_reports_whether_observability_can_be_prepared(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(OpenTelemetry, "_tracer_provider", None)
+    monkeypatch.setattr(OpenTelemetry, "_meter_provider", None)
+    monkeypatch.setattr(OpenTelemetry, "_logger_provider", None)
+    monkeypatch.setattr(OpenTelemetry, "_logger", None)
+
+    assert OpenTelemetry.configured() is False
+
+    OpenTelemetry.autoconfigure(service="checking")
+
+    # what a resource entered on each application startup guards its own
+    # configuration with - the provider slots are claimed once per process
+    assert OpenTelemetry.configured() is True
+
+    OpenTelemetry.shutdown()
+
+    assert OpenTelemetry.configured() is False
+
+
 def test_configure_twice_is_rejected(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(OpenTelemetry, "_meter_provider", MeterProvider(shutdown_on_exit=False))
 

@@ -101,45 +101,59 @@ class Disposables:
 
         # preparation is atomic - either nothing starts or everything gets
         # prepared, refuse to start when cancellation is already requested
-        # yield to deliver the pending cancellation - raising a fresh one
-        # would leave the task cancellation request unhandled
-        await sleep(0)
+        await sleep(0)  # raise when cancelled
 
-        preparation: Future[list[Iterable[State] | State | BaseException]] = gather(
+        # held on its own instead of being awaited inline - the shield detaches
+        # the caller from the preparation, it does not stop it, and this is the
+        # only reference left to reach what it produces after that
+        preparing: Future[list[Iterable[State] | State | BaseException]] = gather(
             *(disposable.__aenter__() for disposable in self._disposables),
             return_exceptions=True,
         )
 
         results: Sequence[Iterable[State] | State | BaseException]
         try:
-            # shield the preparation - cancelling it midway would leave
-            # already prepared elements without anyone to dispose them
-            results = await shield(preparation)
+            results = await shield(preparing)
 
-        except BaseException as exc:  # cancelled while preparing
-            # shield the cleanup as well - repeated cancellation
-            # can't be allowed to abandon prepared elements
+        except BaseException as exc:
+            # cancelled midway - the preparation still completes and nothing else
+            # holds what it prepares, so it is awaited and disposed here rather
+            # than left to the garbage collector. under a single shield, so a
+            # cancellation delivered again does not split the cleanup in half
             await shield(
-                self._dispose_prepared(
-                    preparation,
+                self._dispose_abandoned(
+                    preparing,
                     cause=exc,
                 )
             )
-            raise  # reraise cancellation
+            raise  # reraise exception
 
         try:
             return _collect_state(results)  # raises on preparation errors
 
         except BaseException as exc:
-            await self._dispose_prepared(
-                preparation,
-                cause=exc,
+            await shield(
+                self._dispose_prepared(
+                    results,
+                    cause=exc,
+                )
             )
             raise  # reraise exception
 
+    async def _dispose_abandoned(
+        self,
+        preparing: Future[list[Iterable[State] | State | BaseException]],
+        /,
+        cause: BaseException,
+    ) -> None:
+        await self._dispose_prepared(
+            await preparing,
+            cause=cause,
+        )
+
     async def _dispose_prepared(
         self,
-        preparation: Future[list[Iterable[State] | State | BaseException]],
+        prepared: Sequence[Iterable[State] | State | BaseException],
         /,
         cause: BaseException,
     ) -> None:
@@ -149,7 +163,7 @@ class Disposables:
                 disposable.__aexit__(type(cause), cause, cause.__traceback__)
                 for disposable, result in zip(
                     self._disposables,
-                    await preparation,
+                    prepared,
                     strict=True,
                 )
                 if not isinstance(result, BaseException)

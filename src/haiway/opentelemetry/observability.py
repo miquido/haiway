@@ -1022,6 +1022,26 @@ class OpenTelemetry:
         return cls
 
     @classmethod
+    def configured(cls) -> bool:
+        """
+        Check whether the integration can prepare observability.
+
+        Returns
+        -------
+        bool
+            ``True`` once ``configure()`` or ``autoconfigure()`` succeeded, and
+            until ``shutdown()`` was called.
+
+        Notes
+        -----
+        The provider slots are claimed once per process and can neither be
+        replaced nor restored after a shutdown, so this is what a resource
+        entered on each application startup guards its configuration with -
+        ``configure()`` refuses a second call.
+        """
+        return cls._logger is not None
+
+    @classmethod
     def force_flush(
         cls,
         timeout_millis: int = 30000,
