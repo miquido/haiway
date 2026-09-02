@@ -253,8 +253,8 @@ class HTTPXClient(Immutable):
         body : HTTPBody | None, optional
             Request body content. ``bytes`` are sent with a ``Content-Length``;
             an async byte generator is streamed with chunked transfer encoding
-            instead of being buffered. The `HTTPClient` facade closes it once
-            the request is done with it, so this method does not.
+            instead of being buffered. It stays owned by the caller and is
+            never closed here.
         timeout : float | None, optional
             Request timeout. Overrides default timeout if specified.
         follow_redirects : bool | None, optional

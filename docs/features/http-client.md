@@ -350,11 +350,23 @@ a `Content-Length`. It can be consumed only once, which means it cannot be repla
 preserving the method (307, 308) or a retry fails with `HTTPClientError`. Pass `bytes` instead when
 the request has to survive either.
 
+A streamed payload stays owned by whoever passed it. The request reads it while it is in flight and
+never closes it, so a request that fails before the upload finished - or a server that answers early
+\- leaves the generator open. Close it at the call site when the generator holds anything worth
+releasing:
+
+```python
+from contextlib import aclosing
+
+async with aclosing(encoded_rows(pending_events())) as body:
+    response = await HTTPClient.put(url="/uploads/events", body=body)
+```
+
 Buffered payloads are `bytes`, not `str` - `HTTPBody` is `AsyncGenerator[bytes] | bytes`, so text is
 encoded at the call site and the charset is never guessed for you. It has to be a full async
-generator rather than any async iterable, because a streamed body is closed once it is read or
-abandoned and only a generator has `aclose`. Wrap a bare async iterator in an `async def` generator
-that yields from it.
+generator rather than any async iterable, because a streamed response body is closed once it is read
+or abandoned and only a generator has `aclose`. Wrap a bare async iterator in an `async def`
+generator that yields from it.
 
 ### Connection Pooling and Reuse
 
@@ -427,26 +439,30 @@ A few properties worth knowing:
 ### Trace Propagation
 
 A request can carry the current trace position, so the called service continues this trace instead
-of starting its own. It is asked for per request, and off by default:
+of starting its own. It is asked for per request:
 
 ```python
 async with ctx.scope(
     "api",
     observability=OpenTelemetry.observability(),
-    disposables=(HTTPXClient(base_url="https://internal.example.com"),),
+    disposables=(HTTPXClient(),),
 ):
-    # this request carries `traceparent`, and `tracestate` when present
-    response = await HTTPClient.get(url="/users", trace_propagation=True)
+    # carries `traceparent`, and `tracestate` when present
+    internal = await HTTPClient.get(
+        url="https://internal.example.com/users",
+        trace_propagation=True,
+    )
 
-    # this one does not
-    other = await HTTPClient.get(url="/public")
+    # left off by default, so a third party sees no trace identifiers
+    external = await HTTPClient.get(url="https://api.vendor.com/rates")
 ```
 
-`trace_propagation` is per request, and defaults to `False`, because it exposes internal trace
-identifiers to whoever is called - ask for it towards services you own, not towards third party
-APIs. Since it is decided at the request site, one client can be used for both. Headers passed to
-the request are never overridden, so a caller managing trace context itself keeps control, and a
-backend with no trace position to hand out - the default logger among them - propagates nothing.
+The decision belongs to the request site and defaults to `False` - propagating exposes internal
+trace identifiers to whoever is called, which is a choice per callee rather than per client.
+
+Headers passed to the request are never overridden, so a caller managing trace context itself keeps
+control, and a backend with no trace position to hand out - the default logger among them -
+propagates nothing, so the same code works whether or not the service is traced.
 
 ## Testing
 
@@ -515,8 +531,9 @@ async def test_user_fetching():
 1. **Send replayable bodies where redirects or retries are expected**: A streamed request body is
    consumed once and cannot be sent again.
 1. **Mock the `requesting` callable in tests**: Most unit tests do not need a real transport.
-1. **Ask for `trace_propagation` only on requests towards services you own**: It hands internal
-   trace identifiers to whoever is called.
+1. **Propagate the trace only towards services you own**: Ask for `trace_propagation` on requests
+   towards your own services, and leave it off for third-party APIs. It hands internal trace
+   identifiers to whoever is called.
 
 ## Custom Implementations
 

@@ -104,6 +104,8 @@ nav:
       - Caching Helper: features/caching.md
       - Postgres: features/postgres.md
       - RabbitMQ: features/rabbitmq.md
+      - Starlette: features/starlette.md
+      - FastAPI: features/fastapi.md
       - File Access: features/file-access.md
       - Event Bus: features/event-bus.md
       - State Methods: features/state-methods.md

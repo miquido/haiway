@@ -16,10 +16,12 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
   - `attributes/`: Attribute annotations, state objects, and validation helpers.
   - `context/`: Structured-concurrency context management, scopes, and lifecycle utilities.
   - `helpers/`: Cross-cutting helpers for configuration, async orchestration, retries, throttling, HTTP adapters, file access, and message queues.
+  - `fastapi/`: FastAPI application factory reusing the Starlette integration pieces, built on top of `fastapi`.
   - `httpx/`: Thin wrappers around `httpx2.AsyncClient` aligned with haiway abstractions.
   - `opentelemetry/`: OpenTelemetry integration and observability backend wiring.
   - `postgres/`: Async Postgres client, configuration, and typed row/state helpers built on top of `asyncpg` patterns.
   - `rabbitmq/`: Async RabbitMQ client/state helpers and typed queue/message abstractions built on top of `pika`.
+  - `starlette/`: Starlette integration plugging the context into ASGI request handling - application context, middleware, and application factory built on top of `starlette`.
   - `types/`: Fundamental typed primitives (e.g., `Missing`, immutable containers) shared across modules.
   - `utils/`: Generic async utilities (queues, streams, env helpers, logging bootstrap, metadata helpers).
 - `tests/`: Pytest suite mirroring package structure; keep new tests alongside the code they cover.
@@ -27,7 +29,7 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
 - `Makefile`: Entry point for common dev tasks (`format`, `lint`, `test`, `docs`, `docs-format`, `docs-lint`, `sync`, `update`).
 - `pyproject.toml`: Project metadata, dependencies, and configuration.
 
-Core public exports are centralized in `src/haiway/__init__.py`. Optional integration packages also expose public APIs from their own subpackages such as `haiway.postgres`, `haiway.rabbitmq`, and `haiway.opentelemetry`.
+Core public exports are centralized in `src/haiway/__init__.py`. Optional integration packages also expose public APIs from their own subpackages such as `haiway.postgres`, `haiway.rabbitmq`, `haiway.starlette`, `haiway.fastapi`, and `haiway.opentelemetry`.
 
 ## Style & Patterns
 

@@ -37,8 +37,9 @@ type HTTPBody = AsyncGenerator[bytes] | bytes
 """Payload of a request or a response - buffered as ``bytes``, or streamed as
 an async byte generator.
 
-A full generator is required, not any async iterable: a streamed body is closed
-once it is read or abandoned, which needs ``aclose``. Wrap a bare async iterator
+A full generator is required, not any async iterable: a streamed response body
+is closed once it is read or abandoned, which needs ``aclose``. A streamed
+request payload stays owned by the caller. Wrap a bare async iterator
 in a generator (``async def gen(): ...`` yielding from it) to pass one.
 
 A streamed request payload has no known length, so it is sent with chunked
@@ -328,7 +329,9 @@ class HTTPRequesting(Protocol):
         HTTP headers to include in the request.
     body : HTTPBody | None
         Request body content - buffered `bytes`, or an async byte generator
-        streamed with chunked transfer encoding.
+        streamed with chunked transfer encoding. A streamed payload stays owned
+        by the caller, so an implementation reads it while the request is in
+        flight and never closes it.
     timeout : float | None
         Request timeout in seconds. None uses client default.
     follow_redirects : bool | None
@@ -550,65 +553,6 @@ def _recorded_host(
     return host.partition(":")[0]
 
 
-async def _release_body(
-    body: HTTPBody | None,
-    /,
-) -> None:
-    """Release a streamed request payload the backend may have left open.
-
-    A backend releases a streamed payload only when it began reading it - a
-    request failing before that, or a server answering before the upload
-    finished, would leave the caller's generator open. Closing an exhausted
-    generator does nothing, so the usual path is unaffected. Done here rather
-    than per backend, so the promise of ``HTTPBody`` holds for every
-    ``HTTPRequesting`` implementation.
-
-    A failure closing it is logged rather than raised: it would displace the
-    in-flight error, hiding the timeout or connection failure retries are keyed
-    on, or discard an already obtained response. Cancellation is not a failure
-    and does propagate - what it takes with it is handled at the call site.
-    """
-    if not isinstance(body, AsyncGenerator):
-        return  # buffered, or absent - nothing to release
-
-    try:
-        await body.aclose()
-
-    except Exception as exc:
-        ctx.log_warning(
-            "HTTP request body failed to close",
-            exception=exc,
-        )
-
-
-async def _release_response(
-    response: HTTPResponse,
-    /,
-) -> None:
-    """Discard a response which has to be dropped after it was obtained.
-
-    Cancellation reaching the release of a streamed request payload is the one
-    place that happens. Without this a streamed body would keep holding its
-    connection until the pool is closed.
-
-    Claiming the body through the same accessor a reader would use is what keeps
-    this from drifting from it: a buffered payload holds nothing and stays
-    readable, while a streamed one is claimed, so a later read fails with
-    ``HTTPBodyConsumedError`` rather than reading as empty.
-
-    A failure closing it is logged rather than raised - this runs while another
-    failure unwinds, and must not replace it.
-    """
-    try:
-        await response.stream_body().aclose()
-
-    except Exception as exc:
-        ctx.log_warning(
-            "HTTP response body failed to close",
-            exception=exc,
-        )
-
-
 def _record_failure(
     exception: Exception,
     /,
@@ -682,15 +626,16 @@ class HTTPClient(State):
       the method, the status code or the error type, and `server.address` when
       the request URL names a host. A relative URL resolves against a base URL
       held by the backend, which the facade does not see, so it carries no host.
-    - Requesting `trace_propagation` on a request adds the current trace
-      context to its headers - the W3C `traceparent`, and `tracestate` when
-      present - so the called service continues this trace instead of starting
-      its own. It is asked for per request, and defaults to `False`, because it
-      exposes internal trace identifiers to whoever is called: ask for it
-      towards services you own, not towards third party APIs. Headers passed to
-      the request are never overridden, and an observability backend with no
-      trace context to hand out - the default logger among them - propagates
-      nothing.
+    - `trace_propagation` adds the current trace context to the headers of a
+      request - the W3C `traceparent`, and `tracestate` when present - so the
+      called service continues this trace instead of starting its own. It is
+      asked for per request and defaults to `False`, because propagating
+      exposes internal trace identifiers to whoever is called: ask for it on
+      requests towards services you own, and leave it off for third party APIs.
+      Headers passed to the request are never overridden, and an observability
+      backend with no trace context to hand out - the default logger among
+      them - propagates nothing, so a service records the same requests whether
+      or not it is traced.
     - HTTP status codes such as 4xx and 5xx are returned as normal
       `HTTPResponse` values. `HTTPClientError` is reserved for transport or
       adapter failures, with `HTTPTimeoutError` and `HTTPConnectionError`
@@ -703,9 +648,9 @@ class HTTPClient(State):
     - Request bodies stream too: pass an async byte generator as `body` to send
       a payload without holding it in memory. Such a payload is sent with
       chunked transfer encoding and cannot be replayed, so it does not survive
-      a redirect or a retry. It is closed once the request is done with it,
-      however it ended, so a payload abandoned by a failed request does not
-      outlive the call. Buffered payloads are `bytes` - encode text yourself
+      a redirect or a retry. It stays owned by the caller and is never closed
+      here, so close it at the call site when it holds anything worth
+      releasing. Buffered payloads are `bytes` - encode text yourself
       rather than relying on a guessed charset.
 
     Examples
@@ -722,6 +667,11 @@ class HTTPClient(State):
     ...     body=json.dumps({"name": "Alice"}).encode(),
     ...     headers={"Content-Type": "application/json"}
     ... )
+    ...
+    >>> # Propagating the trace to a service you own
+    >>> async with ctx.scope("internal", disposables=(HTTPXClient(base_url=INTERNAL_URL),)):
+    ...     # carries `traceparent`, and `tracestate` when present
+    ...     response = await HTTPClient.get(url="/users", trace_propagation=True)
     ...
     >>> # Streaming an upload without buffering it
     >>> async def chunks() -> AsyncGenerator[bytes]:
@@ -864,7 +814,9 @@ class HTTPClient(State):
         body : HTTPBody | None, optional
             Request body content - buffered `bytes`, or an async byte
             generator to stream the payload instead of holding it in memory.
-            A streamed payload is closed once the request is done with it.
+            A streamed payload stays owned by the caller and is never closed
+            here - close it at the call site when it holds anything worth
+            releasing.
         timeout : float | None, optional
             Request timeout in seconds.
         follow_redirects : bool | None, optional
@@ -951,7 +903,9 @@ class HTTPClient(State):
         body : HTTPBody | None, optional
             Request body content - buffered `bytes`, or an async byte
             generator to stream the payload instead of holding it in memory.
-            A streamed payload is closed once the request is done with it.
+            A streamed payload stays owned by the caller and is never closed
+            here - close it at the call site when it holds anything worth
+            releasing.
         timeout : float | None, optional
             Request timeout in seconds.
         follow_redirects : bool | None, optional
@@ -1048,7 +1002,9 @@ class HTTPClient(State):
         body : HTTPBody | None, optional
             Request body content - buffered `bytes`, or an async byte
             generator to stream the payload instead of holding it in memory.
-            A streamed payload is closed once the request is done with it.
+            A streamed payload stays owned by the caller and is never closed
+            here - close it at the call site when it holds anything worth
+            releasing.
         timeout : float | None, optional
             Request timeout in seconds. None uses client default.
         follow_redirects : bool | None, optional
@@ -1127,34 +1083,16 @@ class HTTPClient(State):
         started: float = monotonic()
         response: HTTPResponse
         try:
-            try:
-                response = await self.requesting(
-                    method,
-                    url=url,
-                    query=query,
-                    headers=self._propagated_headers(headers) if trace_propagation else headers,
-                    body=body,
-                    timeout=timeout,
-                    follow_redirects=follow_redirects,
-                    stream=stream,
-                )
-
-            except BaseException:
-                # nothing was obtained, so there is no response to protect - release
-                # the payload and let the failure through unchanged
-                await _release_body(body)
-                raise
-
-            try:
-                await _release_body(body)
-
-            except BaseException:
-                # a failure closing the payload is swallowed there, so only
-                # cancellation reaches here - and it takes the response with it.
-                # release it rather than leaving a streamed body holding its
-                # connection until the pool is closed
-                await _release_response(response)
-                raise
+            response = await self.requesting(
+                method,
+                url=url,
+                query=query,
+                headers=_with_trace_headers(headers) if trace_propagation else headers,
+                body=body,
+                timeout=timeout,
+                follow_redirects=follow_redirects,
+                stream=stream,
+            )
 
         except HTTPClientError as exc:
             _record_failure(
@@ -1211,28 +1149,28 @@ class HTTPClient(State):
         )
         return response
 
-    def _propagated_headers(
-        self,
-        headers: HTTPHeaders | None,
-        /,
-    ) -> HTTPHeaders | None:
-        """Extend request headers with the current trace context, when there is one."""
-        trace_context: Mapping[str, str] = ctx.trace_context()
-        if not trace_context:
-            return headers  # no trace position to propagate
-
-        if headers is None:
-            return trace_context
-
-        # explicit headers win - a caller managing trace context itself, or
-        # deliberately suppressing it for one request, is not overridden here
-        provided: set[str] = {name.lower() for name in headers}
-        additional: Mapping[str, str] = {
-            name: value for name, value in trace_context.items() if name.lower() not in provided
-        }
-        if not additional:
-            return headers
-
-        return {**headers, **additional}
-
     requesting: HTTPRequesting
+
+
+def _with_trace_headers(
+    headers: HTTPHeaders | None,
+    /,
+) -> HTTPHeaders | None:
+    """Extend request headers with the current trace context, when there is one."""
+    trace_context: Mapping[str, str] = ctx.trace_context()
+    if not trace_context:
+        return headers  # no trace position to propagate
+
+    if headers is None:
+        return trace_context
+
+    # explicit headers win - a caller managing trace context itself, or
+    # deliberately suppressing it for one request, is not overridden here
+    provided: set[str] = {name.lower() for name in headers}
+    additional: Mapping[str, str] = {
+        name: value for name, value in trace_context.items() if name.lower() not in provided
+    }
+    if not additional:
+        return headers
+
+    return {**headers, **additional}

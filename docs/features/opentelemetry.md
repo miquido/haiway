@@ -304,6 +304,20 @@ trace instead. The value is decoded once, when the adapter is created.
 The remote parent applies to root scopes only. A nested scope entered within a spawned task stays
 under the span its task inherited, instead of being re-rooted at the remote parent.
 
+Reading the headers and preparing a backend per request is what the Starlette and FastAPI
+integrations do, so an ASGI application needs none of the wiring above - `observability` there takes
+the callable itself:
+
+```python
+from haiway.starlette import ServerContext
+
+context = ServerContext(observability=OpenTelemetry.observability)
+```
+
+See [Starlette](starlette.md#distributed-traces) for what it resolves from a request, and for the
+cases a backend handed a single value cannot see - several `traceparent` headers, or a `tracestate`
+split across a few.
+
 To propagate the current active span to another system, use:
 
 ```python

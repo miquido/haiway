@@ -6,6 +6,7 @@ from haiway.utils.collections import (
     as_tuple,
     without_missing,
 )
+from haiway.utils.context import NoopAsyncContext, NoopContext
 from haiway.utils.env import (
     getenv,
     getenv_base64,
@@ -27,6 +28,8 @@ __all__ = (
     "AsyncQueueEmpty",
     "AsyncStream",
     "JSONLogFormatter",
+    "NoopAsyncContext",
+    "NoopContext",
     "Paginated",
     "Pagination",
     "PaginationToken",

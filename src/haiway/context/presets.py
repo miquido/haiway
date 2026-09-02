@@ -2,6 +2,7 @@ from collections.abc import (
     Collection,
     Iterable,
     Mapping,
+    Sequence,
 )
 from contextvars import ContextVar, Token
 from types import TracebackType
@@ -43,9 +44,11 @@ class ContextPresets:
     and then wired into a running context. Immutability is enforced via `@final`
     and attribute guards, so instances are safe to share between scopes and cannot
     be mutated after creation. Resolution happens per scope entry: disposable
-    factories are called each time ``resolve()`` is used, while state provided via
-    ``ContextPresets.of(..., *state)`` is wrapped once in ``DisposableState`` and
-    reused as provided unless the state itself is produced by an async factory.
+    factories are called each time ``resolve()`` is used. State provided via
+    ``ContextPresets.of(..., *state)`` is kept as given when it is plain ``State``,
+    so a preset carrying only state needs no preparation when a scope is entered
+    with it. State produced by an async factory is wrapped once in a
+    ``DisposableState`` and prepared on every resolution.
 
     Examples
     --------
@@ -86,12 +89,24 @@ class ContextPresets:
 
         Notes
         -----
-        When `state` is provided, it is composed into a `DisposableState` and
+        Plain `State` given without any `disposables` is retained as is - such a
+        preset has nothing to prepare, so entering a scope with it stays
+        synchronous. Otherwise `state` is composed into a `DisposableState` and
         wrapped as a callable factory, so the preset behaves consistently with
-        other disposable factories. Async state factories inside `state` are run
-        when the preset is resolved for a scope entry.
+        other disposable factories, and async state factories inside `state` are
+        run when the preset is resolved for a scope entry. Either way the state
+        resolves after the preset disposables, so it keeps precedence over them.
         """
         if state:
+            # a preset built only out of plain state has nothing to prepare - keep
+            # it aside so entering a scope with it stays synchronous instead of
+            # going through the disposables machinery for a no-op
+            if not disposables and all(isinstance(element, State) for element in state):
+                return cls(
+                    name=name,
+                    static_state=tuple(element for element in state),  # pyright: ignore
+                )
+
             disposable_state: DisposableState = DisposableState.of(*state)
             return cls(
                 name=name,
@@ -108,6 +123,7 @@ class ContextPresets:
 
     __slots__ = (
         "_disposables",
+        "_static_state",
         "name",
     )
 
@@ -115,6 +131,7 @@ class ContextPresets:
         self,
         name: str,
         disposables: Collection[ContextPresetsDisposablePreparing] = (),
+        static_state: Sequence[State] = (),
     ) -> None:
         self.name: str
         object.__setattr__(
@@ -128,14 +145,27 @@ class ContextPresets:
             "_disposables",
             disposables,
         )
+        self._static_state: Sequence[State]
+        object.__setattr__(
+            self,
+            "_static_state",
+            static_state,
+        )
 
     def extended(
         self,
         other: Self,
     ) -> Self:
+        if not self._disposables and not other._disposables:
+            return self.__class__(
+                name=self.name,
+                static_state=(*self._static_state, *other._static_state),
+            )
+
         return self.__class__(
             name=self.name,
-            disposables=(*self._disposables, *other._disposables),
+            disposables=(*self._disposables, *self._state_disposables(), *other._disposables),
+            static_state=other._static_state,
         )
 
     def with_state(
@@ -145,10 +175,16 @@ class ContextPresets:
         if not state:
             return self
 
+        if not self._disposables and all(isinstance(element, State) for element in state):
+            return self.__class__(
+                name=self.name,
+                static_state=(*self._static_state, *state),  # pyright: ignore
+            )
+
         disposable_state: DisposableState = DisposableState.of(*state)
         return self.__class__(
             name=self.name,
-            disposables=(*self._disposables, lambda: disposable_state),
+            disposables=(*self._disposables, *self._state_disposables(), lambda: disposable_state),
         )
 
     def with_disposables(
@@ -160,10 +196,44 @@ class ContextPresets:
 
         return self.__class__(
             name=self.name,
-            disposables=(*self._disposables, *disposables),
+            disposables=(*self._disposables, *self._state_disposables(), *disposables),
         )
 
+    def _state_disposables(self) -> tuple[ContextPresetsDisposablePreparing, ...]:
+        # fold the static state back into the disposables order it would have
+        # held, so priority stays the same once a factory is added after it
+        if not self._static_state:
+            return ()
+
+        disposable_state: DisposableState = DisposableState.of(*self._static_state)
+        return (lambda: disposable_state,)
+
+    @property
+    def static_state(self) -> Sequence[State]:
+        """State this preset carries which needs no preparation."""
+        return self._static_state
+
     def resolve(self) -> Disposables:
+        """
+        Prepare every element of this preset as disposables.
+
+        State which needs no preparation is wrapped back into a `DisposableState`
+        here, so the resulting disposables hold the whole preset. Use
+        ``resolve_disposables()`` together with ``static_state`` to skip that
+        wrapping when entering a scope, where plain state can be applied directly.
+        """
+        return Disposables(
+            factory() for factory in (*self._disposables, *self._state_disposables())
+        )
+
+    def resolve_disposables(self) -> Disposables:
+        """
+        Prepare only the elements of this preset which have to be prepared.
+
+        The state reported by ``static_state`` is not included - it resolves after
+        these disposables, so applying it right after them keeps the priority it
+        holds within ``resolve()``.
+        """
         return Disposables(factory() for factory in self._disposables)
 
     def __setattr__(

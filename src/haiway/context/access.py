@@ -15,7 +15,7 @@ from logging import Logger
 from typing import Any, NoReturn, final, overload
 
 from haiway.attributes import State
-from haiway.context.disposables import ContextDisposables, Disposable, Disposables, DisposableState
+from haiway.context.disposables import ContextDisposables, Disposable, Disposables
 from haiway.context.events import ContextEvents, EventsSubscription
 from haiway.context.observability import (
     ContextObservability,
@@ -30,6 +30,7 @@ from haiway.context.presets import ContextPresets, ContextPresetsRegistry
 from haiway.context.scope import ContextScope
 from haiway.context.state import ContextState
 from haiway.context.tasks import BackgroundTaskGroup, ContextTaskGroup
+from haiway.utils.context import NoopAsyncContext, NoopContext
 
 __all__ = ("ctx",)
 
@@ -93,8 +94,13 @@ class ctx:
 
         When entering this context manager, the provided presets become available
         for use with ctx.scope(). The presets are looked up by their name when
-        creating scopes. Registry lookup is scoped: nested registries shadow outer
-        registries for the duration of the nested ``with`` block.
+        creating scopes. A registry covers everything running within it, and a
+        registry entered within another one shadows it for the duration of its
+        block - a scope resolves against the innermost registry only, without
+        falling back to the outer one. Presets describe an application as a
+        whole, so declaring them once at its entry point keeps what a scope
+        resolves from depending on where it was entered from. Entering no presets
+        at all is a no-op, leaving whatever registry is already active in place.
 
         Note: For single preset usage, consider passing the preset directly to
         ctx.scope() instead of using this registry.
@@ -137,6 +143,9 @@ class ctx:
         ...         config = ctx.state(ApiConfig)
         ...         assert config.base_url == "https://dev-api.example.com"
         """
+        if not presets:
+            return NoopContext.instance
+
         return ContextPresetsRegistry(presets=presets)
 
     @staticmethod
@@ -217,20 +226,16 @@ class ctx:
 
         context_disposables: Disposables
         if disposables is None:
-            context_disposables = Disposables.of(
-                DisposableState.of(*(element for element in state if element is not None))
-            )
+            context_disposables = Disposables.of()
 
         else:
-            context_disposables = Disposables.of(
-                *disposables,
-                DisposableState.of(*(element for element in state if element is not None)),
-            )
+            context_disposables = Disposables.of(*disposables)
 
         return ContextScope(
             name=name,
             presets=presets,
             disposables=context_disposables,
+            state=tuple(element for element in state if element is not None),
             observability=observability,
             isolated=isolated,
         )
@@ -256,6 +261,8 @@ class ctx:
         AbstractContextManager[None]
             context manager object intended to enter updated state context with it
         """
+        if not state:
+            return NoopContext.instance
 
         return ContextState.updating(state)
 
@@ -297,6 +304,9 @@ class ctx:
         ...         conn_state = ctx.state(ConnectionState)
         ...         await conn_state.connection.execute("SELECT 1")
         """
+
+        if not disposables:
+            return NoopAsyncContext.instance
 
         return ContextDisposables(disposables)
 

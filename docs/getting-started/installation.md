@@ -12,8 +12,8 @@ pip install haiway
 
 ## Optional Dependencies
 
-You may choose to install haiway including optional support for OpenTelemetry, httpx, Postgres, and
-RabbitMQ.
+You may choose to install haiway including optional support for OpenTelemetry, httpx, Postgres,
+RabbitMQ, Starlette, and FastAPI.
 
 ### OpenTelemetry Support
 
@@ -39,6 +39,19 @@ For RabbitMQ (`pika`) support:
 
 ```bash
 pip install "haiway[rabbitmq]"
+```
+
+For the Starlette integration - middleware and application helpers plugging the context into request
+handling:
+
+```bash
+pip install "haiway[starlette]"
+```
+
+For the same integration with a FastAPI application factory (installs `fastapi`):
+
+```bash
+pip install "haiway[fastapi]"
 ```
 
 Now you're ready to continue with the [Quick Start](quickstart.md) guide!

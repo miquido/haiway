@@ -250,7 +250,9 @@ with ctx.presets(dev_preset, prod_preset, staging_preset):
 
 Direct presets passed to `ctx.scope(preset)` take precedence over registry lookup. Registry lookup
 is scoped through `ctx.presets(...)`, and a nested registry shadows the outer registry for the
-duration of that nested `with` block.
+duration of that nested `with` block - a name is resolved against the innermost registry only,
+without falling back to the outer one. Entering `ctx.presets()` with no presets is a no-op, leaving
+whatever registry is already active in place.
 
 ## Best Practices
 

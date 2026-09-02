@@ -38,6 +38,10 @@ opentelemetry = [
 httpx = ["httpx2~=2.10"]
 postgres = ["asyncpg~=0.31.0"]
 rabbitmq = ["pika~=1.4",]
+starlette = ["starlette~=1.6"]
+# starlette is constrained explicitly - the FastAPI requirement has no upper bound
+# and `haiway.fastapi` builds on top of `haiway.starlette`
+fastapi = ["fastapi~=0.141", "starlette~=1.6"]
 dev = [
   "bandit~=1.9",
   "pyright~=1.1",

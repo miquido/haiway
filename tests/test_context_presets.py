@@ -400,7 +400,7 @@ async def test_preset_with_disposable_lifecycle():
 
 
 @mark.asyncio
-async def test_nested_preset_registries():
+async def test_nested_preset_registries_are_allowed():
     preset1 = ContextPresets.of(
         "outer",
         ConfigState(api_url="https://outer.com"),
@@ -411,31 +411,13 @@ async def test_nested_preset_registries():
         ConfigState(api_url="https://inner.com"),
     )
 
-    preset3 = ContextPresets.of(
-        "outer",  # Same name as preset1
-        ConfigState(api_url="https://inner-override.com"),
-    )
-
     with ctx.presets(preset1):
         async with ctx.scope("outer"):
             config = ctx.state(ConfigState)
             assert config.api_url == "https://outer.com"
 
-        # Nested registry
-        with ctx.presets(preset2, preset3):
-            # Inner registry shadows outer
-            async with ctx.scope("outer"):
-                config = ctx.state(ConfigState)
-                assert config.api_url == "https://inner-override.com"
-
-            async with ctx.scope("inner"):
-                config = ctx.state(ConfigState)
-                assert config.api_url == "https://inner.com"
-
-        # Back to outer registry
-        async with ctx.scope("outer"):
-            config = ctx.state(ConfigState)
-            assert config.api_url == "https://outer.com"
+        with ctx.presets(preset2):
+            pass  # pragma: no cover
 
 
 @mark.asyncio

@@ -8,7 +8,8 @@ no DI container and no mutable service objects — behavior is `Protocol`-typed 
 `pip install haiway`. Core API lives in the root `haiway` package. Optional integrations require
 extras and are imported from their own subpackage: `haiway[httpx]` -> `haiway.httpx`,
 `haiway[postgres]` -> `haiway.postgres`, `haiway[rabbitmq]` -> `haiway.rabbitmq`,
-`haiway[opentelemetry]` -> `haiway.opentelemetry`.
+`haiway[opentelemetry]` -> `haiway.opentelemetry`, `haiway[starlette]` -> `haiway.starlette`,
+`haiway[fastapi]` -> `haiway.fastapi`.
 
 ## Mental Model
 
@@ -199,7 +200,11 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
 
 - **HTTP** (`haiway.httpx`): `HTTPXClient` disposable provides `HTTPClient`. `HTTPResponse` is
   immutable; a `stream=True` body must be consumed inside the issuing scope, reads once, and
-  bodies are `bytes` (encode text yourself). Errors: `HTTPClientError` / `HTTPTimeoutError` /
+  bodies are `bytes` (encode text yourself). A streamed request body stays owned by the caller and
+  is never closed for you - close it at the call site. `trace_propagation` attaches the current
+  `traceparent`/`tracestate` to a request - asked for per request and `False` by default, so ask
+  for it on requests towards services you own and leave it off for third party APIs; headers
+  passed to the request are never overridden. Errors: `HTTPClientError` / `HTTPTimeoutError` /
   `HTTPConnectionError` / `HTTPBodyConsumedError` (a body read twice - never retry it).
 - **Postgres** (`haiway.postgres`): `PostgresConnectionPool` disposable; `Postgres.fetch`,
   `fetch_one`, and `execute` acquire a connection when needed. Pin one connection with
@@ -212,6 +217,56 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
   `async with message as content:` acks on success and rejects on exception. Consumers are
   re-established after a channel drop, so handlers must be idempotent. Errors: `RabbitMQException`
   carrying `retryable` to tell a transient broker failure from one a retry cannot fix.
+- **Starlette** (`haiway.starlette`): `ServerContext(*state, disposables=(...), presets=...,
+  observability=...)` declares the request context, and `application(...)` builds a `Starlette` app
+  installing its `lifespan` plus `ContextMiddleware`. An existing app (FastAPI) instead takes
+  `lifespan=context.lifespan` - or `context.composed_lifespan(existing)` - and
+  `add_middleware(ContextMiddleware, context=context)` added last, to stay outermost. The declared
+  state and `disposables` take the instances themselves and ignore `None` entries; the disposables are
+  prepared once, so a context backs a single run and its lifespan can not be entered again. The
+  lifespan is required - a request reaching an app without it fails rather than being served an
+  incomplete scope. Every request runs in its own scope named `"{method} {path}"` (`"WS {path}"`) -
+  the requested path, since the middleware runs before routing. Responses carry the `trace-id`
+  header, plus `traceparent`/`tracestate` when the backend provides them, dropping any entry a
+  header can not hold. An unhandled exception is recorded as the failure
+  of its request and reraised - answering it is left to the framework's server error handling,
+  which sits above the middleware, so the `500` it produces (plain, `debug` traceback page, or a
+  registered `Exception`/`500` handler) carries no trace headers. `HTTPException`,
+  `WebSocketException` and `ClientDisconnect` are withheld while the scope is left, so they are
+  not recorded as request failures. Request derived state is added by a nested middleware through
+  `ctx.updating(...)`. Startup and shutdown are outside every context scope, so what the lifespan
+  records goes to the root logger rather than the backend, and startup work needing state enters a
+  scope of its own. The W3C trace context of each request is read from its headers and passed to an
+  `observability` callable as `traceparent`/`tracestate`, so
+  `observability=OpenTelemetry.observability` is the whole distributed tracing wiring - configure
+  the integration through a disposable guarding on `OpenTelemetry.configured()`, since the provider
+  slots are claimed once per process, and flushing rather than shutting down on exit. A `Logger`
+  passed instead of a callable is turned into a logging backend of its own for each request, so
+  what one recorded is released along with it. Several `traceparent` headers discard the context,
+  only the first `tracestate` header is read, malformed values are the backend's call.
+- **Streaming** (`haiway.starlette`, re-exported from `haiway.fastapi`):
+  `StreamResponse(generator)` streams the chunks a generator yields - a server sent events feed is
+  the same response with `media_type="text/event-stream"` and the event stream format yielded by
+  the generator itself. The request scope stays entered until the last chunk, so a producer
+  resolves state and reports the request trace mid-stream. It takes a full `AsyncGenerator` and
+  closes it where the streaming ends - an abandoned one would otherwise
+  be finalized by the collector, in a fresh context which can not release a scope it opened. A
+  producer needing a scope of its own keeps it inside the generator (`ctx.stream(produce)`); one
+  entered around building the generator is already gone. A mid-stream failure is recorded within
+  the request scope (`Response streaming failed`, with the exception) then reraised - the framework
+  would otherwise replace it with `RuntimeError: ...response already started` whenever a handler
+  matches its type; a failing close is only a warning and never replaces it. A consumer which went
+  away is not a failure: the send failing - reported as a `ClientDisconnect` - is recorded at debug
+  level and leaves the request unfailed. Requires a server advertising ASGI spec 2.4 or newer,
+  which is the one reporting a gone consumer that way; below it the framework cancels the response
+  instead, which cannot close a body whose cleanup awaits anything.
+- **FastAPI** (`haiway.fastapi`): the same integration with a FastAPI base -
+  `application(context, routers=(APIRouter(prefix="/api/v1"),), title=..., **fastapi_kwargs)`
+  returns a `FastAPI`. `ServerContext` / `ContextMiddleware` are re-exported from here.
+  Endpoints, dependencies, sync endpoints (context copied into the worker thread) and
+  `BackgroundTasks` all run within the request scope. `exception_handlers` may be async or sync
+  (a sync one runs in a worker thread), typed as `ExceptionHandling`. No `max_body_size` - FastAPI
+  does not accept one.
 
 ## Rules
 
