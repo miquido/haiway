@@ -69,10 +69,20 @@ class Map[Key, Element](dict[Key, Element]):
         """
         Serialize the map into a JSON object string.
 
+        The contents are encoded as they are - a ``Map`` holds whatever it was
+        given and ``from_json`` validates nothing on the way back, so there is
+        no spelling to convert values into which reading them back would
+        restore. Keys and values json can't encode raise here instead.
+
         Returns
         -------
         str
             JSON encoding of the mapping contents.
+
+        Raises
+        ------
+        TypeError
+            If any key or value has no JSON representation.
         """
         return json.dumps(self)
 

@@ -1,5 +1,6 @@
 import json
 from collections.abc import (
+    Generator,
     Iterable,
     Mapping,
     MutableMapping,
@@ -37,11 +38,14 @@ from haiway.attributes.specification import object_specification
 from haiway.attributes.validation import ValidationError
 from haiway.types import (
     MISSING,
+    BasicObject,
     DefaultValue,
+    Map,
     Missing,
     TypeSpecification,
     not_missing,
 )
+from haiway.types.basic import basic_key, basic_value
 from haiway.types.immutable import attribute_names, namespace_annotations
 
 __all__ = ("State",)
@@ -861,10 +865,11 @@ class State(metaclass=StateMeta):
             left to the cause, so a payload which failed to encode cannot carry
             a redacted attribute into a log through the error path.
         """
-        mapping: Mapping[str, Any] = self.to_mapping(recursive=True)
         try:
+            # non-strict - `encoder_class` is the extension point for the types
+            # which have no basic spelling, so those have to reach it unchanged
             return json.dumps(
-                mapping,
+                _basic_object(self, strict=False),
                 indent=indent,
                 cls=encoder_class,
             )
@@ -986,6 +991,56 @@ class State(metaclass=StateMeta):
                 dict_result[field.key] = _recursive_mapping(value) if recursive else value
 
         return dict_result
+
+    def to_basic_object(self) -> BasicObject:
+        """
+        Convert this instance to a mapping of basic - JSON compatible - values.
+
+        Where ``to_mapping`` keeps the live values, this converts every leaf and
+        every key to the spelling the attribute validation reads back, so the
+        result round trips through ``from_mapping``:
+
+        ===========================  =====================
+        Type                         Basic value
+        ===========================  =====================
+        str/int/float/bool/None      unchanged
+        StrEnum/IntEnum              unchanged
+        UUID                         ``str(value)``
+        datetime/date/time           ``value.isoformat()``
+        Path                         ``value.as_posix()``
+        bytes-like                   base64 encoded str
+        ===========================  =====================
+
+        Mapping keys go through the same table and are then spelled the way json
+        spells them - ``int`` and ``float`` become ``str(key)``, ``bool`` and
+        ``None`` become ``"true"``/``"false"``/``"null"``.
+
+        Nested ``State`` instances, dataclasses and collections are converted as
+        the value graph is traversed, in a single pass - a basic object is basic
+        all the way down, there is nothing left for a non-recursive form to hold.
+
+        Returns
+        -------
+        BasicObject
+            A mapping keyed by attribute aliases when present, otherwise by
+            canonical field names, holding only basic values.
+
+        Raises
+        ------
+        TypeError
+            If any attribute holds a value with no basic representation, i.e. a
+            plain ``Enum`` or a ``Decimal``. The message names the path and the
+            type only, never the value.
+
+        Examples
+        --------
+        >>> class User(State):
+        ...     identifier: UUID
+        ...     created: datetime
+        >>> User(identifier=UUID(int=0), created=datetime(2026, 1, 1)).to_basic_object()
+        {'identifier': '00000000-0000-0000-0000-000000000000', 'created': '2026-01-01T00:00:00'}
+        """
+        return _basic_object(self, strict=True)
 
     def __str__(self) -> str:
         """
@@ -1236,6 +1291,139 @@ class State(metaclass=StateMeta):
             )
 
         return updated
+
+
+def _basic_object(
+    instance: State,
+    /,
+    strict: bool,
+    path: tuple[str, ...] = (),
+) -> BasicObject:
+    return Map(_basic_attributes(instance, strict=strict, path=path))
+
+
+# The basic conversion of a value graph, next to `_recursive_mapping` and
+# structured the same way - it converts as it traverses instead of copying the
+# live values first. The leaves, the keys and the plain collections are resolved
+# by `haiway.types.basic`, which can't reach `State` from within `types`, so the
+# structured branches are spelled out here.
+def _basic_mapping(  # noqa: PLR0911
+    value: Any,
+    /,
+    strict: bool,
+    path: tuple[str, ...],
+) -> Any:
+    # `str` and the bytes-like types are iterable, so the leaf conversion has to
+    # win over the container branches - every other leaf is unambiguous and
+    # reaches it through the fallthrough below
+    if isinstance(value, str | bytes | bytearray | memoryview):
+        return basic_value(value, strict=strict, path=path)
+
+    elif isinstance(value, State):
+        return _basic_object(value, strict=strict, path=path)
+
+    elif is_dataclass(value) and not isinstance(value, type):
+        return Map(_basic_fields(value, strict=strict, path=path))
+
+    elif isinstance(value, Mapping):
+        return Map(_basic_items(value, strict=strict, path=path))  # pyright: ignore[reportUnknownArgumentType]
+
+    elif isinstance(value, Iterable):
+        return tuple(_basic_elements(value, strict=strict, path=path))  # pyright: ignore[reportUnknownArgumentType]
+
+    else:
+        # the duck-typed `to_mapping` `_recursive_mapping` honors - only in the
+        # non-strict traversal, where an unsupported leaf is left to the caller
+        # anyway, so a value which knows how to spell itself as a mapping is
+        # converted through it instead. Under `strict` it stays rejected below -
+        # the mapping it returns is not the spelling the validation of the
+        # annotation it came from would read back.
+        if not strict:
+            to_mapping: Any = getattr(value, "to_mapping", None)
+            if callable(to_mapping):
+                converted: Any = to_mapping()
+                if isinstance(converted, Mapping):
+                    return Map(
+                        _basic_items(
+                            converted,  # pyright: ignore[reportUnknownArgumentType]
+                            strict=strict,
+                            path=path,
+                        )
+                    )
+
+        # the leaf table - raising under `strict` on a value it has no spelling
+        # for, where `_recursive_mapping` would have made a copy of it
+        return basic_value(value, strict=strict, path=path)
+
+
+def _basic_attributes(
+    instance: State,
+    /,
+    strict: bool,
+    path: tuple[str, ...],
+) -> Generator[Any]:
+    for field in instance.__FIELDS__:
+        value: Any | Missing = getattr(instance, field.name, MISSING)
+        if not_missing(value):
+            yield (
+                field.key,
+                _basic_mapping(
+                    value,
+                    strict=strict,
+                    path=(*path, f'["{field.key}"]'),
+                ),
+            )
+
+
+def _basic_fields(
+    value: Any,
+    /,
+    strict: bool,
+    path: tuple[str, ...],
+) -> Generator[Any]:
+    for field in dataclass_fields(value):
+        yield (
+            field.name,
+            _basic_mapping(
+                getattr(value, field.name),
+                strict=strict,
+                path=(*path, f'["{field.name}"]'),
+            ),
+        )
+
+
+def _basic_items(
+    mapping: Mapping[Any, Any],
+    /,
+    strict: bool,
+    path: tuple[str, ...],
+) -> Generator[Any]:
+    for key, element in mapping.items():
+        key_basic: Any = basic_key(key, strict=strict, path=path)
+        yield (
+            key_basic,
+            _basic_mapping(
+                element,
+                strict=strict,
+                # the converted key - in strict mode always a `str`, so the path
+                # can't render a key through its `repr`
+                path=(*path, f'["{key_basic}"]'),
+            ),
+        )
+
+
+def _basic_elements(
+    value: Iterable[Any],
+    /,
+    strict: bool,
+    path: tuple[str, ...],
+) -> Generator[Any]:
+    for index, element in enumerate(value):
+        yield _basic_mapping(
+            element,
+            strict=strict,
+            path=(*path, f"[{index}]"),
+        )
 
 
 def _recursive_mapping(  # noqa: PLR0911

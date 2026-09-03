@@ -1,11 +1,12 @@
 from copy import copy, deepcopy
-from datetime import datetime
-from uuid import uuid4
+from datetime import UTC, datetime
+from decimal import Decimal
+from pathlib import Path
+from uuid import UUID, uuid4
 
 from pytest import raises
 
 from haiway.types import Map, Meta
-from haiway.types.meta import _validated_meta_value
 
 
 def test_meta_empty_is_singleton():
@@ -344,39 +345,6 @@ def test_meta_copy_returns_same_instance():
     assert deepcopy(meta) is meta
 
 
-def test__validated_meta_value_primitives():
-    assert _validated_meta_value(None) is None
-    assert _validated_meta_value("string") == "string"
-    assert _validated_meta_value(42) == 42
-    assert _validated_meta_value(3.14) == 3.14
-    assert _validated_meta_value(True) is True
-    assert _validated_meta_value(False) is False
-
-
-def test__validated_meta_value_collections():
-    # Lists become tuples
-    assert _validated_meta_value([1, 2, 3]) == (1, 2, 3)
-
-    # Nested validation
-    result = _validated_meta_value([1, [2, 3], {"a": "b"}])
-    assert result == (1, (2, 3), {"a": "b"})
-
-    # Dicts are validated recursively
-    result = _validated_meta_value({"list": [1, 2], "nested": {"key": "value"}})
-    assert result == {"list": (1, 2), "nested": {"key": "value"}}
-
-
-def test__validated_meta_value_invalid():
-    class CustomObject:
-        pass
-
-    with raises(TypeError, match="Invalid Meta value"):
-        _validated_meta_value(CustomObject())
-
-    with raises(TypeError, match="Invalid Meta value"):
-        _validated_meta_value(object())
-
-
 def test_meta_get_str_without_default():
     meta = Meta({"name": "test", "description": "example"})
     assert meta.get_str("name") == "test"
@@ -483,5 +451,44 @@ def test_meta_or_preserves_type_and_validates() -> None:
     assert merged["description"] == "desc"
     assert base is not merged
 
-    with raises(TypeError, match="Invalid Meta value"):
+    with raises(TypeError, match="Can't convert"):
         _ = base | {"invalid": object()}
+
+
+def test_meta_coerces_values_with_a_basic_spelling() -> None:
+    created = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+    meta = Meta.of(
+        {
+            "created": created,
+            "identifier": UUID(int=1),
+            "location": Path("/tmp/example"),
+            "payload": b"blob",
+        }
+    )
+
+    assert meta["created"] == "2026-01-02T03:04:05+00:00"
+    assert meta["identifier"] == "00000000-0000-0000-0000-000000000001"
+    assert meta["location"] == "/tmp/example"
+    assert meta["payload"] == "YmxvYg=="
+    # the accessors read the coerced spelling back
+    assert meta.created == created
+
+
+def test_meta_coerces_nested_values_and_keys() -> None:
+    meta = Meta.of({"nested": {UUID(int=2): [datetime(2026, 1, 2, tzinfo=UTC)]}})
+
+    assert meta["nested"] == {
+        "00000000-0000-0000-0000-000000000002": ("2026-01-02T00:00:00+00:00",)
+    }
+
+
+def test_meta_still_rejects_values_without_a_basic_spelling() -> None:
+    with raises(TypeError, match="Can't convert 'Decimal'"):
+        Meta.of({"amount": Decimal("1.5")})
+
+
+def test_meta_keys_stay_strictly_str() -> None:
+    # only the values are coerced - a key has no spelling to fall back on
+    with raises(TypeError, match="Invalid Meta key"):
+        _ = Meta({"name": "base"}) | {UUID(int=1): "value"}

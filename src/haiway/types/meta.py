@@ -4,8 +4,7 @@ from datetime import datetime
 from typing import Any, ClassVar, NoReturn, Self, TypeGuard, cast, final, overload
 from uuid import UUID
 
-from haiway.types.basic import BasicValue
-from haiway.types.map import Map
+from haiway.types.basic import BasicValue, basic_value
 
 __all__ = (
     "Meta",
@@ -73,7 +72,9 @@ class Meta(dict[str, BasicValue]):
         """
         match value:
             case {**values}:
-                return cls({key: _validated_meta_value(element) for key, element in values.items()})
+                return cls(
+                    {key: basic_value(element, strict=True) for key, element in values.items()}
+                )
 
             case _:
                 raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Meta'")
@@ -124,7 +125,7 @@ class Meta(dict[str, BasicValue]):
         """
         if meta is None:
             if values:
-                return cls({key: _validated_meta_value(value) for key, value in values.items()})
+                return cls({key: basic_value(value, strict=True) for key, value in values.items()})
 
             else:
                 return cls.empty
@@ -136,7 +137,7 @@ class Meta(dict[str, BasicValue]):
         else:
             assert not values  # nosec: B101
             assert isinstance(meta, Mapping)  # nosec: B101
-            return cls({key: _validated_meta_value(value) for key, value in meta.items()})
+            return cls({key: basic_value(value, strict=True) for key, value in meta.items()})
 
     @classmethod
     def from_mapping(
@@ -157,7 +158,7 @@ class Meta(dict[str, BasicValue]):
         Self
             Metadata containing the normalized mapping contents.
         """
-        return cls({key: _validated_meta_value(value) for key, value in mapping.items()})
+        return cls({key: basic_value(value, strict=True) for key, value in mapping.items()})
 
     @classmethod
     def from_json(
@@ -185,7 +186,7 @@ class Meta(dict[str, BasicValue]):
         """
         match json.loads(value):
             case {**values}:
-                return cls({key: _validated_meta_value(val) for key, val in values.items()})
+                return cls({key: basic_value(value, strict=True) for key, value in values.items()})
 
             case other:
                 raise ValueError(
@@ -637,7 +638,7 @@ class Meta(dict[str, BasicValue]):
         return self.__class__(
             {
                 **self,  # already validated
-                **{key: _validated_meta_value(value) for key, value in values.items()},
+                **{key: basic_value(value, strict=True) for key, value in values.items()},
             }
         )
 
@@ -752,7 +753,7 @@ class Meta(dict[str, BasicValue]):
             {
                 **self,  # already validated
                 **{
-                    _validated_meta_key(key): _validated_meta_value(value)
+                    _validated_meta_key(key): basic_value(value, strict=True)
                     for key, value in other.items()  # pyright: ignore[reportUnknownVariableType]
                 },
             }
@@ -768,7 +769,7 @@ class Meta(dict[str, BasicValue]):
         return self.__class__(
             {
                 **{
-                    _validated_meta_key(key): _validated_meta_value(value)
+                    _validated_meta_key(key): basic_value(value, strict=True)
                     for key, value in other.items()  # pyright: ignore[reportUnknownVariableType]
                 },
                 **self,  # already validated
@@ -802,33 +803,6 @@ def _validated_meta_key(value: Any) -> str:
 
     else:
         raise TypeError(f"Invalid Meta key: '{type(value).__name__}'")
-
-
-def _validated_meta_value(value: Any) -> BasicValue:  # noqa: PLR0911
-    match value:
-        case None:
-            return value
-
-        case str():
-            return value
-
-        case bool():
-            return value
-
-        case int():
-            return value
-
-        case float():
-            return value
-
-        case [*values]:
-            return tuple(_validated_meta_value(value) for value in values)
-
-        case {**values}:
-            return Map({key: _validated_meta_value(value) for key, value in values.items()})
-
-        case other:
-            raise TypeError(f"Invalid Meta value: '{type(other).__name__}'")
 
 
 def _validate_tag(tag: Any) -> TypeGuard[str]:

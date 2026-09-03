@@ -3,6 +3,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence, Set
 from copy import copy, deepcopy
 from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import (
@@ -883,9 +884,11 @@ def test_attribute_named_after_its_type_resolves_to_the_type() -> None:
 def test_to_json_failure_does_not_expose_values() -> None:
     class Secretive(State):
         token: Annotated[str, Sensitive()]
-        payload: bytes
+        # `Decimal` has no basic spelling the validation would read back, so it
+        # reaches `json.dumps` unchanged and fails there
+        payload: Decimal
 
-    instance = Secretive(token="sk-live-value", payload=b"\x00")
+    instance = Secretive(token="sk-live-value", payload=Decimal("1.5"))
 
     with raises(ValueError) as exc:
         instance.to_json()

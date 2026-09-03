@@ -243,7 +243,8 @@ class ErrorState(State):
         ("int_val", "forty-two", "int"),
         ("float_val", "pi", "float"),
         ("bool_val", "no", "expected values"),
-        ("bytes_val", "data", "bytes"),
+        # a str reaches `bytes` as base64 now, so only an invalid one fails
+        ("bytes_val", "not base64!", "bytes"),
     ),
 )
 def test_basic_types_validation_errors(field: str, value: object, expected: str) -> None:

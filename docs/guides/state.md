@@ -262,6 +262,11 @@ When working with external payloads, use the complementary helpers:
   instances (or tuples of instances). Validation errors are converted into informative exceptions.
 - `state.to_json(indent=2)` — encode a State instance to JSON using the same alias behaviour as
   `to_mapping`.
+- `state.to_basic_object()` — convert to a mapping of JSON-compatible values, in memory. Where
+  `to_mapping` keeps the live `UUID`, `datetime` or `bytes` values, this encodes every leaf and key
+  to the spelling validation reads back, so the result round trips through `from_mapping`. An
+  attribute with no basic spelling - a plain `Enum`, a `Decimal` - raises `TypeError` naming the
+  path and the type. See [Converting to Basic Values](types.md#converting-to-basic-values).
 - `State.validate(value)` — coerce an instance or compatible mapping into the target State type.
   This is handy when accepting heterogeneous inputs.
 
