@@ -1,4 +1,5 @@
 import annotationlib
+import base64
 import builtins
 import datetime
 import enum
@@ -950,6 +951,18 @@ class IntegerAttribute(Immutable):
         elif isinstance(value, float) and value.is_integer():
             return self.verifying(int(value))
 
+        elif isinstance(value, str):
+            # json spells every mapping key as a str, so an `int` key encodes to
+            # one - it has to be readable back the same way
+            converted: int
+            try:
+                converted = int(value)
+
+            except Exception as exc:
+                raise ValueError("'str' value is not matching expected format of 'int'") from exc
+
+            return self.verifying(converted)
+
         else:
             raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'int'")
 
@@ -1055,6 +1068,18 @@ class FloatAttribute(Immutable):
         elif isinstance(value, int):
             return self.verifying(float(value))
 
+        elif isinstance(value, str):
+            # json spells every mapping key as a str, so a `float` key encodes to
+            # one - it has to be readable back the same way
+            converted: float
+            try:
+                converted = float(value)
+
+            except Exception as exc:
+                raise ValueError("'str' value is not matching expected format of 'float'") from exc
+
+            return self.verifying(converted)
+
         else:
             raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'float'")
 
@@ -1153,6 +1178,21 @@ class BytesAttribute(Immutable):
     ) -> Any:
         if isinstance(value, bytes):
             return self.verifying(value)
+
+        elif isinstance(value, str):
+            # base64 - the spelling `basic_value` encodes `bytes` to, and the
+            # only one json can carry. The field declares `bytes`, so a str here
+            # is unambiguous
+            converted: bytes
+            try:
+                converted = base64.b64decode(value, validate=True)
+
+            except Exception as exc:
+                raise ValueError(
+                    "'str' value is not matching expected base64 format for 'bytes'"
+                ) from exc
+
+            return self.verifying(converted)
 
         else:
             raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'bytes'")

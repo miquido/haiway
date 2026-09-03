@@ -28,6 +28,60 @@ Use the aliases from `haiway.types.basic` when you need precise public types for
 `FlatObject` is useful for headers, message attributes, and similar payloads where nested structures
 are intentionally forbidden.
 
+### Converting to Basic Values
+
+`State.to_basic_object()`, `State.to_json()`, and `Meta` validation all share one conversion into
+this representation. Each leaf is encoded to the spelling the matching attribute validation reads
+back, so a converted value can be validated into the type it came from:
+
+| Type                               | Basic value          |
+| ---------------------------------- | -------------------- |
+| `str`, `int`, `float`, `bool`      | unchanged            |
+| `None`, `StrEnum`, `IntEnum`       | unchanged            |
+| `UUID`                             | `str(value)`         |
+| `datetime`, `date`, `time`         | `value.isoformat()`  |
+| `Path`                             | `value.as_posix()`   |
+| `bytes`, `bytearray`, `memoryview` | base64 encoded `str` |
+
+Nested `State` instances, dataclasses, mappings, sequences and sets are converted as the value graph
+is traversed, into `Map` and `tuple` instances. Mapping keys go through the same table and are then
+spelled the way JSON spells them - a `str` result is used as is, `int` and `float` become
+`str(key)`, and `bool` and `None` become `"true"`, `"false"` and `"null"`. That is the spelling
+`json.dumps` gives those keys on its own, so payloads which already encoded keep the output they
+had.
+
+```python
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from uuid import UUID
+
+from haiway import State
+
+
+class Event(State):
+    identifier: UUID
+    created: datetime
+
+
+class Journal(State):
+    events: Mapping[UUID, Event]
+
+
+event = Event(identifier=UUID(int=1), created=datetime(2026, 1, 2, tzinfo=UTC))
+
+event.to_basic_object()
+# {"identifier": "00000000-0000-0000-0000-000000000001", "created": "2026-01-02T00:00:00+00:00"}
+
+# keys are converted too, so a mapping json could not key encodes now
+Journal(events={UUID(int=1): event}).to_json()
+# '{"events": {"00000000-0000-0000-0000-000000000001": {"identifier": "000...", ...}}}'
+```
+
+Anything else - a plain `Enum`, a `Decimal`, `MISSING` - has no basic spelling the validation would
+read back. Rather than encoding it into a value which could only fail on the way in,
+`to_basic_object` raises `TypeError` naming the path and the type, never the value. `to_json` leaves
+such values unchanged instead, so a custom `encoder_class` still gets to handle them.
+
 ## Missing Values with `MISSING`
 
 `MISSING` is Haiway's explicit "not provided" sentinel. It is different from `None`:
@@ -159,7 +213,10 @@ Normalization rules:
 
 - lists become tuples
 - nested mappings become `Map`
-- invalid values raise `TypeError`
+- values with a basic spelling are coerced to it - a `datetime` becomes its ISO string, a `UUID`
+  becomes `str(value)` - see [Converting to Basic Values](#converting-to-basic-values)
+- values without one raise `TypeError`
+- keys stay strictly `str`, there is no spelling to coerce them to
 
 `Meta.empty` is a shared empty instance returned by `Meta.of(None)`.
 
