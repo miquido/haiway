@@ -27,6 +27,28 @@ async def _until(
             await asyncio.sleep(0)
 
 
+async def _suspended_iteration[Element: State](
+    subscription: EventsSubscription[Element],
+    /,
+) -> Task[Element]:
+    """
+    Start an iteration and hand control back only once it is parked within it.
+
+    The barrier is set right before `anext` with no await in between, so a task
+    which is not done afterwards can only be suspended inside the iteration.
+    """
+    started = asyncio.Event()
+
+    async def iterate() -> Element:
+        started.set()
+        return await anext(subscription)
+
+    task: Task[Element] = asyncio.ensure_future(iterate())
+    await started.wait()
+    assert not task.done()
+    return task
+
+
 class OrderCreated(State):
     order_id: str
     amount: float
@@ -862,25 +884,23 @@ async def test_events_arrived_before_closing_are_delivered_after_it() -> None:
     assert received == ["delivered"]
 
 
+@mark.skipif(not __debug__, reason="assertions are stripped in optimized builds")
 @mark.asyncio
 async def test_subscription_rejects_concurrent_iteration() -> None:
     async with ctx.scope("scope"):
         subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
-        first: Task[OrderCreated] = asyncio.ensure_future(anext(subscription))
-        await _until(lambda: not first.done() and subscription._running)
+        first: Task[OrderCreated] = await _suspended_iteration(subscription)
+        second: Task[OrderCreated] = await _suspended_iteration(subscription)
 
-        # the chain position is shared - a second iteration would deliver the
-        # very same event instead of the next one
-        with raises(RuntimeError):
-            await anext(subscription)
-
-        with raises(RuntimeError):
-            await subscription.asend(None)
-
+        # the chain position is shared - both iterations would deliver the very same
+        # event, which the one finding the position already advanced refuses to do
         ctx.send(OrderCreated(order_id="order", amount=42.0))
 
         assert await first == OrderCreated(order_id="order", amount=42.0)
-        # the guard is released with the iteration - the next one proceeds
+        with raises(AssertionError):
+            await second
+
+        # the position stands where the delivery left it - iterating again proceeds
         ctx.send(OrderCreated(order_id="next", amount=43.0))
         assert await anext(subscription) == OrderCreated(order_id="next", amount=43.0)
 
@@ -890,10 +910,55 @@ async def test_subscription_aclose_is_allowed_during_iteration() -> None:
     # unlike iterating, ending a running subscription is what releases it
     async with ctx.scope("scope"):
         subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
-        iteration: Task[OrderCreated] = asyncio.ensure_future(anext(subscription))
-        await _until(lambda: not iteration.done() and subscription._running)
+        iteration: Task[OrderCreated] = await _suspended_iteration(subscription)
 
         await subscription.aclose()
 
         with raises(StopAsyncIteration):
             await iteration
+
+
+@mark.asyncio
+async def test_subscription_aclose_wins_over_an_event_of_the_same_loop_turn() -> None:
+    # closing and sending within one turn leave a suspended iteration waking up with
+    # both of them completed - it ended, so the event which arrived is not its own
+    async with ctx.scope("scope"):
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+        iteration: Task[OrderCreated] = await _suspended_iteration(subscription)
+
+        await subscription.aclose()  # nothing within it awaits, so the turn holds
+        ctx.send(OrderCreated(order_id="order", amount=42.0))
+
+        with raises(StopAsyncIteration):
+            await iteration
+
+
+@mark.asyncio
+async def test_cancelled_iteration_keeps_the_subscription_usable() -> None:
+    async with ctx.scope("scope"):
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+
+        # a bounded wait which times out cancels the iteration it wraps
+        assert (await _received_within(subscription, _SKIPPED_TIMEOUT)) is None
+
+        # the position within the chain stood still, so the subscription is
+        # the usable one it was before - and it kept receiving throughout
+        ctx.send(OrderCreated(order_id="order", amount=42.0))
+        received: OrderCreated | None = await _received_within(subscription, _DELIVERED_TIMEOUT)
+        assert received == OrderCreated(order_id="order", amount=42.0)
+
+
+@mark.asyncio
+async def test_cancelled_iteration_keeps_the_events_which_arrive_meanwhile() -> None:
+    async with ctx.scope("scope"):
+        subscription: EventsSubscription[OrderCreated] = ctx.subscribe(OrderCreated)
+        iteration: Task[OrderCreated] = await _suspended_iteration(subscription)
+
+        iteration.cancel()
+        with raises(asyncio.CancelledError):
+            await iteration
+
+        # nothing was taken out of the chain, so an event sent after the
+        # cancellation is still the next one to be delivered
+        ctx.send(OrderCreated(order_id="order", amount=42.0))
+        assert (await anext(subscription)).order_id == "order"

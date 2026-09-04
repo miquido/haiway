@@ -140,6 +140,34 @@ Important semantics:
   abandoned. Close the merged stream itself with `contextlib.aclosing` when leaving early, so that
   happens at the break rather than whenever the garbage collector gets to it.
 
+### Merging a Source Which Never Ends
+
+Both modes end on the sources themselves ending, so merging a finite source with an endless one - an
+event subscription being the usual case - needs the endless side given an end of its own. Without
+it, `exhaustive=False` stops the moment the finite source is done and drops whatever the other one
+still had queued, while `exhaustive=True` waits for an end which never comes.
+
+A subscription has no end of its own before the scope which created it begins closing, and that
+scope begins closing only once its body returns - so consuming the merge there would wait forever.
+Give the endless side an end by closing it as the finite source completes. Closing drops whatever
+was not taken yet, so what is still queued behind the last read is lost:
+
+```python
+progress = ctx.subscribe(Progress)
+
+async def work_then_close():
+    try:
+        async for result in process():
+            yield result
+    finally:
+        await progress.aclose()
+
+merged = stream_concurrently(progress, work_then_close(), exhaustive=True)
+async with ctx.closing(merged) as stream:
+    async for element in stream:
+        handle(element)
+```
+
 ## Closing Generator Sources
 
 Every helper here closes an async generator source it consumed, however the consumption ended -

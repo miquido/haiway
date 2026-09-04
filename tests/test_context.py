@@ -631,3 +631,101 @@ async def test_trace_context_encoding_failure_is_reported() -> None:
         assert ctx.trace_context() == {}
 
     assert failures == ["Failed to encode trace context"]
+
+
+@mark.asyncio
+async def test_scope_within_generator_exit_from_a_different_context_fails() -> None:
+    unwound: bool = False
+
+    async def source():
+        nonlocal unwound
+        try:
+            async with ctx.scope("generator"):
+                for element in range(100):
+                    yield element
+
+        finally:
+            unwound = True
+
+    async with ctx.scope("test"):
+        generator = source()
+        assert await anext(generator) == 0
+
+        async def close() -> None:
+            await generator.aclose()
+
+        # a plain task, exactly like the finalizer of the event loop uses for an
+        # abandoned generator - a task of the enclosing scope would be joined by the
+        # task group of the scope within the generator, which the frame leaked here
+        closing = asyncio.get_running_loop().create_task(close())
+
+        # the scope within the generator frame was entered within the context which
+        # iterated it, so releasing it from another one cannot restore what it set
+        # there - which is an error rather than something to be quietly tolerated.
+        # every element of that scope fails the same way, so all of them are
+        # delivered instead of all but the last being lost to the context chain
+        with raises(ExceptionGroup) as failure:
+            await closing
+
+        assert [type(error) for error in failure.value.exceptions] == [ValueError] * 5
+        assert all(
+            "was created in a different Context" in str(error) for error in failure.value.exceptions
+        )
+
+    # the frame is unwound either way, only its scope could not be released
+    assert unwound
+
+
+@mark.asyncio
+async def test_propagating_exception_is_not_reported_as_scope_exit_failure() -> None:
+    records: list[logging.LogRecord] = []
+
+    class CapturingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = CapturingHandler()
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        # the task group of a scope reraises the error propagating through its body,
+        # which must not be mistaken for the exit of that scope failing - the error
+        # is already reported where it was raised
+        with raises(FakeException, match="body failure"):
+            async with ctx.scope("outer"):
+                async with ctx.scope("inner"):
+                    raise FakeException("body failure")
+
+    finally:
+        root.removeHandler(handler)
+
+    assert [record.getMessage() for record in records if "exit failed" in record.getMessage()] == []
+
+
+@mark.asyncio
+async def test_failing_scope_exit_is_reported() -> None:
+    records: list[logging.LogRecord] = []
+
+    class CapturingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = CapturingHandler()
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        # an element raising an error of its own is an actual exit failure and
+        # stays reported - it is not the error which was propagating
+        with raises(RuntimeError, match="dispose failed"):
+            async with ctx.scope(
+                "exit-failure",
+                disposables=(disposable_that_raises(lambda: RuntimeError("dispose failed")),),
+            ):
+                pass
+
+    finally:
+        root.removeHandler(handler)
+
+    assert [record.levelno for record in records if "exit failed" in record.getMessage()] == [
+        logging.ERROR
+    ]

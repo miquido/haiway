@@ -17,6 +17,7 @@ from haiway.context.presets import ContextPresets, ContextPresetsRegistry
 from haiway.context.state import ContextState
 from haiway.context.tasks import ContextTaskGroup
 from haiway.context.types import ContextMissing
+from haiway.utils.exceptions import raise_collected
 
 __all__ = ("ContextScope",)
 
@@ -106,7 +107,10 @@ class ContextScope:
 
             # provide the closing future last so it completes first - everything
             # waiting for the scope to end is released before its tasks are joined
-            closing: ContextClosing = ContextClosing(loop)
+            closing: ContextClosing = ContextClosing(
+                loop=loop,
+                identifier=identifier.scope_id,
+            )
             closing.__enter__()
             entered.append((False, closing))
 
@@ -242,11 +246,13 @@ async def _unwind(
     is exited even when an earlier one failed, and an error raised while exiting
     replaces the one in flight while keeping it as its context. None of the scope
     elements suppress exceptions, so the suppression handling of the stack has no
-    counterpart here.
+    counterpart here. Unlike the stack, several failures are all delivered - see
+    ``_raise_unwound``.
 
-    An element reraising the exception it was given counts as raising, exactly as
-    it does within the stack - the reraised error propagates from here rather than
-    from the `async with`, so a scope reports its exit as failed either way.
+    An element reraising the exception it was given is not an exit failure - it is
+    the error already propagating through the scope body, which is reported where
+    it was raised and propagates from the `async with` on its own. Only an error
+    which is not the one in flight replaces it and marks the exit as failed.
     """
     frame_exception: BaseException | None = sys.exception()
 
@@ -257,19 +263,14 @@ async def _unwind(
         # the context of the newly raised error may point anywhere - walk to the
         # end of its chain and link it to the error it is replacing, the same way
         # nested `with` statements would have chained them
-        while True:
-            exception_context: BaseException | None = new_exception.__context__
-            if exception_context is None or exception_context is old_exception:
-                return  # already set correctly
+        while (context := new_exception.__context__) is not None and context is not old_exception:
+            if context is frame_exception:
+                new_exception.__context__ = old_exception
+                return
 
-            if exception_context is frame_exception:
-                break
+            new_exception = context
 
-            new_exception = exception_context
-
-        new_exception.__context__ = old_exception
-
-    pending_raise: bool = False
+    collected: list[BaseException] = []
     while entered:
         is_async, element = entered.pop()
         try:
@@ -280,19 +281,49 @@ async def _unwind(
                 element.__exit__(exc_type, exc_val, exc_tb)
 
         except BaseException as exc:
+            if exc is exc_val:
+                continue  # reraised what it was given - nothing of its own failed
+
             fix_exception_context(exc, exc_val)
-            pending_raise = True
+            collected.append(exc)
+            # the remaining elements are exited against the newest error, exactly
+            # as the enclosing `with` statements of a nesting would have been
             exc_type = type(exc)
             exc_val = exc
             exc_tb = exc.__traceback__
 
-    if pending_raise:
-        assert exc_val is not None  # nosec: B101
-        # raising replaces the carefully prepared context - keep it to restore
-        fixed_context: BaseException | None = exc_val.__context__
-        try:
-            raise exc_val
+    _raise_unwound(collected)
 
-        except BaseException:
-            exc_val.__context__ = fixed_context
-            raise
+
+def _raise_unwound(
+    collected: list[BaseException],
+    /,
+) -> None:
+    """
+    Deliver the errors the elements raised while exiting, if there were any.
+
+    A single failure is raised as it is - it is the error to report, and wrapping it
+    would break every caller handling what a scope element can raise. Several are
+    delivered together instead of all but the last being left to the context chain,
+    where they can only be read and never handled.
+
+    The error which was propagating through the scope body is never one of them - it
+    stays the context of what is raised here, exactly as it would with nested `with`
+    statements, so a cancellation passing through a scope keeps propagating as one.
+    """
+    match collected:
+        case ():
+            return  # nothing of its own failed
+
+        case (exception,):
+            # raising replaces the carefully prepared context - keep it to restore
+            fixed_context: BaseException | None = exception.__context__
+            try:
+                raise exception
+
+            except BaseException:
+                exception.__context__ = fixed_context
+                raise
+
+        case _:
+            raise_collected(collected, message="Context scope exit errors")

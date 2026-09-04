@@ -299,7 +299,8 @@ async def test_rejects_source_which_can_not_be_released():
     async def handler(element: int) -> None:
         pass
 
-    with raises(TypeError):
+    # the source type is verified by an assert, typing rejects it ahead of runtime
+    with raises(AssertionError):
         await process_concurrently(
             AsyncIterableSource(),  # pyright: ignore[reportArgumentType]
             handler,

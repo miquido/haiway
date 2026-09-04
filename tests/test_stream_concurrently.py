@@ -538,75 +538,59 @@ async def test_closes_the_other_source_when_one_fails_to_close():
 
 
 @mark.asyncio
-async def test_closes_both_sources_when_never_iterated():
-    closed: list[str] = []
+async def test_closes_scoped_source_within_its_producer_when_the_other_fails():
+    released: list[str] = []
 
-    class Tracked(AsyncGenerator[str]):
-        """A source tracking its release, which an unstarted generator could not."""
+    async def scoped() -> AsyncGenerator[int]:
+        try:
+            async with ctx.scope("scoped_source"):
+                index: int = 0
+                while True:  # no await between the yields, resuming stays in the same tick
+                    yield index
+                    index += 1
 
-        def __init__(self, name: str) -> None:
-            self.name: str = name
+        finally:
+            released.append("scoped")
 
-        async def __anext__(self) -> str:
-            await sleep(0.01)
-            return self.name
+    async def failing() -> AsyncGenerator[str]:
+        yield "a"
+        await sleep(0)
+        raise FakeException("source failed")
 
-        async def asend(self, value: None = None, /) -> str:
-            return await self.__anext__()
+    # the other source failing finishes the output without cancelling this producer,
+    # which leaves its source suspended - unwinding it belongs to the producer, as
+    # closing it along with the merged stream would exit the scope it holds within
+    # the context of the consumer instead of the one which entered it
+    async with ctx.scope("test"):
+        with raises(FakeException, match="source failed"):
+            async for _ in stream_concurrently(scoped(), failing()):
+                await sleep(0)
 
-        async def athrow(
-            self,
-            typ: type[BaseException] | BaseException,
-            val: object = None,
-            tb: TracebackType | None = None,
-            /,
-        ) -> NoReturn:
-            raise FakeException("thrown")
-
-        async def aclose(self) -> None:
-            closed.append(self.name)
-
-    merged: AsyncGenerator[str] = stream_concurrently(Tracked("a"), Tracked("b"))
-    # closing a merged stream which was never started does not run its frame,
-    # so the sources have to be released by the stream itself
-    await merged.aclose()
-
-    assert sorted(closed) == ["a", "b"]
+    assert released == ["scoped"]
 
 
 @mark.asyncio
-async def test_closes_both_sources_when_thrown_into_before_started():
-    closed: list[str] = []
+async def test_closes_scoped_sources_within_their_producers_when_left_early():
+    released: list[str] = []
 
-    class Tracked(AsyncGenerator[str]):
-        """A source tracking its release, which an unstarted generator could not."""
+    def scoped(name: str) -> AsyncGenerator[str]:
+        async def generator() -> AsyncGenerator[str]:
+            try:
+                async with ctx.scope(f"scoped_source_{name}"):
+                    for index in range(100):
+                        await sleep(0.01)
+                        yield f"{name}{index}"
 
-        def __init__(self, name: str) -> None:
-            self.name: str = name
+            finally:
+                released.append(name)
 
-        async def __anext__(self) -> str:
-            await sleep(0.01)
-            return self.name
+        return generator()
 
-        async def asend(self, value: None = None, /) -> str:
-            return await self.__anext__()
+    # leaving the iteration early cancels both producers while they send, which
+    # leaves their sources suspended at the yield they were sending from
+    async with ctx.scope("test"):
+        async with ctx.closing(stream_concurrently(scoped("a"), scoped("b"))) as merged:
+            async for _ in merged:
+                break
 
-        async def athrow(
-            self,
-            typ: type[BaseException] | BaseException,
-            val: object = None,
-            tb: TracebackType | None = None,
-            /,
-        ) -> NoReturn:
-            raise FakeException("thrown")
-
-        async def aclose(self) -> None:
-            closed.append(self.name)
-
-    merged: AsyncGenerator[str] = stream_concurrently(Tracked("a"), Tracked("b"))
-    # throwing into a merged stream which was never started does not run its frame,
-    # so the sources have to be released by the stream itself
-    with raises(FakeException, match="thrown in"):
-        await merged.athrow(FakeException("thrown in"))
-
-    assert sorted(closed) == ["a", "b"]
+    assert sorted(released) == ["a", "b"]

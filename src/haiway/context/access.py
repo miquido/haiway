@@ -752,14 +752,21 @@ class ctx:
 
         The subscription is an async generator, so closing it ends the iteration
         where it stands - releasing the events chain it holds and any ``__anext__``
-        waiting on it. Wrap it in ``ctx.closing`` when the iteration is left before
-        its scope ends, instead of leaving the chain pinned until the garbage
-        collector reaches it.
+        waiting on it, and dropping whatever was not taken yet. Wrap it in
+        ``ctx.closing`` when the iteration is left before its scope ends, instead of
+        leaving the chain pinned until the garbage collector reaches it.
 
-        Only one iteration may run at a time, as with any async generator - a second
-        concurrent ``__anext__`` raises ``RuntimeError`` instead of delivering the
-        same event twice. Subscribe once per consumer to fan an event type out to
-        several of them.
+        Cancelling whoever waits on a subscription does not end it - a cancelled wait
+        takes nothing out of the events chain, so the position within it still stands
+        and the events which arrive meanwhile are kept for whoever iterates it next.
+        A bounded wait can be retried, and ending a subscription stays the deliberate
+        act of closing it.
+
+        Only one iteration may run at a time, as with any async generator - the
+        position within the events chain is shared, so concurrent iterations would
+        each deliver the very same event. Doing so is caught by an assertion, which
+        an optimized build strips. Subscribe once per consumer to fan an event type
+        out to several of them.
 
         Parameters
         ----------

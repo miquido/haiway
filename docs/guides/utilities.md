@@ -321,8 +321,10 @@ Key behavior:
 - `finish()` ends the stream immediately for future reads.
 - `finish(exception)` re-raises that exception on the consumer.
 - `cancel()` is shorthand for finishing with `CancelledError`.
-- `send()` to a finished stream is ignored.
-- Pending producers are released when the stream finishes.
+- `send()` to a finished stream raises `RuntimeError` - a producer looping over a source has to end
+  with the stream instead of spinning on discarded elements.
+- Pending producers are released when the stream finishes, their element dropped; they learn of the
+  end from the next `send()`.
 - `aclose()` is `finish()` without an exception - not yet consumed elements are dropped and further
   iteration ends.
 - `asend(None)` is `__anext__()`; sending any other value raises `TypeError`, since `send()` is the

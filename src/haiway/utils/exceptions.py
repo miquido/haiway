@@ -1,6 +1,12 @@
+from asyncio import CancelledError
+from collections.abc import Sequence
 from types import TracebackType
+from typing import cast
 
-__all__ = ("thrown_exception",)
+__all__ = (
+    "raise_collected",
+    "thrown_exception",
+)
 
 
 def thrown_exception(
@@ -56,3 +62,28 @@ def thrown_exception(
         return exception.with_traceback(tb)
 
     return exception
+
+
+def raise_collected(
+    exceptions: Sequence[BaseException],
+    /,
+    message: str,
+) -> None:
+    match exceptions:
+        case ():
+            return  # no errors
+
+        case (exception,):
+            raise exception  # single error
+
+        case _:
+            if all(isinstance(exception, Exception) for exception in exceptions):
+                raise ExceptionGroup(
+                    message,
+                    cast(Sequence[Exception], exceptions),
+                )
+
+            if all(isinstance(exception, CancelledError) for exception in exceptions):
+                raise CancelledError()  # cancelled
+
+            raise BaseExceptionGroup(message, exceptions)

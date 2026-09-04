@@ -77,18 +77,28 @@ class AsyncStream[Element](AsyncGenerator[Element]):
 
         If a consumer is already waiting, the element is delivered immediately.
         Otherwise the element is queued and this call waits until the consumer
-        takes it, implementing back-pressure. If the stream is finished, the
-        element is silently discarded.
+        takes it, implementing back-pressure. Sending to a finished stream is
+        rejected - unlike a delivery which the stream outlived, it never suspends,
+        so a producer looping over a source would spin without ever yielding
+        control instead of ending along with the stream.
+
+        A producer already waiting when the stream finishes completes without
+        delivering, its element dropped - it learns of the end from the next send.
 
         Parameters
         ----------
         element : Element
             The element to send to the stream
+
+        Raises
+        ------
+        RuntimeError
+            If the stream has already been finished
         """
         assert get_running_loop() is self._loop  # nosec: B101
 
         if self._finish_reason is not None:
-            return  # already finished
+            raise RuntimeError("AsyncStream is already finished")
 
         # fulfill waiting first
         if self._waiting is not None and not self._waiting.done():
@@ -106,8 +116,8 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         """
         Mark the stream as finished, optionally with an exception.
 
-        After finishing, future sends are silently discarded. Pending producers
-        are released, and the consumer receives the provided exception or
+        After finishing, future sends are rejected. Pending producers are
+        released, and the consumer receives the provided exception or
         ``StopAsyncIteration`` when attempting to get the next element.
 
         If the stream is already finished, this method does nothing.
@@ -279,10 +289,11 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         Finish the stream, ending the iteration.
 
         Equivalent to calling finish() without an exception - waiting producers
-        are released, not yet consumed elements are dropped and all subsequent
-        iterations raise StopAsyncIteration. Doing nothing when already finished,
-        which preserves the existing finish reason - when cancel(), athrow() or
-        finish() finished the stream first, subsequent iterations keep raising
-        that original exception instead of StopAsyncIteration.
+        are released, not yet consumed elements are dropped, subsequent sends are
+        rejected and all subsequent iterations raise StopAsyncIteration. Doing
+        nothing when already finished, which preserves the existing finish reason -
+        when cancel(), athrow() or finish() finished the stream first, subsequent
+        iterations keep raising that original exception instead of
+        StopAsyncIteration.
         """
         self.finish()

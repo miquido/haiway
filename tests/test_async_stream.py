@@ -97,19 +97,23 @@ async def test_delivers_updates_when_sending():
 
 
 @pytest.mark.asyncio
-async def test_ignores_when_sending_to_finished():
+async def test_rejects_when_sending_to_finished():
     stream: AsyncStream[int] = AsyncStream()
     stream.finish()
 
-    await stream.send(42)
+    # a rejection ends a producer looping over a source, which a silently
+    # discarded element would leave spinning without ever yielding control
+    with raises(RuntimeError):
+        await stream.send(42)
 
 
 @pytest.mark.asyncio
-async def test_ignores_when_sending_to_failed():
+async def test_rejects_when_sending_to_failed():
     stream: AsyncStream[int] = AsyncStream()
     stream.finish(exception=FakeException())
 
-    await stream.send(42)
+    with raises(RuntimeError):
+        await stream.send(42)
 
 
 @pytest.mark.asyncio

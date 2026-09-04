@@ -377,7 +377,8 @@ async def test_rejects_coroutines_which_can_not_be_released():
         async def __anext__(self) -> Coroutine[None, None, int]:
             return coro()
 
-    with raises(TypeError):
+    # the source type is verified by an assert, typing rejects it ahead of runtime
+    with raises(AssertionError):
         await concurrently(
             AsyncIterableSource(),  # pyright: ignore[reportArgumentType]
         )
