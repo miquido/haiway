@@ -245,6 +245,7 @@ class ContextTaskGroup:
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         assert self._task_group is not None  # nosec: B101
 
+        failure: BaseException | None = None
         try:
             await self._task_group.__aexit__(
                 exc_type,
@@ -252,35 +253,79 @@ class ContextTaskGroup:
                 exc_tb,
             )
 
-        except BaseExceptionGroup as exc:  # log before propagation
-            # TaskGroup includes a non-cancellation body exception within its group,
-            # twice when the body reraised the error of a failed child. When the group
-            # holds nothing else - a closing `GeneratorExit` or that single error -
-            # there is no failure to report beyond the exception already propagating,
-            # which was logged where it was raised.
-            if (
-                exc_val is not None
-                and not isinstance(exc_val, CancelledError)
-                and all(error is exc_val for error in exc.exceptions)
-            ):
-                raise exc_val from None  # reraise it without the group wrapper
-
-            ContextObservability.record_log(
-                ObservabilityLevel.ERROR,
-                "Context task group exit failed",
-                exception=exc,
-            )
-            # unwrap the body exception to surface the original error instead of the
-            # group wrapper. A cancellation is never included there - it is the task
-            # group cancelling us on child failure, so propagating it would discard
-            # all child errors.
-            if exc_val is not None and not isinstance(exc_val, CancelledError):
-                raise exc_val from exc  # reraise currently handled exception
-
-            else:
-                raise  # raise exit exception
+        except BaseExceptionGroup as exc:
+            # the group of the TaskGroup wraps the errors of its tasks with the non-cancellation
+            # exception propagating through its body, the latter twice when the body reraised
+            # the error of a failed task - unwrap it to surface the actual failures instead
+            failure = self._failure(exc, body_exception=exc_val)
 
         finally:
             ContextTaskGroup._context.reset(self._token)
             self._token = None
             self._task_group = None
+
+        if failure is None:
+            return  # nothing to raise
+
+        if failure is exc_val:
+            # reraising the exception already propagating through the body does not chain it
+            raise failure
+
+        if exc_val is not None:
+            # the body was cancelled by the group on task failure - that cancellation is
+            # not a cause of the failure, hence not chained as its context
+            failure.__suppress_context__ = True
+
+        raise failure
+
+    @staticmethod
+    def _failure(
+        group: BaseExceptionGroup[BaseException],
+        /,
+        *,
+        body_exception: BaseException | None,
+    ) -> BaseException:
+        errors: list[BaseException] = []
+        for error in group.exceptions:
+            if error is body_exception or any(error is collected for collected in errors):
+                continue  # skip the body exception and duplicates
+
+            errors.append(error)
+
+        if not errors:
+            # the group holds nothing but the exception already propagating through the body -
+            # a closing `GeneratorExit` or the reraised error of a failed task - there is no
+            # failure to report beyond it, which was logged where it was raised
+            assert body_exception is not None  # nosec: B101
+            return body_exception
+
+        collected: BaseException
+        match errors:
+            case [error]:
+                collected = error  # a single error is raised on its own
+
+            case _:
+                if all(isinstance(error, Exception) for error in errors):
+                    collected = ExceptionGroup(
+                        "Context task group failed",
+                        cast(list[Exception], errors),
+                    )
+
+                else:
+                    collected = BaseExceptionGroup("Context task group failed", errors)
+
+        ContextObservability.record_log(
+            ObservabilityLevel.ERROR,
+            "Context task group exit failed",
+            exception=collected,
+        )
+
+        if body_exception is None or isinstance(body_exception, CancelledError):
+            # a cancellation is never included in the group - it is the task group cancelling
+            # the body on task failure, propagating it would discard the errors of the tasks
+            return collected
+
+        # the exception propagating through the body takes precedence over the errors of the
+        # tasks, which failed alongside it - they are chained as its cause instead of being lost
+        body_exception.__cause__ = collected
+        return body_exception

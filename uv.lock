@@ -406,7 +406,7 @@ wheels = [
 
 [[package]]
 name = "haiway"
-version = "0.57.1"
+version = "0.58.1"
 source = { editable = "." }
 dependencies = [
     { name = "typing-extensions" },

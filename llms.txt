@@ -138,7 +138,9 @@ the iteration is left early.
 - `ctx.spawn(fn, *args, **kwargs)` -> `Task` in the current scope's task group. Every scope owns one,
   so the task is awaited by the scope it was spawned in - never by an enclosing one. Scope exit
   awaits spawned tasks rather than cancelling them, so a task must be able to finish on its own: it
-  must not wait for anything signalled after its scope exits. Iterating a `ctx.subscribe(...)`
+  must not wait for anything signalled after its scope exits. A failed task raises its error out of
+  the scope as is, many failing together an `ExceptionGroup` of their errors - never the
+  `unhandled errors in a TaskGroup` wrapper. Iterating a `ctx.subscribe(...)`
   subscription to exhaustion is fine anywhere - a scope completes its closing before joining its
   tasks, which ends the iteration first. `ctx.spawn_background(...)` only when work must outlive the
   scope - such a
@@ -153,9 +155,10 @@ the iteration is left early.
 - `process_concurrently(source, handler, concurrent_tasks=...)` — fire-and-forget, no results.
 - `execute_concurrently(handler, elements, concurrent_tasks=...)` — ordered results.
 - `concurrently(coroutines, ...)` takes an iterable of coroutines (not varargs);
-  `stream_concurrently(a, b)` interleaves two async generators. These helpers require an
-  `AsyncGenerator` (or a sync `Iterable`), not any async iterable - they close the source they
-  consumed, so it needs `aclose`.
+  `stream_concurrently(*sources)` interleaves async generators, with
+  `stream2_concurrently`/`stream3_concurrently`/`stream4_concurrently` keeping each source's type
+  in the element union. These helpers require an `AsyncGenerator` (or a sync `Iterable`), not any
+  async iterable - they close the source they consumed, so it needs `aclose`.
 - `AsyncQueue` / `AsyncStream` bridge producers to consumers and are async generators - `aclose()`
   and `athrow()` end the iteration dropping whatever is buffered; `AsyncQueue.finish()` is the one
   way to stop accepting elements while leaving buffered ones deliverable.

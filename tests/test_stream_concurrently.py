@@ -6,7 +6,12 @@ from typing import NoReturn
 from pytest import mark, raises
 
 from haiway import ctx
-from haiway.helpers.concurrent import stream_concurrently
+from haiway.helpers.concurrent import (
+    stream2_concurrently,
+    stream3_concurrently,
+    stream4_concurrently,
+    stream_concurrently,
+)
 
 
 class FakeException(Exception):
@@ -528,12 +533,13 @@ async def test_closes_the_other_source_when_one_fails_to_close():
         finally:
             closed.append("b")
 
-    with raises(FakeException):
-        async with ctx.closing(stream_concurrently(FailingToClose(), tracked())) as merged:
-            async for _ in merged:
-                break
+    # each source is released by its own producer, so one failing to close does not
+    # strand the other - its error is reported by the task group holding them, which
+    # the closing of the merged stream takes precedence over, leaving it only logged
+    async with ctx.closing(stream_concurrently(FailingToClose(), tracked())) as merged:
+        async for _ in merged:
+            break
 
-    # the sources are closed nested, so one failing to close does not strand the other
     assert closed == ["b"]
 
 
@@ -594,3 +600,164 @@ async def test_closes_scoped_sources_within_their_producers_when_left_early():
                 break
 
     assert sorted(released) == ["a", "b"]
+
+
+@mark.asyncio
+async def test_merges_no_sources_into_empty_stream():
+    items: list[object] = []
+    merged: AsyncGenerator[object] = stream_concurrently()
+    async for item in merged:
+        items.append(item)
+
+    assert items == []
+
+
+@mark.asyncio
+async def test_closing_no_sources_merge_does_nothing():
+    merged: AsyncGenerator[object] = stream_concurrently()
+    await merged.aclose()
+
+    with raises(StopAsyncIteration):
+        await anext(merged)
+
+
+@mark.asyncio
+async def test_merges_single_source_by_passing_it_through():
+    source: AsyncGenerator[int] = async_range(0, 3)
+
+    # there is nothing to merge it with, so it is its own merged stream
+    assert stream_concurrently(source) is source
+    assert [item async for item in source] == [0, 1, 2]
+
+
+@mark.asyncio
+async def test_merges_more_than_two_streams():
+    items: list[int | str] = []
+
+    async for item in stream_concurrently(
+        async_range(0, 3),
+        async_letters("abc"),
+        async_range(10, 13),
+        async_letters("xyz"),
+        exhaustive=True,
+    ):
+        items.append(item)
+
+    assert len(items) == 12
+    assert set(items) == {0, 1, 2, 10, 11, 12, "a", "b", "c", "x", "y", "z"}
+
+
+@mark.asyncio
+async def test_ends_promptly_when_any_of_many_sources_exhausts():
+    async def endless() -> AsyncGenerator[str]:
+        while True:
+            await sleep(0.1)
+            yield "endless"
+
+    items: list[int | str] = []
+    async with ctx.closing(
+        stream_concurrently(async_range(0, 2), endless(), endless(), endless())
+    ) as merged:
+        async for item in merged:
+            items.append(item)
+
+    # the exhausted source ends the merge, the endless ones are cancelled
+    assert [item for item in items if isinstance(item, int)] == [0, 1]
+
+
+@mark.asyncio
+async def test_propagates_source_exception_instead_of_its_cancellation():
+    async def failing() -> AsyncGenerator[int]:
+        yield 1
+        raise FakeException("source failed")
+
+    async def endless() -> AsyncGenerator[str]:
+        while True:
+            await sleep(0.1)
+            yield "endless"
+
+    # a failing producer aborts the group holding it, cancelling the consumer - the
+    # error is delivered to the merged stream first, so the consumer ends on it
+    # instead of on that cancellation
+    with raises(FakeException, match="source failed"):
+        async for _ in stream_concurrently(failing(), endless(), endless(), exhaustive=True):
+            pass
+
+
+@mark.asyncio
+async def test_typed_variants_merge_their_sources():
+    async def numbers() -> AsyncGenerator[int]:
+        yield 1
+
+    async def letters() -> AsyncGenerator[str]:
+        yield "a"
+
+    async def floats() -> AsyncGenerator[float]:
+        yield 2.5
+
+    async def flags() -> AsyncGenerator[bool]:
+        yield True
+
+    two: list[int | str] = [
+        item async for item in stream2_concurrently(numbers(), letters(), exhaustive=True)
+    ]
+    assert sorted(map(str, two)) == ["1", "a"]
+
+    three: list[int | str | float] = [
+        item async for item in stream3_concurrently(numbers(), letters(), floats(), exhaustive=True)
+    ]
+    assert sorted(map(str, three)) == ["1", "2.5", "a"]
+
+    four: list[int | str | float | bool] = [
+        item
+        async for item in stream4_concurrently(
+            numbers(),
+            letters(),
+            floats(),
+            flags(),
+            exhaustive=True,
+        )
+    ]
+    assert sorted(map(str, four)) == ["1", "2.5", "True", "a"]
+
+
+@mark.asyncio
+async def test_raises_first_delivered_error_when_many_sources_fail_at_once():
+    async def failing(tag: str) -> AsyncGenerator[int]:
+        raise FakeException(tag)
+        yield 0  # pragma: no cover - never reached
+
+    # the error which reached the consumer is raised on its own, the ones which
+    # followed it are only collected by the task group holding the producers
+    with raises(FakeException) as failure:
+        async for _ in stream_concurrently(
+            failing("first"),
+            failing("second"),
+            failing("third"),
+            exhaustive=True,
+        ):
+            pass
+
+    assert str(failure.value) == "first"
+
+
+@mark.asyncio
+async def test_reports_release_failure_of_a_merge_which_ended_without_an_error():
+    async def exhausting() -> AsyncGenerator[int]:
+        yield 1
+
+    async def failing_to_release() -> AsyncGenerator[str]:
+        try:
+            yield "b"
+            await sleep(0.01)
+
+        finally:
+            raise FakeException("release failed")
+
+    # the merge ends without an error - the first source exhausted, cancelling the
+    # other - so the producer failing to release has no delivered error to surface
+    # in its place and the task group holding it raises what it collected - a single
+    # error on its own, without the group wrapper
+    with raises(FakeException, match="release failed"):
+        async for _ in stream_concurrently(exhausting(), failing_to_release()):
+            pass

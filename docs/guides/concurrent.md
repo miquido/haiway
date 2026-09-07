@@ -12,7 +12,9 @@ in.
 - `ctx.spawn(...)` keeps work tied to the current scope. A task is awaited by the scope it was
   spawned in - never by an enclosing one.
 - Scope exit waits for in-scope tasks to settle.
-- Child task failures surface through the task group unless explicitly handled.
+- Child task failures surface through the task group unless explicitly handled. A single failed task
+  raises its error as is, while multiple tasks failing together raise an `ExceptionGroup` of their
+  errors - never the `unhandled errors in a TaskGroup` wrapper of `asyncio.TaskGroup`.
 - State, logging, and observability remain available inside spawned tasks, and stay valid for as
   long as the task runs.
 
@@ -106,8 +108,8 @@ applying a single handler over elements.
 
 ## `stream_concurrently`
 
-`stream_concurrently(...)` merges two async generators and yields items as soon as either source
-produces them.
+`stream_concurrently(...)` merges any number of async generators and yields items as soon as any
+source produces them.
 
 ```python
 import asyncio
@@ -131,14 +133,36 @@ async with ctx.closing(stream_concurrently(numbers(), letters(), exhaustive=True
 
 Important semantics:
 
-- Default `exhaustive=False` stops the merged stream when either source finishes.
-- `exhaustive=True` keeps yielding until both sources finish.
+- Default `exhaustive=False` stops the merged stream when any source finishes.
+- `exhaustive=True` keeps yielding until all sources finish.
 - Yielded order depends on arrival timing.
-- Exceptions from either source are propagated.
-- Cancelling the consumer cancels the producer tasks created for both sources.
-- Both sources are closed when the merged stream ends, however it ends - exhausted, failed, or
+- Exceptions from any source are propagated, cancelling the remaining producers regardless of
+  `exhaustive`. The first error to reach the consumer is raised on its own, even when other
+  producers failed alongside it. A producer failing after the merge already ended without an error -
+  typically while being released - has nothing to surface in its place, so the task group holding
+  the producers raises its error on its own, or a `BaseExceptionGroup` when many failed together.
+- Cancelling the consumer cancels the producer tasks created for all sources.
+- Delivery is flow-controlled - a source producing faster than the merged stream is consumed is
+  suspended instead of buffering.
+- All sources are closed when the merged stream ends, however it ends - exhausted, failed, or
   abandoned. Close the merged stream itself with `contextlib.aclosing` when leaving early, so that
   happens at the break rather than whenever the garbage collector gets to it.
+- Merging no sources produces an empty stream, and a single source is returned as is - there is
+  nothing to merge it with.
+
+### Typed Variants
+
+`stream_concurrently(...)` is variadic, so it unifies all of its sources under one element type.
+When merging a fixed number of differently typed sources, use `stream2_concurrently(...)`,
+`stream3_concurrently(...)` or `stream4_concurrently(...)` to keep each source's type within the
+element union:
+
+```python
+from haiway import stream2_concurrently
+
+# AsyncGenerator[int | str]
+merged = stream2_concurrently(numbers(), letters(), exhaustive=True)
+```
 
 ### Merging a Source Which Never Ends
 
@@ -218,4 +242,6 @@ That gives them predictable behavior:
 - `process_concurrently(...)`: side effects only
 - `execute_concurrently(...)`: apply one handler and collect ordered results
 - `concurrently(...)`: run pre-created coroutines and collect ordered results
-- `stream_concurrently(...)`: merge two async generators into one stream
+- `stream_concurrently(...)`: merge any number of async generators into one stream
+- `stream2_concurrently(...)` / `stream3_concurrently(...)` / `stream4_concurrently(...)`: the same
+  merge keeping each source's type in the element union

@@ -1,10 +1,7 @@
 from asyncio import (
-    ALL_COMPLETED,
     CancelledError,
     Semaphore,
     Task,
-    get_running_loop,
-    wait,
 )
 from collections.abc import (
     AsyncGenerator,
@@ -17,22 +14,26 @@ from collections.abc import (
     MutableSet,
     Sequence,
 )
-from contextvars import copy_context
-from typing import Literal, overload
+from types import TracebackType
+from typing import Literal, NoReturn, Self, final, overload
 
 from haiway.context import ctx
 from haiway.context.tasks import ContextTaskGroup
+from haiway.utils.exceptions import thrown_exception
 from haiway.utils.stream import AsyncStream
 
 __all__ = (
     "concurrently",
     "execute_concurrently",
     "process_concurrently",
+    "stream2_concurrently",
+    "stream3_concurrently",
+    "stream4_concurrently",
     "stream_concurrently",
 )
 
 
-async def process_concurrently[Element](  # noqa: C901, PLR0912
+async def process_concurrently[Element](  # noqa: C901
     source: AsyncGenerator[Element] | Iterable[Element],
     /,
     handler: Callable[[Element], Coroutine[None, None, None]],
@@ -73,6 +74,7 @@ async def process_concurrently[Element](  # noqa: C901, PLR0912
         If the function is cancelled, propagated after cancelling all running tasks.
     Exception
         Any exception raised by handler tasks when ignore_exceptions is False.
+        Multiple handlers failing together raise their errors as an `ExceptionGroup`.
 
     Examples
     --------
@@ -98,17 +100,11 @@ async def process_concurrently[Element](  # noqa: C901, PLR0912
         # source from being consumed any further than the running tasks allow
         slots: Semaphore = Semaphore(concurrent_tasks - 1)
         running: MutableSet[Task[None]] = set()
-        error: BaseException | None = None  # error of the first failed task
 
         def complete(
             task: Task[None],
             /,
         ) -> None:
-            nonlocal error
-            running.discard(task)
-            if error is None and not task.cancelled():
-                error = task.exception()  # keep the error which breaks processing
-
             slots.release()  # free the slot for the next task
 
         async def spawn[**Arguments](
@@ -138,49 +134,32 @@ async def process_concurrently[Element](  # noqa: C901, PLR0912
                     exception=exc,
                 )
 
-        try:
-            if isinstance(source, AsyncGenerator):
-                try:
-                    if ignore_exceptions:
-                        async for element in source:
-                            await spawn(ignoring_errors, handler, element)
-
-                    else:
-                        async for element in source:
-                            await spawn(handler, element)
-
-                finally:
-                    await source.aclose()
-
-            else:
-                # an async iterable which is not a generator has no `aclose`, so the
-                # source could not be released when processing ends - hence not accepted,
-                # which the type of the argument already ensures
-                assert isinstance(source, Iterable)  # nosec: B101
-
+        if isinstance(source, AsyncGenerator):
+            try:
                 if ignore_exceptions:
-                    for element in source:
+                    async for element in source:
                         await spawn(ignoring_errors, handler, element)
 
                 else:
-                    for element in source:
+                    async for element in source:
                         await spawn(handler, element)
 
-            # join within the group, so a task failure cancels us here and its error
-            # surfaces instead of the exception group of the task group exit
-            if running:
-                await wait(running, return_when=ALL_COMPLETED)
+            finally:
+                await source.aclose()
 
-            if error is not None:
-                raise error from None  # raise task error and break processing
+        else:
+            # an async iterable which is not a generator has no `aclose`, so the
+            # source could not be released when processing ends - hence not accepted,
+            # which the type of the argument already ensures
+            assert isinstance(source, Iterable)  # nosec: B101
 
-        except CancelledError:
-            # a failed task aborts the enclosing task group, which cancels us -
-            # surface the error which broke processing instead of that cancellation
-            if error is not None:
-                raise error from None
+            if ignore_exceptions:
+                for element in source:
+                    await spawn(ignoring_errors, handler, element)
 
-            raise  # raise cancellation
+            else:
+                for element in source:
+                    await spawn(handler, element)
 
 
 @overload
@@ -205,7 +184,7 @@ async def execute_concurrently[Element, Result](
 ) -> Sequence[Result | Exception]: ...
 
 
-async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
+async def execute_concurrently[Element, Result](  # noqa: C901
     handler: Callable[[Element], Coroutine[None, None, Result]],
     /,
     elements: AsyncGenerator[Element] | Iterable[Element],
@@ -254,6 +233,7 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
         If the function is cancelled, propagated after cancelling all running tasks.
     Exception
         Any exception raised by handler tasks when return_exceptions is False.
+        Multiple handlers failing together raise their errors as an `ExceptionGroup`.
 
     Examples
     --------
@@ -290,16 +270,11 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
         # source from being consumed any further than the running tasks allow
         slots: Semaphore = Semaphore(concurrent_tasks - 1)
         results: MutableSequence[Task[Result | Exception]] = []  # ordered results collection
-        error: BaseException | None = None  # error of the first failed task
 
         def complete(
             task: Task[Result | Exception],
             /,
         ) -> None:
-            nonlocal error
-            if error is None and not task.cancelled():
-                error = task.exception()  # keep the error which breaks execution
-
             slots.release()  # free the slot for the next task
 
         async def spawn[**Arguments](
@@ -325,49 +300,32 @@ async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
             except Exception as exc:
                 return exc
 
-        try:
-            if isinstance(elements, AsyncGenerator):
-                try:
-                    if return_exceptions:
-                        async for element in elements:
-                            results.append(await spawn(returning_errors, handler, element))
-
-                    else:
-                        async for element in elements:
-                            results.append(await spawn(handler, element))
-
-                finally:
-                    await elements.aclose()
-
-            else:
-                # an async iterable which is not a generator has no `aclose`, so the
-                # source could not be released when execution ends - hence not accepted,
-                # which the type of the argument already ensures
-                assert isinstance(elements, Iterable)  # nosec: B101
-
+        if isinstance(elements, AsyncGenerator):
+            try:
                 if return_exceptions:
-                    for element in elements:
+                    async for element in elements:
                         results.append(await spawn(returning_errors, handler, element))
 
                 else:
-                    for element in elements:
+                    async for element in elements:
                         results.append(await spawn(handler, element))
 
-            # join within the group, so a task failure cancels us here and its error
-            # surfaces instead of the exception group of the task group exit
-            if results:
-                await wait(results, return_when=ALL_COMPLETED)
+            finally:
+                await elements.aclose()
 
-            if error is not None:
-                raise error from None  # raise task error and break execution
+        else:
+            # an async iterable which is not a generator has no `aclose`, so the
+            # source could not be released when execution ends - hence not accepted,
+            # which the type of the argument already ensures
+            assert isinstance(elements, Iterable)  # nosec: B101
 
-        except CancelledError:
-            # a failed task aborts the enclosing task group, which cancels us -
-            # surface the error which broke execution instead of that cancellation
-            if error is not None:
-                raise error from None
+            if return_exceptions:
+                for element in elements:
+                    results.append(await spawn(returning_errors, handler, element))
 
-            raise  # raise cancellation
+            else:
+                for element in elements:
+                    results.append(await spawn(handler, element))
 
     # task group joins all tasks so at this point it will be all completed
     return tuple(result.result() for result in results)
@@ -443,6 +401,7 @@ async def concurrently[Result](  # noqa: C901, PLR0912
         If the function is cancelled, propagated after cancelling all running tasks.
     Exception
         Any exception raised by coroutines when return_exceptions is False.
+        Multiple coroutines failing together raise their errors as an `ExceptionGroup`.
 
     Examples
     --------
@@ -492,16 +451,11 @@ async def concurrently[Result](  # noqa: C901, PLR0912
         # source from being consumed any further than the running tasks allow
         slots: Semaphore = Semaphore(concurrent_tasks - 1)
         results: MutableSequence[Task[Result | Exception]] = []  # ordered results collection
-        error: BaseException | None = None  # error of the first failed task
 
         def complete(
             task: Task[Result | Exception],
             /,
         ) -> None:
-            nonlocal error
-            if error is None and not task.cancelled():
-                error = task.exception()  # keep the error which breaks execution
-
             slots.release()  # free the slot for the next task
 
         async def spawn(
@@ -524,105 +478,123 @@ async def concurrently[Result](  # noqa: C901, PLR0912
             except Exception as exc:
                 return exc
 
-        try:
-            if isinstance(coroutines, AsyncGenerator):
-                try:
-                    if return_exceptions:
-                        async for coro in coroutines:
-                            results.append(await spawn(returning_errors(coro)))
+        if isinstance(coroutines, AsyncGenerator):
+            try:
+                if return_exceptions:
+                    async for coro in coroutines:
+                        results.append(await spawn(returning_errors(coro)))
 
-                    else:
-                        async for coro in coroutines:
-                            results.append(await spawn(coro))
+                else:
+                    async for coro in coroutines:
+                        results.append(await spawn(coro))
 
-                finally:
-                    await coroutines.aclose()
+            finally:
+                await coroutines.aclose()
 
-            else:
-                # an async iterable which is not a generator has no `aclose`, so the
-                # source could not be released when execution ends - hence not accepted,
-                # which the type of the argument already ensures
-                assert isinstance(coroutines, Iterable)  # nosec: B101
+        else:
+            assert isinstance(coroutines, Iterable)  # nosec: B101
 
-                remaining: Iterator[Coroutine[None, None, Result]] = iter(coroutines)
-                try:
-                    if return_exceptions:
-                        for coro in remaining:
-                            results.append(await spawn(returning_errors(coro)))
+            remaining: Iterator[Coroutine[None, None, Result]] = iter(coroutines)
+            try:
+                if return_exceptions:
+                    for coro in remaining:
+                        results.append(await spawn(returning_errors(coro)))
 
-                    else:
-                        for coro in remaining:
-                            results.append(await spawn(coro))
+                else:
+                    for coro in remaining:
+                        results.append(await spawn(coro))
 
-                finally:
-                    if isinstance(coroutines, Collection):
-                        # a collection holds all of its coroutines already, so the ones
-                        # left when execution ends early are released here - a lazy
-                        # source has none left over, draining it could never end
-                        for coro in remaining:
-                            coro.close()
-
-            # join within the group, so a task failure cancels us here and its error
-            # surfaces instead of the exception group of the task group exit
-            if results:
-                await wait(results, return_when=ALL_COMPLETED)
-
-            if error is not None:
-                raise error from None  # raise task error and break execution
-
-        except CancelledError:
-            # a failed task aborts the enclosing task group, which cancels us -
-            # surface the error which broke execution instead of that cancellation
-            if error is not None:
-                raise error from None
-
-            raise  # raise cancellation
+            finally:
+                if isinstance(coroutines, Collection):
+                    # a collection holds all of its coroutines already, so the ones
+                    # left when execution ends early are released here - a lazy
+                    # source has none left over, draining it could never end
+                    for coro in remaining:
+                        coro.close()
 
     # task group joins all tasks so at this point it will be all completed
     return tuple(result.result() for result in results)
 
 
-def stream_concurrently[ElementA, ElementB](  # noqa: C901, PLR0915
-    source_a: AsyncGenerator[ElementA],
-    source_b: AsyncGenerator[ElementB],
-    /,
+@final
+class _DummyGenerator[Element](AsyncGenerator[Element]):
+    __slots__ = ()
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> NoReturn:
+        raise StopAsyncIteration
+
+    async def asend(
+        self,
+        value: None = None,
+        /,
+    ) -> NoReturn:
+        raise StopAsyncIteration
+
+    async def athrow(
+        self,
+        typ: type[BaseException] | BaseException,
+        val: object = None,
+        tb: TracebackType | None = None,
+        /,
+    ) -> NoReturn:
+        raise thrown_exception(typ, val, tb)
+
+    async def aclose(self) -> None:
+        pass  # there is nothing left to release
+
+
+def stream_concurrently[Element](  # noqa: C901
+    *sources: AsyncGenerator[Element],
     exhaustive: bool = False,
-) -> AsyncGenerator[ElementA | ElementB]:
-    """Merge streams from two async generators processed concurrently.
+) -> AsyncGenerator[Element]:
+    """Merge streams from multiple async generators consumed concurrently.
 
-    Concurrently consumes elements from two async generators and yields them
-    as they become available. Elements from both sources are interleaved based
-    on which generator produces them first. By default, streaming stops when
-    either generator is exhausted; when `exhaustive=True`, it continues until
-    both generators are exhausted.
+    Concurrently consumes elements from all of the provided async generators and
+    yields them as they become available. Elements from the sources are interleaved
+    based on which generator produces them first. By default, streaming stops when
+    any of the generators is exhausted; when `exhaustive=True`, it continues until
+    all of the generators are exhausted.
 
-    This is useful for combining multiple async data sources into a single
-    stream while maintaining concurrency. Each generator is polled independently,
-    and whichever has data available first will have its element yielded.
+    This is useful for combining multiple async data sources into a single stream
+    while maintaining concurrency. Each generator is drained independently, and
+    whichever has data available first will have its element yielded. Delivery is
+    flow-controlled - a source producing faster than the merged stream is consumed
+    is suspended instead of buffering, so a fast source can't outrun the consumer.
 
     Parameters
     ----------
-    source_a : AsyncGenerator[ElementA]
-        First generator to consume from.
-    source_b : AsyncGenerator[ElementB]
-        Second generator to consume from.
-    exhaustive: bool = False
-        If False (default, recommended), streaming continues until either source becomes exhausted.
-        If True, streaming ends when both sources become completed.
+    *sources : AsyncGenerator[Element]
+        Generators to consume from. Merging no sources produces an empty stream,
+        while a single source is returned as is - there is nothing to merge it with.
+    exhaustive : bool = False
+        If False (default, recommended), streaming continues until any source becomes
+        exhausted. If True, streaming ends when all sources become exhausted.
 
     Yields
     ------
-    ElementA | ElementB
-        Elements from either source as they become available. The order
-        depends on which generator produces elements first.
+    Element
+        Elements from the sources as they become available. The order depends on
+        which generator produces elements first.
 
     Raises
     ------
     CancelledError
-        If the async generator is cancelled, both source tasks are cancelled
+        If the merged stream is cancelled, all source producers are cancelled
         before propagating the cancellation.
     Exception
-        Any exception raised by either source generator.
+        Any exception raised by any of the source generators. The first error ends
+        the merged stream, cancelling the remaining producers regardless of
+        `exhaustive`.
+        A producer failing after the merged stream already ended without an error
+        reaching the consumer - exhausted, or stopped by the first source ending -
+        typically while being released, has no delivered error to raise in its place,
+        so the task group holding the producers raises what it collected - a single
+        error on its own, or a `BaseExceptionGroup` of many failing together.
+        An error which did reach the consumer is raised on its own instead, even
+        when other producers failed alongside it.
 
     Examples
     --------
@@ -642,128 +614,213 @@ def stream_concurrently[ElementA, ElementB](  # noqa: C901, PLR0915
 
     Notes
     -----
-    The function maintains exactly one pending task per generator at all times,
-    ensuring efficient resource usage while maximizing throughput from both
-    sources.
+    Element types are unified under a single `Element` type variable - use
+    ``stream2_concurrently``, ``stream3_concurrently`` or ``stream4_concurrently``
+    to merge a fixed number of differently typed sources into their union.
 
-    Both sources are closed by the producer draining them, however the merged
-    stream ends - exhausted, failed, closed or thrown into - and a source failing
-    to close does not strand the other one, its error surfacing once both are
-    released. A merged stream which was never started is the exception: closing it
-    does not run its frame, so it never reaches its sources - start it, or close
-    the sources directly. The merged stream itself is the caller's to close: the
-    task group holding its producers lives inside the generator frame, so only
-    closing the stream releases them, while an abandoned generator leaves that to
-    the garbage collector, finalizing it outside the task which started it. Wrap it
-    in ``ctx.closing`` whenever the iteration may be left early.
+    Each source is drained by exactly one producer task, so the merge keeps a single
+    pending element per source at all times, ensuring efficient resource usage while
+    maximizing throughput from all sources.
+
+    Each source is closed by the producer draining it, however the merged stream
+    ends - exhausted, failed, closed or thrown into - so a source failing to close
+    does not strand the others. Its error is raised by the task group holding the
+    producers only while nothing else is in flight - a source failing to release a
+    merged stream which is being closed is logged and chained as the cause of the
+    closing rather than raised, the closing taking precedence.
+    A merged stream which was never started is the exception: closing it does not
+    run its frame, so it never reaches its sources - start it, or close the sources
+    directly. This holds for an actual merge only; the single source returned as is
+    has no frame of its own to start, so closing it always releases it. The merged
+    stream itself is the caller's to close: the task group
+    holding its producers lives inside the generator frame, so only closing the
+    stream releases them, while an abandoned generator leaves that to the garbage
+    collector, finalizing it outside the task which started it. Wrap it in
+    ``ctx.closing`` whenever the iteration may be left early.
     """
+    match len(sources):
+        case 0:
+            return _DummyGenerator()
 
-    async def merged() -> AsyncGenerator[ElementA | ElementB]:  # noqa: C901, PLR0915
-        merged_stream: AsyncStream[ElementA | ElementB] = AsyncStream()
-        # error of a source failing to close, raised when the merged stream ends
-        close_error: BaseException | None = None
+        case 1:
+            return sources[0]
 
-        async def produce() -> None:  # noqa: C901
-            nonlocal close_error
-            # local task group for more granular management, entered within this
-            # task so it stays in its context - an async generator frame shares the
-            # context of its consumer, where a group would adopt the tasks spawned
-            # while iterating and wrap the errors passing through the frame
-            async with ContextTaskGroup() as group:
-                sources: MutableSet[Task[None]] = set()
+        case _:
+            pass  # continue with actual merge
 
-                def complete_source(
-                    task: Task[None],
-                    /,
-                ) -> None:
-                    sources.remove(task)
-                    if not exhaustive or not sources:
-                        merged_stream.finish()
+    async def merged() -> AsyncGenerator[Element]:  # noqa: C901
+        merged_stream: AsyncStream[Element] = AsyncStream()
 
-                def drain_source(
-                    source: AsyncGenerator[ElementA] | AsyncGenerator[ElementB],
-                    /,
-                ) -> Task[None]:
-                    def report(
-                        exception: Exception,
-                        /,
-                    ) -> None:
-                        nonlocal close_error
-                        # a stream which is still running delivers the error to its
-                        # consumer, ending it - once it finished there is no one left
-                        # to deliver to, so the error is kept to be raised when the
-                        # merged stream ends, instead of failing this task and
-                        # stranding the other source
-                        if not merged_stream.finished:
-                            merged_stream.finish(exception)
+        async with ContextTaskGroup() as group:
+            running: MutableSet[Task[None]] = set()
 
-                        elif close_error is None:
-                            close_error = exception
+            def complete_source(
+                task: Task[None],
+                /,
+            ) -> None:
+                running.remove(task)
+                # a cancelled producer has no error of its own to report - it was
+                # cancelled by the merge ending, and asking it for one raises
+                exception: BaseException | None = task.exception()
+                if not running:  # finish when no more running
+                    return merged_stream.finish(exception)
 
-                    async def drain() -> None:
+                # cancel remaining if not exhaustive or failed
+                if not exhaustive or exception is not None:
+                    for run in running:
+                        run.cancel()
+
+            def run_source(
+                source: AsyncGenerator[Element],
+                /,
+            ) -> Task[None]:
+                async def drain() -> None:
+                    try:
                         try:
                             async for element in source:
                                 if merged_stream.finished:
-                                    # the output ended - sending to it is rejected
-                                    break
+                                    break  # the output ended - sending to it is rejected
 
                                 await merged_stream.send(element)
 
-                        except Exception as exc:
-                            report(exc)
+                        except CancelledError:
+                            pass  # cancellation of producer is not an error
 
-                        finally:
-                            try:
-                                await source.aclose()
+                        except BaseException as exc:
+                            merged_stream.finish(exc)
 
-                            except Exception as exc:
-                                report(exc)
+                    finally:
+                        await source.aclose()
 
-                    task: Task[None] = group.run(drain)
-                    task.add_done_callback(complete_source)
-                    return task
+                task: Task[None] = group.run(drain)
+                task.add_done_callback(complete_source)
+                return task
 
-                for source in (source_a, source_b):
-                    sources.add(drain_source(source))
+            for source in sources:
+                running.add(run_source(source))
 
-        # the context is copied like a context task group would, so the producers
-        # keep the state and observability of the consumer starting them
-        producer: Task[None] = get_running_loop().create_task(
-            produce(),
-            context=copy_context(),
-        )
+            try:
+                async for element in merged_stream:
+                    yield element
 
-        # set when the merged stream ends by delivering a failure or by the consumer
-        # being cancelled - that error is the one to report, so a source failing to
-        # release afterwards can't take its place
-        delivered_error: bool = False
-        try:
-            async for element in merged_stream:
-                yield element
-
-        except GeneratorExit:
-            raise  # closing is not a failure which was delivered
-
-        except BaseException:
-            delivered_error = True
-            raise
-
-        finally:
-            # nothing reads the merged stream from here on, so it is finished before
-            # the producers are cancelled - whatever they hit while unwinding is then
-            # kept to be raised below, instead of being handed to a stream which no
-            # one will ever read again
-            merged_stream.finish()
-            producer.cancel()  # cancelling it cancels the producers of its group
-            await wait((producer,), return_when=ALL_COMPLETED)
-            if close_error is None and not producer.cancelled():
-                # nothing else reports it, and leaving it unretrieved warns
-                close_error = producer.exception()
-
-            await merged_stream.aclose()
-            # the group of the producer has joined both of them, so a source which
-            # failed to release is known by now
-            if close_error is not None and not delivered_error:
-                raise close_error from None
+            finally:
+                await merged_stream.aclose()
 
     return merged()
+
+
+def stream2_concurrently[ElementA, ElementB](
+    source_a: AsyncGenerator[ElementA],
+    source_b: AsyncGenerator[ElementB],
+    /,
+    *,
+    exhaustive: bool = False,
+) -> AsyncGenerator[ElementA | ElementB]:
+    """Merge streams from two differently typed async generators consumed concurrently.
+
+    Typed variant of ``stream_concurrently`` preserving the type of each source in
+    the union of the merged stream. See ``stream_concurrently`` for the merging,
+    closing and failure semantics.
+
+    Parameters
+    ----------
+    source_a : AsyncGenerator[ElementA]
+        First generator to consume from.
+    source_b : AsyncGenerator[ElementB]
+        Second generator to consume from.
+    exhaustive : bool = False
+        If False (default, recommended), streaming continues until any source becomes
+        exhausted. If True, streaming ends when all sources become exhausted.
+
+    Yields
+    ------
+    ElementA | ElementB
+        Elements from either source as they become available.
+    """
+    return stream_concurrently(
+        source_a,
+        source_b,
+        exhaustive=exhaustive,
+    )
+
+
+def stream3_concurrently[ElementA, ElementB, ElementC](
+    source_a: AsyncGenerator[ElementA],
+    source_b: AsyncGenerator[ElementB],
+    source_c: AsyncGenerator[ElementC],
+    /,
+    *,
+    exhaustive: bool = False,
+) -> AsyncGenerator[ElementA | ElementB | ElementC]:
+    """Merge streams from three differently typed async generators consumed concurrently.
+
+    Typed variant of ``stream_concurrently`` preserving the type of each source in
+    the union of the merged stream. See ``stream_concurrently`` for the merging,
+    closing and failure semantics.
+
+    Parameters
+    ----------
+    source_a : AsyncGenerator[ElementA]
+        First generator to consume from.
+    source_b : AsyncGenerator[ElementB]
+        Second generator to consume from.
+    source_c : AsyncGenerator[ElementC]
+        Third generator to consume from.
+    exhaustive : bool = False
+        If False (default, recommended), streaming continues until any source becomes
+        exhausted. If True, streaming ends when all sources become exhausted.
+
+    Yields
+    ------
+    ElementA | ElementB | ElementC
+        Elements from any of the sources as they become available.
+    """
+    return stream_concurrently(
+        source_a,
+        source_b,
+        source_c,
+        exhaustive=exhaustive,
+    )
+
+
+def stream4_concurrently[ElementA, ElementB, ElementC, ElementD](
+    source_a: AsyncGenerator[ElementA],
+    source_b: AsyncGenerator[ElementB],
+    source_c: AsyncGenerator[ElementC],
+    source_d: AsyncGenerator[ElementD],
+    /,
+    *,
+    exhaustive: bool = False,
+) -> AsyncGenerator[ElementA | ElementB | ElementC | ElementD]:
+    """Merge streams from four differently typed async generators consumed concurrently.
+
+    Typed variant of ``stream_concurrently`` preserving the type of each source in
+    the union of the merged stream. See ``stream_concurrently`` for the merging,
+    closing and failure semantics.
+
+    Parameters
+    ----------
+    source_a : AsyncGenerator[ElementA]
+        First generator to consume from.
+    source_b : AsyncGenerator[ElementB]
+        Second generator to consume from.
+    source_c : AsyncGenerator[ElementC]
+        Third generator to consume from.
+    source_d : AsyncGenerator[ElementD]
+        Fourth generator to consume from.
+    exhaustive : bool = False
+        If False (default, recommended), streaming continues until any source becomes
+        exhausted. If True, streaming ends when all sources become exhausted.
+
+    Yields
+    ------
+    ElementA | ElementB | ElementC | ElementD
+        Elements from any of the sources as they become available.
+    """
+    return stream_concurrently(
+        source_a,
+        source_b,
+        source_c,
+        source_d,
+        exhaustive=exhaustive,
+    )

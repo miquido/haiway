@@ -285,9 +285,11 @@ async def test_closes_the_source_when_a_handler_fails():
     async def handler(element: int) -> int:
         raise FakeException("Test exception")
 
-    with raises(FakeException):
+    # both running handlers fail together, so their errors are raised as a group
+    with raises(ExceptionGroup) as failure:
         await execute_concurrently(handler, tracked_elements())
 
+    assert all(isinstance(error, FakeException) for error in failure.value.exceptions)
     assert closed == ["source"]
 
 

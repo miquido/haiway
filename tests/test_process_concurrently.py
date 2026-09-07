@@ -250,9 +250,11 @@ async def test_closes_the_source_when_a_handler_fails():
     async def handler(element: int) -> None:
         raise FakeException("Test exception")
 
-    with raises(FakeException):
+    # both running handlers fail together, so their errors are raised as a group
+    with raises(ExceptionGroup) as failure:
         await process_concurrently(tracked_source(), handler)
 
+    assert all(isinstance(error, FakeException) for error in failure.value.exceptions)
     # the source is released where the processing stopped, not left to the
     # collector - it is what makes an `AsyncGenerator` source a requirement
     assert closed == ["source"]
