@@ -301,6 +301,24 @@ async with ctx.closing(ctx.subscribe(OrderCreated)) as orders:
     first = await asyncio.wait_for(anext(orders), timeout=5.0)
 ```
 
+A bounded read which times out does not end the subscription. The cancelled wait takes nothing out
+of the events chain, so the position within it still stands, the events which arrived meanwhile are
+kept, and the read can simply be retried. Ending a subscription stays the deliberate act of closing
+it.
+
+### One Consumer per Subscription
+
+A subscription holds a single position within the events chain, so two tasks iterating the same one
+would each be handed the very same event rather than one taking the next. Only one iteration may run
+at a time, as with any async generator - a debug build catches a second one with an assertion, which
+an optimized build strips. Subscribe once per consumer to fan an event type out to several of them:
+
+```python
+async with ctx.scope("server"):
+    ctx.spawn(audit, ctx.subscribe(OrderCreated))     # its own position
+    ctx.spawn(billing, ctx.subscribe(OrderCreated))   # and its own
+```
+
 ## Integration with Other Features
 
 ### With State Management

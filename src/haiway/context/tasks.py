@@ -5,7 +5,7 @@ from contextvars import Context, ContextVar, Token, copy_context
 from inspect import iscoroutine
 from threading import Lock
 from types import FrameType, TracebackType
-from typing import Any, ClassVar, cast, final
+from typing import Any, ClassVar, Self, cast, final
 
 from haiway.context.observability import ContextObservability, ObservabilityLevel
 
@@ -228,12 +228,13 @@ class ContextTaskGroup:
         self._task_group: TaskGroup | None = None
         self._token: Token[TaskGroup] | None = None
 
-    async def __aenter__(self) -> None:
+    async def __aenter__(self) -> Self:
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         assert self._task_group is None  # nosec: B101
         self._task_group = TaskGroup()
         await self._task_group.__aenter__()
         self._token = ContextTaskGroup._context.set(self._task_group)
+        return self
 
     async def __aexit__(
         self,

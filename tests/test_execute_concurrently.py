@@ -305,7 +305,8 @@ async def test_rejects_elements_which_can_not_be_released():
     async def handler(element: int) -> int:
         return element
 
-    with raises(TypeError):
+    # the source type is verified by an assert, typing rejects it ahead of runtime
+    with raises(AssertionError):
         await execute_concurrently(
             handler,
             AsyncIterableSource(),  # pyright: ignore[reportArgumentType]

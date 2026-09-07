@@ -1,10 +1,11 @@
-from asyncio import CancelledError, Future, gather, shield, sleep
+from asyncio import Future, gather, shield, sleep
 from collections.abc import Collection, Iterable, Iterator, MutableSequence, Sequence
 from types import TracebackType
-from typing import Any, NoReturn, Protocol, Self, cast, final, runtime_checkable
+from typing import Any, NoReturn, Protocol, Self, final, runtime_checkable
 
 from haiway.attributes import State
 from haiway.context.state import ContextState
+from haiway.utils.exceptions import raise_collected
 
 __all__ = (
     "ContextDisposables",
@@ -189,7 +190,7 @@ class Disposables:
             return_exceptions=True,
         )
 
-        _raise_collected(
+        raise_collected(
             tuple(result for result in results if isinstance(result, BaseException)),
             message="Disposables disposal errors",
         )
@@ -315,34 +316,9 @@ def _collect_state(
         else:
             state.extend(result)
 
-    _raise_collected(
+    raise_collected(
         errors,
         message="Disposables preparation errors",
     )
 
     return iter(state)
-
-
-def _raise_collected(
-    exceptions: Sequence[BaseException],
-    /,
-    message: str,
-) -> None:
-    match exceptions:
-        case ():
-            return  # no errors
-
-        case (exception,):
-            raise exception  # single error
-
-        case _:
-            if all(isinstance(exception, Exception) for exception in exceptions):
-                raise ExceptionGroup(
-                    message,
-                    cast(Sequence[Exception], exceptions),
-                )
-
-            if all(isinstance(exception, CancelledError) for exception in exceptions):
-                raise CancelledError()  # cancelled
-
-            raise BaseExceptionGroup(message, exceptions)

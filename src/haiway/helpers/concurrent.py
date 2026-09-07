@@ -1,4 +1,11 @@
-from asyncio import ALL_COMPLETED, CancelledError, Semaphore, Task, current_task, wait
+from asyncio import (
+    ALL_COMPLETED,
+    CancelledError,
+    Semaphore,
+    Task,
+    get_running_loop,
+    wait,
+)
 from collections.abc import (
     AsyncGenerator,
     Callable,
@@ -10,14 +17,11 @@ from collections.abc import (
     MutableSet,
     Sequence,
 )
-from functools import partial
-from inspect import iscoroutine
-from types import TracebackType
-from typing import Any, Literal, Self, cast, final, overload
+from contextvars import copy_context
+from typing import Literal, overload
 
 from haiway.context import ctx
 from haiway.context.tasks import ContextTaskGroup
-from haiway.utils.exceptions import thrown_exception
 from haiway.utils.stream import AsyncStream
 
 __all__ = (
@@ -28,200 +32,7 @@ __all__ = (
 )
 
 
-@final
-class _ConcurrentTasks[Result]:
-    """
-    Task spawning bounded by a concurrency limit.
-
-    Keeps at most the requested number of tasks running at once and preserves the
-    error of a failed task. The enclosing task group aborts on a task failure by
-    cancelling whoever spawned that task, which would otherwise surface as a
-    cancellation or an exception group instead of the error breaking processing.
-    """
-
-    __slots__ = (
-        "_failed",
-        "_running",
-        "_slots",
-    )
-
-    def __init__(
-        self,
-        limit: int,
-        /,
-    ) -> None:
-        assert limit > 1  # nosec: B101
-
-        # the slot of the task being spawned is not counted, so waiting for a free
-        # one happens right after a spawn instead of ahead of it - which keeps the
-        # source from being consumed any further than the running tasks allow
-        self._slots: Semaphore = Semaphore(limit - 1)
-        self._running: MutableSet[Task[Result]] = set()
-        # a failed task leaves `_running` as soon as its completion is handled, which
-        # happens before its error is examined - keep it available until it is
-        self._failed: MutableSequence[Task[Result]] = []
-
-    def _handle_completion(
-        self,
-        task: Task[Result],
-        /,
-    ) -> None:
-        self._running.discard(task)
-        if not task.cancelled() and task.exception() is not None:
-            self._failed.append(task)
-
-        self._slots.release()  # free the slot for the next task
-
-    @overload
-    async def spawn(
-        self,
-        coro: Coroutine[None, None, Result],
-        /,
-    ) -> Task[Result]: ...
-
-    @overload
-    async def spawn[**Arguments](
-        self,
-        coro: Callable[Arguments, Coroutine[None, None, Result]],
-        /,
-        *args: Arguments.args,
-        **kwargs: Arguments.kwargs,
-    ) -> Task[Result]: ...
-
-    async def spawn[**Arguments](
-        self,
-        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result],
-        /,
-        *args: Arguments.args,
-        **kwargs: Arguments.kwargs,
-    ) -> Task[Result]:
-        """
-        Spawn a task for the coroutine, then wait for room for the next one.
-
-        Accepts either a coroutine or a function to call with the given arguments,
-        which is then called within the spawned task.
-
-        Returns without suspending while the limit is not reached yet.
-        """
-        task: Task[Result] = ctx.spawn(
-            cast(Any, coro),
-            *args,
-            **kwargs,
-        )
-        self._running.add(task)
-        task.add_done_callback(self._handle_completion)
-        await self._slots.acquire()
-        return task
-
-    async def join(self) -> None:
-        """Wait for all spawned tasks to complete, raising the first task error."""
-        if self._running:
-            await wait(
-                self._running,
-                return_when=ALL_COMPLETED,
-            )
-
-        self.raise_error()
-
-    def raise_error(self) -> None:
-        """Raise the error of the first failed task, when any task has failed."""
-        for task in (*self._failed, *self._running):
-            if not task.done() or task.cancelled():
-                continue  # examine only completed tasks
-
-            error: BaseException | None = task.exception()
-            if error is not None:
-                raise error from None  # raise task error and break processing
-
-
-@overload
-async def _processing(
-    coro: Coroutine[None, None, None],
-    /,
-    *,
-    ignore_exceptions: bool,
-) -> None: ...
-
-
-@overload
-async def _processing[Element](
-    coro: Callable[[Element], Coroutine[None, None, None]],
-    element: Element,
-    /,
-    *,
-    ignore_exceptions: bool,
-) -> None: ...
-
-
-async def _processing[Element](
-    coro: Callable[[Element], Coroutine[None, None, None]] | Coroutine[None, None, None],
-    /,
-    *arguments: Element,
-    ignore_exceptions: bool,
-) -> None:
-    """Process the coroutine, logging and optionally suppressing its errors."""
-    try:
-        if iscoroutine(coro):
-            await coro
-
-        else:
-            # the coroutine of a handler is created within the task running it
-            await cast(Callable[..., Coroutine[None, None, None]], coro)(*arguments)
-
-    except Exception as exc:
-        ctx.log_error(
-            f"Concurrent processing error - {type(exc)}: {exc}",
-            exception=exc,
-        )
-        if not ignore_exceptions:
-            raise  # reraise exception
-
-
-@overload
-async def _executing[Result](
-    coro: Coroutine[None, None, Result],
-    /,
-    *,
-    return_exceptions: bool,
-) -> Result | Exception: ...
-
-
-@overload
-async def _executing[Element, Result](
-    coro: Callable[[Element], Coroutine[None, None, Result]],
-    element: Element,
-    /,
-    *,
-    return_exceptions: bool,
-) -> Result | Exception: ...
-
-
-async def _executing[Element, Result](
-    coro: Callable[[Element], Coroutine[None, None, Result]] | Coroutine[None, None, Result],
-    /,
-    *arguments: Element,
-    return_exceptions: bool,
-) -> Result | Exception:
-    """Execute the coroutine, returning or logging and raising its errors."""
-    try:
-        if iscoroutine(coro):
-            return await coro
-
-        # the coroutine of a handler is created within the task running it
-        return await cast(Callable[..., Coroutine[None, None, Result]], coro)(*arguments)
-
-    except Exception as exc:
-        if return_exceptions:
-            return exc  # return exception as result
-
-        ctx.log_error(
-            f"Concurrent execution error - {type(exc)}: {exc}",
-            exception=exc,
-        )
-        raise  # reraise exception
-
-
-async def process_concurrently[Element](
+async def process_concurrently[Element](  # noqa: C901, PLR0912
     source: AsyncGenerator[Element] | Iterable[Element],
     /,
     handler: Callable[[Element], Coroutine[None, None, None]],
@@ -249,7 +60,7 @@ async def process_concurrently[Element](
         A coroutine function that processes each element. The handler should
         not return a value (returns None).
     concurrent_tasks : int, default=2
-        Maximum number of concurrent tasks. Must be greater than 1. Higher
+        Maximum number of concurrent tasks. Must be greater than 0. Higher
         values allow more parallelism but consume more resources.
     ignore_exceptions : bool, default=False
         If True, exceptions from handler tasks will be logged but not propagated,
@@ -258,8 +69,6 @@ async def process_concurrently[Element](
 
     Raises
     ------
-    TypeError
-        If the source is neither an AsyncGenerator nor an Iterable.
     CancelledError
         If the function is cancelled, propagated after cancelling all running tasks.
     Exception
@@ -281,43 +90,96 @@ async def process_concurrently[Element](
     ... )
 
     """
-    tasks: _ConcurrentTasks[None] = _ConcurrentTasks(concurrent_tasks)
-    process = partial(  # keeps both call forms, an annotation would drop one
-        _processing,
-        ignore_exceptions=ignore_exceptions,
-    )
+    # local task group for more granular management
+    async with ContextTaskGroup() as group:
+        assert concurrent_tasks > 0  # nosec: B101
+        # the slot of the task being spawned is not counted, so waiting for a free
+        # one happens right after a spawn instead of ahead of it - which keeps the
+        # source from being consumed any further than the running tasks allow
+        slots: Semaphore = Semaphore(concurrent_tasks - 1)
+        running: MutableSet[Task[None]] = set()
+        error: BaseException | None = None  # error of the first failed task
 
-    async with ContextTaskGroup():  # local task group for more granular management
+        def complete(
+            task: Task[None],
+            /,
+        ) -> None:
+            nonlocal error
+            running.discard(task)
+            if error is None and not task.cancelled():
+                error = task.exception()  # keep the error which breaks processing
+
+            slots.release()  # free the slot for the next task
+
+        async def spawn[**Arguments](
+            coro: Callable[Arguments, Coroutine[None, None, None]],
+            /,
+            *args: Arguments.args,
+            **kwargs: Arguments.kwargs,
+        ) -> Task[None]:
+            task: Task[None] = group.run(coro, *args, **kwargs)
+            running.add(task)
+            task.add_done_callback(complete)
+            await slots.acquire()
+            return task
+
+        async def ignoring_errors[**Arguments](
+            coro: Callable[Arguments, Coroutine[None, None, None]],
+            /,
+            *args: Arguments.args,
+            **kwargs: Arguments.kwargs,
+        ) -> None:
+            try:
+                return await coro(*args, **kwargs)
+
+            except Exception as exc:
+                ctx.log_error(
+                    f"Concurrent processing error - {type(exc)}: {exc}",
+                    exception=exc,
+                )
+
         try:
             if isinstance(source, AsyncGenerator):
-                generator: AsyncGenerator[Element] = source
                 try:
-                    async for element in generator:
-                        await tasks.spawn(process(handler, element))
+                    if ignore_exceptions:
+                        async for element in source:
+                            await spawn(ignoring_errors, handler, element)
+
+                    else:
+                        async for element in source:
+                            await spawn(handler, element)
 
                 finally:
-                    await generator.aclose()
+                    await source.aclose()
 
             else:
                 # an async iterable which is not a generator has no `aclose`, so the
-                # source could not be released when processing ends - hence not accepted
-                # the type checker knows this holds - the guard is for callers
-                # reaching the runtime without it
-                if not isinstance(source, Iterable):  # pyright: ignore[reportUnnecessaryIsInstance]
-                    raise TypeError(
-                        "process_concurrently requires an AsyncGenerator or an Iterable source,"
-                        f" received {type(source).__name__}"
-                    )
+                # source could not be released when processing ends - hence not accepted,
+                # which the type of the argument already ensures
+                assert isinstance(source, Iterable)  # nosec: B101
 
-                for element in source:
-                    await tasks.spawn(process(handler, element))
+                if ignore_exceptions:
+                    for element in source:
+                        await spawn(ignoring_errors, handler, element)
 
-            await tasks.join()
+                else:
+                    for element in source:
+                        await spawn(handler, element)
+
+            # join within the group, so a task failure cancels us here and its error
+            # surfaces instead of the exception group of the task group exit
+            if running:
+                await wait(running, return_when=ALL_COMPLETED)
+
+            if error is not None:
+                raise error from None  # raise task error and break processing
 
         except CancelledError:
             # a failed task aborts the enclosing task group, which cancels us -
             # surface the error which broke processing instead of that cancellation
-            tasks.raise_error()
+            if error is not None:
+                raise error from None
+
             raise  # raise cancellation
 
 
@@ -343,7 +205,7 @@ async def execute_concurrently[Element, Result](
 ) -> Sequence[Result | Exception]: ...
 
 
-async def execute_concurrently[Element, Result](
+async def execute_concurrently[Element, Result](  # noqa: C901, PLR0912
     handler: Callable[[Element], Coroutine[None, None, Result]],
     /,
     elements: AsyncGenerator[Element] | Iterable[Element],
@@ -373,7 +235,7 @@ async def execute_concurrently[Element, Result](
         A source of elements to process. The source size determines
         the result sequence length.
     concurrent_tasks : int, default=2
-        Maximum number of concurrent tasks. Must be greater than 1. Higher
+        Maximum number of concurrent tasks. Must be greater than 0. Higher
         values allow more parallelism but consume more resources.
     return_exceptions : bool, default=False
         If True, exceptions from handler tasks are included in the results
@@ -388,8 +250,6 @@ async def execute_concurrently[Element, Result](
 
     Raises
     ------
-    TypeError
-        If the elements source is neither an AsyncGenerator nor an Iterable.
     CancelledError
         If the function is cancelled, propagated after cancelling all running tasks.
     Exception
@@ -422,45 +282,95 @@ async def execute_concurrently[Element, Result](
     ...         print(f"Got data from {url}")
 
     """
-    tasks: _ConcurrentTasks[Result | Exception] = _ConcurrentTasks(concurrent_tasks)
-    results: MutableSequence[Task[Result | Exception]] = []  # ordered results collection
-    process = partial(  # keeps both call forms, an annotation would drop one
-        _executing,
-        return_exceptions=return_exceptions,
-    )
+    # local task group for more granular management
+    async with ContextTaskGroup() as group:
+        assert concurrent_tasks > 0  # nosec: B101
+        # the slot of the task being spawned is not counted, so waiting for a free
+        # one happens right after a spawn instead of ahead of it - which keeps the
+        # source from being consumed any further than the running tasks allow
+        slots: Semaphore = Semaphore(concurrent_tasks - 1)
+        results: MutableSequence[Task[Result | Exception]] = []  # ordered results collection
+        error: BaseException | None = None  # error of the first failed task
 
-    async with ContextTaskGroup():  # local task group for more granular management
+        def complete(
+            task: Task[Result | Exception],
+            /,
+        ) -> None:
+            nonlocal error
+            if error is None and not task.cancelled():
+                error = task.exception()  # keep the error which breaks execution
+
+            slots.release()  # free the slot for the next task
+
+        async def spawn[**Arguments](
+            coro: Callable[Arguments, Coroutine[None, None, Result | Exception]],
+            /,
+            *args: Arguments.args,
+            **kwargs: Arguments.kwargs,
+        ) -> Task[Result | Exception]:
+            task: Task[Result | Exception] = group.run(coro, *args, **kwargs)
+            task.add_done_callback(complete)
+            await slots.acquire()
+            return task
+
+        async def returning_errors[**Arguments](
+            coro: Callable[Arguments, Coroutine[None, None, Result]],
+            /,
+            *args: Arguments.args,
+            **kwargs: Arguments.kwargs,
+        ) -> Result | Exception:
+            try:
+                return await coro(*args, **kwargs)
+
+            except Exception as exc:
+                return exc
+
         try:
             if isinstance(elements, AsyncGenerator):
-                generator: AsyncGenerator[Element] = elements
                 try:
-                    async for element in generator:
-                        results.append(await tasks.spawn(process(handler, element)))
+                    if return_exceptions:
+                        async for element in elements:
+                            results.append(await spawn(returning_errors, handler, element))
+
+                    else:
+                        async for element in elements:
+                            results.append(await spawn(handler, element))
 
                 finally:
-                    await generator.aclose()
+                    await elements.aclose()
 
             else:
-                # the type checker knows this holds - the guard is for callers
-                # reaching the runtime without it
-                if not isinstance(elements, Iterable):  # pyright: ignore[reportUnnecessaryIsInstance]
-                    raise TypeError(
-                        "execute_concurrently requires an AsyncGenerator or an Iterable of"
-                        f" elements, received {type(elements).__name__}"
-                    )
+                # an async iterable which is not a generator has no `aclose`, so the
+                # source could not be released when execution ends - hence not accepted,
+                # which the type of the argument already ensures
+                assert isinstance(elements, Iterable)  # nosec: B101
 
-                for element in elements:
-                    results.append(await tasks.spawn(process(handler, element)))
+                if return_exceptions:
+                    for element in elements:
+                        results.append(await spawn(returning_errors, handler, element))
 
-            await tasks.join()
+                else:
+                    for element in elements:
+                        results.append(await spawn(handler, element))
+
+            # join within the group, so a task failure cancels us here and its error
+            # surfaces instead of the exception group of the task group exit
+            if results:
+                await wait(results, return_when=ALL_COMPLETED)
+
+            if error is not None:
+                raise error from None  # raise task error and break execution
 
         except CancelledError:
             # a failed task aborts the enclosing task group, which cancels us -
-            # surface the error which broke processing instead of that cancellation
-            tasks.raise_error()
+            # surface the error which broke execution instead of that cancellation
+            if error is not None:
+                raise error from None
+
             raise  # raise cancellation
 
-    return [result.result() for result in results]
+    # task group joins all tasks so at this point it will be all completed
+    return tuple(result.result() for result in results)
 
 
 @overload
@@ -485,7 +395,7 @@ async def concurrently[Result](
 ) -> Sequence[Result | Exception]: ...
 
 
-async def concurrently[Result](
+async def concurrently[Result](  # noqa: C901, PLR0912
     coroutines: AsyncGenerator[Coroutine[None, None, Result]]
     | Iterable[Coroutine[None, None, Result]],
     /,
@@ -514,7 +424,7 @@ async def concurrently[Result](
         A collection of coroutine objects to execute. Each coroutine should
         return a Result type value.
     concurrent_tasks : int, default=2
-        Maximum number of concurrent tasks. Must be greater than 1. Higher
+        Maximum number of concurrent tasks. Must be greater than 0. Higher
         values allow more parallelism but consume more resources.
     return_exceptions : bool, default=False
         If True, exceptions from coroutines are included in the results
@@ -529,8 +439,6 @@ async def concurrently[Result](
 
     Raises
     ------
-    TypeError
-        If the coroutines source is neither an AsyncGenerator nor an Iterable.
     CancelledError
         If the function is cancelled, propagated after cancelling all running tasks.
     Exception
@@ -576,196 +484,105 @@ async def concurrently[Result](
     iterator over it, otherwise its leftovers are only reclaimed by the garbage
     collector, warning about coroutines which were never awaited.
     """
-    tasks: _ConcurrentTasks[Result | Exception] = _ConcurrentTasks(concurrent_tasks)
-    results: MutableSequence[Task[Result | Exception]] = []  # ordered results collection
-    process = partial(  # keeps both call forms, an annotation would drop one
-        _executing,
-        return_exceptions=return_exceptions,
-    )
+    # local task group for more granular management
+    async with ContextTaskGroup() as group:
+        assert concurrent_tasks > 0  # nosec: B101
+        # the slot of the task being spawned is not counted, so waiting for a free
+        # one happens right after a spawn instead of ahead of it - which keeps the
+        # source from being consumed any further than the running tasks allow
+        slots: Semaphore = Semaphore(concurrent_tasks - 1)
+        results: MutableSequence[Task[Result | Exception]] = []  # ordered results collection
+        error: BaseException | None = None  # error of the first failed task
 
-    async with ContextTaskGroup():  # local task group for more granular management
+        def complete(
+            task: Task[Result | Exception],
+            /,
+        ) -> None:
+            nonlocal error
+            if error is None and not task.cancelled():
+                error = task.exception()  # keep the error which breaks execution
+
+            slots.release()  # free the slot for the next task
+
+        async def spawn(
+            coro: Callable[[], Coroutine[None, None, Result | Exception]]
+            | Coroutine[None, None, Result | Exception],
+            /,
+        ) -> Task[Result | Exception]:
+            task: Task[Result | Exception] = group.run(coro)
+            task.add_done_callback(complete)
+            await slots.acquire()
+            return task
+
+        async def returning_errors(
+            coro: Coroutine[None, None, Result],
+            /,
+        ) -> Result | Exception:
+            try:
+                return await coro
+
+            except Exception as exc:
+                return exc
+
         try:
             if isinstance(coroutines, AsyncGenerator):
-                generator: AsyncGenerator[Coroutine[None, None, Result]] = coroutines
                 try:
-                    async for coroutine in generator:
-                        results.append(await tasks.spawn(process(coroutine)))
+                    if return_exceptions:
+                        async for coro in coroutines:
+                            results.append(await spawn(returning_errors(coro)))
+
+                    else:
+                        async for coro in coroutines:
+                            results.append(await spawn(coro))
 
                 finally:
-                    await generator.aclose()
+                    await coroutines.aclose()
 
             else:
-                # the type checker knows this holds - the guard is for callers
-                # reaching the runtime without it
-                if not isinstance(coroutines, Iterable):  # pyright: ignore[reportUnnecessaryIsInstance]
-                    raise TypeError(
-                        "concurrently requires an AsyncGenerator or an Iterable of coroutines,"
-                        f" received {type(coroutines).__name__}"
-                    )
+                # an async iterable which is not a generator has no `aclose`, so the
+                # source could not be released when execution ends - hence not accepted,
+                # which the type of the argument already ensures
+                assert isinstance(coroutines, Iterable)  # nosec: B101
 
-                iterator: Iterator[Coroutine[None, None, Result]] = iter(coroutines)
+                remaining: Iterator[Coroutine[None, None, Result]] = iter(coroutines)
                 try:
-                    for coroutine in iterator:
-                        results.append(await tasks.spawn(process(coroutine)))
+                    if return_exceptions:
+                        for coro in remaining:
+                            results.append(await spawn(returning_errors(coro)))
+
+                    else:
+                        for coro in remaining:
+                            results.append(await spawn(coro))
 
                 finally:
-                    # a lazy iterable creates its coroutines on demand - only the ones
-                    # a collection has already created require an explicit cleanup
                     if isinstance(coroutines, Collection):
-                        for pending in iterator:
-                            pending.close()
+                        # a collection holds all of its coroutines already, so the ones
+                        # left when execution ends early are released here - a lazy
+                        # source has none left over, draining it could never end
+                        for coro in remaining:
+                            coro.close()
 
-            await tasks.join()
+            # join within the group, so a task failure cancels us here and its error
+            # surfaces instead of the exception group of the task group exit
+            if results:
+                await wait(results, return_when=ALL_COMPLETED)
+
+            if error is not None:
+                raise error from None  # raise task error and break execution
 
         except CancelledError:
             # a failed task aborts the enclosing task group, which cancels us -
-            # surface the error which broke processing instead of that cancellation
-            tasks.raise_error()
+            # surface the error which broke execution instead of that cancellation
+            if error is not None:
+                raise error from None
+
             raise  # raise cancellation
 
-    return [result.result() for result in results]
+    # task group joins all tasks so at this point it will be all completed
+    return tuple(result.result() for result in results)
 
 
-async def _merge_source[Element](
-    source: AsyncGenerator[Element],
-    /,
-    output: AsyncStream[Element],
-    producers: Sequence[Task[None]],
-    exhaustive: bool,
-) -> None:
-    """Consume a source into the merged output, ending it when merging is over."""
-    try:
-        async for item in source:
-            if output.finished:
-                break  # finish when output becomes finished
-
-            await output.send(item)
-
-        # every producer is spawned before any of them runs, so the other ones
-        # are always there to be examined by the time this is reached
-        others: Sequence[Task[None]] = [
-            producer for producer in producers if producer is not current_task()
-        ]
-        if not exhaustive:
-            output.finish()
-            for other in others:
-                other.cancel()
-
-        elif all(other.done() for other in others):
-            output.finish()
-
-    except CancelledError:
-        output.finish()  # release the consumer, it gets nothing more
-        raise  # a swallowed cancellation would report this task as completed
-
-    except BaseException as exc:
-        output.finish(exception=exc)
-
-
-@final
-class _MergedStream[ElementA, ElementB](AsyncGenerator[ElementA | ElementB]):
-    __slots__ = (
-        "_generator",
-        "_source_a",
-        "_source_b",
-        "_started",
-    )
-
-    def __init__(
-        self,
-        source_a: AsyncGenerator[ElementA],
-        source_b: AsyncGenerator[ElementB],
-        exhaustive: bool,
-    ) -> None:
-        self._source_a: AsyncGenerator[ElementA] = source_a
-        self._source_b: AsyncGenerator[ElementB] = source_b
-        self._started: bool = False
-        self._generator: AsyncGenerator[ElementA | ElementB] = self._merged(exhaustive)
-
-    async def _merged(
-        self,
-        exhaustive: bool,
-    ) -> AsyncGenerator[ElementA | ElementB]:
-        self._started = True  # the frame runs only when the stream is actually started
-        merged_stream: AsyncStream[ElementA | ElementB] = AsyncStream()
-        producers: MutableSequence[Task[None]] = []
-
-        try:
-            async with ContextTaskGroup():  # local task group for more granular management
-                for source in (self._source_a, self._source_b):
-                    producers.append(
-                        ctx.spawn(
-                            _merge_source,
-                            source,
-                            output=merged_stream,
-                            producers=producers,
-                            exhaustive=exhaustive,
-                        )
-                    )
-
-                try:
-                    async for element in merged_stream:
-                        yield element
-
-                finally:
-                    for producer in producers:
-                        if not producer.done():
-                            producer.cancel()
-
-        finally:
-            # the task group above has joined both producers, so neither source is
-            # being iterated anymore and both can be closed
-            await self._close_sources()
-
-    async def _close_sources(self) -> None:
-        # nested, so a source failing to close still leaves the other one released
-        try:
-            await self._source_a.aclose()
-
-        finally:
-            await self._source_b.aclose()
-
-    def __aiter__(self) -> Self:
-        return self
-
-    async def __anext__(self) -> ElementA | ElementB:
-        return await self._generator.__anext__()
-
-    async def asend(
-        self,
-        value: None = None,
-        /,
-    ) -> ElementA | ElementB:
-        return await self._generator.asend(value)
-
-    async def athrow(
-        self,
-        typ: type[BaseException] | BaseException,
-        val: object = None,
-        tb: TracebackType | None = None,
-        /,
-    ) -> ElementA | ElementB:
-        try:
-            return await self._generator.athrow(thrown_exception(typ, val, tb))
-
-        finally:
-            if not self._started:
-                # the frame of a generator function which never started does not run
-                # on throw, leaving both sources open - release them here instead
-                await self._close_sources()
-
-    async def aclose(self) -> None:
-        try:
-            await self._generator.aclose()
-
-        finally:
-            if not self._started:
-                # the frame of a generator function which never started does not run
-                # on close, leaving both sources open - release them here instead
-                await self._close_sources()
-
-
-def stream_concurrently[ElementA, ElementB](
+def stream_concurrently[ElementA, ElementB](  # noqa: C901, PLR0915
     source_a: AsyncGenerator[ElementA],
     source_b: AsyncGenerator[ElementB],
     /,
@@ -829,17 +646,124 @@ def stream_concurrently[ElementA, ElementB](
     ensuring efficient resource usage while maximizing throughput from both
     sources.
 
-    Both sources are closed when the merged stream ends, however it ends -
-    exhausted, failed, closed or thrown into, including a stream ended before it
-    was ever started. The merged stream itself is the caller's to close: it holds a task
-    group inside the generator, and an abandoned generator is finalized by the
-    garbage collector in a fresh context, where that group can no longer be
-    released. Wrap it in ``ctx.closing`` whenever the iteration may be left
-    early.
+    Both sources are closed by the producer draining them, however the merged
+    stream ends - exhausted, failed, closed or thrown into - and a source failing
+    to close does not strand the other one, its error surfacing once both are
+    released. A merged stream which was never started is the exception: closing it
+    does not run its frame, so it never reaches its sources - start it, or close
+    the sources directly. The merged stream itself is the caller's to close: the
+    task group holding its producers lives inside the generator frame, so only
+    closing the stream releases them, while an abandoned generator leaves that to
+    the garbage collector, finalizing it outside the task which started it. Wrap it
+    in ``ctx.closing`` whenever the iteration may be left early.
     """
 
-    return _MergedStream(
-        source_a,
-        source_b,
-        exhaustive,
-    )
+    async def merged() -> AsyncGenerator[ElementA | ElementB]:  # noqa: C901, PLR0915
+        merged_stream: AsyncStream[ElementA | ElementB] = AsyncStream()
+        # error of a source failing to close, raised when the merged stream ends
+        close_error: BaseException | None = None
+
+        async def produce() -> None:  # noqa: C901
+            nonlocal close_error
+            # local task group for more granular management, entered within this
+            # task so it stays in its context - an async generator frame shares the
+            # context of its consumer, where a group would adopt the tasks spawned
+            # while iterating and wrap the errors passing through the frame
+            async with ContextTaskGroup() as group:
+                sources: MutableSet[Task[None]] = set()
+
+                def complete_source(
+                    task: Task[None],
+                    /,
+                ) -> None:
+                    sources.remove(task)
+                    if not exhaustive or not sources:
+                        merged_stream.finish()
+
+                def drain_source(
+                    source: AsyncGenerator[ElementA] | AsyncGenerator[ElementB],
+                    /,
+                ) -> Task[None]:
+                    def report(
+                        exception: Exception,
+                        /,
+                    ) -> None:
+                        nonlocal close_error
+                        # a stream which is still running delivers the error to its
+                        # consumer, ending it - once it finished there is no one left
+                        # to deliver to, so the error is kept to be raised when the
+                        # merged stream ends, instead of failing this task and
+                        # stranding the other source
+                        if not merged_stream.finished:
+                            merged_stream.finish(exception)
+
+                        elif close_error is None:
+                            close_error = exception
+
+                    async def drain() -> None:
+                        try:
+                            async for element in source:
+                                if merged_stream.finished:
+                                    # the output ended - sending to it is rejected
+                                    break
+
+                                await merged_stream.send(element)
+
+                        except Exception as exc:
+                            report(exc)
+
+                        finally:
+                            try:
+                                await source.aclose()
+
+                            except Exception as exc:
+                                report(exc)
+
+                    task: Task[None] = group.run(drain)
+                    task.add_done_callback(complete_source)
+                    return task
+
+                for source in (source_a, source_b):
+                    sources.add(drain_source(source))
+
+        # the context is copied like a context task group would, so the producers
+        # keep the state and observability of the consumer starting them
+        producer: Task[None] = get_running_loop().create_task(
+            produce(),
+            context=copy_context(),
+        )
+
+        # set when the merged stream ends by delivering a failure or by the consumer
+        # being cancelled - that error is the one to report, so a source failing to
+        # release afterwards can't take its place
+        delivered_error: bool = False
+        try:
+            async for element in merged_stream:
+                yield element
+
+        except GeneratorExit:
+            raise  # closing is not a failure which was delivered
+
+        except BaseException:
+            delivered_error = True
+            raise
+
+        finally:
+            # nothing reads the merged stream from here on, so it is finished before
+            # the producers are cancelled - whatever they hit while unwinding is then
+            # kept to be raised below, instead of being handed to a stream which no
+            # one will ever read again
+            merged_stream.finish()
+            producer.cancel()  # cancelling it cancels the producers of its group
+            await wait((producer,), return_when=ALL_COMPLETED)
+            if close_error is None and not producer.cancelled():
+                # nothing else reports it, and leaving it unretrieved warns
+                close_error = producer.exception()
+
+            await merged_stream.aclose()
+            # the group of the producer has joined both of them, so a source which
+            # failed to release is known by now
+            if close_error is not None and not delivered_error:
+                raise close_error from None
+
+    return merged()
