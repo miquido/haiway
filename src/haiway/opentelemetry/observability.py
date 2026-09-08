@@ -747,6 +747,10 @@ class _ObservabilityAdapter:
                 StatusCode.ERROR,
                 f"{type(exception).__name__}: {exception}",
             )
+            # the status carries only the message - the exception event is what
+            # carries the stack trace, which is what an unhandled failure is
+            # diagnosed from
+            store.span.record_exception(exception)
 
         store.exit()
         # detach within the exiting task, before any deferred completion

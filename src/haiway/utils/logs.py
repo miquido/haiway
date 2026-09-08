@@ -111,9 +111,11 @@ class JSONLogFormatter(Formatter):
 
     Noise is reduced by omitting fields holding ``None``, which JSON ingestion treats the same
     as absent ones, and by rendering ``exc_info`` as the formatted traceback instead of its
-    raw contents. Remaining values which are not natively JSON serializable are resolved to
-    readable strings without memory addresses - exceptions to their message, types to their
-    qualified name, tracebacks to their formatted frames and anything else through ``str``.
+    raw contents - a record carrying no exception, which within ``logging`` means any falsy
+    ``exc_info`` rather than ``None`` alone, renders no such field at all. Remaining values
+    which are not natively JSON serializable are resolved to readable strings without memory
+    addresses - exceptions to their message, types to their qualified name, tracebacks to
+    their formatted frames and anything else through ``str``.
     Unsupported payloads can still fail rendering - a failing string conversion, a circular
     container or an invalid mapping key propagates out of the formatter, making
     ``Handler.emit`` call ``handleError`` and drop the record.
@@ -143,7 +145,8 @@ class JSONLogFormatter(Formatter):
         -------
         str
             Single-line JSON object containing all attributes of the record except those
-            holding ``None``.
+            holding ``None`` - and except a falsy ``exc_info``, which carries no exception
+            to render.
 
         Raises
         ------
@@ -168,10 +171,15 @@ class JSONLogFormatter(Formatter):
         payload.update(
             (key, value)
             for key, value in record.__dict__.items()
-            if value is not None and key not in _FORMATTER_FIELDS
+            # `exc_info` is rendered below rather than carried over as received
+            if value is not None and key != "exc_info" and key not in _FORMATTER_FIELDS
         )
 
-        if record.exc_info is not None:
+        # truthiness rather than presence - that is the contract of the field within
+        # `logging`, where `Logger._log` normalizes only a true value into an exception
+        # triple. A record made with `exc_info=False` keeps the bool, which has no
+        # exception to render and no place in the payload
+        if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
 
         return dumps(payload, default=_resolved_value)

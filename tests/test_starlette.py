@@ -1,5 +1,11 @@
 from asyncio import CancelledError, Event, Queue, Task, create_task
-from collections.abc import AsyncGenerator, Iterable, Mapping, MutableSequence
+from collections.abc import (
+    AsyncGenerator,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    MutableSequence,
+)
 from contextlib import asynccontextmanager
 from logging import Logger, getLogger
 from typing import Any
@@ -174,11 +180,66 @@ async def test_unhandled_exception_is_answered_by_the_framework() -> None:
         with raises(ValueError):  # reraised for the server to report
             await app(http_scope(), receive_request, result.collecting())
 
-    # answered by the server error handling of the framework, which sits above
-    # the middleware - so outside of the scope of the request, without its headers
+    # answered by the server error handling of the framework, nested within the
+    # scope of the request - so the failure which needs correlating the most is
+    # answered with the headers carrying it
     assert result.status == 500
     assert result.body == b"Internal Server Error"
-    assert TRACE_ID_HEADER not in result.headers
+    assert result.headers[TRACE_ID_HEADER]
+
+
+@mark.asyncio
+async def test_unhandled_exception_is_recorded_as_the_failure_of_its_request() -> None:
+    failures: MutableSequence[BaseException | None] = []
+    recorded: MutableMapping[str, Any] = {}
+
+    def observability() -> Observability:
+        def scope_exiting(
+            scope: Any,
+            /,
+            *,
+            exception: BaseException | None,
+        ) -> None:
+            failures.append(exception)
+
+        def attributes_recording(
+            scope: Any,
+            /,
+            level: Any,
+            attributes: Mapping[str, Any],
+        ) -> None:
+            recorded.update(attributes)
+
+        return Observability(
+            trace_identifying=lambda scope, /: _TRACE_ID,
+            log_recording=lambda scope, /, level, message, *args, exception: None,
+            metric_recording=lambda scope, /, level, **kwargs: None,
+            event_recording=lambda scope, /, level, **kwargs: None,
+            attributes_recording=attributes_recording,
+            scope_entering=lambda scope, /: _TRACE_ID.hex,
+            scope_exiting=scope_exiting,
+            trace_context_encoding=lambda scope, /: {"traceparent": f"00-{_TRACE_ID.hex}-1-01"},
+        )
+
+    async def endpoint(request: Request) -> Response:
+        raise ValueError("broken")
+
+    app: Starlette = application(
+        ServerContext(observability=observability()),
+        routes=[Route("/example", endpoint)],
+    )
+    result = Result()
+
+    async with running(app):
+        with raises(ValueError):
+            await app(http_scope(), receive_request, result.collecting())
+
+    # the request scope is what records the failure, the response answering it
+    # included - the two are correlated by the headers it carries
+    assert [type(failure).__name__ for failure in failures] == ["ValueError"]
+    assert recorded["http.response.status_code"] == 500
+    assert result.headers[TRACE_ID_HEADER] == _TRACE_ID.hex
+    assert result.headers["traceparent"] == f"00-{_TRACE_ID.hex}-1-01"
 
 
 @mark.asyncio
@@ -198,7 +259,7 @@ async def test_debug_application_keeps_its_error_response() -> None:
 
     assert result.status == 500
     assert b"ValueError" in result.body  # the traceback rendered by Starlette
-    assert TRACE_ID_HEADER not in result.headers
+    assert result.headers[TRACE_ID_HEADER]
 
 
 @mark.asyncio
@@ -630,12 +691,15 @@ async def test_registered_server_error_handler_answers_the_request() -> None:
         request: Request,
         exception: Exception,
     ) -> Response:
-        return PlainTextResponse("handled", status_code=503)
+        # the scope of the request is what the handler answers within, so the
+        # trace it is recorded under is available to report as well
+        return PlainTextResponse(ctx.trace_id(), status_code=503)
 
     app: Starlette = application(
         routes=[Route("/example", endpoint)],
-        # a server error handler answers above the middleware, in place of the
-        # plain `500` the framework would produce
+        # a server error handler answers in place of the plain `500` the framework
+        # would produce - from below the request scope, which is where the factory
+        # installs it
         exception_handlers={Exception: handle_server_error},
     )
     result = Result()
@@ -645,9 +709,40 @@ async def test_registered_server_error_handler_answers_the_request() -> None:
             await app(http_scope(), receive_request, result.collecting())
 
     assert result.status == 503
-    assert result.body == b"handled"
-    # the handler runs above every middleware, so outside of the request scope
-    assert TRACE_ID_HEADER not in result.headers
+    # answered from within the scope of the request, so the response carries the
+    # trace headers of the trace the failure was recorded in
+    assert result.headers[TRACE_ID_HEADER] == result.body.decode()
+
+
+@mark.asyncio
+async def test_registered_server_error_handler_answers_only_once() -> None:
+    # the handler is installed below the request scope rather than in the slot of
+    # the framework above it - held in both, it would be called twice, the second
+    # response being discarded rather than sent
+    invocations: MutableSequence[Exception] = []
+
+    async def endpoint(request: Request) -> Response:
+        raise ValueError("broken")
+
+    async def handle_server_error(
+        request: Request,
+        exception: Exception,
+    ) -> Response:
+        invocations.append(exception)
+        return PlainTextResponse("handled", status_code=503)
+
+    app: Starlette = application(
+        routes=[Route("/example", endpoint)],
+        exception_handlers={Exception: handle_server_error},
+    )
+    result = Result()
+
+    async with running(app):
+        with raises(ValueError):
+            await app(http_scope(), receive_request, result.collecting())
+
+    assert len(invocations) == 1
+    assert result.status == 503
 
 
 @mark.asyncio
@@ -704,7 +799,7 @@ async def test_handler_of_another_exception_keeps_the_error_response() -> None:
 
     assert result.status == 500
     assert result.body == b"Internal Server Error"
-    assert TRACE_ID_HEADER not in result.headers
+    assert result.headers[TRACE_ID_HEADER]
 
 
 @mark.asyncio
@@ -794,9 +889,9 @@ async def test_client_disconnect_is_not_recorded_as_a_failure() -> None:
 
     # a consumer which went away is not a failure of the request it abandoned
     assert recorded == [None]
-    # nothing is answered here either - what reaches the connection which is
-    # already gone is the response of the outer error handling of the framework
-    assert TRACE_ID_HEADER not in result.headers
+    # the error handling of the framework still answers - into a connection which
+    # is already gone, yet from within the scope of the request
+    assert result.headers[TRACE_ID_HEADER] == _TRACE_ID.hex
 
 
 @mark.asyncio

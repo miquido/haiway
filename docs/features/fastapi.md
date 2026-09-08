@@ -81,13 +81,12 @@ the application factory differs:
   `openapi_url`, `docs_url`, global `dependencies`, `root_path` - is passed through as keyword
   arguments
 - `exception_handlers` accepts async and sync handlers alike - a sync one is called in a worker
-  thread - and the type `ExceptionHandling` names their signature. A handler nested below the
-  middleware - the validation error handler of FastAPI included - answers within the scope of its
-  request, so its response carries the trace headers, while the `Exception` and `500` slots run
-  above it and carry none
+  thread - and the type `ExceptionHandling` names their signature. Every one of them - the
+  validation error handler of FastAPI and the `Exception` and `500` slots included - answers within
+  the scope of its request, so its response carries the trace headers
 
 `middleware`, `lifespan` and `debug` work exactly as in the Starlette factory, and
-`ContextMiddleware` is installed as the outermost application middleware. There is no
+`ContextMiddleware` is installed around the whole middleware stack of the application. There is no
 `max_body_size` here - FastAPI does not accept one, so passing it through would fail; a body limit
 takes a middleware of its own.
 
@@ -196,6 +195,13 @@ application already has a lifespan of its own, compose the two:
 ```python
 app = FastAPI(lifespan=context.composed_lifespan(existing_lifespan))
 ```
+
+A middleware of the application still sits below its server error handling, which Starlette keeps
+above every middleware it is given - so the `500` of an unhandled failure is produced outside the
+scope of its request and carries none of its trace headers. Nesting that error handling below the
+context middleware is what the factory does - see the
+[Starlette](starlette.md#existing-applications) page for the arrangement, which applies here
+unchanged.
 
 ## Testing
 
