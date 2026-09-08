@@ -14,7 +14,8 @@ The public helpers exported from `haiway.helpers` are:
 - `asynchronous`
 - `CacheMakeKey`, `CacheRead`, `CacheWrite`
 - `cache`, `cache_externally`
-- `concurrently`, `execute_concurrently`, `process_concurrently`, `stream_concurrently`
+- `concurrently`, `execute_concurrently`, `process_concurrently`, `stream_concurrently` (with
+  `stream2_concurrently`, `stream3_concurrently`, `stream4_concurrently`)
 - `Configuration`, `ConfigurationRepository`, `ConfigurationMissing`, `ConfigurationInvalid`
 - `File`, `Files`, `Directory`, `FileException`, `Paths`
 - `HTTPClient`, `HTTPClientError`, `HTTPTimeoutError`, `HTTPConnectionError`,
@@ -62,14 +63,16 @@ The helpers in `haiway.helpers.concurrent` all integrate with Haiway task manage
 - `process_concurrently` is for side effects only.
 - `execute_concurrently` applies one async handler to elements and returns results in input order.
 - `concurrently` runs pre-created coroutine objects and also preserves input order.
-- `stream_concurrently` merges two async generators and yields items as they arrive.
+- `stream_concurrently` merges any number of async generators and yields items as they arrive;
+  `stream2_concurrently`, `stream3_concurrently` and `stream4_concurrently` are its typed variants
+  keeping each source's type in the element union.
 
 Important details:
 
 - `concurrent_tasks` defaults to `2` for the bounded fan-out helpers.
 - `execute_concurrently` and `concurrently` preserve input order, not completion order.
-- `stream_concurrently(..., exhaustive=False)` stops when either source ends.
-- `stream_concurrently(..., exhaustive=True)` continues until both sources end.
+- `stream_concurrently(..., exhaustive=False)` stops when any source ends.
+- `stream_concurrently(..., exhaustive=True)` continues until all sources end.
 - Every helper closes an async generator source it consumed, however the consumption ended.
 
 See [Concurrent Processing](concurrent.md) for usage details.

@@ -5,6 +5,9 @@ from haiway.helpers.concurrent import (
     concurrently,
     execute_concurrently,
     process_concurrently,
+    stream2_concurrently,
+    stream3_concurrently,
+    stream4_concurrently,
     stream_concurrently,
 )
 from haiway.helpers.configuration import (
@@ -78,6 +81,9 @@ __all__ = (
     "process_concurrently",
     "retry",
     "statemethod",
+    "stream2_concurrently",
+    "stream3_concurrently",
+    "stream4_concurrently",
     "stream_concurrently",
     "throttle",
     "timeout",

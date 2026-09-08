@@ -263,14 +263,64 @@ async def test_scope_task_group_cancels_subtasks_on_parent_failure():
 
 
 @mark.asyncio
-async def test_scope_task_group_exit_propagates_exception_group():
+async def test_scope_task_group_exit_propagates_spawned_task_error():
     async def worker() -> None:
         await asyncio.sleep(0)
         raise FakeException()
 
-    with raises(ExceptionGroup):
-        async with ctx.scope("task-group-exception-group"):
+    # a single failed task raises its error on its own instead of the group wrapper
+    with raises(FakeException):
+        async with ctx.scope("task-group-error"):
             ctx.spawn(worker)
+
+
+@mark.asyncio
+async def test_scope_task_group_exit_groups_multiple_spawned_task_errors():
+    async def worker(tag: str) -> None:
+        await asyncio.sleep(0)
+        raise FakeException(tag)
+
+    # multiple failed tasks raise all of their errors within a single group
+    with raises(ExceptionGroup) as failure:
+        async with ctx.scope("task-group-errors"):
+            ctx.spawn(worker, "first")
+            ctx.spawn(worker, "second")
+
+    assert "Context task group failed" in str(failure.value)
+    assert sorted(str(error) for error in failure.value.exceptions) == ["first", "second"]
+
+
+@mark.asyncio
+async def test_scope_task_group_exit_preserves_spawned_task_error_chain():
+    async def worker() -> None:
+        await asyncio.sleep(0)
+        raise FakeException("failure") from ValueError("cause")
+
+    with raises(FakeException) as failure:
+        async with ctx.scope("task-group-error-chain"):
+            ctx.spawn(worker)
+            # still running when the spawned task fails, so the task group cancels
+            # this body - that cancellation must not become the error context
+            await asyncio.sleep(1)
+
+    assert isinstance(failure.value.__cause__, ValueError)
+    assert failure.value.__suppress_context__
+
+
+@mark.asyncio
+async def test_scope_task_group_exit_chains_spawned_task_errors_to_body_error():
+    async def worker() -> None:
+        raise ValueError("task failure")
+
+    # the error propagating through the body takes precedence, with the errors of the
+    # tasks failing alongside it chained as its cause instead of being lost
+    with raises(FakeException, match="body failure") as failure:
+        async with ctx.scope("task-group-body-error"):
+            ctx.spawn(worker)
+            await asyncio.sleep(0)
+            raise FakeException("body failure")
+
+    assert isinstance(failure.value.__cause__, ValueError)
 
 
 @mark.asyncio
@@ -374,7 +424,7 @@ async def test_spawned_task_error_is_recorded_on_task():
         raise FakeException()
 
     task: asyncio.Task[None] | None = None
-    with raises(ExceptionGroup):
+    with raises(FakeException):
         async with ctx.scope("subtask-error"):
             task = ctx.spawn(failing_task)
             # Yield control so the task can run and fail inside the scope
@@ -426,10 +476,8 @@ async def test_spawned_task_error_propagates_out_of_scope():
             # cancels this body - that cancellation must not replace the error
             await asyncio.sleep(1)
 
-    with raises(BaseExceptionGroup) as excinfo:
+    with raises(ValueError, match="spawned failure"):
         await scope_with_failing_task()
-
-    assert any(isinstance(err, ValueError) for err in excinfo.value.exceptions)
 
 
 @mark.asyncio

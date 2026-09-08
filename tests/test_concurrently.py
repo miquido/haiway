@@ -357,9 +357,11 @@ async def test_closes_the_source_when_a_coroutine_fails():
         finally:
             closed.append("source")
 
-    with raises(FakeException):
+    # both running coroutines fail together, so their errors are raised as a group
+    with raises(ExceptionGroup) as failure:
         await concurrently(tracked_coroutines())
 
+    assert all(isinstance(error, FakeException) for error in failure.value.exceptions)
     assert closed == ["source"]
 
 
