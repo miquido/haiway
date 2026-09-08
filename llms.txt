@@ -224,17 +224,20 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
   observability=...)` declares the request context, and `application(...)` builds a `Starlette` app
   installing its `lifespan` plus `ContextMiddleware`. An existing app (FastAPI) instead takes
   `lifespan=context.lifespan` - or `context.composed_lifespan(existing)` - and
-  `add_middleware(ContextMiddleware, context=context)` added last, to stay outermost. The declared
-  state and `disposables` take the instances themselves and ignore `None` entries; the disposables are
-  prepared once, so a context backs a single run and its lifespan can not be entered again. The
+  `add_middleware(ContextMiddleware, context=context)` added last, to stay outermost - with a
+  `ServerErrorMiddleware` holding the server error handler below it to have its `500` traced too.
+  The declared state and `disposables` take the instances themselves and ignore `None` entries; the
+  disposables are prepared once, so a context backs a single run and its lifespan can not be
+  entered again. The
   lifespan is required - a request reaching an app without it fails rather than being served an
   incomplete scope. Every request runs in its own scope named `"{method} {path}"` (`"WS {path}"`) -
   the requested path, since the middleware runs before routing. Responses carry the `trace-id`
   header, plus `traceparent`/`tracestate` when the backend provides them, dropping any entry a
-  header can not hold. An unhandled exception is recorded as the failure
-  of its request and reraised - answering it is left to the framework's server error handling,
-  which sits above the middleware, so the `500` it produces (plain, `debug` traceback page, or a
-  registered `Exception`/`500` handler) carries no trace headers. `HTTPException`,
+  header can not hold. An unhandled exception is recorded as the failure of its request, its stack
+  trace included, and reraised - answering it is left to the framework's server error handling,
+  which `application(...)` nests below the request scope instead of leaving above every middleware,
+  so the `500` it produces (plain, `debug` traceback page, or a registered `Exception`/`500`
+  handler) carries the trace headers as well. `HTTPException`,
   `WebSocketException` and `ClientDisconnect` are withheld while the scope is left, so they are
   not recorded as request failures. Request derived state is added by a nested middleware through
   `ctx.updating(...)`. Startup and shutdown are outside every context scope, so what the lifespan

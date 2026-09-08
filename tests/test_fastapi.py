@@ -156,11 +156,12 @@ async def test_unhandled_exception_is_answered_by_the_framework() -> None:
         with raises(ValueError):  # reraised for the server to report
             await app(http_scope(), receive_request, result.collecting())
 
-    # answered by the server error handling of the framework, which sits above
-    # the middleware - so outside of the scope of the request, without its headers
+    # answered by the server error handling of the framework, nested within the
+    # scope of the request - so the failure which needs correlating the most is
+    # answered with the headers carrying it
     assert result.status == 500
     assert result.body == b"Internal Server Error"
-    assert TRACE_ID_HEADER not in result.headers
+    assert result.headers[TRACE_ID_HEADER]
 
 
 @mark.asyncio

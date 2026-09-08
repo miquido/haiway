@@ -5,8 +5,19 @@ import re
 import textwrap
 from collections.abc import Generator
 from datetime import datetime
-from logging import DEBUG, INFO, Formatter, Handler, Logger, LogRecord, StreamHandler, getLogger
+from logging import (
+    DEBUG,
+    INFO,
+    WARNING,
+    Formatter,
+    Handler,
+    Logger,
+    LogRecord,
+    StreamHandler,
+    getLogger,
+)
 from logging import root as root_logger
+from sys import exc_info
 from typing import Any
 
 import pytest
@@ -265,6 +276,46 @@ def test_json_formatter_renders_exception_info_as_formatted_traceback(
     assert "raise ValueError" in payload["exc_info"]
     assert payload["exc_info"].endswith("ValueError: broken")
     assert MEMORY_ADDRESS.search(payload["exc_info"]) is None  # no memory addresses
+
+
+def test_json_formatter_omits_falsy_exception_info() -> None:
+    # `exc_info=False` is how `logging` itself spells "no exception" - `Logger._log`
+    # normalizes only a true value into a triple, so the bool reaches the formatter
+    record = getLogger("test_logs_json_no_error").makeRecord(
+        "test_logs_json_no_error",
+        WARNING,
+        "test.py",
+        1,
+        "message",
+        None,
+        False,
+    )
+
+    payload = json.loads(JSONLogFormatter().format(record))
+
+    assert payload["message"] == "message"
+    assert "exc_info" not in payload
+
+
+def test_json_formatter_renders_exception_info_of_a_record_holding_a_triple() -> None:
+    try:
+        raise ValueError("broken")
+
+    except ValueError:
+        record = getLogger("test_logs_json_triple").makeRecord(
+            "test_logs_json_triple",
+            WARNING,
+            "test.py",
+            1,
+            "message",
+            None,
+            exc_info(),
+        )
+
+    payload = json.loads(JSONLogFormatter().format(record))
+
+    assert payload["exc_info"].startswith("Traceback (most recent call last):")
+    assert payload["exc_info"].endswith("ValueError: broken")
 
 
 def test_json_formatter_keeps_stack_info(

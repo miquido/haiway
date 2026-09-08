@@ -118,6 +118,32 @@ it outermost - which is what makes the context available to the other middleware
 application already has a lifespan of its own, compose the two with
 `context.composed_lifespan(existing_lifespan)`.
 
+A middleware of the application still sits below its server error handling, which Starlette keeps
+above every middleware it is given - so the `500` of an unhandled failure is produced outside the
+scope of its request and carries none of its trace headers. Nesting that error handling below the
+context middleware instead is what the factory does, and it takes a `ServerErrorMiddleware` of its
+own:
+
+```python
+from starlette.middleware import Middleware
+from starlette.middleware.errors import ServerErrorMiddleware
+
+app = Starlette(
+    routes=[...],
+    middleware=[
+        Middleware(ContextMiddleware, context=context),
+        # the `500` of an unhandled failure is produced here, within the scope of
+        # its request, so it carries the trace headers correlating it
+        Middleware(ServerErrorMiddleware, handler=handle_server_error, debug=False),
+    ],
+    lifespan=context.lifespan,
+)
+```
+
+The handler belongs in that middleware rather than in `exception_handlers[Exception]` - held in
+both, it would be called twice for a single failure, and only the response of the first would be
+sent. The empty slot left in the application answers what fails before a scope was entered.
+
 FastAPI applications work the same way, and there is a factory building one directly - see
 [FastAPI](fastapi.md).
 
@@ -160,11 +186,13 @@ included - through untouched. For each request it:
   protocol rather than answering, so it carries no headers of its own
 
 - lets an exception no handler answered propagate through the scope of its request, which is what
-  records it as the failure of that request, then reraises it. Answering it is left to the
-  application: the server error handling of the framework sits above the middleware, so the `500` it
-  produces is what the client receives - the plain one, the traceback page of a `debug` application,
-  or the response of a handler registered for `Exception` or `500`. None of them carry the trace
-  headers, having been produced outside the scope of the request
+  records it as the failure of that request - the exception among the details, so the trace carries
+  its stack trace - then reraises it for the server to report. Answering it is left to the
+  application: the server error handling of the framework produces the `500` the client receives -
+  the plain one, the traceback page of a `debug` application, or the response of a handler
+  registered for `Exception` or `500`. The factory nests that error handling within the scope of the
+  request, so what it answers with carries the trace headers as well, which is what correlates a
+  failed request with the trace recording why it failed
 
 `HTTPException`, `WebSocketException` and `ClientDisconnect` are not a failure of the request they
 end - the first two are how an application asks for a specific response, the third is a consumer

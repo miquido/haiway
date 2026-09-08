@@ -15,7 +15,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
-from opentelemetry.trace import Tracer
+from opentelemetry.trace import StatusCode, Tracer
 from pytest import MonkeyPatch, fixture, mark, raises
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -412,6 +412,37 @@ async def test_request_span_carries_the_conventional_attributes(
 
 
 @mark.asyncio
+async def test_failed_request_span_records_its_exception(
+    spans: InMemorySpanExporter,
+) -> None:
+    async def endpoint(request: Request) -> Response:
+        raise ValueError("broken")
+
+    app: Starlette = application(
+        ServerContext(observability=OpenTelemetry.observability),
+        routes=[Route("/example", endpoint)],
+    )
+    result = Result()
+
+    async with running(app):
+        with raises(ValueError):
+            await app(http_scope(), receive_request, result.collecting())
+
+    span: ReadableSpan = _request_span(spans)
+    events = [event for event in span.events if event.name == "exception"]
+
+    # the failure which needs correlating the most - the response answering it
+    # carries the trace headers, the trace carries its stack trace
+    assert span.status.status_code is StatusCode.ERROR
+    assert len(events) == 1
+    assert events[0].attributes is not None
+    assert events[0].attributes["exception.type"] == "ValueError"
+    assert "raise ValueError" in str(events[0].attributes["exception.stacktrace"])
+    assert span.context is not None
+    assert result.headers[TRACE_ID_HEADER] == f"{span.context.trace_id:032x}"
+
+
+@mark.asyncio
 async def test_failed_request_span_still_carries_its_attributes(
     spans: InMemorySpanExporter,
 ) -> None:
@@ -432,5 +463,5 @@ async def test_failed_request_span_still_carries_its_attributes(
     # recorded for a request which failed as well, which is where it is needed most
     assert span.attributes["url.path"] == "/example"
     assert span.attributes["http.request.method"] == "GET"
-    # nothing answered it, so there is no status to report
-    assert "http.response.status_code" not in span.attributes
+    # the error handling of the framework answered it within its scope
+    assert span.attributes["http.response.status_code"] == 500

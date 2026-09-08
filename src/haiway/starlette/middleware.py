@@ -38,7 +38,7 @@ class ContextMiddleware:
       parameterized route is findable by, since the scope name carries the path
       which was actually requested rather than the template behind it.
     - a response carries the trace headers of its request scope, whether it was
-      produced by an endpoint or by an exception handler nested below this
+      produced by an endpoint or by anything answering on its behalf below this
       middleware. For a websocket request that is the response denying its
       handshake - an accepted connection switches the protocol rather than
       answering, so it carries none. An entry a header can not hold is left out
@@ -46,10 +46,13 @@ class ContextMiddleware:
     - an exception which no handler answered propagates through the scope of its
       request, which is what records it as the failure of that request, and is
       reraised afterwards. Answering it is left to the application: the server
-      error handling of the framework sits above this middleware, so the ``500``
-      it produces - the plain one, the traceback page of a ``debug`` application,
-      or a registered handler of ``Exception`` or ``500`` - is what the client
-      receives, and carries no trace headers of its own.
+      error handling of the framework produces the ``500`` the client receives -
+      the plain one, the traceback page of a ``debug`` application, or a
+      registered handler of ``Exception`` or ``500``. A Starlette application
+      installs that error handling above every middleware it is given, so its
+      response is only within the request scope - and only carries its trace
+      headers - when it is nested below this middleware instead, which is what
+      ``application()`` arranges.
 
     ``HTTPException``, ``WebSocketException`` and ``ClientDisconnect`` are not a
     failure of the request they end - the first two are how an application asks
@@ -67,7 +70,11 @@ class ContextMiddleware:
     >>> context = ServerContext(disposables=(HTTPXClient(),))
     >>> app = Starlette(
     ...     routes=[...],
-    ...     middleware=[Middleware(ContextMiddleware, context=context)],
+    ...     middleware=[
+    ...         Middleware(ContextMiddleware, context=context),
+    ...         # the server error handling, below the scope rather than above it
+    ...         Middleware(ServerErrorMiddleware, handler=None, debug=False),
+    ...     ],
     ...     lifespan=context.lifespan,
     ... )
 
@@ -75,9 +82,11 @@ class ContextMiddleware:
     -----
     Placing it as the outermost middleware is what makes the context available
     to the other middlewares of the application - which is where
-    ``application()`` puts it. State derived from a request, like the identity of
-    its caller, can be added by a middleware nested below it through
-    ``ctx.updating(...)``.
+    ``application()`` puts it, followed by a ``ServerErrorMiddleware`` holding
+    the server error handler of the application, so an unhandled failure is
+    answered from within the scope of its request rather than above it. State
+    derived from a request, like the identity of its caller, can be added by a
+    middleware nested below it through ``ctx.updating(...)``.
     """
 
     __slots__ = (

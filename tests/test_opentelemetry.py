@@ -246,6 +246,38 @@ async def test_scope_exiting_with_exception_marks_span_error(
 
     span = _named(spans, "failing")
     assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description == "ValueError: boom"
+
+
+@mark.asyncio
+async def test_scope_exiting_with_exception_records_its_stack_trace(
+    spans: InMemorySpanExporter,
+) -> None:
+    with raises(ValueError):
+        async with ctx.scope("failing", observability=OpenTelemetry.observability()):
+            raise ValueError("boom")
+
+    span = _named(spans, "failing")
+    events = [event for event in span.events if event.name == "exception"]
+
+    assert len(events) == 1
+    assert events[0].attributes is not None
+    assert events[0].attributes["exception.type"] == "ValueError"
+    assert events[0].attributes["exception.message"] == "boom"
+    assert "raise ValueError" in str(events[0].attributes["exception.stacktrace"])
+
+
+@mark.asyncio
+async def test_cancelled_scope_records_no_exception(spans: InMemorySpanExporter) -> None:
+    # cancellation is routine control flow, not the failure of the scope it ends
+    with raises(asyncio.CancelledError):
+        async with ctx.scope("cancelled", observability=OpenTelemetry.observability()):
+            raise asyncio.CancelledError()
+
+    span = _named(spans, "cancelled")
+
+    assert span.status.status_code is StatusCode.UNSET
+    assert [event.name for event in span.events] == []
 
 
 @mark.asyncio
