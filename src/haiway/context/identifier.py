@@ -10,7 +10,7 @@ from haiway.utils.formatting import escape_controls
 __all__ = ("ContextIdentifier",)
 
 
-@final  # consider immutable
+@final
 class ContextIdentifier:
     @classmethod
     def current(

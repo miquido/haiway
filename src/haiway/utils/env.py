@@ -81,14 +81,16 @@ def getenv[Value](
         If required=True, the environment variable is not set and no default is provided,
         or if the provided mapping fails to transform the value
     """
-    value = os_getenv(key=key)
+    value: str | None = os_getenv(key=key)
     if value is None:
         if required and default is None:
             raise ValueError(f"Required environment value `{key}` is missing!")
+
         return default
 
     try:
         return mapping(value)
+
     except Exception as exc:
         raise ValueError(f"Failed to transform environment value `{key}`") from exc
 
@@ -179,10 +181,11 @@ def getenv_bool(
         Values are interpreted as booleans ('true', '1', 't' -> True; everything else -> False),
         so a set value will not raise a parsing error.
     """
-    value = os_getenv(key=key)
+    value: str | None = os_getenv(key=key)
     if value is None:
         if required and default is None:
             raise ValueError(f"Required environment value `{key}` is missing!")
+
         return default
 
     return parse_bool(value)
@@ -243,14 +246,16 @@ def getenv_int(
         If the environment variable is set but cannot be converted to an integer,
         or if required=True, the environment variable is not set, and no default is provided
     """
-    value = os_getenv(key=key)
+    value: str | None = os_getenv(key=key)
     if value is None:
         if required and default is None:
             raise ValueError(f"Required environment value `{key}` is missing!")
+
         return default
 
     try:
         return int(value)
+
     except Exception as exc:
         raise ValueError(f"Environment value `{key}` is not a valid int!") from exc
 
@@ -310,14 +315,16 @@ def getenv_float(
         If the environment variable is set but cannot be converted to a float,
         or if required=True, the environment variable is not set, and no default is provided
     """
-    value = os_getenv(key=key)
+    value: str | None = os_getenv(key=key)
     if value is None:
         if required and default is None:
             raise ValueError(f"Required environment value `{key}` is missing!")
+
         return default
 
     try:
         return float(value)
+
     except Exception as exc:
         raise ValueError(f"Environment value `{key}` is not a valid float!") from exc
 
@@ -376,10 +383,11 @@ def getenv_str(
     ValueError
         If required=True, the environment variable is not set, and no default is provided
     """
-    value = os_getenv(key=key)
+    value: str | None = os_getenv(key=key)
     if value is None:
         if required and default is None:
             raise ValueError(f"Required environment value `{key}` is missing!")
+
         return default
 
     return value
@@ -449,19 +457,22 @@ def getenv_base64[Value](
         default is provided, if the value is not valid base64, or if the
         decoded bytes cannot be transformed by ``decoder``.
     """
-    value = os_getenv(key=key)
+    value: str | None = os_getenv(key=key)
     if value is None:
         if required and default is None:
             raise ValueError(f"Required environment value `{key}` is missing!")
+
         return default
 
     try:
         decoded = b64decode(value, validate=True)
+
     except Exception as exc:
         raise ValueError(f"Environment value `{key}` is not valid base64!") from exc
 
     try:
         return decoder(decoded)
+
     except Exception as exc:
         raise ValueError(
             f"Failed to decode environment value `{key}` after base64 transform"
@@ -506,6 +517,9 @@ def load_env(
     try:
         with open(file=path) as file:
             for line in file.readlines():
+                key: str
+                separator: str
+                value: str
                 key, separator, value = line.partition("=")
                 if not separator:
                     continue  # ignore lines without assignment

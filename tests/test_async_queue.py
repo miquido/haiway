@@ -334,7 +334,7 @@ async def test_asend_resumes_iteration_and_rejects_values():
 
     assert await queue.asend() == 7
 
-    with raises(TypeError):
+    with raises(AssertionError):
         await queue.asend(1)  # pyright: ignore[reportArgumentType]
 
 

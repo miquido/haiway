@@ -196,7 +196,7 @@ class ObservabilityScopeExiting(Protocol):
     ) -> None: ...
 
 
-@final  # immutable
+@final
 class Observability:  # avoiding State inheritance to prevent propagation as scope state
     __slots__ = (
         "attributes_recording",
@@ -680,7 +680,7 @@ def _tree_summary(scope_store: ScopeStore) -> str:
     return "\n".join(elements) + "\n┕━"
 
 
-@final  # consider immutable
+@final
 class ContextObservability:
     @classmethod
     def scope(

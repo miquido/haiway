@@ -57,9 +57,7 @@ def basic_value(  # noqa: PLR0911
     # before the iterable branch - `bytes` is a sequence of ints
     if isinstance(value, bytes | bytearray | memoryview):
         # base64, the spelling `BytesAttribute` validation reads back
-        return base64.b64encode(
-            value  # pyright: ignore[reportUnknownArgumentType]
-        ).decode("utf-8")
+        return base64.b64encode(value).decode("utf-8")  # pyright: ignore[reportUnknownArgumentType]
 
     if isinstance(value, UUID):
         return str(value)

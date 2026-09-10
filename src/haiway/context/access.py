@@ -440,57 +440,6 @@ class ctx:
         BackgroundTaskGroup.shutdown_all()
 
     @staticmethod
-    def stream[Element, **Arguments](
-        source: Callable[Arguments, AsyncGenerator[Element]],
-        /,
-        *args: Arguments.args,
-        **kwargs: Arguments.kwargs,
-    ) -> AsyncGenerator[Element]:
-        """
-        Stream results produced by a generator within the proper context state.
-
-        The source generator runs inside a dedicated ``"stream"`` child scope so
-        that state, observability, and trace information remain available while the
-        stream is consumed.
-
-        Parameters
-        ----------
-        source: Callable[Arguments, AsyncGenerator[Element]]
-            async generator used as the stream source
-
-        *args: Arguments.args
-            positional arguments passed to generator call
-
-        **kwargs: Arguments.kwargs
-            keyword arguments passed to generator call
-
-        Returns
-        -------
-        AsyncGenerator[Element]
-            generator for accessing produced elements
-
-        Notes
-        -----
-        The scope lives inside the returned generator, so it is released when the
-        generator ends - by exhausting it, or by closing it. Wrap it in
-        ``ctx.closing`` when the iteration may be left early: an abandoned
-        generator is finalized by the garbage collector in a fresh context, where
-        the scope can no longer be released.
-        """
-
-        async def stream() -> AsyncGenerator[Element]:
-            async with ctx.scope("stream"):
-                generator: AsyncGenerator[Element] = source(*args, **kwargs)
-                try:
-                    async for result in generator:
-                        yield result
-
-                finally:
-                    await generator.aclose()
-
-        return stream()
-
-    @staticmethod
     def closing[Element](
         generator: AsyncGenerator[Element],
         /,
@@ -502,9 +451,10 @@ class ctx:
         its cleanup runs where the iteration ends instead of whenever the garbage
         collector reaches it. Leaving a generator to the collector is unreliable
         in general, and unsound for generators which manage a context scope -
-        ``ctx.stream`` and ``stream_concurrently`` among them: the collector
-        finalizes a generator in a fresh context, where the scope it opened can no
-        longer be released, so the teardown fails and the error is only logged.
+        ``stream_concurrently`` and any generator entering a scope of its own
+        among them: the collector finalizes a generator in a fresh context, where
+        the scope it opened can no longer be released, so the teardown fails and
+        the error is only logged.
 
         Parameters
         ----------
@@ -518,10 +468,10 @@ class ctx:
 
         Examples
         --------
-        >>> async with ctx.closing(ctx.stream(produce)) as stream:
+        >>> async with ctx.closing(produce()) as stream:
         ...     async for element in stream:
         ...         if not await handle(element):
-        ...             break  # the stream scope is released right here
+        ...             break  # the generator cleanup runs right here
         """
 
         return aclosing(generator)

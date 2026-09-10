@@ -244,7 +244,7 @@ class AnyAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -323,7 +323,7 @@ class AliasAttribute(Immutable):
         if self._resolved is None:
             for annotation in self.annotations:
                 if isinstance(annotation, Alias):
-                    return annotation.alias
+                    return annotation.name
 
             return self.type_alias
 
@@ -477,7 +477,7 @@ class MissingAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -576,7 +576,7 @@ class NoneAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -676,7 +676,7 @@ class LiteralAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -781,7 +781,7 @@ class BoolAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -892,7 +892,7 @@ class IntegerAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -1009,7 +1009,7 @@ class FloatAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -1126,7 +1126,7 @@ class BytesAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -1240,7 +1240,7 @@ class UUIDAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -1349,7 +1349,7 @@ class StringAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -1448,7 +1448,7 @@ class DatetimeAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -1559,7 +1559,7 @@ class DateAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -1670,7 +1670,7 @@ class TimeAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -1781,7 +1781,7 @@ class PathAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -1890,7 +1890,7 @@ class TupleAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -2019,7 +2019,7 @@ class SequenceAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -2138,7 +2138,7 @@ class SetAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -2255,7 +2255,7 @@ class MappingAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -2378,7 +2378,7 @@ class MetaAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -2629,7 +2629,7 @@ class ObjectAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -2743,7 +2743,7 @@ class TypedDictAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -2875,7 +2875,7 @@ class FunctionAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -2979,7 +2979,7 @@ class ProtocolAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -3083,7 +3083,7 @@ class UnionAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -3217,7 +3217,7 @@ class CustomAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -3322,7 +3322,7 @@ class StrEnumAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification
@@ -3440,7 +3440,7 @@ class IntEnumAttribute(Immutable):
                     description = annotation.description
 
                 elif isinstance(annotation, Alias):
-                    alias = annotation.alias
+                    alias = annotation.name
 
                 elif isinstance(annotation, Specification):
                     specification = annotation.specification

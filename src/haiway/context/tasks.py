@@ -1,11 +1,10 @@
-import signal
 from asyncio import AbstractEventLoop, CancelledError, Task, TaskGroup, gather, get_running_loop
 from collections.abc import Callable, Collection, Coroutine, MutableMapping, MutableSet
 from contextvars import Context, ContextVar, Token, copy_context
 from inspect import iscoroutine
-from threading import Lock
-from types import FrameType, TracebackType
+from types import TracebackType
 from typing import Any, ClassVar, Self, cast, final
+from weakref import WeakKeyDictionary
 
 from haiway.context.observability import ContextObservability, ObservabilityLevel
 
@@ -17,8 +16,14 @@ __all__ = (
 
 @final  # global background tasks
 class BackgroundTaskGroup:
-    _lock: ClassVar[Lock] = Lock()
-    _loops_tasks: ClassVar[MutableMapping[AbstractEventLoop, MutableSet[Task[Any]]]] = {}
+    # tasks can only be created from within a running loop, i.e. from its own thread, and are
+    # discarded by done callbacks running on that same thread - multithreading is not supported,
+    # hence no lock is required to guard the mapping.
+    # keeping the loops weakly lets a loop completing without an explicit shutdown drop its entry
+    # instead of leaking it - pending tasks reference their loop, keeping it alive until they end.
+    _loops_tasks: ClassVar[MutableMapping[AbstractEventLoop, MutableSet[Task[Any]]]] = (
+        WeakKeyDictionary()
+    )
 
     @classmethod
     def create_task[Result](
@@ -36,16 +41,15 @@ class BackgroundTaskGroup:
         )
 
         tasks: MutableSet[Task[Any]]
-        with cls._lock:
-            loop_tasks: MutableSet[Task[Any]] | None = cls._loops_tasks.get(loop)
-            if loop_tasks is None:
-                tasks = set()
-                cls._loops_tasks[loop] = tasks
+        loop_tasks: MutableSet[Task[Any]] | None = cls._loops_tasks.get(loop)
+        if loop_tasks is None:
+            tasks = set()
+            cls._loops_tasks[loop] = tasks
 
-            else:
-                tasks = loop_tasks
+        else:
+            tasks = loop_tasks
 
-            tasks.add(task)
+        tasks.add(task)
 
         def handle_done(completed: Task[Any]) -> None:
             tasks.discard(completed)
@@ -77,9 +81,7 @@ class BackgroundTaskGroup:
         if loop is None:
             loop = get_running_loop()
 
-        loop_tasks: Collection[Task[Any]]
-        with cls._lock:
-            loop_tasks = tuple(cls._loops_tasks.pop(loop, ()))
+        loop_tasks: Collection[Task[Any]] = tuple(cls._loops_tasks.pop(loop, ()))
 
         if loop.is_closed():
             return
@@ -117,47 +119,11 @@ class BackgroundTaskGroup:
 
     @classmethod
     def shutdown_all(cls) -> None:
-        loops: Collection[AbstractEventLoop]
-        with cls._lock:
-            loops = tuple(cls._loops_tasks.keys())
-
-        for loop in loops:
+        for loop in tuple(cls._loops_tasks.keys()):
             cls.shutdown(loop=loop)
 
 
-# Install best-effort signal handlers to shut down background tasks.
-for signum in (
-    signal.SIGINT,
-    signal.SIGTERM,
-):
-    previous_handler: Any = signal.getsignal(signum)
-
-    def handle_signal(
-        received: int,
-        frame: FrameType | None,
-        *,
-        previous: signal.Handlers | Callable[[int, FrameType | None], None] = previous_handler,
-    ) -> None:
-        BackgroundTaskGroup.shutdown_all()
-        if previous is signal.SIG_IGN:
-            return
-
-        if previous is signal.SIG_DFL:
-            signal.signal(received, signal.SIG_DFL)
-            signal.raise_signal(received)
-            return
-
-        if callable(previous):
-            previous(received, frame)
-
-    try:
-        signal.signal(signum, handle_signal)
-
-    except OSError, RuntimeError, ValueError:
-        pass  # ignore
-
-
-@final  # consider immutable
+@final
 class ContextTaskGroup:
     @classmethod
     def run[Result, **Arguments](

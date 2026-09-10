@@ -9,7 +9,7 @@ from haiway.context.types import ContextMissing
 __all__ = ("ContextClosing",)
 
 
-@final  # consider immutable
+@final
 class ContextClosing:
     """
     Future completed when the context scope owning it begins closing.

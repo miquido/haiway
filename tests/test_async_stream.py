@@ -309,7 +309,7 @@ async def test_asend_resumes_iteration_and_rejects_values():
     assert await stream.asend() == 7
     await delivering
 
-    with raises(TypeError):
+    with raises(AssertionError):
         await stream.asend(1)  # pyright: ignore[reportArgumentType]
 
 

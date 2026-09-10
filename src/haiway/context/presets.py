@@ -35,7 +35,7 @@ class ContextPresetsDisposablePreparing(Protocol):
     def __call__(self) -> Disposable: ...
 
 
-@final  # immutable
+@final
 class ContextPresets:
     """
     Bundle named context disposables into an immutable preset.
@@ -256,7 +256,7 @@ class ContextPresets:
         )
 
 
-@final  # consider immutable
+@final
 class ContextPresetsRegistry:
     @classmethod
     def select(

@@ -16,16 +16,16 @@ __all__ = (
 # tab is kept - it cannot start a new record and it keeps output readable
 _LINE_FEED: Final[int] = 0x0A
 _CARRIAGE_RETURN: Final[int] = 0x0D
-_CONTROL_ESCAPES: Final[Mapping[int, str]] = {
+_CONTROL_ESCAPES_KEEPING_NEWLINES: Final[Mapping[int, str]] = {
     **{
         code: f"\\x{code:02x}"
         for code in (*range(0x00, 0x09), *range(0x0B, 0x20), *range(0x7F, 0xA0))
     },
-    _LINE_FEED: "\\n",
     _CARRIAGE_RETURN: "\\r",
 }
-_CONTROL_ESCAPES_KEEPING_NEWLINES: Final[Mapping[int, str]] = {
-    code: escape for code, escape in _CONTROL_ESCAPES.items() if code != _LINE_FEED
+_CONTROL_ESCAPES: Final[Mapping[int, str]] = {
+    **_CONTROL_ESCAPES_KEEPING_NEWLINES,
+    _LINE_FEED: "\\n",
 }
 
 
