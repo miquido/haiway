@@ -1,6 +1,6 @@
 import sys
-from asyncio import AbstractEventLoop, CancelledError, get_running_loop
-from collections.abc import Sequence
+from asyncio import AbstractEventLoop, CancelledError, get_running_loop, iscoroutine
+from collections.abc import Callable, Coroutine, MutableSequence, Sequence
 from logging import Logger
 from types import TracebackType
 from typing import Any, final
@@ -22,17 +22,17 @@ from haiway.utils.exceptions import raise_collected
 __all__ = ("ContextScope",)
 
 
-@final  # consider immutable
+@final
 class ContextScope:
     __slots__ = (
         "_disposables",
-        "_entered",
         "_identifier",
         "_isolated",
         "_name",
         "_observability",
         "_presets",
         "_state",
+        "_unwinds",
     )
 
     def __init__(
@@ -51,7 +51,7 @@ class ContextScope:
         self._state: Sequence[State] = state
         self._disposables: Disposables = disposables
         self._isolated: bool = isolated
-        self._entered: list[tuple[bool, Any]] | None = None
+        self._unwinds: MutableSequence[_Unwind] | None = None
 
     async def __aenter__(self) -> str:
         assert self._identifier is None, "Context reentrance is not allowed"  # nosec: B101
@@ -63,12 +63,12 @@ class ContextScope:
         # elements which were entered, paired with whether they exit asynchronously.
         # a plain list instead of an `AsyncExitStack` - the elements are known here,
         # so there is nothing to gain from the stack building a closure per element
-        entered: list[tuple[bool, Any]] = []
+        unwinds: MutableSequence[_Unwind] = []
 
         try:
             # propagate new scope identifier
             identifier.__enter__()
-            entered.append((False, identifier))
+            unwinds.append(identifier.__exit__)
 
             # ensure associated observability and obtain trace identifier
             observability: ContextObservability = ContextObservability.scope(
@@ -76,7 +76,7 @@ class ContextScope:
                 observability=self._observability,
             )
             trace_id: str = observability.__enter__()
-            entered.append((False, observability))
+            unwinds.append(observability.__exit__)
 
             # resolve presets
             if self._presets is not None:
@@ -86,9 +86,9 @@ class ContextScope:
                 presets = ContextPresetsRegistry.select(self._name)
 
             # resolve combined state and ensure it is used
-            state: ContextState = await self._resolve_state(presets, entered)
+            state: ContextState = await self._resolve_state(presets, unwinds)
             state.__enter__()
-            entered.append((False, state))
+            unwinds.append(state.__exit__)
 
             # enter the task group after everything its tasks are given to work
             # with - it is joined on exit before the state and the disposables
@@ -96,14 +96,14 @@ class ContextScope:
             # against a connection pool or a client which was already closed
             task_group: ContextTaskGroup = ContextTaskGroup()
             await task_group.__aenter__()
-            entered.append((True, task_group))
+            unwinds.append(task_group.__aexit__)
 
             # provide events after the task group so they exit before it - closing
             # the event bus releases all pending subscribers so it can join them
             if self._isolated or identifier.is_root:
                 events: ContextEvents = ContextEvents(loop=loop)
                 await events.__aenter__()
-                entered.append((True, events))
+                unwinds.append(events.__aexit__)
 
             # provide the closing future last so it completes first - everything
             # waiting for the scope to end is released before its tasks are joined
@@ -112,18 +112,18 @@ class ContextScope:
                 identifier=identifier.scope_id,
             )
             closing.__enter__()
-            entered.append((False, closing))
+            unwinds.append(closing.__exit__)
 
             # claim the entered elements only when the scope is fully prepared - a
             # failed enter unwinds them here and leaves nothing behind to exit later
-            self._entered = entered
+            self._unwinds = unwinds
 
             return trace_id
 
         except BaseException as exc:
             try:  # ensure unwinding on error
                 await _unwind(
-                    entered,
+                    unwinds,
                     type(exc),
                     exc,
                     exc.__traceback__,
@@ -140,23 +140,15 @@ class ContextScope:
     async def _resolve_state(
         self,
         presets: ContextPresets | None,
-        entered: list[tuple[bool, Any]],
+        unwinds: MutableSequence[_Unwind],
         /,
     ) -> ContextState:
-        """
-        Combine the state of every source, lowest priority first.
-
-        The disposables of each source are entered only when there is something
-        to prepare - entering an empty set would cost a few event loop round
-        trips to prepare nothing. State given to the scope directly never needs
-        preparation, so it is applied last without going through them at all.
-        """
         presets_state: tuple[State, ...] = ()
         if presets is not None:
             presets_disposables: Disposables = presets.resolve_disposables()
             if presets_disposables:
                 presets_state = (
-                    *await self._enter_disposables(presets_disposables, entered),
+                    *await self._enter_disposables(presets_disposables, unwinds),
                     # the state a preset carries directly needs no preparation,
                     # it keeps the priority it would have as the last disposable
                     *presets.static_state,
@@ -167,7 +159,7 @@ class ContextScope:
 
         disposables_state: tuple[State, ...] = ()
         if self._disposables:
-            disposables_state = tuple(await self._enter_disposables(self._disposables, entered))
+            disposables_state = tuple(await self._enter_disposables(self._disposables, unwinds))
 
         return ContextState.updating(
             (
@@ -180,11 +172,11 @@ class ContextScope:
     @staticmethod
     async def _enter_disposables(
         disposables: Disposables,
-        entered: list[tuple[bool, Any]],
+        unwinds: MutableSequence[_Unwind],
         /,
     ) -> Any:
         prepared: Any = await disposables.__aenter__()
-        entered.append((True, disposables))
+        unwinds.append(disposables.__aexit__)
         return prepared
 
     async def __aexit__(
@@ -193,8 +185,8 @@ class ContextScope:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        entered: list[tuple[bool, Any]] | None = self._entered
-        if entered is None:
+        unwinds: MutableSequence[_Unwind] | None = self._unwinds
+        if unwinds is None:
             raise ContextMissing("Context scope requested but not defined!")
 
         # a claimed identifier always comes with the entered elements
@@ -202,11 +194,11 @@ class ContextScope:
         assert claimed is not None  # nosec: B101
         # released before unwinding - the scope is spent either way, so a failing
         # exit can't leave it looking like it could be exited again
-        self._entered = None
+        self._unwinds = None
 
         try:  # unwind entered elements
             await _unwind(
-                entered,
+                unwinds,
                 exc_type,
                 exc_val,
                 exc_tb,
@@ -232,28 +224,23 @@ class ContextScope:
             self._identifier = None
 
 
+_Unwind = Callable[
+    [
+        type[BaseException] | None,
+        BaseException | None,
+        TracebackType | None,
+    ],
+    Coroutine[None, None, None] | None,
+]
+
+
 async def _unwind(
-    entered: list[tuple[bool, Any]],
+    unwinds: MutableSequence[_Unwind],
     exc_type: type[BaseException] | None,
     exc_val: BaseException | None,
     exc_tb: TracebackType | None,
     /,
 ) -> None:
-    """
-    Exit entered scope elements in reverse order, as nested context managers.
-
-    Mirrors what an ``AsyncExitStack`` does for the same elements - every element
-    is exited even when an earlier one failed, and an error raised while exiting
-    replaces the one in flight while keeping it as its context. None of the scope
-    elements suppress exceptions, so the suppression handling of the stack has no
-    counterpart here. Unlike the stack, several failures are all delivered - see
-    ``_raise_unwound``.
-
-    An element reraising the exception it was given is not an exit failure - it is
-    the error already propagating through the scope body, which is reported where
-    it was raised and propagates from the `async with` on its own. Only an error
-    which is not the one in flight replaces it and marks the exit as failed.
-    """
     frame_exception: BaseException | None = sys.exception()
 
     def fix_exception_context(
@@ -270,15 +257,13 @@ async def _unwind(
 
             new_exception = context
 
-    collected: list[BaseException] = []
-    while entered:
-        is_async, element = entered.pop()
+    collected: MutableSequence[BaseException] = []
+    while unwinds:
+        element = unwinds.pop()
         try:
-            if is_async:
-                await element.__aexit__(exc_type, exc_val, exc_tb)
-
-            else:
-                element.__exit__(exc_type, exc_val, exc_tb)
+            result: Any = element(exc_type, exc_val, exc_tb)
+            if iscoroutine(result):
+                await result
 
         except BaseException as exc:
             if exc is exc_val:
@@ -292,38 +277,7 @@ async def _unwind(
             exc_val = exc
             exc_tb = exc.__traceback__
 
-    _raise_unwound(collected)
-
-
-def _raise_unwound(
-    collected: list[BaseException],
-    /,
-) -> None:
-    """
-    Deliver the errors the elements raised while exiting, if there were any.
-
-    A single failure is raised as it is - it is the error to report, and wrapping it
-    would break every caller handling what a scope element can raise. Several are
-    delivered together instead of all but the last being left to the context chain,
-    where they can only be read and never handled.
-
-    The error which was propagating through the scope body is never one of them - it
-    stays the context of what is raised here, exactly as it would with nested `with`
-    statements, so a cancellation passing through a scope keeps propagating as one.
-    """
-    match collected:
-        case ():
-            return  # nothing of its own failed
-
-        case (exception,):
-            # raising replaces the carefully prepared context - keep it to restore
-            fixed_context: BaseException | None = exception.__context__
-            try:
-                raise exception
-
-            except BaseException:
-                exception.__context__ = fixed_context
-                raise
-
-        case _:
-            raise_collected(collected, message="Context scope exit errors")
+    raise_collected(
+        collected,
+        message="Scope exit errors",
+    )

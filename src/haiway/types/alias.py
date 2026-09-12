@@ -9,7 +9,7 @@ class Alias:
 
     Parameters
     ----------
-    alias : str
+    name : str
         Non-empty string identifying the exposed name that should be used
         when the annotated value is surfaced externally.
 
@@ -18,20 +18,20 @@ class Alias:
     >>> aliased: Annotated[str, Alias("customer_id")]
     """
 
-    __slots__ = ("alias",)
+    __slots__ = ("name",)
 
     def __init__(
         self,
-        alias: str,
+        name: str,
         /,
     ) -> None:
-        assert alias  # nosec: B101
+        assert name  # nosec: B101
 
-        self.alias: str
+        self.name: str
         object.__setattr__(
             self,
-            "alias",
-            alias,
+            "name",
+            name,
         )
 
     def __setattr__(

@@ -68,9 +68,9 @@ class StreamResponse(StreamingResponse):
     at the first await of that cleanup, leaving the body suspended halfway
     through it.
 
-    A generator opening a scope of its own has to keep it inside itself, which
-    is what ``ctx.stream`` provides - a scope entered around building the
-    generator is already released by the time the streaming starts.
+    A generator opening a scope of its own has to keep it inside itself - a
+    scope entered around building the generator is already released by the time
+    the streaming starts.
     """
 
     def __init__(
@@ -139,8 +139,8 @@ class StreamResponse(StreamingResponse):
         finally:
             # closed where the streaming ended, whether the body ran out or the
             # connection went away. Leaving it to the garbage collector would
-            # finalize it in a fresh context, where a scope it opened - what
-            # `ctx.stream` provides - can no longer be released
+            # finalize it in a fresh context, where a scope it opened can no
+            # longer be released
             try:
                 await self._stream.aclose()
 

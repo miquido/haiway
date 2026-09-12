@@ -32,7 +32,6 @@ from haiway.attributes.annotations import (
     resolve_self_attribute,
 )
 from haiway.attributes.attribute import Attribute
-from haiway.attributes.coding import AttributesJSONEncoder
 from haiway.attributes.path import AttributePath
 from haiway.attributes.specification import object_specification
 from haiway.attributes.validation import ValidationError
@@ -841,7 +840,7 @@ class State(metaclass=StateMeta):
     def to_json(
         self,
         indent: int | None = None,
-        encoder_class: type[json.JSONEncoder] = AttributesJSONEncoder,
+        encoder_class: type[json.JSONEncoder] = json.JSONEncoder,
     ) -> str:
         """
         Serialize this instance to a JSON string.
@@ -850,7 +849,7 @@ class State(metaclass=StateMeta):
         ----------
         indent : int | None, optional
             Indentation passed to ``json.dumps`` for pretty-printing.
-        encoder_class : type[json.JSONEncoder], default=AttributesJSONEncoder
+        encoder_class : type[json.JSONEncoder], default=JSONEncoder
             Encoder class responsible for encoding custom types.
 
         Returns

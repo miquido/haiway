@@ -498,69 +498,6 @@ async def test_spawned_task_error_is_visible_to_enclosing_task_group():
 
 
 @mark.asyncio
-async def test_stream_restores_scope_when_closed_early():
-    async def source():
-        for element in range(100):
-            yield element
-
-    async with ctx.scope("test"):
-        outer: ContextIdentifier = ContextIdentifier.current()
-        collected: list[int] = []
-        stream = aiter(ctx.stream(source))
-        async for element in stream:
-            collected.append(element)
-            if len(collected) >= 2:
-                break
-
-        # closing the stream must restore the consuming scope, not merely leave
-        # a trace id that every child scope inherits anyways
-        await stream.aclose()
-        assert collected == [0, 1]
-        assert ContextIdentifier.current().scope_id == outer.scope_id
-
-
-@mark.asyncio
-async def test_stream_provides_scope_state_to_source():
-    async def source():
-        yield ctx.state(ExampleState).state
-
-    async with ctx.scope("test", ExampleState(state="streamed")):
-        assert [element async for element in ctx.stream(source)] == ["streamed"]
-
-
-@mark.asyncio
-async def test_stream_propagates_source_error():
-    async def source():
-        yield 1
-        raise ValueError("source failure")
-
-    async with ctx.scope("test"):
-        with raises(ValueError):
-            async for _ in ctx.stream(source):
-                pass
-
-
-@mark.asyncio
-async def test_stream_does_not_run_ahead_of_consumer():
-    produced: list[int] = []
-
-    async def source():
-        for element in range(100):
-            produced.append(element)
-            yield element
-
-    async with ctx.scope("test"):
-        collected: list[int] = []
-        async for element in ctx.stream(source):
-            collected.append(element)
-            if len(collected) >= 3:
-                break
-
-        # the source is suspended on delivery instead of draining eagerly
-        assert len(produced) < 10
-
-
-@mark.asyncio
 async def test_record_outside_of_scope_is_silent() -> None:
     records: list[logging.LogRecord] = []
 

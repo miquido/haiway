@@ -309,13 +309,10 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
 
         Raises
         ------
-        TypeError
-            If a value other than None was sent
         BaseException
             Re-raises the finish reason when the queue has been finished
         """
-        if value is not None:
-            raise TypeError("AsyncQueue can't receive values, use `enqueue` to add elements")
+        assert value is None  # nosec: B101
 
         return await self.__anext__()
 

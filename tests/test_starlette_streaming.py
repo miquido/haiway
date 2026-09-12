@@ -223,23 +223,24 @@ async def test_framework_response_leaves_an_abandoned_body_open() -> None:
 
 
 @mark.asyncio
-async def test_context_stream_is_closed_when_abandoned() -> None:
+async def test_stream_scope_is_closed_when_abandoned() -> None:
     released: MutableSequence[str] = []
 
     async def produce() -> AsyncGenerator[bytes]:
-        try:
-            # the state of the request, resolved from the parent of the stream scope
-            yield ctx.state(ExampleState).value.encode()
-            await sleep(1)  # never reached by the consumer
-            yield b"unreachable"
+        # a scope kept inside the generator spans the whole response, instead of
+        # being released before the streaming starts
+        async with ctx.scope("stream"):
+            try:
+                # the state of the request, resolved from the parent scope
+                yield ctx.state(ExampleState).value.encode()
+                await sleep(1)  # never reached by the consumer
+                yield b"unreachable"
 
-        finally:
-            released.append("closed")
+            finally:
+                released.append("closed")
 
     async def endpoint(request: Request) -> Response:
-        # the scope of `ctx.stream` lives inside its generator, so it spans the
-        # whole response instead of being released before the streaming starts
-        return StreamResponse(ctx.stream(produce))
+        return StreamResponse(produce())
 
     app: Starlette = application(
         ServerContext(ExampleState(value="from-stream")),

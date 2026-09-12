@@ -33,6 +33,10 @@ Such a task is fully detached - it runs with an empty context, so `ctx.state(...
 `ctx.subscribe(...)` raise `ContextMissing` within it. Enter a scope inside the task, or pass what
 it needs as arguments.
 
+Nothing joins a background task on its own - no scope owns it and no signal handler is installed to
+reach for it. `ctx.shutdown_background_tasks()` cancels the ones belonging to the running loop, for
+a graceful shutdown or a test teardown which must not leak tasks into the next case.
+
 ## `process_concurrently`
 
 Use `process_concurrently(...)` when you need bounded concurrent side effects and do not need
@@ -192,6 +196,49 @@ async with ctx.closing(merged) as stream:
         handle(element)
 ```
 
+## Scopes Inside Generators
+
+A generator needing a scope of its own has to keep it inside itself - calling a generator function
+runs none of its body, so a scope entered around *building* one is already released by the time the
+first element is asked for:
+
+```python
+async with ctx.scope("updates", disposables=(Subscription(),)):
+    stream = produce()  # nothing was produced yet
+
+async for element in stream:  # the subscription is already disposed
+    handle(element)
+```
+
+Kept inside the body, it spans the whole iteration:
+
+```python
+async def produce() -> AsyncGenerator[bytes]:
+    async with ctx.scope("updates", disposables=(Subscription(),)):
+        async for update in Updates.subscribe():
+            yield update.payload.encode()
+
+
+async with ctx.closing(produce()) as stream:
+    async for element in stream:
+        handle(element)
+```
+
+That scope is entered in the *consumer's* context, not in one the generator keeps to itself - an
+async generator body runs in whatever context resumed it. Between yields the consumer therefore sees
+the generator's scope as the current one, and resolves state against it:
+
+```python
+async with ctx.scope("outer", ExampleState(value="outer")):
+    async with ctx.closing(produce()) as stream:
+        async for element in stream:
+            ctx.state(ExampleState).value  # the state of `produce`, not "outer"
+```
+
+The consuming scope is restored once the generator ends, whether it was exhausted or closed. Where
+the difference matters, resolve the state before entering the iteration rather than inside it, or
+have the generator yield what the consumer needs along with each element.
+
 ## Closing Generator Sources
 
 Every helper here closes an async generator source it consumed, however the consumption ended -
@@ -208,14 +255,14 @@ async with ctx.closing(stream_concurrently(numbers(), letters())) as merged:
             break  # both sources are closed right here
 ```
 
-This matters more than the usual "release resources promptly" argument. `ctx.stream(...)` and
-`stream_concurrently(...)` open a context scope inside the generator, and an abandoned generator is
-finalized by the garbage collector in a *fresh* context - one where the scope it opened can no
-longer be released. The teardown fails there and the error is only logged, so an unclosed stream
-degrades quietly rather than raising where the mistake was made:
+This matters more than the usual "release resources promptly" argument. `stream_concurrently(...)`
+opens a context scope inside the generator, as does any generator entering a scope of its own, and
+an abandoned generator is finalized by the garbage collector in a *fresh* context - one where the
+scope it opened can no longer be released. The teardown fails there and the error is only logged, so
+an unclosed stream degrades quietly rather than raising where the mistake was made:
 
 ```python
-stream = ctx.stream(produce)
+stream = stream_concurrently(numbers(), letters())
 async for element in stream:
     break  # walking away here leaves the scope to the collector, which cannot release it
 ```

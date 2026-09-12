@@ -266,8 +266,8 @@ Key behavior:
 - Reach for `finish()` rather than `aclose()` when the *producer* is done but the consumer should
   still drain what was accepted - that is the difference between the two, and it is why `finish()`
   keeps the buffer.
-- `asend(None)` is `__anext__()`; sending any other value raises `TypeError`, since `enqueue()` is
-  the producer side.
+- `asend(None)` is `__anext__()`; sending any other value is a programming error caught by an
+  assertion, since `enqueue()` is the producer side.
 - `athrow()` finishes the queue with the exception and drops buffered items, as `aclose()` does -
   ending the iteration where it stands leaves nothing to deliver them to.
 
@@ -327,8 +327,8 @@ Key behavior:
   end from the next `send()`.
 - `aclose()` is `finish()` without an exception - not yet consumed elements are dropped and further
   iteration ends.
-- `asend(None)` is `__anext__()`; sending any other value raises `TypeError`, since `send()` is the
-  producer side. `athrow()` finishes the stream with the exception.
+- `asend(None)` is `__anext__()`; sending any other value is a programming error caught by an
+  assertion, since `send()` is the producer side. `athrow()` finishes the stream with the exception.
 
 ### Choosing between them
 

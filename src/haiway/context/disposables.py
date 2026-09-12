@@ -1,7 +1,7 @@
 from asyncio import Future, gather, shield, sleep
 from collections.abc import Collection, Iterable, Iterator, MutableSequence, Sequence
 from types import TracebackType
-from typing import Any, NoReturn, Protocol, Self, final, runtime_checkable
+from typing import Protocol, Self, final, runtime_checkable
 
 from haiway.attributes import State
 from haiway.context.state import ContextState
@@ -76,7 +76,7 @@ class DisposableState:
         pass  # nothing to dispose
 
 
-@final  # consider immutable
+@final
 class Disposables:
     @classmethod
     def of(
@@ -130,7 +130,24 @@ class Disposables:
             raise  # reraise exception
 
         try:
-            return _collect_state(results)  # raises on preparation errors
+            state: MutableSequence[State] = []
+            errors: MutableSequence[BaseException] = []
+            for result in results:
+                if isinstance(result, BaseException):
+                    errors.append(result)
+
+                elif isinstance(result, State):
+                    state.append(result)
+
+                else:
+                    state.extend(result)
+
+            raise_collected(
+                errors,
+                message="Disposables preparation errors",
+            )
+
+            return iter(state)
 
         except BaseException as exc:
             await shield(
@@ -208,7 +225,7 @@ class Disposables:
         return len(self._disposables) > 0
 
 
-@final  # immutable
+@final
 class ContextDisposables:
     @classmethod
     def of(
@@ -227,31 +244,16 @@ class ContextDisposables:
         disposables: Iterable[Disposable | None],
         /,
     ) -> None:
-        self._disposables: Disposables
-        object.__setattr__(
-            self,
-            "_disposables",
-            Disposables(disposables),
-        )
-        self._context_state: ContextState | None
-        object.__setattr__(
-            self,
-            "_context_state",
-            None,
-        )
+        self._disposables: Disposables = Disposables(disposables)
+        self._context_state: ContextState | None = None
 
     def __bool__(self) -> bool:
         return bool(self._disposables)
 
     async def __aenter__(self) -> None:
         assert self._context_state is None  # nosec: B101
-        context_state: ContextState = ContextState.updating(await self._disposables.__aenter__())
-        context_state.__enter__()
-        object.__setattr__(
-            self,
-            "_context_state",
-            context_state,
-        )
+        self._context_state = ContextState.updating(await self._disposables.__aenter__())
+        self._context_state.__enter__()
 
     async def __aexit__(
         self,
@@ -274,51 +276,4 @@ class ContextDisposables:
                 exc_val,
                 exc_tb,
             )
-            object.__setattr__(
-                self,
-                "_context_state",
-                None,
-            )
-
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> NoReturn:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__}"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> NoReturn:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__}"
-            f" attribute - '{name}' cannot be deleted"
-        )
-
-
-def _collect_state(
-    results: Sequence[Iterable[State] | State | BaseException],
-    /,
-) -> Iterator[State]:
-    state: MutableSequence[State] = []
-    errors: MutableSequence[BaseException] = []
-    for result in results:
-        if isinstance(result, BaseException):
-            errors.append(result)
-
-        elif isinstance(result, State):
-            state.append(result)
-
-        else:
-            state.extend(result)
-
-    raise_collected(
-        errors,
-        message="Disposables preparation errors",
-    )
-
-    return iter(state)
+            self._context_state = None

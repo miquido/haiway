@@ -292,8 +292,7 @@ or newer, the one reporting a gone consumer by failing the send: below that vers
 ends a streamed response by cancelling it, and the cancellation would be delivered again at the
 first await of the cleanup, leaving the generator suspended halfway through it.
 
-A generator opening a scope of its own has to keep it inside itself, which is what `ctx.stream`
-provides:
+A generator opening a scope of its own has to keep it inside itself:
 
 ```python
 async def produce() -> AsyncGenerator[bytes]:
@@ -304,7 +303,7 @@ async def produce() -> AsyncGenerator[bytes]:
 
 async def updates(request: Request) -> Response:
     # the scope lives inside the generator, so it spans the whole response
-    return StreamResponse(ctx.stream(produce))
+    return StreamResponse(produce())
 ```
 
 A scope entered around *building* the generator is already released by the time the streaming
@@ -317,6 +316,14 @@ async def updates(request: Request) -> Response:
 
     return StreamResponse(content)  # the subscription is already disposed
 ```
+
+Calling `produce()` runs none of its body, so `updates()` leaves the scope - disposing the
+subscription - before `StreamResponse(content)` asks for the first element. The scope kept inside
+`produce()` is instead entered when the response streaming resumes the generator, and stays current
+for the whole iteration - it is entered in the context which resumes the generator rather than one
+the generator keeps to itself. That has no consumer to surprise in a response, but it does when such
+a generator is iterated by your own code: see
+[Scopes Inside Generators](../guides/concurrent.md#scopes-inside-generators).
 
 ### A Failing Stream
 

@@ -24,7 +24,7 @@ __all__ = (
 )
 
 
-@final  # consider immutable
+@final
 class Event[Payload: State]:
     __slots__ = (
         "next",
@@ -45,7 +45,7 @@ class Event[Payload: State]:
         self.path: Collection[UUID] = path
 
 
-@final  # consider immutable
+@final
 class EventsSubscription[Payload: State](AsyncGenerator[Payload]):
     __slots__ = (
         "_finished",
@@ -138,7 +138,7 @@ class EventsSubscription[Payload: State](AsyncGenerator[Payload]):
         self._finish()
 
 
-@final  # consider immutable
+@final
 class ContextEvents:
     @classmethod
     def send(

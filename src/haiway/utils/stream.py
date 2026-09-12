@@ -7,7 +7,7 @@ from asyncio import (
 from collections import deque
 from collections.abc import AsyncGenerator
 from types import TracebackType
-from typing import NoReturn, final
+from typing import Any, NoReturn, final
 
 from haiway.utils.exceptions import thrown_exception
 
@@ -50,10 +50,49 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         loop : AbstractEventLoop | None, default=None
             Event loop to use for async operations. If None, the running loop is used.
         """
-        self._loop: AbstractEventLoop = loop or get_running_loop()
-        self._pending: deque[tuple[Element, Future[None]]] = deque()
-        self._waiting: Future[Element] | None = None
-        self._finish_reason: BaseException | None = None
+        self._loop: AbstractEventLoop
+        object.__setattr__(
+            self,
+            "_loop",
+            loop or get_running_loop(),
+        )
+        self._pending: deque[tuple[Future[None], Element]]
+        object.__setattr__(
+            self,
+            "_pending",
+            deque(),
+        )
+        self._waiting: Future[Element] | None
+        object.__setattr__(
+            self,
+            "_waiting",
+            None,
+        )
+        self._finish_reason: BaseException | None
+        object.__setattr__(
+            self,
+            "_finish_reason",
+            None,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> NoReturn:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> NoReturn:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}"
+            f" attribute - '{name}' cannot be deleted"
+        )
 
     @property
     def finished(self) -> bool:
@@ -106,7 +145,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
 
         else:  # otherwise wait pending
             consumed: Future[None] = self._loop.create_future()
-            self._pending.append((element, consumed))
+            self._pending.append((consumed, element))
             await consumed
 
     def finish(
@@ -131,31 +170,36 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         if self.finished:
             return  # already finished, ignore
 
-        self._finish_reason = exception if exception is not None else StopAsyncIteration()
+        object.__setattr__(
+            self,
+            "_finish_reason",
+            exception if exception is not None else StopAsyncIteration(),
+        )
 
         while self._pending:
-            _, pending = self._pending.popleft()
-            if pending.done():
-                continue
+            consumed: Future[None]
+            consumed, _ = self._pending.popleft()
+            if consumed.done():
+                continue  # skip dropped
 
             if get_running_loop() is not self._loop:
                 self._loop.call_soon_threadsafe(
-                    pending.set_result,
+                    consumed.set_result,
                     None,
                 )
 
             else:
-                pending.set_result(None)
+                consumed.set_result(None)
 
         if self._waiting is not None and not self._waiting.done():
             if get_running_loop() is not self._loop:
-                self._loop.call_soon_threadsafe(
+                self._loop.call_soon_threadsafe(  # pyright: ignore[reportArgumentType]
                     self._waiting.set_exception,
                     self._finish_reason,
                 )
 
             else:
-                self._waiting.set_exception(self._finish_reason)
+                self._waiting.set_exception(self._finish_reason)  # pyright: ignore[reportArgumentType]
 
     def cancel(self) -> None:
         """
@@ -190,23 +234,24 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         if self._finish_reason:
             raise self._finish_reason
 
+        while self._pending:
+            consumed: Future[None]
+            pending: Element
+            consumed, pending = self._pending.popleft()
+            if consumed.done():
+                continue  # skip dropped
+
+            consumed.set_result(None)
+            return pending
+
         try:
-            while self._pending:  # consume pending values
-                element, consumed = self._pending.popleft()
-                if consumed.done():
-                    # the producer was cancelled while waiting for this element
-                    # to be taken - delivering it would leave the consumer with
-                    # a value nobody is waiting to hear was consumed, so the
-                    # abandoned element is dropped in favor of the next one
-                    continue
-
-                consumed.set_result(None)  # notify consumed
-                return element
-
-            # nothing pending - create new waiting future
-            self._waiting = self._loop.create_future()
+            object.__setattr__(
+                self,
+                "_waiting",
+                self._loop.create_future(),
+            )
             # and wait for the result
-            return await self._waiting
+            return await self._waiting  # pyright: ignore[reportUnknownVariableType, reportGeneralTypeIssues]
 
         except CancelledError:
             self.cancel()  # when consumer is cancelled, signal producers to stop waiting
@@ -214,7 +259,11 @@ class AsyncStream[Element](AsyncGenerator[Element]):
 
         finally:
             # cleanup waiting future
-            self._waiting = None
+            object.__setattr__(
+                self,
+                "_waiting",
+                None,
+            )
 
     async def asend(
         self,
@@ -237,17 +286,8 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         -------
         Element
             The next element from the stream
-
-        Raises
-        ------
-        TypeError
-            If a value other than None was sent
-        BaseException
-            The exception provided to finish(), or StopAsyncIteration if
-            finish() was called without an exception
         """
-        if value is not None:
-            raise TypeError("AsyncStream can't receive values, use `send` to deliver elements")
+        assert value is None  # nosec: B101
 
         return await self.__anext__()
 
@@ -280,7 +320,6 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             Always - the exception which was thrown in
         """
         exception: BaseException = thrown_exception(typ, val, tb)
-
         self.finish(exception=exception)
         raise exception
 

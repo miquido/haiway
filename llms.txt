@@ -145,12 +145,17 @@ the iteration is left early.
   tasks, which ends the iteration first. `ctx.spawn_background(...)` only when work must outlive the
   scope - such a
   task runs with an empty context, so `ctx.state(...)`/`ctx.subscribe(...)` raise `ContextMissing`
-  within it.
-- `ctx.stream(async_generator_fn, ...)` iterates a generator with context preserved.
+  within it. Nothing joins a background task on its own - `ctx.shutdown_background_tasks()` cancels
+  the ones of the running loop for a graceful shutdown or a test teardown.
 - `ctx.closing(generator)` closes an async generator on leaving its iteration - required for
-  `ctx.stream(...)`/`stream_concurrently(...)` left early, since the collector finalizes a
-  generator in a fresh context where the scope it opened can no longer be released. Use it for a
-  `ctx.subscribe(...)` subscription left early too, to release the events chain it holds.
+  `stream_concurrently(...)`, or any generator entering a scope of its own, left early, since the
+  collector finalizes a generator in a fresh context where the scope it opened can no longer be
+  released. Use it for a `ctx.subscribe(...)` subscription left early too, to release the events
+  chain it holds.
+- A generator needing a scope of its own keeps it inside the body - one entered around building the
+  generator is released before the first element is asked for. Such a scope is entered in the
+  consumer's context: between yields the consumer sees it as current and resolves `ctx.state(...)`
+  against it, with the consuming scope restored once the generator is exhausted or closed.
 - `ctx.check_cancellation()` for cooperative cancellation points.
 - `process_concurrently(source, handler, concurrent_tasks=...)` — fire-and-forget, no results.
 - `execute_concurrently(handler, elements, concurrent_tasks=...)` — ordered results.
@@ -257,8 +262,8 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
   resolves state and reports the request trace mid-stream. It takes a full `AsyncGenerator` and
   closes it where the streaming ends - an abandoned one would otherwise
   be finalized by the collector, in a fresh context which can not release a scope it opened. A
-  producer needing a scope of its own keeps it inside the generator (`ctx.stream(produce)`); one
-  entered around building the generator is already gone. A mid-stream failure is recorded within
+  producer needing a scope of its own keeps it inside the generator; one entered around building
+  the generator is already gone. A mid-stream failure is recorded within
   the request scope (`Response streaming failed`, with the exception) then reraised - the framework
   would otherwise replace it with `RuntimeError: ...response already started` whenever a handler
   matches its type; a failing close is only a warning and never replaces it. A consumer which went

@@ -74,16 +74,20 @@ def raise_collected(
             return  # no errors
 
         case (exception,):
-            raise exception  # single error
+            # raising replaces the carefully prepared context - keep it to restore
+            fixed_context: BaseException | None = exception.__context__
+            try:
+                raise exception
+
+            except BaseException:
+                exception.__context__ = fixed_context
+                raise
 
         case _:
-            if all(isinstance(exception, Exception) for exception in exceptions):
-                raise ExceptionGroup(
-                    message,
-                    cast(Sequence[Exception], exceptions),
-                )
-
-            if all(isinstance(exception, CancelledError) for exception in exceptions):
+            if all(isinstance(exc, CancelledError) for exc in exceptions):
                 raise CancelledError()  # cancelled
+
+            if all(isinstance(exc, Exception) for exc in exceptions):
+                raise ExceptionGroup(message, cast(Sequence[Exception], exceptions))
 
             raise BaseExceptionGroup(message, exceptions)

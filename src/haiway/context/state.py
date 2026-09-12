@@ -10,7 +10,7 @@ from haiway.context.types import ContextMissing, ContextStateMissing
 __all__ = ("ContextState",)
 
 
-@final  # consider immutable
+@final
 class ContextState:
     @classmethod
     def snapshot(cls) -> Collection[State]:
