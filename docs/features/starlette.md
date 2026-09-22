@@ -178,6 +178,26 @@ included - through untouched. For each request it:
   and the address of the caller are deliberately left out - the first carries credentials often
   enough that recording it by default would leak them, the second identifies the caller
 
+- records `http.server.response.start.duration` among those same attributes when a response was
+  started - the seconds its consumer waited for the headers of an answer, which the span holding the
+  request does not report on its own. It stays on the trace rather than being aggregated
+
+- records how long the request took as one histogram, in seconds: `http.server.request.duration`, or
+  `websocket.server.duration` for a `websocket` connection, which is no HTTP request. Every request
+  is measured, the ones which failed or were never answered included. It is kept by the bounded
+  attributes of the request only:
+
+  | dimension                   | absent when                                             |
+  | --------------------------- | ------------------------------------------------------- |
+  | `http.request.method`       | the request is a `websocket` connection, which has none |
+  | `http.route`                | the routing left no route in the request scope          |
+  | `http.response.status_code` | the request was never answered                          |
+
+  `url.path` is deliberately not among them - it carries whatever identifier a parameterized route
+  was called with, and one time series per value of it is how a metrics store is brought down. An
+  absent dimension is a series of its own, which is what keeps an unanswered request findable. The
+  names are exported from `haiway.starlette.observability`
+
 - adds the trace headers to the response: `trace-id` holding the trace identifier of the request
   scope, accompanied by `traceparent` and `tracestate` when the observability backend provides them.
   An entry which a header cannot hold - a line break, a character outside latin-1 - is left out

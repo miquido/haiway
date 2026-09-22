@@ -1,4 +1,5 @@
-from collections.abc import Mapping, MutableMapping
+from collections.abc import MutableMapping
+from time import monotonic
 from typing import Any, final
 
 from starlette.datastructures import MutableHeaders
@@ -9,6 +10,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from haiway.context import ObservabilityAttribute
 from haiway.context.access import ctx
 from haiway.starlette.context import ServerContext
+from haiway.starlette.observability import (
+    CONNECTION_DURATION_METRIC,
+    REQUEST_DURATION_METRIC,
+    RESPONSE_START_DURATION_ATTRIBUTE,
+    request_metric_attributes,
+)
 
 __all__ = ("ContextMiddleware",)
 
@@ -36,7 +43,15 @@ class ContextMiddleware:
       attributes - once it was handled, which is when the route it matched and
       the status it was answered with are known. ``http.route`` is what a
       parameterized route is findable by, since the scope name carries the path
-      which was actually requested rather than the template behind it.
+      which was actually requested rather than the template behind it. The wait
+      for the headers of the response - what its consumer waited for an answer -
+      is recorded among them as ``http.server.response.start.duration``, in
+      seconds, when one was started.
+    - how long the request took is recorded as one histogram, in seconds:
+      ``http.server.request.duration``, or ``websocket.server.duration`` for a
+      connection, which is no HTTP request. Every request is measured, the ones
+      which failed or were never answered included. It is kept by the bounded
+      attributes of the request only - see ``request_metric_attributes``.
     - a response carries the trace headers of its request scope, whether it was
       produced by an endpoint or by anything answering on its behalf below this
       middleware. For a websocket request that is the response denying its
@@ -119,6 +134,7 @@ class ContextMiddleware:
                     name=f"{method} {scope['path']}",
                     method=method,
                     response_start="http.response.start",
+                    duration_metric=REQUEST_DURATION_METRIC,
                 )
 
             case "websocket":
@@ -132,6 +148,10 @@ class ContextMiddleware:
                     # the method it does not have
                     method=None,
                     response_start="websocket.http.response.start",
+                    # a connection is no HTTP request - it switches the protocol
+                    # and lasts until closed, so it is measured under its own name.
+                    # the response denying a handshake is an HTTP response though
+                    duration_metric=CONNECTION_DURATION_METRIC,
                 )
 
             case _:
@@ -146,7 +166,12 @@ class ContextMiddleware:
         name: str,
         method: str | None,
         response_start: str,
+        duration_metric: str,
     ) -> None:
+        # the earliest moment the application can observe the request. monotonic,
+        # so a change of the system clock does not reach the measurement
+        received_at: float = monotonic()
+
         with ctx.presets(*self._context.presets):
             async with ctx.scope(
                 name,
@@ -156,10 +181,16 @@ class ContextMiddleware:
                 # the status of the response, which only the message carrying it
                 # reports - an aborted request is answered with none at all
                 status: int | None = None
+                # only the moment is kept - nothing is measured while handling
+                response_started_at: float | None = None
 
                 async def traced_send(message: Message) -> None:
-                    nonlocal status
+                    nonlocal response_started_at, status
                     if message["type"] == response_start:
+                        # taken before the message is handed over, like the status
+                        # it is paired with - a send failing on a gone consumer
+                        # still started the response
+                        response_started_at = monotonic()
                         status = message["status"]
                         # headers are optional in the message - a response without
                         # any is what an application sending raw messages can do
@@ -186,16 +217,32 @@ class ContextMiddleware:
                     withheld = exc
 
                 finally:
+                    # measured first, so what is done with it is not measured too
+                    duration: float = monotonic() - received_at
                     # recorded here rather than before the request - the route it
                     # matched is resolved by the routing below this middleware,
                     # and the status only by the response. Recorded even for a
                     # request which failed, which is where it is needed most
-                    ctx.record_info(
-                        attributes=_request_attributes(
-                            scope,
-                            method=method,
-                            status=status,
+                    attributes: MutableMapping[str, ObservabilityAttribute] = _request_attributes(
+                        scope,
+                        method=method,
+                        status=status,
+                    )
+                    if response_started_at is not None:
+                        # the wait for an answer, which the span does not report on
+                        # its own - unlike the duration, which is what the span is
+                        attributes[RESPONSE_START_DURATION_ATTRIBUTE] = (
+                            response_started_at - received_at
                         )
+
+                    ctx.record_info(attributes=attributes)
+                    ctx.record_info(
+                        metric=duration_metric,
+                        value=duration,
+                        unit="s",
+                        kind="histogram",
+                        # bounded dimensions only - see `request_metric_attributes`
+                        attributes=request_metric_attributes(attributes),
                     )
 
         if withheld is not None:
@@ -208,7 +255,7 @@ def _request_attributes(
     *,
     method: str | None,
     status: int | None,
-) -> Mapping[str, ObservabilityAttribute]:
+) -> MutableMapping[str, ObservabilityAttribute]:
     """Describe a request the way the HTTP semantic conventions of OpenTelemetry do.
 
     Recorded once the request was handled, which is when the route it matched
