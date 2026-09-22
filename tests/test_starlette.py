@@ -1,4 +1,4 @@
-from asyncio import CancelledError, Event, Queue, Task, create_task
+from asyncio import CancelledError, Event, Queue, Task, create_task, sleep
 from collections.abc import (
     AsyncGenerator,
     Iterable,
@@ -1312,6 +1312,271 @@ async def test_requests_are_recorded_as_the_conventions_describe_them() -> None:
     # the routing of Starlette leaves no route in the scope, so there is no route
     # template to report - a FastAPI application is where one is available
     assert "http.route" not in recorded
+
+
+class _ExampleRoute:
+    # what a FastAPI `APIRoute` leaves in the request scope
+
+    def __init__(
+        self,
+        path_format: str,
+        /,
+    ) -> None:
+        self.path_format: str = path_format
+
+
+async def request_telemetry(
+    handling: ASGIApp,
+    /,
+    scope: MutableMapping[str, Any] | None = None,
+    *,
+    send: Send | None = None,
+    failure: type[BaseException] | None = None,
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    recorded: MutableSequence[Mapping[str, Any]] = []
+    metrics: MutableMapping[str, Any] = {}
+
+    def record_metric(
+        scope: Any,
+        /,
+        level: Any,
+        *,
+        metric: str,
+        value: float,
+        unit: str | None,
+        kind: str,
+        attributes: Mapping[str, Any],
+    ) -> None:
+        metrics[metric] = {
+            "value": value,
+            "unit": unit,
+            "kind": kind,
+            "attributes": dict(attributes),
+        }
+
+    context = ServerContext(
+        observability=Observability(
+            trace_identifying=lambda scope, /: _TRACE_ID,
+            log_recording=lambda scope, /, level, message, *args, exception: None,
+            metric_recording=record_metric,
+            event_recording=lambda scope, /, level, **kwargs: None,
+            attributes_recording=lambda scope, /, level, attributes: recorded.append(
+                dict(attributes)
+            ),
+            scope_entering=lambda scope, /: _TRACE_ID.hex,
+            scope_exiting=lambda scope, /, *, exception: None,
+            trace_context_encoding=lambda scope, /: {},
+        )
+    )
+    app: ASGIApp = ContextMiddleware(handling, context=context)
+    sending: Send = send if send is not None else Result().collecting()
+
+    async with context.lifespan():
+        if failure is None:
+            await app(scope or http_scope(), receive_request, sending)
+
+        else:
+            with raises(failure):
+                await app(scope or http_scope(), receive_request, sending)
+
+    assert len(recorded) == 1
+    return recorded[0], metrics
+
+
+@mark.asyncio
+async def test_duration_is_recorded_as_a_histogram_in_seconds() -> None:
+    async def responding(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        await send({"type": "http.response.start", "status": 201})
+        await sleep(0)
+        await send({"type": "http.response.body", "body": b"first", "more_body": True})
+        await sleep(0)
+        await send({"type": "http.response.body", "body": b"last"})
+
+    attributes, metrics = await request_telemetry(responding)
+
+    duration: Mapping[str, Any] = metrics["http.server.request.duration"]
+    assert duration["unit"] == "s"
+    assert duration["kind"] == "histogram"
+    assert duration["value"] >= 0
+    # the wait for an answer is on the trace instead, and is no longer than the whole
+    assert 0 <= attributes["http.server.response.start.duration"] <= duration["value"]
+    assert "http.server.request.duration" not in attributes
+    assert "websocket.server.duration" not in metrics
+
+
+@mark.asyncio
+async def test_durations_measure_the_time_which_elapsed() -> None:
+    delay: float = 0.05
+
+    async def responding(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        await sleep(delay)
+        await send({"type": "http.response.start", "status": 200})
+        await sleep(delay)
+        await send({"type": "http.response.body", "body": b"done"})
+
+    attributes, metrics = await request_telemetry(responding)
+
+    # measured from the request, so each covers the waiting which preceded it
+    assert attributes["http.server.response.start.duration"] >= delay
+    assert metrics["http.server.request.duration"]["value"] >= 2 * delay
+
+
+@mark.asyncio
+async def test_duration_is_kept_by_the_bounded_attributes_only() -> None:
+    async def responding(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        scope["route"] = _ExampleRoute("/users/{user_id}")
+        await send({"type": "http.response.start", "status": 200})
+        await send({"type": "http.response.body", "body": b"done"})
+
+    attributes, metrics = await request_telemetry(
+        responding,
+        http_scope(path="/users/12345"),
+    )
+
+    # the path is on the trace, never a dimension
+    assert attributes["url.path"] == "/users/12345"
+    assert metrics["http.server.request.duration"]["attributes"] == {
+        "http.request.method": "GET",
+        "http.route": "/users/{user_id}",
+        "http.response.status_code": 200,
+    }
+
+
+@mark.asyncio
+async def test_duration_of_a_response_the_server_delivers_is_measured() -> None:
+    async def responding(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        await send({"type": "http.response.start", "status": 200})
+        # a `FileResponse` answers this way when the server offers the extension -
+        # the payload comes from the server, so the response carries no body message
+        await send({"type": "http.response.pathsend", "path": "/tmp/example"})
+
+    attributes, metrics = await request_telemetry(responding)
+
+    assert attributes["http.server.response.start.duration"] >= 0
+    assert metrics["http.server.request.duration"]["value"] >= 0
+
+
+@mark.asyncio
+async def test_request_which_failed_is_measured_like_any_other() -> None:
+    async def failing(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        raise ValueError("failed")
+
+    attributes, metrics = await request_telemetry(failing, failure=ValueError)
+
+    assert metrics["http.server.request.duration"]["value"] >= 0
+    # nothing answered it, so it is kept apart from the requests which were
+    assert (
+        "http.response.status_code" not in (metrics["http.server.request.duration"]["attributes"])
+    )
+    # the response never started, so there is nothing to report as its beginning
+    assert "http.server.response.start.duration" not in attributes
+
+
+@mark.asyncio
+async def test_request_abandoned_after_starting_is_measured_like_any_other() -> None:
+    async def abandoning(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        await send({"type": "http.response.start", "status": 200})
+        await send({"type": "http.response.body", "body": b"partial", "more_body": True})
+        raise ClientDisconnect()
+
+    attributes, metrics = await request_telemetry(abandoning, failure=ClientDisconnect)
+
+    assert metrics["http.server.request.duration"]["value"] >= 0
+    assert attributes["http.server.response.start.duration"] >= 0
+    assert attributes["http.response.status_code"] == 200
+
+
+@mark.asyncio
+async def test_response_a_gone_consumer_failed_is_measured_as_started() -> None:
+    async def responding(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        await send({"type": "http.response.start", "status": 200})
+
+    async def failing_send(message: Message) -> None:
+        # a gone consumer, which a server reports by failing the send
+        raise ClientDisconnect()
+
+    attributes, metrics = await request_telemetry(
+        responding,
+        send=failing_send,
+        failure=ClientDisconnect,
+    )
+
+    # the response did start - the status says so, and so does its duration
+    assert attributes["http.response.status_code"] == 200
+    assert attributes["http.server.response.start.duration"] >= 0
+    assert metrics["http.server.request.duration"]["value"] >= 0
+
+
+@mark.asyncio
+async def test_websocket_connection_is_measured_under_its_own_name() -> None:
+    async def accepting(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        await send({"type": "websocket.accept"})
+        await sleep(0)
+        await send({"type": "websocket.close", "code": 1000})
+
+    attributes, metrics = await request_telemetry(accepting, websocket_scope())
+
+    # a connection is not an HTTP request - it is never measured as one
+    assert metrics["websocket.server.duration"]["value"] >= 0
+    assert metrics["websocket.server.duration"]["unit"] == "s"
+    assert "http.server.request.duration" not in metrics
+    # it carries no method either, so nothing is kept by one
+    assert metrics["websocket.server.duration"]["attributes"] == {}
+    # an accepted connection is answered with no response at all
+    assert "http.server.response.start.duration" not in attributes
+
+
+@mark.asyncio
+async def test_denied_websocket_handshake_is_measured_as_a_connection() -> None:
+    async def denying(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        await send({"type": "websocket.http.response.start", "status": 403})
+        await send({"type": "websocket.http.response.body", "body": b"denied"})
+
+    attributes, metrics = await request_telemetry(denying, websocket_scope())
+
+    assert metrics["websocket.server.duration"]["value"] >= 0
+    assert metrics["websocket.server.duration"]["attributes"] == {
+        "http.response.status_code": 403,
+    }
+    # a denied handshake is answered with an HTTP response, which did start
+    assert attributes["http.server.response.start.duration"] >= 0
+    assert attributes["http.response.status_code"] == 403
 
 
 @mark.asyncio
