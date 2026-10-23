@@ -27,7 +27,8 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
   - `utils/`: Generic async utilities (queues, streams, env helpers, logging bootstrap, metadata helpers).
 - `tests/`: Pytest suite mirroring package structure; keep new tests alongside the code they cover.
 - `docs/`: MkDocs content, author guides, and API references; update navigation in `mkdocs.yml` when adding pages.
-- `Makefile`: Entry point for common dev tasks (`format`, `lint`, `test`, `docs`, `docs-format`, `docs-lint`, `sync`, `update`).
+- `scripts/`: Dev scripts; `smoke.py` is run by `make build` against the built wheel.
+- `Makefile`: Entry point for common dev tasks (`format`, `lint`, `test`, `build`, `docs`, `docs-format`, `docs-lint`, `sync`, `update`).
 - `pyproject.toml`: Project metadata, dependencies, and configuration.
 
 Core public exports are centralized in `src/haiway/__init__.py`. Optional integration packages also expose public APIs from their own subpackages such as `haiway.postgres`, `haiway.rabbitmq`, `haiway.starlette`, `haiway.fastapi`, and `haiway.opentelemetry`.

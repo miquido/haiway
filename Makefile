@@ -5,6 +5,7 @@ SHELL := sh
 
 SOURCES_PATH := src
 TESTS_PATH := tests
+SCRIPTS_PATH := scripts
 
 # load environment config from .env if able
 -include .env
@@ -18,7 +19,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.13.5
 endif
 
-.PHONY: uv_check setup sync update format lint test docs docs-server docs-format docs-lint release
+.PHONY: uv_check setup sync update format lint test build docs docs-server docs-format docs-lint release
 
 
 # Check installed UV version and install the pinned one if needed
@@ -73,13 +74,13 @@ update: uv_check
 
 # Run formatter.
 format:
-	@uv run --frozen ruff check --quiet --fix $(SOURCES_PATH) $(TESTS_PATH)
-	@uv run --frozen ruff format --quiet $(SOURCES_PATH) $(TESTS_PATH)
+	@uv run --frozen ruff check --quiet --fix $(SOURCES_PATH) $(TESTS_PATH) $(SCRIPTS_PATH)
+	@uv run --frozen ruff format --quiet $(SOURCES_PATH) $(TESTS_PATH) $(SCRIPTS_PATH)
 
 # Run linters and code checks.
 lint:
 	@uv run --frozen bandit -r $(SOURCES_PATH)
-	@uv run --frozen ruff check $(SOURCES_PATH) $(TESTS_PATH)
+	@uv run --frozen ruff check $(SOURCES_PATH) $(TESTS_PATH) $(SCRIPTS_PATH)
 	@uv run --frozen pyright --project ./
 
 # Format Markdown docs and README
@@ -98,6 +99,17 @@ docs-lint:
 # Run tests suite.
 test:
 	@uv run --frozen python -B -m pytest -v --cov=$(SOURCES_PATH)
+
+# Build sdist and wheel, then run the smoke program from the wheel installed with all extras
+build: uv_check
+	@echo '# Building package...'
+	@rm -rf dist
+	@uv build --out-dir dist
+	@SMOKE_DIR=$$(mktemp -d "$${TMPDIR:-/tmp}/haiway-smoke.XXXXXX") && trap 'rm -rf "$$SMOKE_DIR"' EXIT; \
+	uv venv --quiet "$$SMOKE_DIR/venv" && \
+	WHEEL=$$(ls dist/haiway-*.whl) && \
+	uv pip install --quiet --python "$$SMOKE_DIR/venv" "haiway[opentelemetry,httpx,postgres,rabbitmq,starlette,fastapi] @ file://$$PWD/$$WHEEL" && \
+	"$$SMOKE_DIR/venv/bin/python" -I scripts/smoke.py
 
 # Build documentation for production
 docs:
