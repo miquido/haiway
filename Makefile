@@ -18,7 +18,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.13.5
 endif
 
-.PHONY: uv_check venv sync update format lint test docs docs-server docs-format docs-lint release
+.PHONY: uv_check setup sync update format lint test docs docs-server docs-format docs-lint release
 
 
 # Check installed UV version and install the pinned one if needed
@@ -48,15 +48,15 @@ uv_check:
 		echo '...uv version is up-to-date!'; \
 	fi
 
-# Setup virtual environment for local development.
-venv: uv_check
+# Setup the local development environment: uv, .env, git hook and virtual environment.
+setup: uv_check
 	@echo '# Preparing development environment...'
 	@echo '...cloning .env...'
 	@cp -n ./config/.env.example ./.env || :
 	@echo '...preparing git hooks...'
-	@cp -n ./config/pre-push ./.git/hooks/pre-push || :
+	@HOOKS=$$(git rev-parse --git-path hooks) && mkdir -p "$$HOOKS" && cp -n ./config/pre-push "$$HOOKS/pre-push" || :
 	@echo '...preparing venv...'
-	@uv sync --all-groups --all-extras --frozen --reinstall
+	@uv sync --all-groups --all-extras --frozen
 	@echo '...development environment ready! Make targets and `uv run` use it without activation.'
 
 # Sync environment with uv based on constraints

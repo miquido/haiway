@@ -80,3 +80,8 @@ pip-selfcheck.json
 .vscode/
 .idea/
 local_cache/
+
+## Local state and artifacts
+/.hq
+/site/
+/dist/
