@@ -9,40 +9,43 @@ TESTS_PATH := tests
 # load environment config from .env if able
 -include .env
 
+# a UV_PYTHON set in .env (e.g. UV_PYTHON=3.14) selects the interpreter for every uv command
+ifdef UV_PYTHON
+export UV_PYTHON
+endif
+
 ifndef UV_VERSION
-	UV_VERSION := 0.12.5
+	UV_VERSION := 0.13.5
 endif
 
 .PHONY: uv_check venv sync update format lint test docs docs-server docs-format docs-lint release
 
 
-# Check installed UV version and install if needed
+# Check installed UV version and install the pinned one if needed
 uv_check:
 	@echo 'Checking uv version...'
 
-	# Install if not present
+	# Install pinned version if not present
 	@if ! command -v uv > /dev/null; then \
-		echo '...installing uv...'; \
-		curl -fLsS https://astral.sh/uv/install.sh | sh; \
+		echo '...installing uv $(UV_VERSION)...'; \
+		curl -fLsS https://astral.sh/uv/$(UV_VERSION)/install.sh | sh; \
 		if [ $$? -ne 0 ]; then \
 			echo "...installing uv failed!"; \
 			exit 1; \
 		fi; \
 	fi
 
-	# Check version and update if needed
-	@if command -v uv > /dev/null; then \
-		CURRENT_VERSION=$$(uv --version | head -n1 | cut -d" " -f2); \
-		if [ "$$(printf "%s\n%s" "$(UV_VERSION)" "$$CURRENT_VERSION" | sort -V | head -n1)" != "$(UV_VERSION)" ]; then \
-			echo '...updating uv...'; \
-			curl -fLsS https://astral.sh/uv/install.sh | sh; \
-			if [ $$? -ne 0 ]; then \
-				echo "...updating uv failed!"; \
-				exit 1; \
-			fi; \
-		else \
-			echo '...uv version is up-to-date!'; \
+	# Switch to the pinned version if a different one is installed
+	@CURRENT_VERSION=$$(uv --version | head -n1 | cut -d" " -f2); \
+	if [ "$$CURRENT_VERSION" != "$(UV_VERSION)" ]; then \
+		echo "...switching uv $$CURRENT_VERSION to $(UV_VERSION)..."; \
+		uv self update $(UV_VERSION) || curl -fLsS https://astral.sh/uv/$(UV_VERSION)/install.sh | sh; \
+		if [ $$? -ne 0 ]; then \
+			echo "...updating uv failed!"; \
+			exit 1; \
 		fi; \
+	else \
+		echo '...uv version is up-to-date!'; \
 	fi
 
 # Setup virtual environment for local development.
@@ -54,7 +57,7 @@ venv: uv_check
 	@cp -n ./config/pre-push ./.git/hooks/pre-push || :
 	@echo '...preparing venv...'
 	@uv sync --all-groups --all-extras --frozen --reinstall
-	@echo '...development environment ready! Activate venv using `. ./.venv/bin/activate`.'
+	@echo '...development environment ready! Make targets and `uv run` use it without activation.'
 
 # Sync environment with uv based on constraints
 sync: uv_check
@@ -70,41 +73,42 @@ update: uv_check
 
 # Run formatter.
 format:
-	@ruff check --quiet --fix $(SOURCES_PATH) $(TESTS_PATH)
-	@ruff format --quiet $(SOURCES_PATH) $(TESTS_PATH)
+	@uv run --frozen ruff check --quiet --fix $(SOURCES_PATH) $(TESTS_PATH)
+	@uv run --frozen ruff format --quiet $(SOURCES_PATH) $(TESTS_PATH)
 
 # Run linters and code checks.
 lint:
-	@bandit -r $(SOURCES_PATH)
-	@ruff check $(SOURCES_PATH) $(TESTS_PATH)
-	@pyright --project ./
+	@uv run --frozen bandit -r $(SOURCES_PATH)
+	@uv run --frozen ruff check $(SOURCES_PATH) $(TESTS_PATH)
+	@uv run --frozen pyright --project ./
 
 # Format Markdown docs and README
 docs-format:
 	@echo '# Formatting Markdown...'
-	@uv run mdformat --wrap 100 README.md docs
+	@uv run --frozen mdformat --wrap 100 README.md docs
 	@echo '...finished!'
 
 # Lint Markdown docs and README
 docs-lint:
 	@echo '# Linting Markdown...'
-	@uv run pymarkdown --config .pymarkdown.json scan README.md docs
+	@uv run --frozen pymarkdown --config .pymarkdown.json scan README.md docs
+	@uv run --frozen mdformat --wrap 100 --check README.md docs
 	@echo '...finished!'
 
 # Run tests suite.
 test:
-	@python -B -m pytest -v --cov=$(SOURCES_PATH)
+	@uv run --frozen python -B -m pytest -v --cov=$(SOURCES_PATH)
 
 # Build documentation for production
 docs:
 	@echo '# Building documentation...'
-	@mkdocs build --clean --strict
+	@uv run --frozen mkdocs build --clean --strict
 	@echo '...documentation built in site/ directory!'
 
 # Build and serve documentation locally
 docs-server:
 	@echo '# Starting documentation server...'
-	@mkdocs serve --dev-addr 127.0.0.1:8000
+	@uv run --frozen mkdocs serve --dev-addr 127.0.0.1:8000
 
 release: lint test
 	@echo '# Preparing release...'

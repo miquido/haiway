@@ -264,12 +264,11 @@ def _request_attributes(
     a parameterized route findable as one, while ``url.path`` keeps the path
     which was actually requested.
 
-    The route is read from the request scope, which is where the routing leaves
-    the route it matched - FastAPI puts it there, Starlette does not, so a plain
-    Starlette application records no ``http.route`` unless it reports one itself
-    through ``ctx.record_info(attributes={"http.route": ...})`` from within the
-    request. Resolving it here instead would mean matching the route table a
-    second time for every request, which is the cost the routing already paid.
+    The route is read from the request scope, which is where the routing of both
+    Starlette and FastAPI leaves the route it matched. A request which matched no
+    route records no ``http.route``. Resolving it here instead would mean matching
+    the route table a second time for every request, which is the cost the
+    routing already paid.
 
     The method is recorded as received, and only for an ``http`` request - a
     websocket connection carries none, so reporting one would be inventing it.
@@ -289,9 +288,9 @@ def _request_attributes(
     if scheme:
         attributes["url.scheme"] = scheme
 
-    # `path_format` is the template of the path a route matched, which is what a
-    # FastAPI `APIRoute` left in the scope. Read defensively - the scope of a
-    # request which matched nothing holds no route at all
+    # `path_format` is the template of the path a route matched, which both a
+    # Starlette `Route` and a FastAPI `APIRoute` carry. Read defensively - the scope
+    # of a request which matched nothing holds no route at all
     route_path: Any | None = getattr(scope.get("route"), "path_format", None)
     if isinstance(route_path, str):
         attributes["http.route"] = route_path
