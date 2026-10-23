@@ -62,6 +62,12 @@ With pip:
 pip install haiway
 ```
 
+## 📚 Project documents
+
+- [Product requirements](docs/PRD.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Change requests](docs/changes/README.md)
+
 ## 👷 Contributing
 
 As an open-source project in a rapidly evolving field, we welcome all contributions. Whether you can
