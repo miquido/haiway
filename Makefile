@@ -40,9 +40,13 @@ uv_check:
 	@CURRENT_VERSION=$$(uv --version | head -n1 | cut -d" " -f2); \
 	if [ "$$CURRENT_VERSION" != "$(UV_VERSION)" ]; then \
 		echo "...switching uv $$CURRENT_VERSION to $(UV_VERSION)..."; \
-		uv self update $(UV_VERSION) || curl -fLsS https://astral.sh/uv/$(UV_VERSION)/install.sh | sh; \
-		if [ $$? -ne 0 ]; then \
-			echo "...updating uv failed!"; \
+		if ! uv self update $(UV_VERSION); then \
+			curl -fLsS https://astral.sh/uv/$(UV_VERSION)/install.sh | sh || { echo "...updating uv failed!"; exit 1; }; \
+		fi; \
+		CURRENT_VERSION=$$(uv --version | head -n1 | cut -d" " -f2); \
+		if [ "$$CURRENT_VERSION" != "$(UV_VERSION)" ]; then \
+			echo "...uv $$CURRENT_VERSION is still first on PATH instead of $(UV_VERSION)!"; \
+			echo "...update or uninstall it (Homebrew/pip) or put $${UV_INSTALL_DIR:-$$HOME/.local/bin} first on PATH."; \
 			exit 1; \
 		fi; \
 	else \
