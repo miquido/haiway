@@ -43,6 +43,10 @@ Gaps and contradictions found in the code:
   wheel with `uv build` and runs a smoke program from the built wheel (see R2).
 - D4 — No product features, no version bump, no `uv.lock` change (briefing rules).
 
+### correct-the-env-fallback
+
+`.env` is read by make only; docs state that direct `uv sync`/`uv run` needs `UV_PYTHON` exported.
+
 ## Requirements
 
 ### R1 — Makefile `setup` and environment files

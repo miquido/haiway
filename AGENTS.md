@@ -4,7 +4,7 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
 
 ## Development Toolchain
 
-- Python: 3.15 by default (`.python-version`), 3.14 still supported - keep code 3.14 compatible (ruff and pyright target 3.14, CI tests both). Where 3.15 is unavailable, fall back with `UV_PYTHON=3.14` (environment or `.env`), which every uv command and make target honors
+- Python: 3.15 by default (`.python-version`), 3.14 still supported - keep code 3.14 compatible (ruff and pyright target 3.14, CI tests both). Where 3.15 is unavailable, fall back with `UV_PYTHON=3.14` (environment or `.env`): `.env` applies to make targets only, so run direct `uv sync`/`uv run` with `export UV_PYTHON=3.14` or an inline `UV_PYTHON=3.14 uv ...`
 - uv: pinned to 0.13.5 (`[tool.uv] required-version`, `UV_VERSION` in `Makefile`)
 - Virtualenv: managed by uv at `./.venv`; `uv sync` installs every dependency group and integration extra it needs. Never activate the venv, run tools through make targets or `uv run --frozen`
 - Formatting: Ruff formatter (`make format`), no other formatter

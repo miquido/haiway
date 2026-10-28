@@ -10,7 +10,7 @@ SCRIPTS_PATH := scripts
 # load environment config from .env if able
 -include .env
 
-# a UV_PYTHON set in .env (e.g. UV_PYTHON=3.14) selects the interpreter for every uv command
+# a UV_PYTHON set in .env (e.g. UV_PYTHON=3.14) selects the interpreter for make targets only (direct uv needs it exported)
 ifdef UV_PYTHON
 export UV_PYTHON
 endif
