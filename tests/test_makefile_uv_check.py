@@ -2,6 +2,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ def _script(path: Path, body: str) -> None:
 
 
 @pytest.mark.skipif(shutil.which("make") is None, reason="make is required")
+@pytest.mark.skipif(sys.platform == "win32", reason="requires a POSIX shell and PATH")
 def test_uv_check_fails_when_path_uv_stays_outdated(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
