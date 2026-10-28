@@ -29,7 +29,7 @@ jobs:
         run: uv sync --no-default-groups --group docs --all-extras --frozen --no-python-downloads
 
       - name: Build MkDocs site
-        run: uv run --frozen mkdocs build --strict
+        run: uv run --frozen --no-sync mkdocs build --strict
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
