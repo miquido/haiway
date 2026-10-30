@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "source .venv/bin/activate && make format"
+            "command": "make format"
           }
         ]
       }

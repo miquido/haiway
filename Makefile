@@ -5,56 +5,71 @@ SHELL := sh
 
 SOURCES_PATH := src
 TESTS_PATH := tests
+SCRIPTS_PATH := scripts
 
 # load environment config from .env if able
 -include .env
 
-ifndef UV_VERSION
-	UV_VERSION := 0.12.5
+# a UV_PYTHON set in .env (e.g. UV_PYTHON=3.14) selects the interpreter for make targets only (direct uv needs it exported)
+ifdef UV_PYTHON
+export UV_PYTHON
 endif
 
-.PHONY: uv_check venv sync update format lint test docs docs-server docs-format docs-lint release
+ifndef UV_VERSION
+	UV_VERSION := 0.13.5
+endif
+
+.PHONY: uv_check setup venv sync update format lint test build docs docs-server docs-format docs-lint release
 
 
-# Check installed UV version and install if needed
+# The uv installer cannot change the environment of this make process, so its install directory is
+# put first on PATH up front: the uv it installs serves uv_check and every later recipe line
+export PATH := $(or $(UV_INSTALL_DIR),$(HOME)/.local/bin):$(PATH)
+
+# Check installed UV version and install the pinned one if needed
 uv_check:
 	@echo 'Checking uv version...'
 
-	# Install if not present
+	# Install pinned version if not present
 	@if ! command -v uv > /dev/null; then \
-		echo '...installing uv...'; \
-		curl -fLsS https://astral.sh/uv/install.sh | sh; \
+		echo '...installing uv $(UV_VERSION)...'; \
+		curl -fLsS https://astral.sh/uv/$(UV_VERSION)/install.sh | sh; \
 		if [ $$? -ne 0 ]; then \
 			echo "...installing uv failed!"; \
 			exit 1; \
 		fi; \
 	fi
 
-	# Check version and update if needed
-	@if command -v uv > /dev/null; then \
-		CURRENT_VERSION=$$(uv --version | head -n1 | cut -d" " -f2); \
-		if [ "$$(printf "%s\n%s" "$(UV_VERSION)" "$$CURRENT_VERSION" | sort -V | head -n1)" != "$(UV_VERSION)" ]; then \
-			echo '...updating uv...'; \
-			curl -fLsS https://astral.sh/uv/install.sh | sh; \
-			if [ $$? -ne 0 ]; then \
-				echo "...updating uv failed!"; \
-				exit 1; \
-			fi; \
-		else \
-			echo '...uv version is up-to-date!'; \
+	# Switch to the pinned version if a different one is installed
+	@CURRENT_VERSION=$$(uv --version | head -n1 | cut -d" " -f2); \
+	if [ "$$CURRENT_VERSION" != "$(UV_VERSION)" ]; then \
+		echo "...switching uv $$CURRENT_VERSION to $(UV_VERSION)..."; \
+		if ! uv self update $(UV_VERSION); then \
+			curl -fLsS https://astral.sh/uv/$(UV_VERSION)/install.sh | sh || { echo "...updating uv failed!"; exit 1; }; \
 		fi; \
+		CURRENT_VERSION=$$(uv --version | head -n1 | cut -d" " -f2); \
+		if [ "$$CURRENT_VERSION" != "$(UV_VERSION)" ]; then \
+			echo "...uv $$CURRENT_VERSION is still first on PATH instead of $(UV_VERSION)!"; \
+			echo "...update or uninstall it (Homebrew/pip) or put $${UV_INSTALL_DIR:-$$HOME/.local/bin} first on PATH."; \
+			exit 1; \
+		fi; \
+	else \
+		echo '...uv version is up-to-date!'; \
 	fi
 
-# Setup virtual environment for local development.
-venv: uv_check
+# Setup the local development environment: uv, .env, git hook and virtual environment.
+setup: uv_check
 	@echo '# Preparing development environment...'
 	@echo '...cloning .env...'
 	@cp -n ./config/.env.example ./.env || :
 	@echo '...preparing git hooks...'
-	@cp -n ./config/pre-push ./.git/hooks/pre-push || :
+	@HOOKS=$$(git rev-parse --git-path hooks) && mkdir -p "$$HOOKS" && cp -n ./config/pre-push "$$HOOKS/pre-push" || :
 	@echo '...preparing venv...'
-	@uv sync --all-groups --all-extras --frozen --reinstall
-	@echo '...development environment ready! Activate venv using `. ./.venv/bin/activate`.'
+	@uv sync --all-groups --all-extras --frozen
+	@echo '...development environment ready! Make targets and `uv run` use it without activation.'
+
+# Alias of setup, kept for scripts which ran `make venv`
+venv: setup
 
 # Sync environment with uv based on constraints
 sync: uv_check
@@ -70,41 +85,53 @@ update: uv_check
 
 # Run formatter.
 format:
-	@ruff check --quiet --fix $(SOURCES_PATH) $(TESTS_PATH)
-	@ruff format --quiet $(SOURCES_PATH) $(TESTS_PATH)
+	@uv run --frozen ruff check --quiet --fix $(SOURCES_PATH) $(TESTS_PATH) $(SCRIPTS_PATH)
+	@uv run --frozen ruff format --quiet $(SOURCES_PATH) $(TESTS_PATH) $(SCRIPTS_PATH)
 
 # Run linters and code checks.
 lint:
-	@bandit -r $(SOURCES_PATH)
-	@ruff check $(SOURCES_PATH) $(TESTS_PATH)
-	@pyright --project ./
+	@uv run --frozen bandit -r $(SOURCES_PATH)
+	@uv run --frozen ruff check $(SOURCES_PATH) $(TESTS_PATH) $(SCRIPTS_PATH)
+	@uv run --frozen pyright --project ./
 
 # Format Markdown docs and README
 docs-format:
 	@echo '# Formatting Markdown...'
-	@uv run mdformat --wrap 100 README.md docs
+	@uv run --frozen mdformat --wrap 100 README.md docs
 	@echo '...finished!'
 
 # Lint Markdown docs and README
 docs-lint:
 	@echo '# Linting Markdown...'
-	@uv run pymarkdown --config .pymarkdown.json scan README.md docs
+	@uv run --frozen pymarkdown --config .pymarkdown.json scan README.md docs
+	@uv run --frozen mdformat --wrap 100 --check README.md docs
 	@echo '...finished!'
 
 # Run tests suite.
 test:
-	@python -B -m pytest -v --cov=$(SOURCES_PATH)
+	@uv run --frozen python -B -m pytest -v --cov=$(SOURCES_PATH)
+
+# Build sdist and wheel, then run the smoke program from the wheel installed with all extras
+build: uv_check
+	@echo '# Building package...'
+	@rm -rf dist
+	@uv build --out-dir dist
+	@SMOKE_DIR=$$(mktemp -d "$${TMPDIR:-/tmp}/haiway-smoke.XXXXXX") && trap 'rm -rf "$$SMOKE_DIR"' EXIT; \
+	uv venv --quiet "$$SMOKE_DIR/venv" && \
+	WHEEL=$$(ls dist/haiway-*.whl) && \
+	uv pip install --quiet --python "$$SMOKE_DIR/venv" "haiway[opentelemetry,httpx,postgres,rabbitmq,starlette,fastapi] @ file://$$PWD/$$WHEEL" && \
+	"$$SMOKE_DIR/venv/bin/python" -I scripts/smoke.py
 
 # Build documentation for production
 docs:
 	@echo '# Building documentation...'
-	@mkdocs build --clean --strict
+	@uv run --frozen mkdocs build --clean --strict
 	@echo '...documentation built in site/ directory!'
 
 # Build and serve documentation locally
 docs-server:
 	@echo '# Starting documentation server...'
-	@mkdocs serve --dev-addr 127.0.0.1:8000
+	@uv run --frozen mkdocs serve --dev-addr 127.0.0.1:8000
 
 release: lint test
 	@echo '# Preparing release...'

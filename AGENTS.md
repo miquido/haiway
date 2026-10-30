@@ -4,11 +4,21 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
 
 ## Development Toolchain
 
-- Python: 3.14+
-- Virtualenv: managed by uv, available at `./.venv`, assume already set up and working within venv
+- Python: 3.15 by default (`.python-version`), 3.14 still supported - keep code 3.14 compatible (ruff and pyright target 3.14, CI tests both). Where 3.15 is unavailable, fall back with `UV_PYTHON=3.14` (environment or `.env`): `.env` applies to make targets only, so run direct `uv sync`/`uv run` with `export UV_PYTHON=3.14` or an inline `UV_PYTHON=3.14 uv ...`
+- uv: pinned to 0.13.5 (`[tool.uv] required-version`, `UV_VERSION` in `Makefile`)
+- Virtualenv: managed by uv at `./.venv`; `uv sync` installs every dependency group and integration extra it needs. Never activate the venv, run tools through make targets or `uv run --frozen`
 - Formatting: Ruff formatter (`make format`), no other formatter
 - Linters/Type-checkers: Ruff, Bandit, Pyright (strict). Run via `make lint`
 - Tests: using pytest, run using `make test` or targeted `pytest tests/test_...::test_...`
+
+### Commands
+
+- `make setup`: install uv-managed Python and dependencies on a clean clone (`make venv` is an alias)
+- `make format`: format code (Ruff)
+- `make build`: build the wheel and smoke-test it with `scripts/smoke.py`
+- `make lint`: Ruff, Bandit and Pyright strict
+- `make test`: run the pytest suite
+- `make docs`: build the documentation site; `make docs-lint` / `make docs-format` check and format Markdown
 
 ## Project Layout
 
@@ -25,8 +35,9 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
   - `types/`: Fundamental typed primitives (e.g., `Missing`, immutable containers) shared across modules.
   - `utils/`: Generic async utilities (queues, streams, env helpers, logging bootstrap, metadata helpers).
 - `tests/`: Pytest suite mirroring package structure; keep new tests alongside the code they cover.
-- `docs/`: MkDocs content, author guides, and API references; update navigation in `mkdocs.yml` when adding pages.
-- `Makefile`: Entry point for common dev tasks (`format`, `lint`, `test`, `docs`, `docs-format`, `docs-lint`, `sync`, `update`).
+- `docs/`: MkDocs content, author guides, and API references; update navigation in `mkdocs.yml` when adding pages. `docs/PRD.md` (product requirements), `docs/ARCHITECTURE.md` (design) and `docs/changes/` (change requests such as `CR-001-dev-environment.md`) hold the project documents.
+- `scripts/`: Dev scripts; `smoke.py` is run by `make build` against the built wheel.
+- `Makefile`: Entry point for common dev tasks (`setup`, `format`, `lint`, `test`, `build`, `docs`, `docs-format`, `docs-lint`, `sync`, `update`).
 - `pyproject.toml`: Project metadata, dependencies, and configuration.
 
 Core public exports are centralized in `src/haiway/__init__.py`. Optional integration packages also expose public APIs from their own subpackages such as `haiway.postgres`, `haiway.rabbitmq`, `haiway.starlette`, `haiway.fastapi`, and `haiway.opentelemetry`.
@@ -101,10 +112,16 @@ Core public exports are centralized in `src/haiway/__init__.py`. Optional integr
 
 ## Security & Secrets
 
+- Never commit secrets, `.env`, credentials, or build/generated output (`dist/`, `site/`, caches, `.venv`)
 - Never log secrets or full request bodies containing keys/tokens
 - Use environment variables for credentials, resolve via helpers like `getenv_str`
 
 ## Contribution Checklist
+
+- Never run `make release` or `uv publish`, never push; publishing is the maintainer's
+- Do not change the version or edit `uv.lock`/dependency pins outside dependency tasks; no new core runtime dependencies (only typing-extensions), integration deps go to optional extras
+- Never mute errors (`# type: ignore`, `# noqa`, pyright ignores), fix the cause
+- Commit messages: short imperative summaries without prefixes; `git diff --check` must be clean
 
 - Build: `make format` succeeds
 - Quality: `make lint` is clean (Ruff, Bandit, Pyright strict)

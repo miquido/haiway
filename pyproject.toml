@@ -1,5 +1,5 @@
 [build-system]
-requires = ["uv_build>=0.12.0,<0.13.0"]
+requires = ["uv_build>=0.13.5,<0.14.0"]
 build-backend = "uv_build"
 
 [project]
@@ -18,6 +18,7 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
   "Typing :: Typed",
   "Topic :: Software Development",
   "Topic :: Software Development :: Libraries :: Application Frameworks",
@@ -36,28 +37,38 @@ opentelemetry = [
   "opentelemetry-exporter-otlp-proto-grpc~=1.44",
 ]
 httpx = ["httpx2~=2.10"]
-postgres = ["asyncpg~=0.31.0"]
+postgres = ["asyncpg~=0.32.0"]
 rabbitmq = ["pika~=1.4",]
-starlette = ["starlette~=1.6"]
+starlette = ["starlette~=1.7"]
 # starlette is constrained explicitly - the FastAPI requirement has no upper bound
 # and `haiway.fastapi` builds on top of `haiway.starlette`
-fastapi = ["fastapi~=0.141", "starlette~=1.6"]
+fastapi = ["fastapi~=0.141", "starlette~=1.7"]
+
+[dependency-groups]
+# development tooling lives in dependency groups (synced by default, never published)
+# while the integration extras stay optional dependencies of the package itself
 dev = [
+  "haiway[opentelemetry,httpx,postgres,rabbitmq,starlette,fastapi]",
   "bandit~=1.9",
   "pyright~=1.1",
   "pytest~=9.1",
   "pytest-asyncio~=1.4",
   "pytest-cov~=7.1",
-  "ruff~=0.16",
+  "ruff~=0.17",
 ]
 docs = [
+  "haiway[opentelemetry,httpx,postgres,rabbitmq,starlette,fastapi]",
   "mkdocs~=1.6",
   "mkdocs-material~=9.7",
-  "mkdocstrings[python]~=0.30",
-  "mdformat~=0.7",
-  "mdformat-gfm~=0.4",
+  "mkdocstrings[python]~=1.0",
+  "mdformat~=1.0",
+  "mdformat-gfm~=1.0",
   "pymarkdownlnt~=0.9",
 ]
+
+[tool.uv]
+required-version = "==0.13.5"
+default-groups = "all"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
