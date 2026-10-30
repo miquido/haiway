@@ -47,6 +47,11 @@ Gaps and contradictions found in the code:
 
 `.env` is read by make only; docs state that direct `uv sync`/`uv run` needs `UV_PYTHON` exported.
 
+### fix-three-review-findings-on
+
+`venv` is an alias of `setup` again. The Makefile puts `$UV_INSTALL_DIR` (default `~/.local/bin`)
+first on `PATH`, so a uv installed during `uv_check` serves `setup` and every later recipe line.
+
 ## Requirements
 
 ### R1 — Makefile `setup` and environment files

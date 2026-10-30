@@ -13,7 +13,7 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
 
 ### Commands
 
-- `make setup`: install uv-managed Python and dependencies on a clean clone
+- `make setup`: install uv-managed Python and dependencies on a clean clone (`make venv` is an alias)
 - `make format`: format code (Ruff)
 - `make build`: build the wheel and smoke-test it with `scripts/smoke.py`
 - `make lint`: Ruff, Bandit and Pyright strict

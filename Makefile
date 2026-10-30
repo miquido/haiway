@@ -19,8 +19,12 @@ ifndef UV_VERSION
 	UV_VERSION := 0.13.5
 endif
 
-.PHONY: uv_check setup sync update format lint test build docs docs-server docs-format docs-lint release
+.PHONY: uv_check setup venv sync update format lint test build docs docs-server docs-format docs-lint release
 
+
+# The uv installer cannot change the environment of this make process, so its install directory is
+# put first on PATH up front: the uv it installs serves uv_check and every later recipe line
+export PATH := $(or $(UV_INSTALL_DIR),$(HOME)/.local/bin):$(PATH)
 
 # Check installed UV version and install the pinned one if needed
 uv_check:
@@ -63,6 +67,9 @@ setup: uv_check
 	@echo '...preparing venv...'
 	@uv sync --all-groups --all-extras --frozen
 	@echo '...development environment ready! Make targets and `uv run` use it without activation.'
+
+# Alias of setup, kept for scripts which ran `make venv`
+venv: setup
 
 # Sync environment with uv based on constraints
 sync: uv_check

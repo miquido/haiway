@@ -171,11 +171,15 @@ included - through untouched. For each request it:
 
   `http.route` is what makes the requests of a parameterized route findable as one, since the scope
   name carries the path which was actually requested rather than the template behind it. The routing
-  of both Starlette and FastAPI leaves the matched route in the request scope, so it is recorded for
-  every request which matched one. Resolving it in the middleware would mean matching the route
-  table a second time for every request. The query string and the address of the caller are
-  deliberately left out - the first carries credentials often enough that recording it by default
-  would leak them, the second identifies the caller
+  of both Starlette and FastAPI leaves the matched route in the request scope, and its template is
+  recorded as it stands there. That is the full template for routes declared on the application, on
+  a Starlette `Mount`, or on `APIRouter(prefix=...)`, but not for routes of routers added with
+  `include_router(prefix=...)` or of nested routers: FastAPI 0.141.x leaves a template without the
+  include-time prefix, so `/api/users/{id}` is recorded as `/users/{id}`. The middleware does not
+  correct this. Resolving it in the middleware would mean matching the route table a second time for
+  every request. The query string and the address of the caller are deliberately left out - the
+  first carries credentials often enough that recording it by default would leak them, the second
+  identifies the caller
 
 - records `http.server.response.start.duration` among those same attributes when a response was
   started - the seconds its consumer waited for the headers of an answer, which the span holding the
