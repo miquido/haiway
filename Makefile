@@ -19,7 +19,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.13.7
 endif
 
-.PHONY: uv_check venv sync update format lint test benchmark benchmark-server docs docs-server docs-format docs-lint release
+.PHONY: uv_check venv sync update format lint test benchmark benchmark-server benchmark-otel docs docs-server docs-format docs-lint release
 
 
 # Check installed UV version and install the pinned one if needed
@@ -109,6 +109,10 @@ benchmark:
 # Run with -O, as production does, to leave out the debug bookkeeping of observability.
 benchmark-server:
 	@uv run --frozen python -O benchmarks/server_benchmark.py $(ARGS)
+
+# Measure the OpenTelemetry bridge against the logger backend, same ARGS as benchmark.
+benchmark-otel:
+	@uv run --frozen python -O benchmarks/opentelemetry_benchmark.py $(ARGS)
 
 # Build documentation for production
 docs:

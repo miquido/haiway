@@ -46,7 +46,7 @@ CONNECTION_WAIT_TIME_METRIC: Final[str] = "db.client.connection.wait_time"
 """Time spent waiting for a pooled connection, separating contention from slow statements."""
 
 CONNECTION_COUNT_METRIC: Final[str] = "db.client.connection.count"
-"""Sampled pool occupancy, split by the `state` attribute into `used` and `idle`."""
+"""Sampled pool occupancy, split by `db.client.connection.state` into `used` and `idle`."""
 
 CONNECTION_TIMEOUTS_METRIC: Final[str] = "db.client.connection.timeouts"
 """Acquisitions which gave up waiting, the signal that the pool is exhausted."""
@@ -75,18 +75,17 @@ def operation_attributes(
     Returns
     -------
     Mapping[str, ObservabilityAttribute]
-        Attributes holding the operation name and, for a failure, its SQLSTATE
-        and exception type.
+        Attributes holding the database system, the adapter operation and, for a
+        failure, its SQLSTATE and exception type.
     """
-    if error is None:
-        return {
-            "db.system.name": DB_SYSTEM_NAME,
-            "db.operation.name": operation,
-        }
-
-    return {
+    attributes: dict[str, ObservabilityAttribute] = {
         "db.system.name": DB_SYSTEM_NAME,
-        "db.operation.name": operation,
-        "db.response.status_code": error.sqlstate,
-        "error.type": type(error).__qualname__,
+        # the adapter method - `db.operation.name` is reserved for what the database
+        # was asked to do, which is not known without parsing the statement
+        "haiway.postgres.operation": operation,
     }
+    if error is not None:
+        attributes["db.response.status_code"] = error.sqlstate
+        attributes["error.type"] = type(error).__qualname__
+
+    return attributes

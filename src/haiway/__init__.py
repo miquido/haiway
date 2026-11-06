@@ -26,6 +26,7 @@ from haiway.context import (
     Observability,
     ObservabilityAttribute,
     ObservabilityLevel,
+    ScopeKind,
     ctx,
 )
 from haiway.helpers import (
@@ -184,6 +185,7 @@ __all__ = (
     "PaginationToken",
     "Paths",
     "RawValue",
+    "ScopeKind",
     "Sensitive",
     "Specification",
     "State",

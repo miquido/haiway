@@ -40,6 +40,8 @@ class _Deliver:
     ) -> None:
         self.delivery_tag = delivery_tag
         self.redelivered = redelivered
+        self.exchange = ""
+        self.routing_key = "jobs"
 
 
 class FakeChannel:

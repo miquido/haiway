@@ -23,6 +23,7 @@ from haiway.postgres.observability import (
     CONNECTION_FAILED_EVENT,
     CONNECTION_TIMEOUTS_METRIC,
     CONNECTION_WAIT_TIME_METRIC,
+    DB_SYSTEM_NAME,
     TRANSACTION_DURATION_METRIC,
     operation_attributes,
 )
@@ -459,7 +460,7 @@ class _TransactionContext(Immutable):
             unit="s",
             kind="histogram",
             attributes={
-                "db.system.name": "postgresql",
+                "db.system.name": DB_SYSTEM_NAME,
                 "db.transaction.outcome": outcome,
             },
         )
@@ -546,14 +547,14 @@ class _ConnectionContext(Immutable):
             value=idle,
             unit="{connection}",
             kind="gauge",
-            attributes={"db.system.name": "postgresql", "state": "idle"},
+            attributes={"db.system.name": DB_SYSTEM_NAME, "db.client.connection.state": "idle"},
         )
         ctx.record_info(
             metric=CONNECTION_COUNT_METRIC,
             value=used,
             unit="{connection}",
             kind="gauge",
-            attributes={"db.system.name": "postgresql", "state": "used"},
+            attributes={"db.system.name": DB_SYSTEM_NAME, "db.client.connection.state": "used"},
         )
 
     async def _acquire(self) -> PoolConnectionProxy:
@@ -591,7 +592,7 @@ class _ConnectionContext(Immutable):
             ctx.record_warning(
                 event=CONNECTION_FAILED_EVENT,
                 attributes={
-                    "db.system.name": "postgresql",
+                    "db.system.name": DB_SYSTEM_NAME,
                     "error.type": type(exc).__qualname__,
                     "db.client.connection.wait_time": monotonic() - started,
                 },

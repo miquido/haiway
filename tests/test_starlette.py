@@ -1580,7 +1580,7 @@ async def test_denied_websocket_handshake_is_measured_as_a_connection() -> None:
 
 
 @mark.asyncio
-async def test_unknown_request_method_is_reported_as_received() -> None:
+async def test_unknown_request_method_is_bounded_as_the_conventions_require() -> None:
     logger: Logger = getLogger("test-unknown-method")
 
     async def endpoint(request: Request) -> Response:
@@ -1595,8 +1595,10 @@ async def test_unknown_request_method_is_reported_as_received() -> None:
         async with running(app):
             await send_request(app, method="BREW")
 
-    # a method the conventions do not know is neither replaced nor dropped - what
-    # the request carried is what names its scope and what is recorded for it
+    # the scope keeps naming what the request carried, while the attribute - a
+    # dimension of metrics and the name of spans - stays bounded, the received
+    # value being kept apart from it
     assert any("Entering scope: BREW /example" in record for record in records)
     recorded: str = "\n".join(record for record in records if "Attributes:" in record)
-    assert '"http.request.method"]: "BREW"' in recorded
+    assert '"http.request.method"]: "_OTHER"' in recorded
+    assert '"http.request.method_original"]: "BREW"' in recorded

@@ -1,12 +1,15 @@
 import os
 from collections.abc import Mapping, Sequence
 from contextvars import Token
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from logging import Logger as StdLogger
 from logging import getLogger
 from sys import float_info
 from time import time_ns
+from traceback import format_tb
 from typing import Any, ClassVar, Final, Protocol, Self, cast, final
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from grpc import ChannelCredentials
 from opentelemetry import metrics, trace
@@ -44,7 +47,7 @@ from opentelemetry.sdk.metrics.export import (
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SpanExporter
-from opentelemetry.trace import Span, StatusCode, Tracer
+from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.util.types import AttributeValue
 
@@ -54,6 +57,7 @@ from haiway.context import (
     ObservabilityAttribute,
     ObservabilityLevel,
     ObservabilityMetricKind,
+    ScopeKind,
 )
 from haiway.types import MISSING
 from haiway.utils.formatting import escape_controls
@@ -80,6 +84,7 @@ class ScopeStore:
         "_completed",
         "_end_time",
         "_log_attributes",
+        "_reported",
         "_token",
         "context",
         "identifier",
@@ -104,7 +109,7 @@ class ScopeStore:
             context,
         )
         # every log emitted within the scope carries its name, prepare it once
-        self._log_attributes: Mapping[str, AttributeValue] = {"scope.name": identifier.name}
+        self._log_attributes: Mapping[str, AttributeValue] = {"haiway.scope.name": identifier.name}
         # nested scopes entered but not completed yet - the span may only end
         # once all of them did, which can happen much later when a nested scope
         # outlives this one. completed scopes are never revisited, so counting
@@ -114,6 +119,9 @@ class ScopeStore:
         # the duration of the scope instead of the one of its longest descendant
         self._end_time: int | None = None
         self._completed: bool = False
+        # the latest exception reported by the scope - logging an exception which
+        # then fails the scope is the common flow, and it is reported just once
+        self._reported: BaseException | None = None
         self._token: Token[Context] | None = None
 
     def attach_context(self) -> None:
@@ -158,31 +166,81 @@ class ScopeStore:
         level: ObservabilityLevel,
         exception: BaseException | None,
     ) -> None:
-        severity_number, severity_text = _SEVERITY_MAPPING[level]
-        self.logger.emit(
-            timestamp=time_ns(),
-            context=self.context,
+        self._emit(
+            level,
             body=message,
-            severity_text=severity_text,
-            severity_number=severity_number,
             attributes=self._log_attributes,
-            # the log record carries the exception for the logs signal
             exception=exception,
         )
         if exception is not None:
-            # while the span event makes the same failure visible on the trace
-            self.span.record_exception(exception)
+            self._reported = exception
+
+    def adopt_reported(
+        self,
+        exception: BaseException,
+        /,
+    ) -> None:
+        # an exception propagating out of a nested scope was reported there - the
+        # scope it propagates into must not report it again
+        self._reported = exception
+
+    def record_exception(
+        self,
+        exception: BaseException,
+        /,
+    ) -> None:
+        # logging an exception and then letting it fail the scope is the common
+        # flow - report each exception once
+        if exception is self._reported:
+            return
+
+        self._reported = exception
+        self._emit(
+            ObservabilityLevel.ERROR,
+            attributes=self._log_attributes,
+            event_name="exception",
+            exception=exception,
+        )
 
     def record_event(
         self,
         event: str,
         /,
+        level: ObservabilityLevel,
         *,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        self.span.add_event(
-            event,
-            attributes=_sanitized_attributes(attributes),
+        self._emit(
+            level,
+            attributes={**_sanitized_attributes(attributes), **self._log_attributes},
+            event_name=event,
+        )
+
+    def _emit(
+        self,
+        level: ObservabilityLevel,
+        /,
+        *,
+        attributes: Mapping[str, AttributeValue],
+        body: str | None = None,
+        event_name: str | None = None,
+        exception: BaseException | None = None,
+    ) -> None:
+        # logs, events and exceptions all travel as log records correlated with the
+        # span through the context - span events are deprecated by OpenTelemetry
+        severity_number, severity_text = _SEVERITY_MAPPING[level]
+        self.logger.emit(
+            timestamp=time_ns(),
+            context=self.context,
+            body=body,
+            severity_text=severity_text,
+            severity_number=severity_number,
+            attributes=(
+                attributes
+                if exception is None
+                else {**attributes, **_exception_attributes(exception)}
+            ),
+            event_name=event_name,
         )
 
     def record_attributes(
@@ -190,7 +248,87 @@ class ScopeStore:
         attributes: Mapping[str, ObservabilityAttribute],
         /,
     ) -> None:
-        self.span.set_attributes(_sanitized_attributes(attributes))
+        if not self.span.is_recording():
+            return  # sampled out, nothing would be kept
+
+        sanitized: Mapping[str, AttributeValue] = _sanitized_attributes(attributes)
+        self.span.set_attributes(sanitized)
+        # the span of a server scope is named after the request it handles, which is
+        # only known once the request was routed
+        if self.identifier.kind == "server":
+            self._update_request_name(sanitized)
+
+    def _update_request_name(
+        self,
+        attributes: Mapping[str, AttributeValue],
+        /,
+    ) -> None:
+        # `{method} {route}` is what the HTTP conventions name a server span after,
+        # or just `{method}` when no route matched - the raw path has unbounded
+        # cardinality and stays available as an attribute instead
+        method: AttributeValue | None = attributes.get("http.request.method")
+        if method is None:
+            if attributes.get("url.scheme") not in ("ws", "wss"):
+                return
+
+            # a websocket connection carries no method - it is named after the
+            # route the same way, since its path holds identifiers just as well
+            method = "WS"
+
+        elif method == "_OTHER":
+            method = "HTTP"  # what the conventions name a request of an unknown method
+
+        route: AttributeValue | None = attributes.get("http.route")
+        self.span.update_name(f"{method} {route}" if route else str(method))
+
+
+def _exception_message(
+    exception: BaseException,
+    /,
+) -> str:
+    try:
+        return str(exception)
+
+    except Exception:  # a failing `__str__` must not fail what reports the exception
+        return "<unprintable>"
+
+
+def _exception_attributes(
+    exception: BaseException,
+    /,
+) -> Mapping[str, AttributeValue]:
+    # rendered here instead of by the SDK, which prints the message of every exception
+    # in the chain of causes. the messages of causes come from the libraries the
+    # integrations wrap - a database driver quotes values of a statement, a client
+    # the address it called - so only their types and frames are exported. the
+    # exception itself is what the code reporting it chose to say
+    chain: list[BaseException] = []
+    current: BaseException | None = exception
+    while current is not None and all(current is not seen for seen in chain):
+        chain.append(current)
+        current = (
+            current.__cause__
+            if current.__cause__ is not None
+            else None
+            if current.__suppress_context__
+            else current.__context__
+        )
+
+    sections: list[str] = []
+    for element in reversed(chain):  # the root cause first
+        message: str = _exception_message(element) if element is exception else "<redacted>"
+        sections.append(
+            "Traceback (most recent call last):\n"
+            + "".join(format_tb(element.__traceback__))
+            + f"{type(element).__qualname__}: {message}\n"
+        )
+
+    return {
+        "exception.type": type(exception).__qualname__,
+        "exception.message": _exception_message(exception),
+        "exception.stacktrace": "\n\nThe above exception was the cause of the following"
+        " exception:\n\n".join(sections),
+    }
 
 
 def _sanitized_value(
@@ -271,6 +409,33 @@ def _sanitized_attributes(
 
 
 _NO_TRACE_ID: Final[UUID] = UUID(int=0)
+
+_LOGGED_VALUE_LIMIT: Final[int] = 128
+
+_SPAN_KINDS: Final[Mapping[ScopeKind, SpanKind]] = {
+    "internal": SpanKind.INTERNAL,
+    "server": SpanKind.SERVER,
+    "client": SpanKind.CLIENT,
+    "producer": SpanKind.PRODUCER,
+    "consumer": SpanKind.CONSUMER,
+}
+
+
+def _installed_version() -> str:
+    try:
+        return package_version("haiway")
+
+    except PackageNotFoundError:
+        return ""
+
+
+# the instrumentation scope names the library producing telemetry - the service
+# is identified by the resource instead
+_INSTRUMENTATION_NAME: Final[str] = "haiway"
+_INSTRUMENTATION_VERSION: Final[str] = _installed_version()
+
+# spec compliant W3C trace context codec, shared by extraction and injection
+_W3C_PROPAGATOR: Final[TraceContextTextMapPropagator] = TraceContextTextMapPropagator()
 
 _logger: Final[StdLogger] = getLogger("OpenTelemetry")
 
@@ -441,14 +606,13 @@ class _MetricRecording(Protocol):
     ) -> None: ...
 
 
-def _remote_parent(
+def _remote_context(
     traceparent: str | None,
     tracestate: str | None,
     /,
-    propagator: TraceContextTextMapPropagator,
-) -> Span | None:
+) -> Context | None:
     """
-    Decode a W3C trace context into the remote span to be continued.
+    Decode a W3C trace context into the context of the remote caller to be continued.
 
     Delegates to the OpenTelemetry trace context propagator, so field lengths,
     reserved versions, zeroed identifiers, and vendor trace state are handled
@@ -461,32 +625,26 @@ def _remote_parent(
     if tracestate is not None:
         carrier["tracestate"] = tracestate
 
-    # extraction defaults to an empty context, so a rejected value leaves no
-    # span behind and can not be mistaken for the ambient one
-    span: Span = trace.get_current_span(propagator.extract(carrier))
-    if not span.get_span_context().is_valid:
+    # an explicitly empty context, so a rejected value leaves nothing behind that
+    # could be mistaken for the ambient one
+    context: Context = _W3C_PROPAGATOR.extract(carrier, context=Context())
+    if not trace.get_current_span(context).get_span_context().is_valid:
         # the value comes straight from an untrusted carrier - escaping keeps it
         # from forging additional log records
         _logger.warning(
             "Ignoring malformed traceparent: %s",
-            escape_controls(traceparent),
+            # bounded as well - a header may be as long as the server accepts
+            escape_controls(traceparent[:_LOGGED_VALUE_LIMIT]),
         )
         return None
 
-    return span
+    return context
 
 
-def _injected_trace_context(
-    propagator: TraceContextTextMapPropagator,
-    /,
-    context: Context | None = None,
-) -> Mapping[str, str]:
-    """Encode a trace position into a fresh W3C trace context carrier.
-
-    Injects from the given context, or from the ambient one when none is given.
-    """
+def _active_w3c_trace_context() -> Mapping[str, str]:
+    """Encode the active trace position as a fresh W3C trace context carrier."""
     carrier: dict[str, str] = {}
-    propagator.inject(carrier, context=context)
+    _W3C_PROPAGATOR.inject(carrier)
     return carrier
 
 
@@ -501,8 +659,7 @@ class _ObservabilityAdapter:
         "_level",
         "_logger",
         "_meter",
-        "_propagator",
-        "_remote_parent",
+        "_remote_context",
         "_scopes",
         "_tracer",
     )
@@ -514,16 +671,14 @@ class _ObservabilityAdapter:
         logger: Logger,
         tracer: Tracer,
         meter: Meter,
-        propagator: TraceContextTextMapPropagator,
-        remote_parent: Span | None,
+        remote_context: Context | None,
     ) -> None:
         self._level: ObservabilityLevel = level
         self._logger: Logger = logger
         self._tracer: Tracer = tracer
         self._meter: Meter = meter
-        self._propagator: TraceContextTextMapPropagator = propagator
-        # decoded once instead of on each root scope entry
-        self._remote_parent: Span | None = remote_parent
+        # extracted once instead of on each root scope entry
+        self._remote_context: Context | None = remote_context
         # live scopes of every subtree entered through this adapter
         self._scopes: dict[UUID, ScopeStore] = {}
         # instruments are identified by kind, name and unit - keyed on all three
@@ -555,7 +710,9 @@ class _ObservabilityAdapter:
 
         # injected from the scope's own context rather than the ambient one, so
         # the propagated position is the scope asking for it in all cases
-        return _injected_trace_context(self._propagator, context=store.context)
+        carrier: dict[str, str] = {}
+        _W3C_PROPAGATOR.inject(carrier, context=store.context)
+        return carrier
 
     def log_recording(
         self,
@@ -605,6 +762,7 @@ class _ObservabilityAdapter:
 
         store.record_event(
             event,
+            level=level,
             attributes=attributes,
         )
 
@@ -700,11 +858,11 @@ class _ObservabilityAdapter:
         if parent is not None:
             context = parent.context
 
-        elif self._remote_parent is not None and scope.is_root:
+        elif self._remote_context is not None and scope.is_root:
             # only an actual root continues the remote trace - a nested scope
             # whose parent already completed is no longer tracked here, yet its
             # ambient context still carries the span it belongs under
-            context = trace.set_span_in_context(self._remote_parent)
+            context = self._remote_context
 
         else:
             context = get_current()
@@ -715,6 +873,7 @@ class _ObservabilityAdapter:
             span=self._tracer.start_span(
                 name=scope.name,
                 context=context,
+                kind=_SPAN_KINDS.get(scope.kind, SpanKind.INTERNAL),
             ),
             logger=self._logger,
         )
@@ -743,14 +902,18 @@ class _ObservabilityAdapter:
         # reserves it for explicitly asserted success and the SDK treats it as
         # terminal, preventing a later error on the same span
         if isinstance(exception, Exception):
-            store.span.set_status(
-                StatusCode.ERROR,
-                f"{type(exception).__name__}: {exception}",
-            )
-            # the status carries only the message - the exception event is what
-            # carries the stack trace, which is what an unhandled failure is
-            # diagnosed from
-            store.span.record_exception(exception)
+            # the description stays free of the message, which may carry sensitive
+            # data - the exception log record carries it along with the stack trace,
+            # which is what an unhandled failure is diagnosed from
+            error_type: str = type(exception).__qualname__
+            store.span.set_attribute("error.type", error_type)
+            store.span.set_status(StatusCode.ERROR, error_type)
+            store.record_exception(exception)
+            # the scopes it propagates through next report it no more, however deep
+            # the scope tree is - each of them hands it on to its own parent
+            parent_store: ScopeStore | None = self._scopes.get(scope.parent_id)
+            if parent_store is not None and parent_store is not store:
+                parent_store.adopt_reported(exception)
 
         store.exit()
         # detach within the exiting task, before any deferred completion
@@ -788,8 +951,6 @@ class OpenTelemetry:
     _logger_provider: ClassVar[LoggerProvider | None] = None
     _meter_provider: ClassVar[SdkMeterProvider | None] = None
     _tracer_provider: ClassVar[TracerProvider | None] = None
-    # spec compliant W3C trace context codec, shared by extraction and injection
-    _propagator: ClassVar[TraceContextTextMapPropagator] = TraceContextTextMapPropagator()
 
     @classmethod
     def autoconfigure(
@@ -861,8 +1022,8 @@ class OpenTelemetry:
             logger_provider if isinstance(logger_provider, LoggerProvider) else None
         )
         cls._logger = logger_provider.get_logger(
-            service,
-            version=version,
+            _INSTRUMENTATION_NAME,
+            version=_INSTRUMENTATION_VERSION,
         )
 
         if (
@@ -907,8 +1068,9 @@ class OpenTelemetry:
         version : str
             The version of the service
         instance : str | None, optional
-            The deployment instance identifier. Resolved to the current process
-            id when not provided.
+            The service instance identifier, expected to be globally unique.
+            A random UUID is generated when not provided - a process id would
+            collide between containers.
         environment : str
             The deployment environment (e.g., "production", "staging")
         otlp_endpoint : str | None, optional
@@ -978,7 +1140,7 @@ class OpenTelemetry:
             {
                 "service.name": service,
                 "service.version": version,
-                "service.instance.id": instance if instance is not None else str(os.getpid()),
+                "service.instance.id": instance if instance is not None else str(uuid4()),
                 "deployment.environment.name": environment,
                 **(attributes if attributes is not None else {}),
             },
@@ -1019,8 +1181,8 @@ class OpenTelemetry:
         # always take the logger from the globally installed provider, the same
         # place spans and metrics come from, even when it is not the one built here
         cls._logger = get_logger_provider().get_logger(
-            service,
-            version=version,
+            _INSTRUMENTATION_NAME,
+            version=_INSTRUMENTATION_VERSION,
         )
 
         return cls
@@ -1132,7 +1294,7 @@ class OpenTelemetry:
             Encoded ``traceparent`` value when a valid span context is active,
             otherwise ``None``.
         """
-        return _injected_trace_context(cls._propagator).get("traceparent")
+        return _active_w3c_trace_context().get("traceparent")
 
     @classmethod
     def tracestate(cls) -> str | None:
@@ -1145,7 +1307,7 @@ class OpenTelemetry:
             Encoded ``tracestate`` value when a valid span context carrying
             vendor trace state is active, otherwise ``None``.
         """
-        return _injected_trace_context(cls._propagator).get("tracestate")
+        return _active_w3c_trace_context().get("tracestate")
 
     @classmethod
     def observability(
@@ -1176,7 +1338,6 @@ class OpenTelemetry:
         tracestate : str | None, optional
             W3C ``tracestate`` value accompanying ``traceparent``, propagating
             vendor specific trace state. Ignored without a valid ``traceparent``.
-
         Returns
         -------
         Observability
@@ -1203,10 +1364,9 @@ class OpenTelemetry:
         adapter: _ObservabilityAdapter = _ObservabilityAdapter(
             level=level,
             logger=cls._logger,
-            tracer=trace.get_tracer(cls.service, cls.version),
-            meter=metrics.get_meter(cls.service, cls.version),
-            propagator=cls._propagator,
-            remote_parent=_remote_parent(traceparent, tracestate, cls._propagator),
+            tracer=trace.get_tracer(_INSTRUMENTATION_NAME, _INSTRUMENTATION_VERSION),
+            meter=metrics.get_meter(_INSTRUMENTATION_NAME, _INSTRUMENTATION_VERSION),
+            remote_context=_remote_context(traceparent, tracestate),
         )
 
         return Observability(

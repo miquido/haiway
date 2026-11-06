@@ -12,6 +12,8 @@ from haiway.context.access import ctx
 from haiway.starlette.context import ServerContext
 from haiway.starlette.observability import (
     CONNECTION_DURATION_METRIC,
+    KNOWN_METHODS,
+    OTHER_METHOD,
     REQUEST_DURATION_METRIC,
     RESPONSE_START_DURATION_ATTRIBUTE,
     request_metric_attributes,
@@ -33,8 +35,8 @@ class ContextMiddleware:
     Requests are affected in four ways:
 
     - a scope is entered for each ``http`` and ``websocket`` request, recording
-      it as one trace, and named after the request: the method and the requested
-      path - ``"GET /users/12345"`` - with ``"WS"`` in place of the method for a
+      it as one ``server`` trace, and named after the request: the method and the
+      requested path - ``"GET /users/12345"`` - with ``"WS"`` in place of the method for a
       websocket connection, which carries none. Other request types, ``lifespan``
       included, are passed through untouched.
     - the request is recorded into its scope as the HTTP semantic conventions of
@@ -43,7 +45,8 @@ class ContextMiddleware:
       attributes - once it was handled, which is when the route it matched and
       the status it was answered with are known. ``http.route`` is what a
       parameterized route is findable by, since the scope name carries the path
-      which was actually requested rather than the template behind it. The wait
+      which was actually requested rather than the template behind it. An OpenTelemetry span
+      is renamed after the template, as ``"GET /users/{id}"``, once it is known. The wait
       for the headers of the response - what its consumer waited for an answer -
       is recorded among them as ``http.server.response.start.duration``, in
       seconds, when one was started.
@@ -177,6 +180,7 @@ class ContextMiddleware:
                 name,
                 *self._context.request_state(),
                 observability=self._context.request_observability(scope),
+                kind="server",
             ) as trace_id:
                 # the status of the response, which only the message carrying it
                 # reports - an aborted request is answered with none at all
@@ -270,8 +274,12 @@ def _request_attributes(
     the route table a second time for every request, which is the cost the
     routing already paid.
 
-    The method is recorded as received, and only for an ``http`` request - a
-    websocket connection carries none, so reporting one would be inventing it.
+    The method is recorded only for an ``http`` request - a websocket connection
+    carries none, so reporting one would be inventing it. A method outside the
+    standard ones is recorded as ``_OTHER``, the received value moving to
+    ``http.request.method_original`` on the trace: the method is chosen by the
+    caller, and it is a dimension of the request metrics and the name of the
+    span, where an unbounded set of values is how a metrics store is brought down.
 
     The query string is left out - it carries credentials often enough that
     recording it by default would leak them - and so is the address of the
@@ -282,7 +290,12 @@ def _request_attributes(
     }
 
     if method is not None:
-        attributes["http.request.method"] = method
+        if method in KNOWN_METHODS:
+            attributes["http.request.method"] = method
+
+        else:
+            attributes["http.request.method"] = OTHER_METHOD
+            attributes["http.request.method_original"] = method
 
     scheme: Any | None = scope.get("scheme")
     if scheme:

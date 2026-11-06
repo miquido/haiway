@@ -41,6 +41,19 @@ The `reference/` cases are a frozen dataclass doing the same work without valida
 `State` operation can not go below. Conversion cases (`to_basic_object`, `to_json`) are the slowest
 relative to the size of the data, and the first candidates for optimization.
 
+## OpenTelemetry bridge
+
+`opentelemetry_benchmark.py` measures scope entry and exit, logs below and above the threshold,
+metrics, attributes and events under three setups: `bare` (no backend of its own), `logger` (the
+standard library logger backend) and `otel` (the bridge on SDK providers with batch processors
+writing into exporters which drop everything). Providers are claimed once per process, so it owns
+its process. Results are nanoseconds per call and take the same `--json`, `--compare`, `--filter`
+and `--budget` options. Most of the `otel` cost is the SDK itself - creating spans and log records.
+
+```bash
+make benchmark-otel
+```
+
 ## Server integrations
 
 `server_benchmark.py` measures the Starlette and FastAPI integrations. Requests are driven through

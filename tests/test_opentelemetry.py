@@ -3,7 +3,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 from opentelemetry import metrics, trace
-from opentelemetry._logs import NoOpLoggerProvider
+from opentelemetry._logs import NoOpLoggerProvider, SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.metrics import NoOpMeterProvider
 from opentelemetry.sdk._logs import LoggerProvider
@@ -17,10 +17,10 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
-from opentelemetry.trace import ProxyTracerProvider, SpanContext, StatusCode, Tracer
+from opentelemetry.trace import ProxyTracerProvider, SpanContext, SpanKind, StatusCode, Tracer
 from pytest import LogCaptureFixture, MonkeyPatch, fixture, mark, raises
 
-from haiway import ctx
+from haiway import ScopeKind, ctx
 from haiway.opentelemetry import OpenTelemetry, OpenTelemetryException, observability
 
 _CONFIGURATION_ATTRIBUTES: Sequence[str] = (
@@ -246,25 +246,32 @@ async def test_scope_exiting_with_exception_marks_span_error(
 
     span = _named(spans, "failing")
     assert span.status.status_code is StatusCode.ERROR
-    assert span.status.description == "ValueError: boom"
+    assert span.status.description == "ValueError"
+    assert span.attributes is not None
+    assert span.attributes["error.type"] == "ValueError"
 
 
 @mark.asyncio
 async def test_scope_exiting_with_exception_records_its_stack_trace(
     spans: InMemorySpanExporter,
+    logs: InMemoryLogRecordExporter,
 ) -> None:
     with raises(ValueError):
         async with ctx.scope("failing", observability=OpenTelemetry.observability()):
             raise ValueError("boom")
 
-    span = _named(spans, "failing")
-    events = [event for event in span.events if event.name == "exception"]
+    # the failure is a log record - span events are deprecated by OpenTelemetry
+    assert not _named(spans, "failing").events
+    records = [entry.log_record for entry in logs.get_finished_logs()]
 
-    assert len(events) == 1
-    assert events[0].attributes is not None
-    assert events[0].attributes["exception.type"] == "ValueError"
-    assert events[0].attributes["exception.message"] == "boom"
-    assert "raise ValueError" in str(events[0].attributes["exception.stacktrace"])
+    assert [record.event_name for record in records] == ["exception"]
+    assert records[0].severity_number is SeverityNumber.ERROR
+    assert records[0].attributes is not None
+    assert records[0].attributes["exception.type"] == "ValueError"
+    assert records[0].attributes["exception.message"] == "boom"
+    assert "raise ValueError" in str(records[0].attributes["exception.stacktrace"])
+    # correlated with the span that failed
+    assert records[0].span_id == _context(_named(spans, "failing")).span_id
 
 
 @mark.asyncio
@@ -757,7 +764,9 @@ async def test_error_status_describes_the_exception(spans: InMemorySpanExporter)
 
     span = _named(spans, "failing")
     assert span.status.status_code is StatusCode.ERROR
-    assert span.status.description == "ValueError: boom"
+    assert span.status.description == "ValueError"
+    assert span.attributes is not None
+    assert span.attributes["error.type"] == "ValueError"
 
 
 @mark.asyncio
@@ -875,14 +884,13 @@ async def test_logged_exception_reaches_logs_and_traces(
     assert record.body == "failed"
     assert record.attributes is not None
     # the scope name stays alongside the exception details
-    assert record.attributes["scope.name"] == "logged"
+    assert record.attributes["haiway.scope.name"] == "logged"
     assert record.attributes["exception.type"] == "ValueError"
     assert record.attributes["exception.message"] == "boom"
-    # while the trace carries the very same failure as a span event
+    # span events are not used, the log is correlated with the span instead
     span = _named(spans, "logged")
-    assert [event.name for event in span.events] == ["exception"]
-    assert span.events[0].attributes is not None
-    assert span.events[0].attributes["exception.type"] == "ValueError"
+    assert not span.events
+    assert record.span_id == _context(span).span_id
 
 
 @mark.asyncio
@@ -1064,3 +1072,271 @@ async def test_trace_context_continues_across_a_hop(spans: InMemorySpanExporter)
     # what one service propagates is what the next one continues
     assert _context(downstream).trace_id == _context(upstream).trace_id
     assert _parent(downstream).span_id == _context(upstream).span_id
+
+
+@mark.asyncio
+async def test_exception_is_recorded_once_when_logged_and_raised(
+    spans: InMemorySpanExporter,
+    logs: InMemoryLogRecordExporter,
+) -> None:
+    with raises(ValueError):
+        async with ctx.scope("failing", observability=OpenTelemetry.observability()):
+            try:
+                raise ValueError("boom")
+
+            except ValueError as exc:
+                ctx.log_error("failed", exception=exc)
+                raise
+
+    records = [entry.log_record for entry in logs.get_finished_logs()]
+    assert len(records) == 1
+    assert records[0].body == "failed"
+
+
+@mark.asyncio
+async def test_telemetry_is_attributed_to_the_library_not_the_service(
+    spans: InMemorySpanExporter,
+    logs: InMemoryLogRecordExporter,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    requested: list[object] = []
+    stubbed = trace.get_tracer
+
+    def get_tracer(name: str, *args: object, **kwargs: object) -> Tracer:
+        requested.append(name)
+        return stubbed(name, *args, **kwargs)
+
+    monkeypatch.setattr(trace, "get_tracer", get_tracer)
+    async with ctx.scope("scoped", observability=OpenTelemetry.observability()):
+        ctx.log_info("hello")
+
+    assert requested == ["haiway"]
+    assert logs.get_finished_logs()[0].instrumentation_scope.name == "haiway"
+
+
+@mark.asyncio
+async def test_event_is_a_log_record_not_a_span_event(
+    spans: InMemorySpanExporter,
+    logs: InMemoryLogRecordExporter,
+) -> None:
+    async with ctx.scope("evented", observability=OpenTelemetry.observability()):
+        ctx.record_warning(event="user.signup", attributes={"plan": "pro", "seats": 3})
+
+    span = _named(spans, "evented")
+    record = logs.get_finished_logs()[0].log_record
+
+    assert not span.events
+    assert record.event_name == "user.signup"
+    assert record.severity_number is SeverityNumber.WARN
+    assert record.attributes is not None
+    assert record.attributes["plan"] == "pro"
+    assert record.attributes["seats"] == 3
+    assert record.span_id == _context(span).span_id
+    assert record.trace_id == _context(span).trace_id
+
+
+@mark.asyncio
+async def test_events_below_the_level_are_dropped(logs: InMemoryLogRecordExporter) -> None:
+    async with ctx.scope("evented", observability=OpenTelemetry.observability()):
+        ctx.record_debug(event="noisy")
+
+    assert not logs.get_finished_logs()
+
+
+@mark.asyncio
+@mark.parametrize(
+    ("kind", "expected"),
+    (
+        ("internal", SpanKind.INTERNAL),
+        ("server", SpanKind.SERVER),
+        ("client", SpanKind.CLIENT),
+        ("producer", SpanKind.PRODUCER),
+        ("consumer", SpanKind.CONSUMER),
+    ),
+)
+async def test_scope_kind_becomes_span_kind(
+    spans: InMemorySpanExporter,
+    kind: ScopeKind,
+    expected: SpanKind,
+) -> None:
+    async with ctx.scope("kinded", observability=OpenTelemetry.observability(), kind=kind):
+        pass
+
+    assert _named(spans, "kinded").kind is expected
+
+
+@mark.asyncio
+async def test_scope_kind_defaults_to_internal(spans: InMemorySpanExporter) -> None:
+    async with ctx.scope("plain", observability=OpenTelemetry.observability()):
+        pass
+
+    assert _named(spans, "plain").kind is SpanKind.INTERNAL
+
+
+@mark.asyncio
+async def test_server_span_is_named_after_method_and_route(
+    spans: InMemorySpanExporter,
+) -> None:
+    async with ctx.scope(
+        "GET /users/12345",
+        observability=OpenTelemetry.observability(),
+        kind="server",
+    ):
+        ctx.record_info(
+            attributes={"http.request.method": "GET", "http.route": "/users/{id}"},
+        )
+
+    assert [span.name for span in spans.get_finished_spans()] == ["GET /users/{id}"]
+
+
+@mark.asyncio
+async def test_unrouted_server_span_is_named_after_method_only(
+    spans: InMemorySpanExporter,
+) -> None:
+    async with ctx.scope(
+        "GET /scanner/probe",
+        observability=OpenTelemetry.observability(),
+        kind="server",
+    ):
+        ctx.record_info(attributes={"http.request.method": "GET"})
+
+    assert [span.name for span in spans.get_finished_spans()] == ["GET"]
+
+
+@mark.asyncio
+async def test_internal_span_keeps_its_name_when_attributes_describe_a_request(
+    spans: InMemorySpanExporter,
+) -> None:
+    async with ctx.scope("handler", observability=OpenTelemetry.observability()):
+        ctx.record_info(attributes={"http.request.method": "GET", "http.route": "/x"})
+
+    assert [span.name for span in spans.get_finished_spans()] == ["handler"]
+
+
+@mark.asyncio
+async def test_malformed_traceparent_warning_is_bounded(caplog: LogCaptureFixture) -> None:
+    OpenTelemetry.autoconfigure(service="test-service")
+
+    with caplog.at_level("WARNING", logger="OpenTelemetry"):
+        OpenTelemetry.observability(traceparent="x" * 100_000)
+
+    assert caplog.records
+    assert len(caplog.text) < 1_000
+
+
+@mark.asyncio
+async def test_exception_is_recorded_once_across_nested_scopes(
+    spans: InMemorySpanExporter,
+    logs: InMemoryLogRecordExporter,
+) -> None:
+    with raises(ValueError):
+        async with ctx.scope("outer", observability=OpenTelemetry.observability()):
+            async with ctx.scope("middle"):
+                async with ctx.scope("inner"):
+                    try:
+                        raise ValueError("boom")
+
+                    except ValueError as exc:
+                        ctx.log_error("failed", exception=exc)
+                        raise
+
+    records = [entry.log_record for entry in logs.get_finished_logs()]
+    # logged where it happened, and not once more by each scope it travelled through
+    assert [record.body for record in records] == ["failed"]
+    # every one of them still failed
+    assert all(span.status.status_code is StatusCode.ERROR for span in spans.get_finished_spans())
+
+
+@mark.asyncio
+async def test_unlogged_exception_is_recorded_once_across_nested_scopes(
+    logs: InMemoryLogRecordExporter,
+    spans: InMemorySpanExporter,
+) -> None:
+    with raises(ValueError):
+        async with ctx.scope("outer", observability=OpenTelemetry.observability()):
+            async with ctx.scope("inner"):
+                raise ValueError("boom")
+
+    records = [entry.log_record for entry in logs.get_finished_logs()]
+    assert [record.event_name for record in records] == ["exception"]
+    # reported by the scope it was raised in
+    assert records[0].span_id == _context(_named(spans, "inner")).span_id
+
+
+@mark.asyncio
+async def test_messages_of_causes_are_not_exported_with_the_exception(
+    logs: InMemoryLogRecordExporter,
+) -> None:
+    # assembled at runtime - a stack trace carries source lines, which would
+    # otherwise contain the very literal searched for
+    secret: str = "-".join(("hunter", "2"))
+
+    def failing() -> None:
+        try:
+            raise ValueError(f"invalid input syntax for type integer: {secret}")
+
+        except ValueError as cause:
+            raise RuntimeError("Failed to execute statement") from cause
+
+    with raises(RuntimeError):
+        async with ctx.scope("failing", observability=OpenTelemetry.observability()):
+            failing()
+
+    (record,) = [
+        entry.log_record
+        for entry in logs.get_finished_logs()
+        if entry.log_record.event_name == "exception"
+    ]
+    assert record.attributes is not None
+    stacktrace: str = str(record.attributes["exception.stacktrace"])
+    # the exception says what its author chose to, causes only what they are
+    assert record.attributes["exception.message"] == "Failed to execute statement"
+    assert "RuntimeError: Failed to execute statement" in stacktrace
+    assert "ValueError: <redacted>" in stacktrace
+    assert secret not in repr(dict(record.attributes))
+    # the frames of the cause are still there to diagnose it from
+    assert stacktrace.index("ValueError") < stacktrace.index("RuntimeError")
+
+
+@mark.asyncio
+async def test_logged_exception_with_causes_is_redacted_the_same_way(
+    logs: InMemoryLogRecordExporter,
+) -> None:
+    secret: str = "-".join(("hunter", "2"))
+
+    async with ctx.scope("logged", observability=OpenTelemetry.observability()):
+        try:
+            try:
+                raise KeyError(secret)
+
+            except KeyError as cause:
+                raise RuntimeError("failed") from cause
+
+        except RuntimeError as exc:
+            ctx.log_error("failed", exception=exc)
+
+    record = logs.get_finished_logs()[0].log_record
+    assert record.attributes is not None
+    assert secret not in repr(dict(record.attributes))
+    assert "KeyError: <redacted>" in str(record.attributes["exception.stacktrace"])
+
+
+@mark.asyncio
+async def test_exception_which_fails_to_render_does_not_fail_the_scope(
+    logs: InMemoryLogRecordExporter,
+) -> None:
+    class Unprintable(Exception):
+        def __str__(self) -> str:
+            raise RuntimeError("no representation")
+
+    with raises(Unprintable):
+        async with ctx.scope("failing", observability=OpenTelemetry.observability()):
+            raise Unprintable()
+
+    (record,) = [
+        entry.log_record
+        for entry in logs.get_finished_logs()
+        if entry.log_record.event_name == "exception"
+    ]
+    assert record.attributes is not None
+    assert record.attributes["exception.message"] == "<unprintable>"

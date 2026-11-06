@@ -5,6 +5,8 @@ from haiway.context import ObservabilityAttribute
 
 __all__ = (
     "CONNECTION_DURATION_METRIC",
+    "KNOWN_METHODS",
+    "OTHER_METHOD",
     "REQUEST_DURATION_METRIC",
     "RESPONSE_START_DURATION_ATTRIBUTE",
     "request_metric_attributes",
@@ -24,6 +26,14 @@ CONNECTION_DURATION_METRIC: Final[str] = "websocket.server.duration"
 
 RESPONSE_START_DURATION_ATTRIBUTE: Final[str] = "http.server.response.start.duration"
 """Wait for the headers of a response, in seconds - kept on the trace rather than aggregated."""
+
+KNOWN_METHODS: Final[frozenset[str]] = frozenset(
+    ("CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE")
+)
+"""Methods recorded as received - the set the HTTP semantic conventions define."""
+
+OTHER_METHOD: Final[str] = "_OTHER"
+"""What any other method is recorded as, keeping the dimension bounded."""
 
 _METRIC_DIMENSIONS: Final[tuple[str, ...]] = (
     "http.request.method",

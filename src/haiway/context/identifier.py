@@ -1,13 +1,18 @@
 from collections.abc import Sequence
 from contextvars import ContextVar, Token
 from types import TracebackType
-from typing import Any, ClassVar, Self, final
+from typing import Any, ClassVar, Literal, Self, final
 from uuid import UUID, uuid4
 
 from haiway.context.types import ContextMissing
 from haiway.utils.formatting import escape_controls
 
-__all__ = ("ContextIdentifier",)
+__all__ = (
+    "ContextIdentifier",
+    "ScopeKind",
+)
+
+type ScopeKind = Literal["internal", "server", "client", "producer", "consumer"]
 
 
 @final
@@ -28,12 +33,14 @@ class ContextIdentifier:
         cls,
         name: str,
         /,
+        kind: ScopeKind = "internal",
     ) -> Self:
         try:  # check for current scope
             current: Self = cls._context.get()
             scope_id: UUID = uuid4()
             return cls(
                 name=name,
+                kind=kind,
                 scope_id=scope_id,
                 # create nested scope
                 parent_id=current.scope_id,
@@ -44,6 +51,7 @@ class ContextIdentifier:
             root_id: UUID = uuid4()
             return cls(
                 name=name,
+                kind=kind,
                 scope_id=root_id,
                 parent_id=root_id,  # own id is parent_id for root
                 path=(root_id,),
@@ -54,6 +62,7 @@ class ContextIdentifier:
     __slots__ = (
         "_token",
         "_unique_name",
+        "kind",
         "name",
         "parent_id",
         "path",
@@ -66,6 +75,7 @@ class ContextIdentifier:
         scope_id: UUID,
         name: str,
         path: Sequence[UUID],
+        kind: ScopeKind = "internal",
     ) -> None:
         self.parent_id: UUID = parent_id
         self.scope_id: UUID = scope_id
@@ -74,6 +84,8 @@ class ContextIdentifier:
         # the name labels every record produced within the scope, so control
         # characters are escaped here instead of in each observability backend
         self.name: str = escape_controls(name)
+        # the role the scope plays in a trace, closed to what tracing systems expect
+        self.kind: ScopeKind = kind
         self._unique_name: str | None = None
         self._token: Token[ContextIdentifier] | None = None
 

@@ -172,7 +172,9 @@ async def test_successful_operation_records_its_duration() -> None:
     assert duration[0].kind == "histogram"
     assert duration[0].unit == "s"
     assert duration[0].value >= 0
-    assert duration[0].attributes["db.operation.name"] == "execute"
+    assert duration[0].attributes["haiway.postgres.operation"] == "execute"
+    # the adapter method, never passed off as what the database was asked to do
+    assert "db.operation.name" not in duration[0].attributes
     assert duration[0].attributes["db.system.name"] == "postgresql"
     # a success has no failure to attribute
     assert "db.response.status_code" not in duration[0].attributes
@@ -193,7 +195,7 @@ async def test_failed_operation_records_its_sqlstate() -> None:
     assert len(duration) == 1
     assert duration[0].attributes["db.response.status_code"] == PostgresErrorCode.unique_violation
     assert duration[0].attributes["error.type"] == "PostgresException"
-    assert duration[0].attributes["db.operation.name"] == "fetch"
+    assert duration[0].attributes["haiway.postgres.operation"] == "fetch"
 
 
 @mark.asyncio
@@ -228,7 +230,7 @@ async def test_fetch_one_records_every_row_it_had_to_transfer() -> None:
     returned = recorder.named(RETURNED_ROWS_METRIC)
     assert len(returned) == 1
     assert returned[0].value == 50
-    assert returned[0].attributes["db.operation.name"] == "fetch_one"
+    assert returned[0].attributes["haiway.postgres.operation"] == "fetch_one"
 
 
 @mark.asyncio

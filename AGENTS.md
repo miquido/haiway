@@ -36,6 +36,18 @@ Core public exports are centralized in `src/haiway/__init__.py`. Optional integr
 
 ## Style & Patterns
 
+### Golden Rule
+
+Apply to every design decision, new or changed code, and review:
+
+- Use algebraic data types principles to avoid invalid state: make illegal combinations
+  unrepresentable with unions, closed literal types and small value types, instead of optional
+  fields that are only valid together or flags that are only meaningful in some states.
+- Use a single source of truth and derive/compute other state from it: never store what can be
+  computed, never repeat a name, value or list that already has a home.
+- Use small, focused feature interfaces that are easily composable: one narrow responsibility per
+  protocol, type or function, combined by composition rather than by growing one interface.
+
 ### Typing & Immutability
 
 - Ensure latest, most strict typing syntax available from python 3.14+

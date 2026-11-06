@@ -155,7 +155,10 @@ included - through untouched. For each request it:
 - enters a context scope named after the request - the method and the requested path, as in
   `GET /users/12345`, with `WS` in place of the method for a websocket connection, which carries
   none. The middleware runs before routing, so the route template behind that path is not available
-  where the scope starts; it is recorded as an attribute once it is
+  where the scope starts; it is recorded as an attribute once it is. The scope is entered as a
+  `server` scope, and the OpenTelemetry span is renamed `GET /users/{id}` after the route template
+  once it is known - or just `GET` when no route matched, keeping the raw path out of span names
+  (`WS /rooms/{room}` for a websocket connection, an unknown method is `HTTP`)
 
 - records the request into its scope as the HTTP semantic conventions of OpenTelemetry describe it,
   once it was handled and both the route it matched and the status it was answered with are known:

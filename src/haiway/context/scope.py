@@ -9,7 +9,7 @@ from haiway.attributes import State
 from haiway.context.closing import ContextClosing
 from haiway.context.disposables import Disposables
 from haiway.context.events import ContextEvents
-from haiway.context.identifier import ContextIdentifier
+from haiway.context.identifier import ContextIdentifier, ScopeKind
 from haiway.context.observability import ContextObservability, Observability, ObservabilityLevel
 
 # Import after other imports to avoid circular dependencies
@@ -28,6 +28,7 @@ class ContextScope:
         "_disposables",
         "_identifier",
         "_isolated",
+        "_kind",
         "_name",
         "_observability",
         "_presets",
@@ -42,10 +43,12 @@ class ContextScope:
         state: Sequence[State],
         disposables: Disposables,
         observability: Observability | Logger | None,
+        kind: ScopeKind,
         isolated: bool,
     ) -> None:
         self._identifier: ContextIdentifier | None = None
         self._name: str = name
+        self._kind: ScopeKind = kind
         self._observability: Observability | Logger | None = observability
         self._presets: ContextPresets | None = presets
         self._state: Sequence[State] = state
@@ -58,7 +61,7 @@ class ContextScope:
         loop: AbstractEventLoop = get_running_loop()
         # claimed before the first await - the scope has to be rejected for the
         # whole setup, not only after it became fully prepared
-        identifier: ContextIdentifier = ContextIdentifier.scope(self._name)
+        identifier: ContextIdentifier = ContextIdentifier.scope(self._name, self._kind)
         self._identifier = identifier
         # elements which were entered, paired with whether they exit asynchronously.
         # a plain list instead of an `AsyncExitStack` - the elements are known here,

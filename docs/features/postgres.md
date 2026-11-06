@@ -533,8 +533,11 @@ completion attempt actually did, not what it intended: `committed`, `rolled_back
 or `rollback_failed`. The third is a transaction whose work is lost even though the block left
 cleanly, and is the one worth alerting on.
 
-Recorded attributes are `db.system.name`, `db.operation.name`, and for a failure
-`db.response.status_code` and `error.type`. Statements and their parameters are not recorded.
+Recorded attributes are `db.system.name`, `haiway.postgres.operation` (the adapter method - `fetch`,
+`fetch_one`, `execute` or `acquire_connection`) and, for a failure, `db.response.status_code` and
+`error.type`. `db.operation.name` is not recorded - it names what the database was asked to do,
+which would take parsing the statement. Statements and their parameters are not recorded.
+`db.client.connection.count` is split by `db.client.connection.state`.
 
 ### Reading the two durations
 
