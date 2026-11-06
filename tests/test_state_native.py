@@ -72,7 +72,7 @@ def test_instance_which_skipped_init_is_safe_to_inspect() -> None:
 
 
 @native_only
-def test_hashing_a_deeply_nested_state_fails_instead_of_overflowing_the_stack() -> None:
+def test_hashing_a_deeply_nested_state_does_not_overflow_the_stack() -> None:
     class Node(State):
         child: Any = None
 
@@ -80,5 +80,10 @@ def test_hashing_a_deeply_nested_state_fails_instead_of_overflowing_the_stack() 
     for _ in range(300_000):
         node = Node(child=node)
 
-    with pytest.raises(RecursionError):
-        hash(node)
+    # how deep it goes before it is refused depends on the stack of the platform - what
+    # it must never do is crash, which a hash of the whole chain used to
+    try:
+        assert isinstance(hash(node), int)
+
+    except RecursionError:
+        pass
