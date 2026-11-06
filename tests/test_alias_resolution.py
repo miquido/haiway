@@ -1,6 +1,8 @@
 from collections.abc import Sequence
 from typing import Annotated, NotRequired, TypedDict
 
+import pytest
+
 from haiway.attributes.annotations import (
     AliasAttribute,
     CustomAttribute,
@@ -16,6 +18,7 @@ from haiway.attributes.annotations import (
     resolve_self_attribute,
 )
 from haiway.attributes.state import State
+from haiway.attributes.validation import ValidationError
 from haiway.types import Alias
 
 
@@ -146,3 +149,22 @@ def test_recursive_alias_annotated_with_alias_exposes_alias() -> None:
     )
     # the annotation still renames the nested element
     assert sequence.values.alias == "children"
+
+
+class _GenericBox[T](TypedDict):
+    value: T
+
+
+class _GenericBoxes(State):
+    number: _GenericBox[int]
+    text: _GenericBox[str]
+
+
+def test_generic_typed_dict_validates_type_arguments() -> None:
+    _GenericBoxes(number={"value": 1}, text={"value": "x"})
+
+    with pytest.raises(ValidationError):
+        _GenericBoxes(number={"value": "x"}, text={"value": "x"})
+
+    with pytest.raises(ValidationError):
+        _GenericBoxes(number={"value": 1}, text={"value": 1})
