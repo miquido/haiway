@@ -1,5 +1,12 @@
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from textwrap import dedent
+from typing import Annotated, Any
+from uuid import UUID
 
+import pytest
+
+from haiway import MISSING, Sensitive, State
 from haiway.utils.formatting import escape_controls, format_log_message, format_str
 
 
@@ -132,3 +139,133 @@ def test_booleans_render_as_their_names() -> None:
   ["off"]: False
 }"""
     )
+
+
+class _PlainObject:
+    def __init__(self) -> None:
+        self.visible = 1
+        self._private = 2
+        self.absent: object = MISSING
+        self.text = "x\ny"
+
+
+class _OpaqueObject:
+    __slots__ = ()
+
+    def __str__(self) -> str:
+        return "first\nsecond"
+
+
+class _SecretState(State):
+    name: str
+    secret: Annotated[str, Sensitive()]
+
+
+@dataclass
+class _DataclassObject:
+    value: int
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, "None"),
+        (MISSING, ""),
+        (1, "1"),
+        (1.5, "1.5"),
+        (1j, "1j"),
+        (True, "True"),
+        (b"abc", "<<<3 bytes>>>"),
+        (bytearray(2), "<<<2 bytes>>>"),
+        (memoryview(b"abcd"), "<<<4 bytes>>>"),
+        (UUID(int=1), "00000000-0000-0000-0000-000000000001"),
+        (datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC), "2024-01-02T03:04:05+00:00"),
+        ("text", '"text"'),
+        ("", '""'),
+        ({}, "{}"),
+        ([], "[]"),
+        ((), "[]"),
+        (set[int](), "{}"),
+        (frozenset[int](), "{}"),
+    ],
+)
+def test_format_str_scalars_and_empty_containers(value: Any, expected: str) -> None:
+    assert format_str(value) == expected
+
+
+def test_format_str_renders_sets_as_braces() -> None:
+    assert format_str({"a"}) == '{\n  "a"\n}'
+    assert format_str(frozenset({1})) == "{\n  1\n}"
+
+
+def test_format_str_renders_all_elements_of_a_set() -> None:
+    formatted = format_str({1, 2, 3})
+
+    assert formatted.startswith("{\n")
+    assert formatted.endswith("\n}")
+    for element in ("1", "2", "3"):
+        assert f"  {element}" in formatted
+
+
+def test_format_str_skips_missing_elements_and_values() -> None:
+    assert format_str([MISSING, 1]) == "[\n  [1]: 1\n]"
+    assert format_str({"k": MISSING}) == "{}"
+    assert format_str({"k": MISSING, "other": 1}) == '{\n  ["other"]: 1\n}'
+    assert format_str([MISSING]) == "[]"
+    assert format_str({MISSING}) == "{}"
+
+
+def test_format_str_applies_indent_to_nested_output() -> None:
+    assert format_str([1, 2], indent=2) == "  [\n    [0]: 1\n    [1]: 2\n  ]"
+
+
+def test_format_str_nested_sequences() -> None:
+    assert (
+        format_str([[1], [2]]) == "[\n  [0]:\n  [\n    [0]: 1\n  ]\n  [1]:\n  [\n    [0]: 2\n  ]\n]"
+    )
+
+
+def test_format_str_object_with_instance_dict() -> None:
+    formatted = format_str(_PlainObject())
+
+    assert formatted == '┍━ _PlainObject:\n┝ visible: 1\n┝ text:\n  """\n    x\n    y\n  """\n┕━'
+    assert "_private" not in formatted
+    assert "absent" not in formatted
+
+
+def test_format_str_object_without_attributes_falls_back_to_str() -> None:
+    assert format_str(_OpaqueObject()) == "first\nsecond"
+    assert format_str(_OpaqueObject(), indent=2) == "first\n  second"
+
+
+def test_format_str_dataclass_object() -> None:
+    assert format_str(_DataclassObject(value=1)) == "┍━ _DataclassObject:\n┝ value: 1\n┕━"
+
+
+def test_format_str_state_redacts_sensitive_attributes() -> None:
+    formatted = format_str(_SecretState(name="public", secret="hunter2"))
+
+    assert "hunter2" not in formatted
+    assert '┝ name: "public"' in formatted
+    assert "┝ secret: <redacted>" in formatted
+
+
+def test_format_str_object_inside_collections() -> None:
+    formatted = format_str({"key": _DataclassObject(value=1)})
+
+    assert "┍━ _DataclassObject:" in formatted
+    assert "┝ value: 1" in formatted
+    assert formatted.startswith('{\n  ["key"]:')
+
+
+def test_format_str_nested_empty_containers_stay_inline() -> None:
+    assert format_str({"a": {}}) == '{\n  ["a"]: {}\n}'
+    assert format_str({"a": []}) == '{\n  ["a"]: []\n}'
+    assert format_str([{}, set()]) == "[\n  [0]: {}\n  [1]: {}\n]"
+    assert format_str(_PlainObject2()) == "┍━ _PlainObject2:\n┝ items: []\n┝ mapping: {}\n┕━"
+
+
+class _PlainObject2:
+    def __init__(self) -> None:
+        self.items: list[int] = []
+        self.mapping: dict[str, int] = {}

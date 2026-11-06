@@ -492,3 +492,175 @@ def test_meta_keys_stay_strictly_str() -> None:
     # only the values are coerced - a key has no spelling to fall back on
     with raises(TypeError, match="Invalid Meta key"):
         _ = Meta({"name": "base"}) | {UUID(int=1): "value"}
+
+
+def test_meta_validate_accepts_mappings_and_rejects_others() -> None:
+    validated = Meta.validate({"a": (1, 2), "b": {"c": UUID(int=1)}})
+
+    assert isinstance(validated, Meta)
+    assert validated == {"a": (1, 2), "b": {"c": str(UUID(int=1))}}
+
+    with raises(TypeError, match="'list' is not matching expected type of 'Meta'"):
+        Meta.validate([("a", 1)])
+
+    with raises(TypeError, match="'NoneType'"):
+        Meta.validate(None)
+
+
+def test_meta_of_accepts_keyword_values() -> None:
+    meta = Meta.of(a=1, b=[1, 2])
+
+    assert meta == {"a": 1, "b": (1, 2)}
+    assert Meta.of() is Meta.empty
+
+
+def test_meta_to_str_matches_str() -> None:
+    meta = Meta({"a": 1})
+
+    assert meta.to_str() == str(meta) == "{'a': 1}"
+
+
+def test_meta_uuid_round_trip_and_defaults() -> None:
+    identifier = UUID(int=7)
+    meta = Meta.empty.with_uuid("ref", value=identifier)
+
+    assert meta["ref"] == str(identifier)
+    assert meta.get_uuid("ref") == identifier
+    assert meta.get_uuid("absent") is None
+    assert meta.get_uuid("absent", default=identifier) == identifier
+
+
+def test_meta_datetime_round_trip_and_defaults() -> None:
+    moment = datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
+    meta = Meta.empty.with_datetime("at", value=moment)
+
+    assert meta["at"] == moment.isoformat()
+    assert meta.get_datetime("at") == moment
+    assert meta.get_datetime("absent") is None
+    assert meta.get_datetime("absent", default=moment) == moment
+
+
+def test_meta_invalid_uuid_and_datetime_strings_fail() -> None:
+    meta = Meta({"ref": "not-a-uuid", "at": "not-a-date"})
+
+    with raises(ValueError):
+        meta.get_uuid("ref")
+
+    with raises(ValueError):
+        meta.get_datetime("at")
+
+
+def test_meta_typed_accessors_reject_wrong_value_types() -> None:
+    meta = Meta({"ref": 1, "at": 1, "kind": 1, "name": 1, "description": 1, "error": 1})
+    meta = meta.updating(created=1, last_updated=1, identifier=1)
+
+    with raises(TypeError, match="expected 'str'"):
+        meta.get_uuid("ref")
+
+    with raises(TypeError, match="expected 'str'"):
+        meta.get_datetime("at")
+
+    for attribute in ("kind", "name", "description", "error", "created", "last_updated"):
+        with raises(TypeError, match=f"for {attribute}, expected 'str'"):
+            getattr(meta, attribute)
+
+    with raises(TypeError):
+        _ = meta.identifier
+
+
+def test_meta_error_round_trip() -> None:
+    meta = Meta.empty
+
+    assert meta.error is None
+
+    from_exception = meta.with_error(ValueError("boom"))
+    from_text = meta.with_error("boom")
+
+    assert from_exception["error"] == "boom"
+    assert from_text.error is not None
+    assert str(from_text.error) == "boom"
+    assert type(from_text.error) is Exception
+
+
+def test_meta_last_updated_round_trip() -> None:
+    moment = datetime(2024, 5, 6, tzinfo=UTC)
+    meta = Meta.empty
+
+    assert meta.last_updated is None
+    assert meta.with_last_updated(moment).last_updated == moment
+    assert meta.with_last_updated(moment)["last_updated"] == moment.isoformat()
+
+
+def test_meta_with_methods_return_new_instances() -> None:
+    original = Meta({"a": 1})
+
+    updated = original.with_name("n").with_description("d").with_kind("k")
+
+    assert original == {"a": 1}
+    assert updated == {"a": 1, "name": "n", "description": "d", "kind": "k"}
+
+
+def test_meta_tags_ignore_non_sequence_values() -> None:
+    assert Meta({"tags": "abc"}).tags == ()
+    assert Meta({"tags": 1}).tags == ()
+
+
+def test_meta_remaining_mutations_are_rejected() -> None:
+    meta = Meta({"a": 1})
+
+    with raises(AttributeError):
+        meta.clear()
+
+    with raises(AttributeError):
+        meta.pop("a")
+
+    with raises(AttributeError):
+        meta.popitem()
+
+    with raises(AttributeError):
+        meta.setdefault("b", 1)
+
+    with raises(AttributeError):
+        meta.update({"b": 1})
+
+    with raises(AttributeError):
+        meta.__ior__({"b": 1})
+
+    with raises(AttributeError):
+        del meta["a"]
+
+    assert meta == {"a": 1}
+
+
+def test_meta_or_with_non_mapping_is_unsupported() -> None:
+    meta = Meta({"a": 1})
+
+    with raises(TypeError):
+        meta | 1  # pyright: ignore[reportUnusedExpression, reportOperatorIssue]
+
+    with raises(TypeError):
+        1 | meta  # pyright: ignore[reportUnusedExpression, reportOperatorIssue]
+
+
+def test_meta_ror_validates_and_prefers_meta_values() -> None:
+    merged = {"a": 1, "b": (1, 2)} | Meta({"a": 2})
+
+    assert isinstance(merged, Meta)
+    assert merged == {"a": 2, "b": (1, 2)}
+
+
+def test_meta_or_and_ror_reject_non_str_keys() -> None:
+    meta = Meta({"a": 1})
+
+    with raises(TypeError, match="Invalid Meta key"):
+        meta | {1: "x"}  # pyright: ignore[reportUnusedExpression, reportOperatorIssue]
+
+    with raises(TypeError, match="Invalid Meta key"):
+        {1: "x"} | meta  # pyright: ignore[reportUnusedExpression, reportOperatorIssue]
+
+
+def test_meta_hash_follows_contents() -> None:
+    assert hash(Meta({"a": 1, "b": 2})) == hash(Meta({"b": 2, "a": 1}))
+
+    with raises(TypeError):
+        hash(Meta({"a": [1]}))

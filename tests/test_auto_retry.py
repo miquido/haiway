@@ -361,3 +361,109 @@ async def test_async_retries_with_custom_predicate():
     assert executions == 2
     assert len(observed) == 1
     assert isinstance(observed[0], FakeException)
+
+
+def test_sync_uses_delay_with_errors(monkeypatch: MonkeyPatch):
+    executions: int = 0
+    delays: list[float] = []
+
+    # assert the requested delays instead of measuring wall clock time
+    monkeypatch.setattr(retries, "sleep_sync", delays.append)
+
+    @retry(limit=2, delay=0.05)
+    def compute(value: str, /) -> str:
+        nonlocal executions
+        executions += 1
+        raise FakeException()
+
+    with raises(FakeException):
+        compute("expected")
+
+    assert delays == [0.05, 0.05]
+    assert executions == 3
+
+
+def test_sync_uses_integer_delay_as_seconds(monkeypatch: MonkeyPatch):
+    delays: list[float] = []
+    monkeypatch.setattr(retries, "sleep_sync", delays.append)
+
+    @retry(limit=1, delay=2)
+    def compute() -> None:
+        raise FakeException()
+
+    with raises(FakeException):
+        compute()
+
+    assert delays == [2.0]
+    assert isinstance(delays[0], float)
+
+
+def test_sync_uses_computed_delay_with_errors(monkeypatch: MonkeyPatch):
+    delays: list[float] = []
+    seen: list[tuple[int, type[Exception]]] = []
+    monkeypatch.setattr(retries, "sleep_sync", delays.append)
+
+    def make_delay(attempt: int, exc: Exception) -> float:
+        seen.append((attempt, type(exc)))
+        return attempt * 0.035
+
+    @retry(limit=2, delay=make_delay)
+    def compute() -> None:
+        raise FakeException()
+
+    with raises(FakeException):
+        compute()
+
+    assert delays == [0.035, 0.07]
+    assert seen == [(1, FakeException), (2, FakeException)]
+
+
+def test_sync_without_delay_does_not_sleep(monkeypatch: MonkeyPatch):
+    delays: list[float] = []
+    monkeypatch.setattr(retries, "sleep_sync", delays.append)
+    executions: int = 0
+
+    @retry(limit=3)
+    def compute() -> str:
+        nonlocal executions
+        executions += 1
+        if executions < 3:
+            raise FakeException()
+
+        return "done"
+
+    assert compute() == "done"
+    assert delays == []
+    assert executions == 3
+
+
+def test_sync_does_not_sleep_for_errors_which_are_not_retried(monkeypatch: MonkeyPatch):
+    delays: list[float] = []
+    monkeypatch.setattr(retries, "sleep_sync", delays.append)
+
+    @retry(limit=3, delay=1, catching=FakeException)
+    def compute() -> None:
+        raise ValueError("not retried")
+
+    with raises(ValueError):
+        compute()
+
+    assert delays == []
+
+
+def test_sync_stops_sleeping_after_success(monkeypatch: MonkeyPatch):
+    delays: list[float] = []
+    monkeypatch.setattr(retries, "sleep_sync", delays.append)
+    executions: int = 0
+
+    @retry(limit=5, delay=0.5)
+    def compute() -> int:
+        nonlocal executions
+        executions += 1
+        if executions == 1:
+            raise FakeException()
+
+        return executions
+
+    assert compute() == 2
+    assert delays == [0.5]
