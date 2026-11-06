@@ -395,7 +395,7 @@ instance that is already open raises `RuntimeError` from the backend.
 
 Every request records events within the current scope, whichever backend is bound to
 `HTTPClient.requesting` - including test doubles and custom implementations. Each event carries
-`http.request.method` and `url`, plus:
+`http.request.method` and `url.full`, plus:
 
 | Event                | Level | Additional attributes                   |
 | -------------------- | ----- | --------------------------------------- |

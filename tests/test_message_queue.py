@@ -1,12 +1,22 @@
 from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from logging import DEBUG, Handler, LogRecord, getLogger
 from typing import Any
 
 import pytest
 
 from haiway import ctx
-from haiway.helpers.message_queue import MQMessage, MQQueue
+from haiway.helpers.message_queue import MQMessage, MQMessageSource, MQQueue
 from haiway.types import FlatObject, Meta
+
+
+class _Collecting(Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[str] = []
+
+    def emit(self, record: LogRecord) -> None:
+        self.messages.append(record.getMessage())
 
 
 class Recorder:
@@ -231,3 +241,53 @@ async def test_consume_releases_consumer_when_loop_raises() -> None:
 
     assert broker.recorder.rejected == [{}]
     assert broker.cancelled == 1
+
+
+@pytest.mark.asyncio
+async def test_settling_records_the_source_of_the_message() -> None:
+    logger = getLogger("test-message-source")
+    logger.setLevel(DEBUG)
+    handler = _Collecting()
+    logger.addHandler(handler)
+    recorder = Recorder()
+    message = MQMessage(
+        content="payload",
+        acknowledge=recorder.acknowledge,
+        reject=recorder.reject,
+        meta=Meta.of({}),
+        source=MQMessageSource(system="custom", destination="jobs", attributes={"shard": 3}),
+    )
+    try:
+        async with ctx.scope("test", observability=logger):
+            await message.map(len).acknowledge()
+            await message.reject(requeue=False)
+
+    finally:
+        logger.removeHandler(handler)
+
+    rendered: str = "\n".join(handler.messages)
+    # the source survives mapping, and describes both outcomes alike
+    assert rendered.count("Event: messaging.settle") == 2
+    assert '"messaging.system"]: "custom"' in rendered
+    assert '"messaging.destination.name"]: "jobs"' in rendered
+    assert '"shard"]: 3' in rendered
+    assert '"messaging.settle.requeue"]: False' in rendered
+
+
+@pytest.mark.asyncio
+async def test_settling_a_message_without_a_source_records_the_outcome_only() -> None:
+    logger = getLogger("test-message-no-source")
+    logger.setLevel(DEBUG)
+    handler = _Collecting()
+    logger.addHandler(handler)
+    recorder = Recorder()
+    try:
+        async with ctx.scope("test", observability=logger):
+            await recorder.message("payload").acknowledge()
+
+    finally:
+        logger.removeHandler(handler)
+
+    rendered: str = "\n".join(handler.messages)
+    assert '"messaging.operation.name"]: "ack"' in rendered
+    assert "messaging.system" not in rendered

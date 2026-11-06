@@ -4,6 +4,8 @@ from collections.abc import (
     MutableSequence,
     Sequence,
 )
+from re import Pattern
+from re import compile as compile_pattern
 from time import monotonic
 from types import TracebackType
 from typing import NoReturn, Protocol, Self, cast, final, overload, runtime_checkable
@@ -491,6 +493,9 @@ class HTTPConnectionError(HTTPClientError):
     """
 
 
+_SCHEME: Pattern[str] = compile_pattern(r"[A-Za-z][A-Za-z0-9+.\-]*")
+"""Syntax of a URL scheme, which is what tells a `://` of an authority from one quoted in a path."""
+
 _DURATION_METRIC: str = "http.client.request.duration"
 """Distribution of request durations, in seconds - the OpenTelemetry HTTP client
 convention, so the usual dashboards and alerts apply to it unchanged."""
@@ -516,16 +521,17 @@ def _recorded_url(
     # cutting at the first delimiter rather than parsing keeps this from
     # failing on a URL which the backend will reject anyway
     location: str = url.partition("#")[0].partition("?")[0]
-    scheme, separator, remainder = location.partition("://")
-    if not separator:
+    split: tuple[str, str] | None = _split_authority(location)
+    if split is None:
         return location  # relative or opaque - no authority to redact
 
+    prefix, remainder = split
     authority, path_separator, path = remainder.partition("/")
     if "@" in authority:
         # only the userinfo is replaced - the host stays, it is the useful part
         authority = f"REDACTED@{authority.rpartition('@')[2]}"
 
-    return f"{scheme}://{authority}{path_separator}{path}"
+    return f"{prefix}{authority}{path_separator}{path}"
 
 
 def _recorded_host(
@@ -540,17 +546,37 @@ def _recorded_host(
     Missing for a relative URL: the base URL it resolves against belongs to the
     backend, which the facade does not see.
     """
-    _, separator, remainder = url.partition("://")
-    if not separator:
+    split: tuple[str, str] | None = _split_authority(url)
+    if split is None:
         return MISSING  # relative or opaque - no authority to read
 
-    authority: str = remainder.partition("/")[0].partition("?")[0].partition("#")[0]
+    authority: str = split[1].partition("/")[0].partition("?")[0].partition("#")[0]
     # userinfo never reaches an attribute, and the port belongs to `server.port`
     host: str = authority.rpartition("@")[2]
     if host.startswith("["):  # IPv6 literal - bare address, without the brackets
         return host.partition("]")[0].removeprefix("[")
 
     return host.partition(":")[0]
+
+
+def _split_authority(
+    url: str,
+    /,
+) -> tuple[str, str] | None:
+    """Split what precedes the authority of a URL from the rest, when it has one.
+
+    A scheme relative URL is told apart first, and anything before a ``://`` has
+    to be a scheme to count - the path or the query of a relative URL may quote
+    another URL, which names no authority of this one.
+    """
+    if url.startswith("//"):
+        return ("//", url[2:])
+
+    scheme, separator, remainder = url.partition("://")
+    if separator and _SCHEME.fullmatch(scheme):
+        return (f"{scheme}://", remainder)
+
+    return None
 
 
 def _record_failure(
@@ -566,12 +592,12 @@ def _record_failure(
     duration: float = monotonic() - started
     # the concrete type - a timeout and a refused connection are both an
     # HTTPClientError, and they call for different actions
-    error_type: str = type(exception).__name__
+    error_type: str = type(exception).__qualname__
     ctx.record_error(
         event="http.request.error",
         attributes={
             "http.request.method": method,
-            "url": url,
+            "url.full": url,
             "error.type": error_type,
             "duration": duration,
         },
@@ -612,7 +638,7 @@ class HTTPClient(State):
       `HTTPClient` instance from the active Haiway context.
     - Every request records observability events within the current scope:
       `http.request` and `http.response` at debug level, `http.request.error`
-      at error level. They carry the method, the URL, the status code, the
+      at error level. They carry the method, the URL (`url.full`), the status code, the
       elapsed time and the error type. Recorded URLs are stripped of userinfo,
       query and fragment, and neither headers nor bodies are ever recorded, so
       credentials do not reach the observability backend. For a streamed
@@ -1074,7 +1100,7 @@ class HTTPClient(State):
             event="http.request",
             attributes={
                 "http.request.method": method,
-                "url": recorded_url,
+                "url.full": recorded_url,
                 # a streamed payload has no known length - recording one would
                 # mean buffering it, which is the opposite of what it is for
                 "http.request.body.size": len(body) if isinstance(body, bytes) else MISSING,
@@ -1125,7 +1151,7 @@ class HTTPClient(State):
             event="http.response",
             attributes={
                 "http.request.method": method,
-                "url": recorded_url,
+                "url.full": recorded_url,
                 "http.response.status_code": response.status_code,
                 # for a streamed response this is the time to its headers - the
                 # body is transferred afterwards, outside of this call

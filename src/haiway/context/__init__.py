@@ -1,7 +1,7 @@
 from haiway.context.access import ctx
 from haiway.context.disposables import ContextDisposables, Disposable, Disposables, DisposableState
 from haiway.context.events import ContextEvents, EventsSubscription
-from haiway.context.identifier import ContextIdentifier
+from haiway.context.identifier import ContextIdentifier, ScopeKind
 from haiway.context.observability import (
     ContextObservability,
     LoggerObservability,
@@ -49,5 +49,6 @@ __all__ = (
     "ObservabilityScopeExiting",
     "ObservabilityTraceContextEncoding",
     "ObservabilityTraceIdentifying",
+    "ScopeKind",
     "ctx",
 )

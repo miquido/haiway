@@ -2,6 +2,7 @@ from asyncio import AbstractEventLoop, Future, Lock, get_running_loop, sleep, ti
 from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, MutableMapping
 from contextlib import AbstractAsyncContextManager
 from functools import partial
+from time import monotonic
 from types import TracebackType
 from typing import Any, Final, final
 
@@ -15,7 +16,16 @@ from pika.spec import Basic, Connection
 
 from haiway.context import ctx
 from haiway.helpers import MQMessage, MQQueue
-from haiway.helpers.message_queue import MQMessageAcknowledging, MQMessageRejecting
+from haiway.helpers.message_queue import (
+    MQMessageAcknowledging,
+    MQMessageRejecting,
+    MQMessageSource,
+)
+from haiway.rabbitmq.observability import (
+    OPERATION_DURATION_METRIC,
+    SENT_MESSAGES_METRIC,
+    SYSTEM_NAME,
+)
 from haiway.rabbitmq.types import RabbitMQException
 from haiway.types import FlatObject, Meta
 from haiway.utils import AsyncQueue, AsyncQueueEmpty, getenv_int, getenv_str
@@ -1382,15 +1392,88 @@ class _QueueAccess[Content]:
                 queue=self._queue,
             ) from exc
 
+        resolved_routing_key: str = routing_key if routing_key is not None else self._queue
+        # the exchange is the destination, the default one is addressed by the name
+        # of the queue - both fixed by configuration, unlike a routing key which may
+        # be chosen per message and is kept off the metrics
+        destination: str = exchange or self._queue
+        metric_attributes: Mapping[str, str] = {
+            "messaging.system": SYSTEM_NAME,
+            "messaging.operation.name": "publish",
+            "messaging.operation.type": "send",
+            "messaging.destination.name": destination,
+        }
+        # a producer scope is what the trace of the consumer continues from - the
+        # context is injected into the message from within it
+        async with ctx.scope(f"publish {destination}", kind="producer"):
+            ctx.record_info(
+                attributes={
+                    **metric_attributes,
+                    "messaging.rabbitmq.destination.routing_key": resolved_routing_key,
+                    "messaging.message.body.size": len(body),
+                }
+            )
+            started: float = monotonic()
+            failure: BaseException | None = None
+            try:
+                await self._published(
+                    body,
+                    attributes,
+                    exchange=exchange,
+                    routing_key=resolved_routing_key,
+                )
+
+            except BaseException as exc:
+                # cancellation included - an attempt which did not complete is not
+                # a success, whatever ended it. the exception propagates unchanged
+                failure = exc
+                raise
+
+            finally:
+                # in `finally` so a failure is measured too, and counted as sent -
+                # it was attempted, which is what the counter reports
+                outcome: Mapping[str, str] = (
+                    metric_attributes
+                    if failure is None
+                    else {**metric_attributes, "error.type": type(failure).__qualname__}
+                )
+                ctx.record_info(
+                    metric=OPERATION_DURATION_METRIC,
+                    value=monotonic() - started,
+                    unit="s",
+                    kind="histogram",
+                    attributes=outcome,
+                )
+                ctx.record_info(
+                    metric=SENT_MESSAGES_METRIC,
+                    value=1,
+                    unit="{message}",
+                    kind="counter",
+                    attributes=outcome,
+                )
+
+    async def _published(
+        self,
+        body: bytes,
+        attributes: FlatObject | None,
+        /,
+        *,
+        exchange: str | None,
+        routing_key: str,
+    ) -> None:
         # capture the channel so allocation, publish, and cleanup all refer to
         # the same one even if it is reopened meanwhile
         channel: _ChannelState = await self._ensure_channel()
 
-        headers: MutableMapping[str, Any] = (
-            {key: value for key, value in attributes.items() if value is not None}
-            if attributes
-            else {}
-        )
+        # the trace context goes first, so an attribute of the same name wins
+        headers: MutableMapping[str, Any] = {
+            **ctx.trace_context(),
+            **(
+                {key: value for key, value in attributes.items() if value is not None}
+                if attributes
+                else {}
+            ),
+        }
         publish_id: int | None = None
         confirmation: Future[None] | None = None
         if self._publisher_confirms:
@@ -1401,7 +1484,7 @@ class _QueueAccess[Content]:
         try:
             channel.channel.basic_publish(
                 exchange=exchange if exchange is not None else "",
-                routing_key=routing_key if routing_key is not None else self._queue,
+                routing_key=routing_key,
                 body=body,
                 mandatory=self._mandatory,
                 properties=BasicProperties(
@@ -1696,5 +1779,16 @@ class _QueueAccess[Content]:
                 acknowledge=acknowledge,
                 reject=reject,
                 meta=Meta.from_mapping(meta_values),
+                source=MQMessageSource(
+                    system=SYSTEM_NAME,
+                    destination=self._queue,
+                    attributes={
+                        # the routing key it was published with - unbounded at worst, so
+                        # it describes the event only, never the metrics
+                        "messaging.rabbitmq.destination.routing_key": method.routing_key,
+                        "messaging.rabbitmq.message.delivery_tag": delivery_tag,
+                        "messaging.message.body.size": len(body),
+                    },
+                ),
             ),
         )

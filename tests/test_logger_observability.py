@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from pytest import fixture, mark, raises
 
-from haiway import LoggerObservability, ctx
+from haiway import LoggerObservability, ScopeKind, ctx
 from haiway.context.identifier import ContextIdentifier
 
 
@@ -269,3 +269,22 @@ async def test_trace_context_is_empty_without_a_backend_encoder(
         # a logger has no distributed trace position to hand out, so there is
         # nothing to propagate - callers of it have to keep working regardless
         assert ctx.trace_context() == {}
+
+
+@mark.asyncio
+@mark.parametrize("kind", ("internal", "server", "client", "producer", "consumer"))
+async def test_scope_kind_is_accepted_by_the_logger_backend(
+    logger: tuple[Logger, list[LogRecord]],
+    kind: ScopeKind,
+) -> None:
+    instance, records = logger
+
+    async with ctx.scope("kinded", observability=instance, kind=kind):
+        ctx.log_info("inside")
+        async with ctx.scope("nested"):
+            # nothing to propagate - there is no trace behind a logger
+            assert ctx.trace_context() == {}
+
+    messages: list[str] = _messages(records)
+    assert any("Entering scope: kinded" in message for message in messages)
+    assert any("inside" in message for message in messages)

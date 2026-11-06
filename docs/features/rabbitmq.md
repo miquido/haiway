@@ -237,6 +237,31 @@ Publish confirmations get their own `publish_timeout` (30 s) rather than sharing
 (5 s), since a broker under load can take far longer to confirm a persistent write than to answer a
 channel operation.
 
+## Observability
+
+Publishing is traced and measured following the OpenTelemetry messaging conventions:
+
+- each publish runs in a `producer` scope named `publish {destination}` - the exchange, or the queue
+  when the default exchange is used - recording `messaging.system`, `messaging.destination.name`,
+  `messaging.rabbitmq.destination.routing_key` and `messaging.message.body.size`
+- the trace context of that scope is added to the message headers as `traceparent` and `tracestate`,
+  for a consumer to continue the trace of the publisher. Attributes passed to `publish` win over a
+  header of the same name
+- `messaging.client.operation.duration` (seconds, until the broker confirms when confirms are
+  enabled) and `messaging.client.sent.messages` are recorded with the system, operation and
+  destination, plus `error.type` for a failed publish. Message bodies and headers are never recorded
+
+Consuming opens no scope of its own - the handler is your code, and the scope it runs in is yours.
+Settling a message, by `async with message` or by calling `acknowledge()` / `reject()`, records a
+`messaging.settle` event within the current scope: `ack` at debug level, `reject` at info level,
+carrying `messaging.system`, `messaging.destination.name`, the routing key, the delivery tag, the
+body size and the plain options of the settle, `requeue` for instance. Message headers and bodies
+are never recorded.
+
+The headers a message was published with, the trace context among them, are available in
+`message.meta`. Consuming does not continue the trace of the publisher by itself: a scope nested
+within the one of the consumer loop stays in the trace of that loop.
+
 ## Operational Notes
 
 - The connection URL defaults to `RABBITMQ_URL` (`amqp://localhost:5672` when unset), read when the

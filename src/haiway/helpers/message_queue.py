@@ -1,16 +1,20 @@
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from types import TracebackType
-from typing import Any, Protocol, final, overload, runtime_checkable
+from typing import Any, Final, Protocol, final, overload, runtime_checkable
 
 from haiway.attributes import State
+from haiway.context import ObservabilityAttribute, ctx
 from haiway.helpers.statemethods import statemethod
 from haiway.types import FlatObject, Immutable, Meta
 
 __all__ = (
     "MQMessage",
+    "MQMessageSource",
     "MQQueue",
 )
+
+_SETTLE_EVENT: Final[str] = "messaging.settle"
 
 
 @runtime_checkable
@@ -30,6 +34,28 @@ class MQMessageRejecting(Protocol):
 
 
 @final
+class MQMessageSource(Immutable):
+    """Where a message was received from, as queue adapters describe it.
+
+    The system and the destination are what a message is attributed to, so they
+    exist together or not at all - a message either has a source or it has none.
+
+    Parameters
+    ----------
+    system : str
+        Messaging system the message was received from, as ``"rabbitmq"``.
+    destination : str
+        Queue or topic the message was received from.
+    attributes : Mapping[str, ObservabilityAttribute]
+        Further attributes describing the receiving, recorded with the settle event.
+    """
+
+    system: str
+    destination: str
+    attributes: Mapping[str, ObservabilityAttribute] = {}
+
+
+@final
 class MQMessage[Content](Immutable):
     """Immutable message wrapper returned by queue consumers.
     The message holds the deserialized `content` and accompanying `meta`
@@ -40,6 +66,12 @@ class MQMessage[Content](Immutable):
     exception calls `acknowledge`, while exiting with an exception calls
     `reject`. Either outcome commits the message in the broker so other
     consumers cannot inspect it unless the queue explicitly requeues it.
+
+    Settling a message - by either way - records a ``messaging.settle`` event
+    within the current scope: ``ack`` at debug level, ``reject`` at info level,
+    carrying the system and the destination the message was received from.
+    No scope is opened for the processing.
+
     Parameters
     ----------
     content : Content
@@ -50,6 +82,8 @@ class MQMessage[Content](Immutable):
         Callable invoked to mark the message as failed/undesirable.
     meta : Meta
         Transport-specific metadata attached to the message.
+    source : MQMessageSource | None, optional
+        Where the message was received from, recorded with the settle event.
     Notes
     -----
     Use the async context manager for straightforward processing where the
@@ -75,6 +109,7 @@ class MQMessage[Content](Immutable):
 
     content: Content
     meta: Meta
+    source: MQMessageSource | None
     _acknowledge: MQMessageAcknowledging
     _reject: MQMessageRejecting
 
@@ -84,12 +119,14 @@ class MQMessage[Content](Immutable):
         acknowledge: MQMessageAcknowledging,
         reject: MQMessageRejecting,
         meta: Meta,
+        source: MQMessageSource | None = None,
     ) -> None:
         super().__init__(
             content=content,
             _acknowledge=acknowledge,
             _reject=reject,
             meta=meta,
+            source=source,
         )
 
     def map[MappedContent](
@@ -101,6 +138,7 @@ class MQMessage[Content](Immutable):
             acknowledge=self._acknowledge,
             reject=self._reject,
             meta=self.meta,
+            source=self.source,
         )
 
     async def acknowledge(
@@ -115,6 +153,7 @@ class MQMessage[Content](Immutable):
             Backend-specific settle options. Unsupported options raise.
         """
         await self._acknowledge(**extra)
+        self._record_settled("ack", extra)
 
     async def reject(
         self,
@@ -129,6 +168,7 @@ class MQMessage[Content](Immutable):
             dead-letter instead of redelivering. Unsupported options raise.
         """
         await self._reject(**extra)
+        self._record_settled("reject", extra)
 
     async def __aenter__(self) -> Content:
         return self.content
@@ -140,9 +180,37 @@ class MQMessage[Content](Immutable):
         exc_tb: TracebackType | None,
     ) -> None:
         if exc_val is not None:
-            await self._reject()
+            await self.reject()
+
         else:
-            await self._acknowledge()
+            await self.acknowledge()
+
+    def _record_settled(
+        self,
+        operation: str,
+        options: Mapping[str, Any],
+        /,
+    ) -> None:
+        attributes: dict[str, ObservabilityAttribute] = {
+            "messaging.operation.name": operation,
+            "messaging.operation.type": "settle",
+        }
+        if self.source is not None:
+            attributes["messaging.system"] = self.source.system
+            attributes["messaging.destination.name"] = self.source.destination
+            attributes.update(self.source.attributes)
+
+        # settle options are adapter specific, only the plain ones describe the outcome
+        for name, value in options.items():
+            if isinstance(value, bool | int | float | str):
+                attributes[f"messaging.settle.{name}"] = value
+
+        # an acknowledged message is the routine outcome, a rejected one is not
+        if operation == "ack":
+            ctx.record_debug(event=_SETTLE_EVENT, attributes=attributes)
+
+        else:
+            ctx.record_info(event=_SETTLE_EVENT, attributes=attributes)
 
 
 @runtime_checkable

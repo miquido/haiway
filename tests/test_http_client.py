@@ -22,6 +22,8 @@ from haiway.helpers.http_client import (
     HTTPHeaders,
     HTTPResponse,
     HTTPTimeoutError,
+    _recorded_host,
+    _recorded_url,
 )
 
 
@@ -417,7 +419,7 @@ async def test_http_client_records_request_and_response_events() -> None:
     ]
     request_attributes = events[0][2]
     assert request_attributes["http.request.method"] == "POST"
-    assert request_attributes["url"] == "https://example.com/users"
+    assert request_attributes["url.full"] == "https://example.com/users"
     assert request_attributes["http.request.body.size"] == len(b"payload")
     response_attributes = events[1][2]
     assert response_attributes["http.response.status_code"] == 201
@@ -504,7 +506,7 @@ async def test_http_client_records_url_without_credentials_or_query() -> None:
 
     # the host and path identify the request, the rest can authorize it
     for _, _, attributes in events:
-        assert attributes["url"] == "https://REDACTED@example.com/files"
+        assert attributes["url.full"] == "https://REDACTED@example.com/files"
 
 
 @mark.asyncio
@@ -517,7 +519,7 @@ async def test_http_client_records_relative_url_as_given() -> None:
         await HTTPClient(requesting=responding).get(url="/files?token=leaked")
 
     # the base URL belongs to the backend, so the facade records what it has
-    assert events[0][2]["url"] == "/files"
+    assert events[0][2]["url.full"] == "/files"
 
 
 @mark.asyncio
@@ -845,3 +847,43 @@ async def test_http_response_releasing_a_buffered_body_leaves_it_readable() -> N
 
     assert await response.body() == b"buffered"
     assert [chunk async for chunk in response.stream_body()] == [b"buffered"]
+
+
+@mark.parametrize(
+    ("url", "expected"),
+    (
+        ("https://user:pw@example.com/p?token=abc#frag", "https://REDACTED@example.com/p"),
+        ("//user:pw@example.com/p?token=abc", "//REDACTED@example.com/p"),
+        ("//example.com/p?token=abc", "//example.com/p"),
+        # a `://` within the path is no scheme delimiter
+        (
+            "//user:pw@example.com/redirect/https://other.example/p?token=abc",
+            "//REDACTED@example.com/redirect/https://other.example/p",
+        ),
+        ("/redirect/https://other.example/p", "/redirect/https://other.example/p"),
+        ("/relative?token=abc", "/relative"),
+    ),
+)
+def test_recorded_url_redacts_credentials_of_every_url_form(url: str, expected: str) -> None:
+    assert _recorded_url(url) == expected
+
+
+@mark.parametrize(
+    ("url", "expected"),
+    (
+        ("https://user:pw@api.example.com:8443/p?x=1", "api.example.com"),
+        ("http://[::1]:8080/p", "::1"),
+        ("//api.example.com/p", "api.example.com"),
+        ("custom+scheme-1.0://api.example.com/p", "api.example.com"),
+        # a URL quoted within a relative one names no authority of its own
+        ("/x?next=https://evil.example/p", MISSING),
+        ("/redirect/https://other.example/p", MISSING),
+        ("/a/b?x=1#https://frag.example", MISSING),
+        ("/relative", MISSING),
+    ),
+)
+def test_recorded_host_reads_only_the_authority_of_the_url_itself(
+    url: str,
+    expected: object,
+) -> None:
+    assert _recorded_host(url) == expected

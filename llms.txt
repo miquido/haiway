@@ -106,8 +106,9 @@ async with ctx.scope("request", RuntimeConfig(debug=True), disposables=(HTTPXCli
     config = ctx.state(RuntimeConfig)
 ```
 
-`ctx.scope(name_or_preset, /, *state, disposables=None, observability=None, isolated=False)` is an
-async context manager yielding the scope trace id. Nested scopes inherit parent state.
+`ctx.scope(name_or_preset, /, *state, disposables=None, observability=None, kind="internal", isolated=False)`
+is an async context manager yielding the scope trace id. `kind` (`ScopeKind`: `"internal" | "server" |
+"client" | "producer" | "consumer"`) is the role of the scope in a trace, a span kind for OpenTelemetry. Nested scopes inherit parent state.
 
 State priority, highest first: **explicit state -> explicit disposables -> preset state -> parent
 scope state**.
@@ -194,6 +195,8 @@ the iteration is left early.
   no generic `ctx.record(...)`. `ctx.trace_id()` returns the current trace id.
 - Install a backend on the root scope: `observability=LoggerObservability(...)`, or
   `OpenTelemetry.observability(...)` after a one-time `OpenTelemetry.configure(...)` at startup.
+  Under OpenTelemetry events and exceptions are log records correlated with the span (no span
+  events) and a failed scope sets the span status and `error.type`.
 - Never log secrets, credentials, or full request bodies.
 
 ## Integrations
@@ -225,7 +228,11 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
   `consume`. Consuming is scoped - `async with await queue.consume() as messages:` then
   `async for message in messages:` - and leaving it cancels the consumer at the broker.
   `async with message as content:` acks on success and rejects on exception. Consumers are
-  re-established after a channel drop, so handlers must be idempotent. Errors: `RabbitMQException`
+  re-established after a channel drop, so handlers must be idempotent. Publishing runs in a
+  `producer` scope, injects the trace context into the message headers and records
+  `messaging.client.*` metrics; settling a message records a `messaging.settle` event in the
+  current scope.
+  Errors: `RabbitMQException`
   carrying `retryable` to tell a transient broker failure from one a retry cannot fix.
 - **Starlette** (`haiway.starlette`): `ServerContext(*state, disposables=(...), presets=...,
   observability=...)` declares the request context, and `application(...)` builds a `Starlette` app
@@ -237,8 +244,9 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
   disposables are prepared once, so a context backs a single run and its lifespan can not be
   entered again. The
   lifespan is required - a request reaching an app without it fails rather than being served an
-  incomplete scope. Every request runs in its own scope named `"{method} {path}"` (`"WS {path}"`) -
-  the requested path, since the middleware runs before routing. Responses carry the `trace-id`
+  incomplete scope. Every request runs in its own `kind="server"` scope named `"{method} {path}"` (`"WS {path}"`) -
+  the requested path, since the middleware runs before routing; the OpenTelemetry span is renamed
+  `"{method} {route}"` (just `"{method}"` unrouted) once the route is known. Responses carry the `trace-id`
   header, plus `traceparent`/`tracestate` when the backend provides them, dropping any entry a
   header can not hold. An unhandled exception is recorded as the failure of its request, its stack
   trace included, and reraised - answering it is left to the framework's server error handling,

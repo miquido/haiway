@@ -7,15 +7,17 @@ pytest.importorskip("starlette")
 pytest.importorskip("opentelemetry")
 pytest.importorskip("httpx2")
 
-from httpx2 import MockTransport
+from httpx2 import ConnectError, MockTransport
 from httpx2 import Request as HTTPXRequest
 from httpx2 import Response as HTTPXResponse
 from opentelemetry import trace
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
-from opentelemetry.trace import StatusCode, Tracer
+from opentelemetry.trace import SpanKind, StatusCode, Tracer
 from pytest import MonkeyPatch, fixture, mark, raises
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -24,14 +26,16 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.types import Message
 from starlette.websockets import WebSocket
 
-from haiway import HTTPClient, ctx
+from haiway import HTTPClient, HTTPConnectionError, ctx
 from haiway.httpx import HTTPXClient
-from haiway.opentelemetry import OpenTelemetry, OpenTelemetryException
+from haiway.opentelemetry import OpenTelemetry, OpenTelemetryException, observability
 from haiway.starlette import (
     ServerContext,
     StreamResponse,
     application,
 )
+from haiway.starlette.middleware import _request_attributes
+from haiway.starlette.observability import request_metric_attributes
 from tests.asgi import (
     TRACE_ID_HEADER,
     Result,
@@ -429,15 +433,13 @@ async def test_failed_request_span_records_its_exception(
             await app(http_scope(), receive_request, result.collecting())
 
     span: ReadableSpan = _request_span(spans)
-    events = [event for event in span.events if event.name == "exception"]
 
     # the failure which needs correlating the most - the response answering it
-    # carries the trace headers, the trace carries its stack trace
+    # carries the trace headers, the span the error type
     assert span.status.status_code is StatusCode.ERROR
-    assert len(events) == 1
-    assert events[0].attributes is not None
-    assert events[0].attributes["exception.type"] == "ValueError"
-    assert "raise ValueError" in str(events[0].attributes["exception.stacktrace"])
+    assert span.attributes is not None
+    assert span.attributes["error.type"] == "ValueError"
+    assert not span.events  # exceptions are reported as logs, not span events
     assert span.context is not None
     assert result.headers[TRACE_ID_HEADER] == f"{span.context.trace_id:032x}"
 
@@ -465,3 +467,208 @@ async def test_failed_request_span_still_carries_its_attributes(
     assert span.attributes["http.request.method"] == "GET"
     # the error handling of the framework answered it within its scope
     assert span.attributes["http.response.status_code"] == 500
+
+
+@mark.asyncio
+async def test_request_span_is_a_server_span_named_after_the_route(
+    spans: InMemorySpanExporter,
+) -> None:
+    async def endpoint(request: Request) -> Response:
+        return PlainTextResponse("done")
+
+    app: Starlette = application(
+        ServerContext(observability=OpenTelemetry.observability),
+        routes=[Route("/users/{user_id}", endpoint)],
+    )
+
+    async with running(app):
+        await send_request(app, path="/users/12345")
+        await send_request(app, path="/missing/12345")
+
+    names: Sequence[str] = [span.name for span in spans.get_finished_spans()]
+    # the route template, never the raw path - and just the method when unrouted
+    assert sorted(names) == ["GET", "GET /users/{user_id}"]
+    assert all(span.kind is SpanKind.SERVER for span in spans.get_finished_spans())
+
+
+@fixture
+def logs(
+    spans: InMemorySpanExporter,
+    monkeypatch: MonkeyPatch,
+) -> Iterator[InMemoryLogRecordExporter]:
+    exporter = InMemoryLogRecordExporter()
+    provider = LoggerProvider(shutdown_on_exit=False)
+    provider.add_log_record_processor(SimpleLogRecordProcessor(exporter))
+    monkeypatch.setattr(observability, "get_logger_provider", lambda: provider)
+    OpenTelemetry.autoconfigure(service="test-service", version="1.2.3", environment="test")
+
+    yield exporter
+
+    provider.shutdown()
+
+
+@mark.asyncio
+async def test_unknown_method_is_bounded_on_the_span_and_its_name(
+    spans: InMemorySpanExporter,
+) -> None:
+    app: Starlette = _application()
+
+    async with running(app):
+        await send_request(app, method="X" * 500)
+
+    (span,) = spans.get_finished_spans()
+    # the method is chosen by the caller - an unbounded set of values would become
+    # unbounded span names and metric series
+    assert span.name == "HTTP /example"
+    assert span.attributes is not None
+    assert span.attributes["http.request.method"] == "_OTHER"
+    assert span.attributes["http.request.method_original"] == "X" * 500
+
+
+def test_unknown_method_is_a_bounded_metric_dimension() -> None:
+    attributes = _request_attributes(http_scope(), method="BREW", status=200)
+
+    assert request_metric_attributes(attributes)["http.request.method"] == "_OTHER"
+
+
+@mark.asyncio
+async def test_credentials_of_a_request_never_reach_telemetry(
+    spans: InMemorySpanExporter,
+    logs: InMemoryLogRecordExporter,
+) -> None:
+    async def endpoint(request: Request) -> Response:
+        ctx.log_info("handling")
+        ctx.record_info(event="handled")
+        raise ValueError("boom")
+
+    app: Starlette = application(
+        ServerContext(observability=OpenTelemetry.observability),
+        routes=[Route("/example", endpoint)],
+    )
+
+    async with running(app):
+        with raises(ValueError):
+            await send_request(
+                app,
+                query="token=SECRET-QUERY",
+                headers=(
+                    (b"authorization", b"Bearer SECRET-AUTH"),
+                    (b"cookie", b"session=SECRET-COOKIE"),
+                    (b"x-api-key", b"SECRET-KEY"),
+                ),
+            )
+
+    exported: str = repr(
+        [
+            (span.name, dict(span.attributes or {}), [event.name for event in span.events])
+            for span in spans.get_finished_spans()
+        ]
+    ) + repr(
+        [
+            (entry.log_record.body, dict(entry.log_record.attributes or {}))
+            for entry in logs.get_finished_logs()
+        ]
+    )
+
+    assert "SECRET" not in exported
+
+
+@mark.asyncio
+async def test_hostile_trace_headers_do_not_break_the_response(
+    spans: InMemorySpanExporter,
+) -> None:
+    app: Starlette = _application()
+
+    async with running(app):
+        result: Result = await send_request(
+            app,
+            headers=(
+                (b"traceparent", REMOTE_TRACEPARENT.encode()),
+                (b"tracestate", b"vendor=value\r\nset-cookie: pwned=1"),
+            ),
+        )
+
+    assert result.status == 200
+    assert not any("\r" in value or "\n" in value for value in result.headers.values())
+    assert "set-cookie" not in result.headers
+
+
+@mark.asyncio
+async def test_websocket_span_is_named_after_the_route_not_the_path(
+    spans: InMemorySpanExporter,
+) -> None:
+    async def endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.close()
+
+    app: Starlette = application(
+        ServerContext(observability=OpenTelemetry.observability),
+        routes=[WebSocketRoute("/rooms/{room}", endpoint)],
+    )
+
+    incoming: Queue[Message] = Queue()
+
+    async def send(message: Message) -> None:
+        pass
+
+    await incoming.put({"type": "websocket.connect"})
+    async with running(app):
+        await app(websocket_scope(path="/rooms/SECRET-ROOM-TOKEN"), incoming.get, send)
+
+    (span,) = spans.get_finished_spans()
+    assert span.name == "WS /rooms/{room}"
+    assert span.kind is SpanKind.SERVER
+
+
+@mark.asyncio
+async def test_exception_chain_of_a_failed_request_exposes_neither_url_nor_messages(
+    spans: InMemorySpanExporter,
+    logs: InMemoryLogRecordExporter,
+) -> None:
+    # assembled at runtime - a stack trace carries the source lines, which would
+    # otherwise contain the very literals searched for
+    token: str = "-".join(("hunter", "2"))
+    password: str = "-".join(("pass", "word"))
+    refusal: str = "-".join(("connection", "refused"))
+
+    def downstream(request: HTTPXRequest) -> HTTPXResponse:
+        raise ConnectError(refusal)
+
+    async def endpoint(request: Request) -> Response:
+        await HTTPClient.get(url=f"/downstream?token={token}")
+        return PlainTextResponse("unreachable")
+
+    app: Starlette = application(
+        ServerContext(
+            observability=OpenTelemetry.observability,
+            disposables=(
+                HTTPXClient(
+                    base_url=f"https://user:{password}@downstream.test",
+                    transport=MockTransport(downstream),
+                ),
+            ),
+        ),
+        routes=[Route("/example", endpoint)],
+    )
+
+    async with running(app):
+        with raises(HTTPConnectionError):
+            await send_request(app)
+
+    exported: str = repr(
+        [
+            (span.name, dict(span.attributes or {}), [event.name for event in span.events])
+            for span in spans.get_finished_spans()
+        ]
+    ) + repr(
+        [
+            (entry.log_record.body, dict(entry.log_record.attributes or {}))
+            for entry in logs.get_finished_logs()
+        ]
+    )
+
+    # the chain is reported by its types, the messages of the causes are not
+    assert "ConnectError: <redacted>" in exported
+    assert refusal not in exported
+    assert token not in exported
+    assert password not in exported

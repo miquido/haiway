@@ -17,6 +17,7 @@ from typing import Any, NoReturn, final, overload
 from haiway.attributes import State
 from haiway.context.disposables import ContextDisposables, Disposable, Disposables
 from haiway.context.events import ContextEvents, EventsSubscription
+from haiway.context.identifier import ScopeKind
 from haiway.context.observability import (
     ContextObservability,
     Observability,
@@ -155,6 +156,7 @@ class ctx:
         *state: State | None,
         disposables: Iterable[Disposable | None] | None = None,
         observability: Observability | Logger | None = None,
+        kind: ScopeKind = "internal",
         isolated: bool = False,
     ) -> AbstractAsyncContextManager[str]:
         """
@@ -199,6 +201,13 @@ class ctx:
             When not provided, the current observability backend is reused if one exists;
             otherwise a logger with the scope name will be requested and used.
 
+        kind: ScopeKind = "internal"
+            the role the scope plays in a trace - "server" for the handling of an incoming
+            request, "consumer" for processing a received message, "client" and "producer"
+            for outgoing calls and published messages, "internal" for everything else.
+            Observability backends use it to describe the scope the way tracing systems
+            expect, which is what service maps and request metrics derived from traces rely on.
+
         isolated: bool = False
             controls whether event handling is isolated from the parent scope. When set to
             True, the scope uses its own event bus, so events sent within it do not reach
@@ -239,6 +248,7 @@ class ctx:
             disposables=context_disposables,
             state=tuple(element for element in state if element is not None),
             observability=observability,
+            kind=kind,
             isolated=isolated,
         )
 

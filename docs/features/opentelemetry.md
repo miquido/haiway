@@ -96,10 +96,10 @@ scopes report a zero trace identifier.
 Both `configure()` and `autoconfigure()` raise `OpenTelemetryException` when `service` is empty, and
 `observability()` raises it when neither has been called yet.
 
-Telemetry is attributed to an instrumentation scope named after `service`, carrying `version`. The
-service is identified by the resource attributes as well, per the OpenTelemetry specification, which
-is what `autoconfigure()` relies on - there the resource belongs to the externally installed
-providers.
+Telemetry is attributed to an instrumentation scope named `haiway`, carrying the installed Haiway
+version - the scope names the library producing telemetry. The service is identified by the resource
+attributes, per the OpenTelemetry specification, which is what `autoconfigure()` relies on - there
+the resource belongs to the externally installed providers.
 
 ### Flushing and Shutdown
 
@@ -133,12 +133,12 @@ so avoid it after `shutdown()`.
 
 ### Basic Configuration
 
-| Parameter     | Type          | Description                                             |
-| ------------- | ------------- | ------------------------------------------------------- |
-| `service`     | `str`         | Name of your service. Must not be empty.                |
-| `version`     | `str`         | Version of your service                                 |
-| `environment` | `str`         | Deployment environment (e.g., "production", "staging")  |
-| `instance`    | `str \| None` | Instance identifier. Defaults to the current process id |
+| Parameter     | Type          | Description                                                                                 |
+| ------------- | ------------- | ------------------------------------------------------------------------------------------- |
+| `service`     | `str`         | Name of your service. Must not be empty.                                                    |
+| `version`     | `str`         | Version of your service                                                                     |
+| `environment` | `str`         | Deployment environment (e.g., "production", "staging")                                      |
+| `instance`    | `str \| None` | Instance identifier. Defaults to a random UUID, which is unique across hosts and containers |
 
 ### OTLP Export Configuration
 
@@ -278,9 +278,23 @@ async def handle_request():
             await call_external_service()
 ```
 
-### External Trace Linking
+### Span Kind
 
-Connect to existing distributed traces from other services:
+Spans are `INTERNAL` unless the scope declares what role it plays, which is what service maps and
+request metrics derived from traces rely on:
+
+```python
+async with ctx.scope("handle-request", kind="server"):
+    ...
+```
+
+`kind` is one of `internal` (the default), `server`, `client`, `producer` and `consumer`, mapped to
+the span kind of the same name. The Starlette and FastAPI integrations enter their request scopes as
+`server`. A `server` scope is also renamed once the attributes describing its request are recorded:
+`http.request.method` and `http.route` make the span `GET /users/{id}`, and a request which matched
+no route is just `GET` - the raw path has unbounded cardinality, so it stays an attribute.
+
+### External Trace Linking
 
 ```python
 # Continue an external trace from the W3C trace context headers
@@ -299,7 +313,7 @@ incoming trace continues as a single trace across services, and `tracestate=` ca
 trace state along with it. Decoding is delegated to the OpenTelemetry trace context propagator, so
 field lengths, reserved versions, and zeroed identifiers are validated exactly as the W3C
 specification requires. Anything it rejects is ignored with a warning and the scope starts its own
-trace instead. The value is decoded once, when the adapter is created.
+trace instead. The context is extracted once, when the adapter is created.
 
 The remote parent applies to root scopes only. A nested scope entered within a spawned task stays
 under the span its task inherited, instead of being re-rooted at the remote parent.
@@ -449,6 +463,10 @@ async with ctx.scope("critical-operation", observability=observability):
 
 ### Custom Events
 
+Events are log records carrying an event name, correlated with the active span - span events are
+deprecated by OpenTelemetry. They are exported through the logs signal, with the severity of the
+level they were recorded at, so a backend has to ingest logs to show them.
+
 Record significant events with structured attributes:
 
 ```python
@@ -526,18 +544,21 @@ Anything passed through `attributes=` is applied last, so it can override these.
 
 ### Error Handling and Status
 
-On scope exit, spans are marked `ERROR` - described as `TypeName: message` - when the scope exits
-with a regular exception, and left `UNSET` otherwise. `OK` is deliberately not set on success: the
-OpenTelemetry specification reserves it for explicitly asserted success, and the SDK treats it as
-terminal, which would stop a later error from being recorded on the same span.
+On scope exit, spans are marked `ERROR` - described as the exception type, with `error.type` set to
+it - when the scope exits with a regular exception, and left `UNSET` otherwise. The message is left
+out of the description, since it may carry sensitive data. `OK` is deliberately not set on success:
+the OpenTelemetry specification reserves it for explicitly asserted success, and the SDK treats it
+as terminal, which would stop a later error from being recorded on the same span.
 
 Cancellation is not an error. A scope exiting with `CancelledError` - or any other `BaseException`
 which is not an `Exception` - leaves the status `UNSET`, since cancellation is routine control flow
 under structured concurrency and marking it would paint whole subtrees red.
 
-Logging with `exception=...` reports the failure through both signals - `exception.type`,
-`exception.message` and `exception.stacktrace` on the log record, and an `exception` event on the
-active span:
+Exceptions are reported as log records - `exception.type`, `exception.message` and
+`exception.stacktrace`, correlated with the active span - never as span events, whose API
+OpenTelemetry deprecates in favor of log based events. A failing scope reports its exception this
+way, once: an exception logged with `exception=...` and then raised out of the scope is not reported
+again:
 
 ```python
 async with ctx.scope("risky-operation"):
@@ -545,8 +566,8 @@ async with ctx.scope("risky-operation"):
         await potentially_failing_operation()
         # Span status: UNSET
     except Exception as e:
-        # Span status: ERROR, described as "TypeName: message"
-        # Exception details attached to the log record and to the active span:
+        # Span status: ERROR, described as the exception type
+        # Exception details carried by the log record:
         ctx.log_error("Operation failed", exception=e)
         raise
 ```
@@ -594,6 +615,34 @@ request.id=req-123
 request.method=POST
 tags=("api", "critical")
 ```
+
+## Data Exposure
+
+Telemetry leaves the process and is stored elsewhere, so what reaches it is worth knowing:
+
+- **Never recorded by the integrations:** query strings, request and response headers and bodies
+  (credentials included), the address of the caller, SQL statements and their parameters. URLs
+  recorded by the HTTP client have their userinfo replaced with `REDACTED` and their query and
+  fragment dropped, scheme relative ones included.
+- **Recorded by design:** the requested path (`url.path`, and the name of the scope, which labels
+  every log and event within it as `haiway.scope.name`). A path carrying a secret - a reset token,
+  say - is exported with it. Span names are the exception: HTTP and websocket spans are named after
+  the route template once the request is routed, and after the method alone when it is not.
+- **Exception details:** a failed scope, and a log carrying `exception=...`, export the exception
+  type, its message and its stack trace as a log record, once however many scopes it travels
+  through. The stack trace holds source lines but no local variables. The chain of causes is
+  exported by type and frames only - their messages are replaced with `<redacted>`, since they come
+  from the libraries the integrations wrap (a database driver quotes values of a statement) rather
+  than from code that chose what to say. The message of the exception itself is exported as it is,
+  so keep secrets out of the messages of your own exceptions. The span status carries the type only.
+- **Bounded by design:** the request method is reported as `_OTHER` when it is not a standard one
+  (the received value stays on the span as `http.request.method_original`), and request metrics are
+  kept by method, route and status only - a caller can not create series by choosing values.
+- **Baggage is neither read nor propagated.** Only the W3C trace position (`traceparent` and
+  `tracestate`) crosses service boundaries, so nothing a caller sends beyond it is forwarded to the
+  services this one calls, or into the headers of the messages it publishes.
+- **Attribute values** which are not strings, numbers or booleans are exported as their `str()`, so
+  keep objects holding secrets out of attributes.
 
 ## Integration with Popular Tools
 

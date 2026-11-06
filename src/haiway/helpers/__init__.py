@@ -38,7 +38,7 @@ from haiway.helpers.http_client import (
     HTTPStatusCode,
     HTTPTimeoutError,
 )
-from haiway.helpers.message_queue import MQMessage, MQQueue
+from haiway.helpers.message_queue import MQMessage, MQMessageSource, MQQueue
 from haiway.helpers.retries import retry
 from haiway.helpers.statemethods import statemethod
 from haiway.helpers.throttling import throttle
@@ -71,6 +71,7 @@ __all__ = (
     "HTTPTimeoutError",
     "LoggerObservability",
     "MQMessage",
+    "MQMessageSource",
     "MQQueue",
     "Paths",
     "asynchronous",
