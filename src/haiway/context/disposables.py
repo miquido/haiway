@@ -6,6 +6,7 @@ from typing import Protocol, Self, final, runtime_checkable
 from haiway.attributes import State
 from haiway.context.observability import ContextObservability, ObservabilityLevel
 from haiway.context.state import ContextState
+from haiway.context.tasks import ScopeTaskGroup
 from haiway.utils.exceptions import raise_collected
 
 __all__ = (
@@ -220,7 +221,8 @@ class Disposables:
                 if disposing.done():
                     # the disposal itself got cancelled, nothing is left running
                     cancellation = cancellation or exc
-                    results = ()
+                    # finished together with the cancellation - keep its results
+                    results = () if disposing.cancelled() else disposing.result()
                     break
 
                 cancellation = cancellation or exc  # keep waiting, deliver it afterwards
@@ -285,7 +287,11 @@ class ContextDisposables:
 
     async def __aenter__(self) -> None:
         assert self._context_state is None  # nosec: B101
-        self._context_state = ContextState.updating(await self._disposables.__aenter__())
+        # tasks spawned while preparing would be joined only after disposal
+        with ScopeTaskGroup.forbidding():
+            prepared = await self._disposables.__aenter__()
+
+        self._context_state = ContextState.updating(prepared)
         self._context_state.__enter__()
 
     async def __aexit__(
@@ -297,11 +303,12 @@ class ContextDisposables:
         assert self._context_state is not None  # nosec: B101
 
         try:
-            await self._disposables.__aexit__(
-                exc_type,
-                exc_val,
-                exc_tb,
-            )
+            with ScopeTaskGroup.forbidding():
+                await self._disposables.__aexit__(
+                    exc_type,
+                    exc_val,
+                    exc_tb,
+                )
 
         finally:
             self._context_state.__exit__(

@@ -368,6 +368,21 @@ class _ExternalCache[**Args, Result, Key: Hashable]:
         self._write: CacheWrite[Key, Result] = write
         self._clear: CacheClear[Key] | None = clear
 
+    async def _writing(
+        self,
+        key: Key,
+        value: Result,
+    ) -> None:
+        # best effort - a failed write must not fail the scope which spawned it
+        try:
+            await self._write(key=key, value=value)
+
+        except Exception as exc:
+            ctx.log_error(
+                "Failed to write the cache entry",
+                exception=exc,
+            )
+
     async def clear_cache(
         self,
         key: Key | None = None,
@@ -391,7 +406,7 @@ class _ExternalCache[**Args, Result, Key: Hashable]:
         if entry is None:
             result: Result = await self._function(*args, **kwargs)
             ctx.spawn(  # write the value asynchronously
-                self._write,
+                self._writing,
                 key=key,
                 value=result,
             )
