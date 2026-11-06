@@ -1309,9 +1309,9 @@ async def test_requests_are_recorded_as_the_conventions_describe_them() -> None:
     assert '"http.request.method"]: "GET"' in recorded
     assert '"http.response.status_code"]: 201' in recorded
     assert '"url.scheme"]: "http"' in recorded
-    # the routing of Starlette leaves no route in the scope, so there is no route
-    # template to report - a FastAPI application is where one is available
-    assert "http.route" not in recorded
+    # the routing leaves the route it matched in the scope, so the template behind
+    # the requested path is reported as well
+    assert '"http.route"]: "/users/{identifier}"' in recorded
 
 
 class _ExampleRoute:
