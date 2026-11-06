@@ -5,6 +5,7 @@ SHELL := sh
 
 SOURCES_PATH := src
 TESTS_PATH := tests
+BENCHMARKS_PATH := benchmarks
 
 # load environment config from .env if able
 -include .env
@@ -18,7 +19,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.13.7
 endif
 
-.PHONY: uv_check venv sync update format lint test docs docs-server docs-format docs-lint release
+.PHONY: uv_check venv sync update format lint test benchmark docs docs-server docs-format docs-lint release
 
 
 # Check installed UV version and install the pinned one if needed
@@ -73,13 +74,13 @@ update: uv_check
 
 # Run formatter.
 format:
-	@uv run --frozen ruff check --quiet --fix $(SOURCES_PATH) $(TESTS_PATH)
-	@uv run --frozen ruff format --quiet $(SOURCES_PATH) $(TESTS_PATH)
+	@uv run --frozen ruff check --quiet --fix $(SOURCES_PATH) $(TESTS_PATH) $(BENCHMARKS_PATH)
+	@uv run --frozen ruff format --quiet $(SOURCES_PATH) $(TESTS_PATH) $(BENCHMARKS_PATH)
 
 # Run linters and code checks.
 lint:
 	@uv run --frozen bandit -r $(SOURCES_PATH)
-	@uv run --frozen ruff check $(SOURCES_PATH) $(TESTS_PATH)
+	@uv run --frozen ruff check $(SOURCES_PATH) $(TESTS_PATH) $(BENCHMARKS_PATH)
 	@uv run --frozen pyright --project ./
 
 # Format Markdown docs and README
@@ -98,6 +99,11 @@ docs-lint:
 # Run tests suite.
 test:
 	@uv run --frozen python -B -m pytest -v --cov=$(SOURCES_PATH)
+
+# Measure the performance of State operations, pass ARGS for the options of the script i.e.
+# make benchmark ARGS="--json before.json" or make benchmark ARGS="--compare before.json".
+benchmark:
+	@uv run --frozen python benchmarks/state_benchmark.py $(ARGS)
 
 # Build documentation for production
 docs:

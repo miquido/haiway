@@ -556,16 +556,13 @@ def _satisfies(
         return True  # not a relation which can be decided on classes alone
 
 
-def _duplicate_attributes(
+def _duplicate_attribute(
     cls: type[Any],
     /,
-    keys: Set[str] | Mapping[str, Any],
-) -> None:
-    # only an aliased attribute can be provided twice, under both of its keys -
-    # the mapping of aliases is empty for most of the classes
-    for alias, name in cls.__ALIASES__.items():  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
-        if alias in keys and name in keys:
-            raise TypeError(f"Duplicate attribute '{name}' with alias '{alias}' for {cls.__name__}")
+    name: str,
+    alias: str,
+) -> TypeError:
+    return TypeError(f"Duplicate attribute '{name}' with alias '{alias}' for {cls.__name__}")
 
 
 def _unexpected_attributes(
@@ -710,8 +707,6 @@ class State(metaclass=StateMeta):
             # if we got unfinished type treat it as an alias instead of resolving
             return cast(type[Self], GenericAlias(cls, type_arguments))
 
-        _check_type_arguments(cls, type_arguments)
-
         # held by the class which is specialized rather than by a registry of the
         # module - a registry would keep every class created at runtime, together
         # with all of its variants, alive for as long as the process runs. here
@@ -720,16 +715,25 @@ class State(metaclass=StateMeta):
         specializations: MutableMapping[tuple[Any, ...], Any] | None = cls.__dict__.get(
             "__SPECIALIZATIONS__"
         )
+        if specializations is None:
+            specializations = {}
+            cls.__SPECIALIZATIONS__ = specializations  # pyright: ignore[reportAttributeAccessIssue]
+
         cacheable: bool = True
+        cached: Any | None = None
         try:
-            hash(type_arguments)
+            cached = specializations.get(type_arguments)
 
         except TypeError:
             cacheable = False  # i.e. an annotation carrying an unhashable value
 
-        if cacheable and specializations is not None:
-            if (cached := specializations.get(type_arguments)) is not None:
-                return cached
+        # the lookup comes first - the arguments of a variant which exists have
+        # been checked when it was created, and this is the path taken each time
+        # the variant is spelled out
+        if cached is not None:
+            return cached
+
+        _check_type_arguments(cls, type_arguments)
 
         type_parameters: dict[str, Any] = {
             parameter.__name__: argument
@@ -763,10 +767,6 @@ class State(metaclass=StateMeta):
             type_parameters=type_parameters,
         )
         if cacheable:
-            if specializations is None:
-                specializations = {}
-                cls.__SPECIALIZATIONS__ = specializations  # pyright: ignore[reportAttributeAccessIssue]
-
             specializations[type_arguments] = parametrized_type
 
         return parametrized_type
@@ -1048,7 +1048,9 @@ class State(metaclass=StateMeta):
 
         # the same attribute given under its name and its alias is ambiguous -
         # accepting it would silently let one of them win
-        _duplicate_attributes(self.__class__, kwargs)
+        for alias, name in self.__ALIASES__.items():
+            if alias in kwargs and name in kwargs:
+                raise _duplicate_attribute(self.__class__, name, alias)
 
         for field in self.__FIELDS__:
             validated: Any
@@ -1423,11 +1425,13 @@ class State(metaclass=StateMeta):
         if unexpected := kwargs.keys() - self.__ALLOWED_FIELDS__:
             raise _unexpected_attributes(self.__class__, unexpected)
 
-        _duplicate_attributes(self.__class__, kwargs)
+        aliases: Mapping[str, str] = self.__ALIASES__
+        for alias, name in aliases.items():
+            if alias in kwargs and name in kwargs:
+                raise _duplicate_attribute(self.__class__, name, alias)
 
         # both names and aliases are accepted, the aliases are the only keys
         # which have to be normalized - and only when the class declares any
-        aliases: Mapping[str, str] = self.__ALIASES__
         canonical_updates: Mapping[str, Any] = (
             {aliases.get(key, key): value for key, value in kwargs.items()} if aliases else kwargs
         )

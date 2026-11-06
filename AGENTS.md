@@ -10,6 +10,7 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
 - Formatting: Ruff formatter (`make format`), no other formatter
 - Linters/Type-checkers: Ruff, Bandit, Pyright (strict). Run via `make lint`
 - Tests: using pytest, run using `make test` or targeted `pytest tests/test_...::test_...`
+- Benchmarks: `make benchmark` measures State operations (`benchmarks/state_benchmark.py`); save a run with `ARGS="--json before.json"` and compare after a change with `ARGS="--compare before.json"`. Compare on the same machine, alternating runs, since single runs are noisy
 
 ## Project Layout
 
@@ -26,6 +27,7 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
   - `types/`: Fundamental typed primitives (e.g., `Missing`, immutable containers) shared across modules.
   - `utils/`: Generic async utilities (queues, streams, env helpers, logging bootstrap, metadata helpers).
 - `tests/`: Pytest suite mirroring package structure; keep new tests alongside the code they cover.
+- `benchmarks/`: Dependency-free micro benchmarks, not part of the test run.
 - `docs/`: MkDocs content, author guides, and API references; update navigation in `mkdocs.yml` when adding pages.
 - `Makefile`: Entry point for common dev tasks (`format`, `lint`, `test`, `docs`, `docs-format`, `docs-lint`, `sync`, `update`).
 - `pyproject.toml`: Project metadata, dependencies, and configuration.
