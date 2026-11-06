@@ -10,6 +10,7 @@ from haiway.attributes.annotations import (
     AnyAttribute,
     AttributeAnnotation,
     BoolAttribute,
+    BytesAttribute,
     CustomAttribute,
     DateAttribute,
     DatetimeAttribute,
@@ -23,9 +24,11 @@ from haiway.attributes.annotations import (
     NoneAttribute,
     PathAttribute,
     SequenceAttribute,
+    SetAttribute,
     StrEnumAttribute,
     StringAttribute,
     TimeAttribute,
+    TimedeltaAttribute,
     TupleAttribute,
     TypedDictAttribute,
     UnionAttribute,
@@ -311,6 +314,25 @@ def _prepare_specification_of_sequence(
     }
 
 
+def _prepare_specification_of_set(
+    annotation: AttributeAnnotation,
+    recursion_guard: MutableMapping[int, _RecursionGuard],
+) -> TypeSpecification | None:
+    items_specification: TypeSpecification | None = _specification(
+        cast(SetAttribute, annotation).values,
+        recursion_guard=recursion_guard,
+    )
+
+    if items_specification is None:
+        return None
+
+    return {
+        "type": "array",
+        "items": items_specification,
+        "uniqueItems": True,
+    }
+
+
 def _prepare_specification_of_mapping(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
@@ -493,6 +515,16 @@ def _prepare_specification_of_int_enum(
     }
 
 
+def _prepare_specification_of_bytes(
+    annotation: AttributeAnnotation,
+    recursion_guard: MutableMapping[int, _RecursionGuard],
+) -> TypeSpecification:
+    return {
+        "type": "string",
+        "contentEncoding": "base64",
+    }
+
+
 def _prepare_specification_of_uuid(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
@@ -530,6 +562,16 @@ def _prepare_specification_of_time(
     return {
         "type": "string",
         "format": "time",
+    }
+
+
+def _prepare_specification_of_timedelta(
+    annotation: AttributeAnnotation,
+    recursion_guard: MutableMapping[int, _RecursionGuard],
+) -> TypeSpecification:
+    return {
+        "type": "string",
+        "format": "duration",
     }
 
 
@@ -658,15 +700,18 @@ SPECIFICATIONS: Mapping[
     IntEnumAttribute: _prepare_specification_of_int_enum,
     LiteralAttribute: _prepare_specification_of_literal,
     SequenceAttribute: _prepare_specification_of_sequence,
+    SetAttribute: _prepare_specification_of_set,
     TupleAttribute: _prepare_specification_of_tuple,
     MappingAttribute: _prepare_specification_of_mapping,
     TypedDictAttribute: _prepare_specification_of_typed_dict,
     UnionAttribute: _prepare_specification_of_union,
     ValidableAttribute: _prepare_specification_of_validable,
+    BytesAttribute: _prepare_specification_of_bytes,
     UUIDAttribute: _prepare_specification_of_uuid,
     DateAttribute: _prepare_specification_of_date,
     DatetimeAttribute: _prepare_specification_of_datetime,
     TimeAttribute: _prepare_specification_of_time,
+    TimedeltaAttribute: _prepare_specification_of_timedelta,
     PathAttribute: _prepare_specification_of_path,
     MetaAttribute: _prepare_specification_of_meta,
     CustomAttribute: _prepare_specification_of_custom,

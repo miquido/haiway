@@ -40,7 +40,7 @@ Core public exports are centralized in `src/haiway/__init__.py`. Optional integr
 - Strict typing only: no untyped public APIs, no loose `Any` unless required by third-party boundaries
 - Prefer explicit attribute access with static types. Avoid dynamic `getattr` except at narrow boundaries.
 - Prefer abstract immutable protocols: `Mapping`, `Sequence`, `Iterable` over `dict`/`list`/`set` in public types.
-  Sequences/sets are coerced to immutable containers, while mappings remain dict-like and should be treated as read-only.
+  Sequences, sets and mappings are all coerced to immutable containers (`tuple`, `frozenset` and the immutable `Map`).
 - Use `final` where applicable; avoid inheritance, prefer type composition
 - Use precise unions (`|`) and narrow with `match`/`isinstance`, avoid `cast` unless provably safe and localized
 - Favor structural typing (Protocols) for async clients and adapters; runtime-checkable protocols like `HTTPRequesting` keep boundaries explicit.

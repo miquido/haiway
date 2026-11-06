@@ -86,6 +86,11 @@ class Map[Key, Element](dict[Key, Element]):
         """
         return json.dumps(self)
 
+    def __hash__(self) -> int:  # pyright: ignore[reportIncompatibleVariableOverride, reportIncompatibleMethodOverride]
+        # an immutable mapping is as hashable as its contents are - a value which
+        # is not raises `TypeError`, the same way a tuple holding it would
+        return hash(frozenset(self.items()))
+
     def __setattr__(
         self,
         name: str,

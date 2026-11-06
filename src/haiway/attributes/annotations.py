@@ -58,6 +58,7 @@ from haiway.types import (
     Specification,
     TypeSpecification,
 )
+from haiway.types.basic import parse_duration
 
 __all__ = (
     "AliasAttribute",
@@ -80,12 +81,12 @@ __all__ = (
     "NotRequired",
     "ObjectAttribute",
     "PathAttribute",
-    "ProtocolAttribute",
     "SequenceAttribute",
     "SetAttribute",
     "StrEnumAttribute",
     "StringAttribute",
     "TimeAttribute",
+    "TimedeltaAttribute",
     "TupleAttribute",
     "TypedDictAttribute",
     "UUIDAttribute",
@@ -1634,6 +1635,121 @@ class DateAttribute(Immutable):
         return isinstance(value, datetime.date)
 
 
+class TimedeltaAttribute(Immutable):
+    type_name: Final[Literal["timedelta"]] = "timedelta"
+    alias: str | None = None
+    description: str | None = None
+    verifying: Verifying[Any] = _no_verify
+    required: bool = True
+    specification: TypeSpecification | None = None
+    meta: Meta = Meta.empty
+    redaction: str | None = None
+
+    @property
+    def base(self) -> type[datetime.timedelta]:
+        return datetime.timedelta
+
+    def annotated(  # noqa: C901
+        self,
+        annotations: Sequence[Any],
+    ) -> AttributeAnnotation:
+        if annotations:
+            alias: str | None = self.alias
+            description: str | None = self.description
+            verifying: Verifying[Any] = self.verifying
+            required: bool = self.required
+            specification: TypeSpecification | None = self.specification
+            validating: Validating[Any] | None = None
+            meta: Meta = self.meta
+            redaction: str | None = self.redaction
+
+            for annotation in annotations:
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
+                    description = annotation.description
+
+                elif isinstance(annotation, Alias):
+                    alias = annotation.name
+
+                elif isinstance(annotation, Specification):
+                    specification = annotation.specification
+
+                elif isinstance(annotation, NotRequired):
+                    required = False
+
+                elif isinstance(annotation, Verifier):
+                    verifying = cast(Verifier[Any], annotation).verifier
+
+                elif isinstance(annotation, Validator):
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
+
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
+            if validating is None:
+                return self.__class__(
+                    alias=alias,
+                    description=description,
+                    verifying=verifying,
+                    required=required,
+                    specification=specification,
+                    meta=meta,
+                    redaction=redaction,
+                )
+
+            return ValidableAttribute(
+                validating=validating,
+                attribute=self.__class__(
+                    alias=alias,
+                    description=description,
+                    verifying=verifying,
+                    required=required,
+                    specification=specification,
+                    meta=meta,
+                    redaction=redaction,
+                ),
+            )
+
+        return self
+
+    def validate(
+        self,
+        value: Any,
+    ) -> Any:
+        if isinstance(value, datetime.timedelta):
+            return self.verifying(value)
+
+        elif isinstance(value, str):
+            # ISO 8601 duration - the spelling `basic_value` encodes `timedelta`
+            # to. The field declares `timedelta`, so a str here is unambiguous
+            converted: datetime.timedelta
+            try:
+                converted = parse_duration(value)
+
+            except Exception as exc:
+                raise ValueError(
+                    "'str' value is not matching expected ISO 8601 duration format for 'timedelta'"
+                ) from exc
+
+            return self.verifying(converted)
+
+        else:
+            raise TypeError(
+                f"'{type(value).__name__}' is not matching expected type of 'timedelta'"
+            )
+
+    def check(
+        self,
+        value: Any,
+    ) -> bool:
+        return isinstance(value, datetime.timedelta)
+
+
 class TimeAttribute(Immutable):
     type_name: Final[Literal["time"]] = "time"
     alias: str | None = None
@@ -2685,18 +2801,10 @@ class ObjectAttribute(Immutable):
         self,
         value: Any,
     ) -> Any:
-        if isinstance(value, self.base):
-            return self.verifying(value)
-
-        elif isinstance(
-            value, collections_abc.Mapping | typing.Mapping | typing_extensions.Mapping
-        ):
-            return self.verifying(self.base(**value))
-
-        else:
-            raise TypeError(
-                f"'{type(value).__name__}' is not matching expected type of '{self.base}'"
-            )
+        # the class validates its own input - the conversion of a mapping and the
+        # refusal of anything else - as the innermost step, so a `Validator`
+        # annotated on the attribute always sees the raw value ahead of it
+        return self.verifying(self.base.validate(value))
 
     def check(
         self,
@@ -2943,109 +3051,6 @@ class FunctionAttribute(Immutable):
         return callable(value)
 
 
-class ProtocolAttribute(Immutable):
-    base: Any
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
-
-    @property
-    def type_name(self) -> str:
-        return self.base.__qualname__
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
-    def validate(
-        self,
-        value: Any,
-    ) -> Any:
-        if isinstance(value, self.base):
-            return self.verifying(value)
-
-        else:
-            raise TypeError(
-                f"'{type(value).__name__}' is not matching expected type of '{self.base}'"
-            )
-
-    def check(
-        self,
-        value: Any,
-    ) -> bool:
-        return isinstance(value, self.base)
-
-
 class UnionAttribute(Immutable):
     base: Any
     alternatives: Sequence[AttributeAnnotation] = ()
@@ -3271,12 +3276,19 @@ class CustomAttribute(Immutable):
         self,
         value: Any,
     ) -> Any:
-        if isinstance(value, self.base):
-            return self.verifying(value)
+        # a class providing its own `validate` converts the input as the innermost
+        # step, so a `Validator` annotated on the attribute sees the raw value
+        # ahead of it
+        validated: Any = value
+        if (validate := getattr(self.base, "validate", None)) is not None:
+            validated = validate(value)
+
+        if isinstance(validated, self.base):
+            return self.verifying(validated)
 
         else:
             raise TypeError(
-                f"'{type(value).__name__}' is not matching expected type of '{self.base}'"
+                f"'{type(validated).__name__}' is not matching expected type of '{self.base}'"
             )
 
     def check(
@@ -4158,6 +4170,7 @@ BYTES_ATTRIBUTE: Final[BytesAttribute] = BytesAttribute()
 UUID_ATTRIBUTE: Final[UUIDAttribute] = UUIDAttribute()
 DATETIME_ATTRIBUTE: Final[DatetimeAttribute] = DatetimeAttribute()
 DATE_ATTRIBUTE: Final[DateAttribute] = DateAttribute()
+TIMEDELTA_ATTRIBUTE: Final[TimedeltaAttribute] = TimedeltaAttribute()
 TIME_ATTRIBUTE: Final[TimeAttribute] = TimeAttribute()
 PATH_ATTRIBUTE: Final[PathAttribute] = PathAttribute()
 
@@ -4215,6 +4228,9 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
         case datetime.date:
             return DATE_ATTRIBUTE
+
+        case datetime.timedelta:
+            return TIMEDELTA_ATTRIBUTE
 
         case datetime.time:
             return TIME_ATTRIBUTE
@@ -4390,14 +4406,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
         case origin:
             if self_attribute := _declared_self_attribute(annotation):
-                if validate := getattr(origin, "validate", None):
-                    return ValidableAttribute(
-                        validating=validate,
-                        attribute=self_attribute,
-                    )
-
-                else:
-                    return self_attribute
+                return self_attribute
 
             parameters: Sequence[AttributeAnnotation] = _resolve_parameters(
                 annotation,
@@ -4412,16 +4421,6 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             )
             if guard := recursion_guard.get(recursion_key):
                 return guard
-
-            if validate := getattr(origin, "validate", None):
-                assert isinstance(validate, Validating)  # nosec: B101
-                return ValidableAttribute(
-                    validating=validate,  # pyright: ignore[reportUnknownArgumentType]
-                    attribute=CustomAttribute(
-                        base=origin,
-                        parameters=parameters,
-                    ),
-                )
 
             return CustomAttribute(
                 base=origin,

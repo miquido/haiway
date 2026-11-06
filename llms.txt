@@ -87,13 +87,15 @@ class Invoice(State):
 - Annotate **every** attribute. Use `collections.abc` types (`Sequence`, `Mapping`, `Set`), never
   `list`/`dict`/`set`; use `X | None`, never `Optional[X]`.
 - Values are validated against annotations at construction. Sequences/sets become
-  `tuple`/`frozenset`; mappings stay dict-like and must be treated as read-only.
+  `tuple`/`frozenset`; mappings become the immutable `Map`.
 - Defaults: `Default(value)`, `Default(default_factory=...)`, `Default(env="VAR")`.
 - `Annotated` metadata: `Alias`, `Description`, `Specification`, `Validator` (pre-validation, may
   coerce), `Verifier` (post-validation, enforces invariants), `Sensitive` (renders as `<redacted>` in
   `str`/`repr`/`format_str`, value kept for serialization - use it for every secret).
 - Instances: `.updating(**kwargs)`, `.to_mapping()`, `.to_json()`, `.from_mapping()`,
-  `.from_json()`, `.json_schema()`. Generics are supported and enforced (`class Box[T](State)`).
+  `.from_json()`, `.json_schema()`. Generics are supported and enforced (`class Box[T](State)`):
+  each specialization is a distinct class, `Box[Dog]` is a subclass of `Box[Animal]`, and type
+  parameter bounds are checked. States can't be pickled - use `to_json`/`to_basic_object`.
 - `Immutable` is the lighter, non-validating frozen base for infrastructure objects (clients,
   responses) that must not propagate as scope state. `Map` is an immutable `dict`.
 

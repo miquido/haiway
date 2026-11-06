@@ -1,6 +1,7 @@
 import base64
+import re
 from collections.abc import Generator, Iterable, Mapping, Sequence
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -28,6 +29,7 @@ type FlatObject = Mapping[str, RawValue]
 #   StrEnum/IntEnum             unchanged - they ride the str/int guards
 #   UUID                        str(value)
 #   datetime/date/time          value.isoformat()
+#   timedelta                   ISO 8601 duration, i.e. P1DT2H3M4.5S
 #   Path                        value.as_posix()
 #   bytes-like                  base64 encoded str
 #
@@ -38,7 +40,74 @@ type FlatObject = Mapping[str, RawValue]
 # `State` is not resolved here - `types` can't import `attributes`. Its own
 # conversion covers the structured values, this one covers the leaves, the keys
 # and the plain collections of `Map` and `Meta`.
-def basic_value(  # noqa: PLR0911
+_DURATION: re.Pattern[str] = re.compile(
+    r"(?P<sign>[+-])?P"
+    r"(?:(?P<weeks>\d+)W)?"
+    r"(?:(?P<days>\d+)D)?"
+    r"(?:T(?=\d)"
+    r"(?:(?P<hours>\d+)H)?"
+    r"(?:(?P<minutes>\d+)M)?"
+    r"(?:(?P<seconds>\d+)(?:[.,](?P<fraction>\d{1,6}))?S)?"
+    r")?"
+)
+
+
+def format_duration(
+    value: timedelta,
+    /,
+) -> str:
+    """Spell a ``timedelta`` as an ISO 8601 duration, i.e. ``P1DT2H3M4.5S``."""
+    sign: str = "-" if value < timedelta(0) else ""
+    magnitude: timedelta = abs(value)
+    hours, remainder = divmod(magnitude.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    date_part: str = f"{magnitude.days}D" if magnitude.days else ""
+    time_part: str = f"{hours}H" if hours else ""
+    time_part += f"{minutes}M" if minutes else ""
+    if seconds or magnitude.microseconds:
+        fraction: str = f".{magnitude.microseconds:06d}".rstrip("0")
+        time_part += f"{seconds}{'' if fraction == '.' else fraction}S"
+
+    if not date_part and not time_part:
+        return "PT0S"  # a zero duration still needs a component
+
+    return f"{sign}P{date_part}{'T' + time_part if time_part else ''}"
+
+
+def parse_duration(
+    value: str,
+    /,
+) -> timedelta:
+    """Read an ISO 8601 duration - weeks, days, hours, minutes and seconds.
+
+    Years and months are refused, their length depends on the calendar date
+    they are counted from, which a ``timedelta`` does not have.
+
+    Raises
+    ------
+    ValueError
+        When the value is not a duration made of the supported components.
+    """
+    matched: re.Match[str] | None = _DURATION.fullmatch(value)
+    if matched is None or all(
+        matched[name] is None for name in ("weeks", "days", "hours", "minutes", "seconds")
+    ):
+        raise ValueError(f"'{value}' is not a valid ISO 8601 duration of weeks, days and time")
+
+    duration: timedelta = timedelta(
+        weeks=int(matched["weeks"] or 0),
+        days=int(matched["days"] or 0),
+        hours=int(matched["hours"] or 0),
+        minutes=int(matched["minutes"] or 0),
+        seconds=int(matched["seconds"] or 0),
+        microseconds=int((matched["fraction"] or "").ljust(6, "0") or 0),
+    )
+
+    return -duration if matched["sign"] == "-" else duration
+
+
+def basic_value(  # noqa: C901, PLR0911
     value: Any,
     /,
     *,
@@ -65,6 +134,9 @@ def basic_value(  # noqa: PLR0911
     # `datetime` before `date` - it is a subclass of it
     if isinstance(value, datetime | date | time):
         return value.isoformat()
+
+    if isinstance(value, timedelta):
+        return format_duration(value)
 
     if isinstance(value, Path):
         return value.as_posix()
