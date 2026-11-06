@@ -87,7 +87,8 @@ class BackgroundTaskGroup:
                 exception=exception,
             )
 
-        task.add_done_callback(handle_done)
+        # run detached like the task itself - the spawning scope may be long gone
+        task.add_done_callback(handle_done, context=Context())
         return task
 
     @classmethod
@@ -144,6 +145,7 @@ class BackgroundTaskGroup:
 @final
 class _ScopeTasks:
     __slots__ = (
+        "_cancelling",
         "_closed",
         "_errors",
         "_loop",
@@ -155,6 +157,7 @@ class _ScopeTasks:
         self._tasks: MutableSet[Task[Any]] = set()
         self._errors: list[BaseException] = []
         self._closed: bool = False
+        self._cancelling: bool = False
 
     def create_task[Result](
         self,
@@ -173,6 +176,9 @@ class _ScopeTasks:
         )
         self._tasks.add(task)
         task.add_done_callback(self._completed)
+        if self._cancelling:
+            task.cancel()  # spawned while cancelling, e.g. by a cleanup of another task
+
         return task
 
     def _completed(
@@ -220,6 +226,7 @@ class _ScopeTasks:
         return tuple(self._errors), cancellation
 
     def _cancel(self) -> None:
+        self._cancelling = True
         for task in tuple(self._tasks):
             task.cancel()
 
@@ -358,7 +365,8 @@ class ScopeTaskGroup:
 
         # the exception propagating through the body takes precedence over the errors of
         # the tasks which failed alongside it - they are chained as its cause instead
-        if not isinstance(exc_val, CancelledError):
+        # an explicit cause of the body error is never replaced - the failure is logged
+        if not isinstance(exc_val, CancelledError) and exc_val.__cause__ is None:
             exc_val.__cause__ = failure
 
     @staticmethod
@@ -550,5 +558,8 @@ class ContextTaskGroup:
 
         # the exception propagating through the body takes precedence over the errors of the
         # tasks, which failed alongside it - they are chained as its cause instead of being lost
-        body_exception.__cause__ = collected
+        # an explicit cause is never replaced - the failure was logged above
+        if body_exception.__cause__ is None:
+            body_exception.__cause__ = collected
+
         return body_exception
