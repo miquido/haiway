@@ -1,4 +1,7 @@
+import inspect
 import json
+import types
+import typing
 from collections.abc import (
     Generator,
     Iterable,
@@ -23,6 +26,8 @@ from typing import (
     cast,
     dataclass_transform,
     final,
+    get_args,
+    get_origin,
     overload,
 )
 
@@ -110,7 +115,7 @@ class StateMeta(type):
         # those is resolved once, when the class is created - a base changing
         # afterwards is not seen. the nominal identity that equality, the
         # instance checks and the schema are built on stops holding along with it
-        if type_parameters is None:
+        if not type_parameters:
             for base in bases:
                 if getattr(base, "__FIELDS__", ()):
                     raise TypeError(
@@ -206,7 +211,7 @@ class StateMeta(type):
         # only a class created as a specialization checks its type arguments -
         # `__origin__` and `__args__` reach a subclass of one through inheritance,
         # which would otherwise make it interchangeable with each of its siblings
-        cls.__SPECIALIZED__ = type_parameters is not None  # pyright: ignore[reportConstantRedefinition]
+        cls.__SPECIALIZED__ = bool(type_parameters)  # pyright: ignore[reportConstantRedefinition]
         cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
 
         if not bases:  # handle base class - no fields specified
@@ -278,6 +283,23 @@ class StateMeta(type):
         )
 
         return cls
+
+    @property
+    def __signature__(cls) -> inspect.Signature:  # pyright: ignore[reportIncompatibleVariableOverride]
+        # what `inspect.signature` reads - the constructor itself takes `**kwargs`,
+        # which tells a tool nothing about the attributes it accepts
+        return inspect.Signature(
+            parameters=[
+                inspect.Parameter(
+                    field.name,
+                    inspect.Parameter.KEYWORD_ONLY,
+                    annotation=cls.__ANNOTATED__.get(field.name, Any),
+                    default=inspect.Parameter.empty if field.required else ...,
+                )
+                for field in cls.__FIELDS__
+            ],
+            return_annotation=None,
+        )
 
     def __instancecheck__(
         self,
@@ -445,6 +467,107 @@ def _resolve_default(
     return DefaultValue(default=value)
 
 
+def _check_type_arguments(
+    cls: type[Any],
+    type_arguments: tuple[Any, ...],
+    /,
+) -> None:
+    if len(type_arguments) != len(cls.__type_params__):
+        raise TypeError(
+            f"{cls.__name__} takes {len(cls.__type_params__)} type arguments,"
+            f" {len(type_arguments)} given"
+        )
+
+    for parameter, argument in zip(
+        cls.__type_params__,
+        type_arguments,
+        strict=True,
+    ):
+        _check_type_argument(cls, parameter, argument)
+
+
+def _check_type_argument(
+    cls: type[Any],
+    parameter: Any,
+    argument: Any,
+    /,
+) -> None:
+    # a variant is distinguished by its arguments, so one which can never hold a
+    # value of the declared type is refused where it is spelled out, rather than
+    # surfacing as a validation failure of every value it is ever given
+    bound: Any = getattr(parameter, "__bound__", None)
+    constraints: Sequence[Any] = getattr(parameter, "__constraints__", ())
+    if bound is not None and not _satisfies(argument, bound):
+        raise TypeError(
+            f"{cls.__name__} can't be specialized with '{_type_name(argument)}' -"
+            f" '{parameter.__name__}' is bound to '{_type_name(bound)}'"
+        )
+
+    if constraints and not any(_satisfies(argument, constraint) for constraint in constraints):
+        raise TypeError(
+            f"{cls.__name__} can't be specialized with '{_type_name(argument)}' -"
+            f" '{parameter.__name__}' is constrained to"
+            f" {', '.join(repr(_type_name(constraint)) for constraint in constraints)}"
+        )
+
+
+def _type_name(
+    annotation: Any,
+    /,
+) -> str:
+    return getattr(annotation, "__name__", None) or str(annotation)
+
+
+def _satisfies(
+    argument: Any,
+    bound: Any,
+    /,
+) -> bool:
+    if argument is Any or bound is Any or isinstance(argument, str | TypeVar):
+        return True  # nothing to decide against - a forward reference, an open parameter
+
+    argument = type(None) if argument is None else argument
+    bound = type(None) if bound is None else bound
+
+    # every member of a union has to satisfy it, a literal is checked by its values
+    match get_origin(argument):
+        case typing.Union | types.UnionType:
+            return all(_satisfies(member, bound) for member in get_args(argument))
+
+        case typing.Literal:
+            return all(_satisfies(type(member), bound) for member in get_args(argument))
+
+        case _:
+            pass
+
+    match get_origin(bound):
+        case typing.Union | types.UnionType:
+            return any(_satisfies(argument, member) for member in get_args(bound))
+
+        case _:
+            pass
+
+    target: Any = get_origin(argument) or argument
+    limit: Any = get_origin(bound) or bound
+    try:
+        return issubclass(target, limit)
+
+    except TypeError:
+        return True  # not a relation which can be decided on classes alone
+
+
+def _duplicate_attributes(
+    cls: type[Any],
+    /,
+    keys: Set[str] | Mapping[str, Any],
+) -> None:
+    # only an aliased attribute can be provided twice, under both of its keys -
+    # the mapping of aliases is empty for most of the classes
+    for alias, name in cls.__ALIASES__.items():  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+        if alias in keys and name in keys:
+            raise TypeError(f"Duplicate attribute '{name}' with alias '{alias}' for {cls.__name__}")
+
+
 def _unexpected_attributes(
     cls: type[Any],
     /,
@@ -469,14 +592,6 @@ class _NoSpecification:
 
 _no_specification: _NoSpecification = _NoSpecification()
 
-_types_cache: MutableMapping[
-    tuple[
-        Any,
-        tuple[Any, ...],
-    ],
-    Any,
-] = {}
-
 
 class State(metaclass=StateMeta):
     """
@@ -492,7 +607,7 @@ class State(metaclass=StateMeta):
     - Generic: Can be parameterized with type variables
     - Declarative: Uses a class-based declaration syntax similar to dataclasses
     - Validated: Custom validation rules can be applied to attributes (sequences and
-      sets are coerced to immutable containers; mappings remain regular dicts)
+      sets and mappings are coerced to immutable containers)
 
     State classes can be created by subclassing State and declaring attributes:
 
@@ -540,6 +655,7 @@ class State(metaclass=StateMeta):
 
     Notes
     -----
+    Instances can't be pickled - serialize them with ``to_json`` or ``to_basic_object``.
     Instances are not weak referenceable - attributes are held in slots and no
     slot list declares ``__weakref__``, keeping instances as small as they can
     be. A ``State`` can't be held by ``weakref.ref`` or a ``WeakValueDictionary``
@@ -567,11 +683,20 @@ class State(metaclass=StateMeta):
         -------
         type[Self]
             A specialized version of the class
+
+        Raises
+        ------
+        TypeError
+            If an argument does not satisfy the bound or the constraints of its
+            type parameter.
         """
         # the parameters bound by a specialization above are inherited, so only
         # being a specialization rules out specializing this class again
-        assert not cls.__SPECIALIZED__, "Can't specialize already specialized type!"  # nosec: B101
-        assert Generic in cls.__bases__, "Can't specialize non generic type!"  # nosec: B101
+        if cls.__SPECIALIZED__:
+            raise TypeError(f"Can't specialize already specialized type {cls.__name__}")
+
+        if Generic not in cls.__bases__:
+            raise TypeError(f"Can't specialize non generic type {cls.__name__}")
 
         type_arguments: tuple[type[Any], ...]
         match type_argument:
@@ -585,12 +710,26 @@ class State(metaclass=StateMeta):
             # if we got unfinished type treat it as an alias instead of resolving
             return cast(type[Self], GenericAlias(cls, type_arguments))
 
-        assert len(type_arguments) == len(  # nosec: B101
-            cls.__type_params__
-        ), "Type arguments count has to match type parameters count"
+        _check_type_arguments(cls, type_arguments)
 
-        if (cached := _types_cache.get((cls, type_arguments))) is not None:
-            return cached
+        # held by the class which is specialized rather than by a registry of the
+        # module - a registry would keep every class created at runtime, together
+        # with all of its variants, alive for as long as the process runs. here
+        # the variants reference their origin and are referenced by it, a cycle
+        # which is collected along with it
+        specializations: MutableMapping[tuple[Any, ...], Any] | None = cls.__dict__.get(
+            "__SPECIALIZATIONS__"
+        )
+        cacheable: bool = True
+        try:
+            hash(type_arguments)
+
+        except TypeError:
+            cacheable = False  # i.e. an annotation carrying an unhashable value
+
+        if cacheable and specializations is not None:
+            if (cached := specializations.get(type_arguments)) is not None:
+                return cached
 
         type_parameters: dict[str, Any] = {
             parameter.__name__: argument
@@ -623,7 +762,13 @@ class State(metaclass=StateMeta):
             },
             type_parameters=type_parameters,
         )
-        _types_cache[(cls, type_arguments)] = parametrized_type
+        if cacheable:
+            if specializations is None:
+                specializations = {}
+                cls.__SPECIALIZATIONS__ = specializations  # pyright: ignore[reportAttributeAccessIssue]
+
+            specializations[type_arguments] = parametrized_type
+
         return parametrized_type
 
     @classmethod
@@ -656,15 +801,6 @@ class State(metaclass=StateMeta):
             for key in cast(Mapping[Any, Any], value.keys()):
                 if key not in cls.__ALLOWED_FIELDS__:
                     raise TypeError(f"Unexpected attribute '{key}' for {cls.__name__}")
-
-            # only an aliased attribute can be provided twice, under both of its
-            # keys - the mapping of aliases is empty for most of the classes
-            for alias, field_name in cls.__ALIASES__.items():
-                if alias in value and field_name in value:
-                    raise TypeError(
-                        f"Duplicate attribute '{field_name}'"
-                        f" with alias '{alias}' for {cls.__name__}"
-                    )
 
             return cls(**value)
 
@@ -899,7 +1035,8 @@ class State(metaclass=StateMeta):
         Raises
         ------
         TypeError
-            If any key does not match a field name or alias
+            If any key does not match a field name or alias, or an attribute is
+            given under both its name and its alias
         Exception
             If validation fails for any attribute
         """
@@ -908,6 +1045,10 @@ class State(metaclass=StateMeta):
         # defaults then hide. `validate` refuses the same input for a mapping
         if unexpected := kwargs.keys() - self.__ALLOWED_FIELDS__:
             raise _unexpected_attributes(self.__class__, unexpected)
+
+        # the same attribute given under its name and its alias is ambiguous -
+        # accepting it would silently let one of them win
+        _duplicate_attributes(self.__class__, kwargs)
 
         for field in self.__FIELDS__:
             validated: Any
@@ -1006,6 +1147,7 @@ class State(metaclass=StateMeta):
         StrEnum/IntEnum              unchanged
         UUID                         ``str(value)``
         datetime/date/time           ``value.isoformat()``
+        timedelta                    ISO 8601 duration, ``P1DT2H3M4.5S``
         Path                         ``value.as_posix()``
         bytes-like                   base64 encoded str
         ===========================  =====================
@@ -1064,9 +1206,16 @@ class State(metaclass=StateMeta):
         Returns
         -------
         str
-            ``repr`` string mirroring ``__str__`` for readability.
+            ``repr`` of the class and its attributes, in the format of ``__str__``
+            but with every value spelled by its own ``repr`` - so ``"1"`` and ``1``
+            can be told apart. Redacted attributes still render their redaction.
         """
-        return str(self)
+        attributes: str = ", ".join(
+            f"{field.key}:"
+            f" {repr(getattr(self, field.name)) if field.redaction is None else field.redaction}"
+            for field in self.__FIELDS__
+        )
+        return f"{self.__class__.__name__}({attributes})"
 
     def __eq__(
         self,
@@ -1088,6 +1237,9 @@ class State(metaclass=StateMeta):
         bool
             True if the objects are equal, False otherwise
         """
+        if other is self:
+            return True  # not decided by the values - a `NaN` is not equal to itself
+
         if other.__class__ is not self.__class__:
             return False
 
@@ -1167,6 +1319,25 @@ class State(metaclass=StateMeta):
         raise AttributeError(
             f"Can't modify immutable state {self.__class__.__qualname__},"
             f" attribute - '{name}' cannot be deleted"
+        )
+
+    def __reduce_ex__(
+        self,
+        protocol: Any,
+    ) -> NoReturn:
+        """
+        Refuse pickling.
+
+        Raises
+        ------
+        TypeError
+            Always - a ``State`` is not picklable. Rebuilding one would have to
+            skip validation, and a specialized variant has no importable name.
+            Use ``to_json`` or ``to_basic_object`` to serialize it.
+        """
+        raise TypeError(
+            f"{self.__class__.__name__} can't be pickled - serialize it with"
+            " to_json or to_basic_object and rebuild it with from_json or from_mapping"
         )
 
     def __copy__(self) -> Self:
@@ -1251,6 +1422,8 @@ class State(metaclass=StateMeta):
 
         if unexpected := kwargs.keys() - self.__ALLOWED_FIELDS__:
             raise _unexpected_attributes(self.__class__, unexpected)
+
+        _duplicate_attributes(self.__class__, kwargs)
 
         # both names and aliases are accepted, the aliases are the only keys
         # which have to be normalized - and only when the class declares any
@@ -1425,6 +1598,10 @@ def _basic_elements(
         )
 
 
+def _is_dataclass_instance(value: Any, /) -> bool:
+    return is_dataclass(value) and not isinstance(value, type)
+
+
 def _recursive_mapping(  # noqa: PLR0911
     value: Any,
 ) -> Any:
@@ -1434,7 +1611,7 @@ def _recursive_mapping(  # noqa: PLR0911
     elif isinstance(value, State):
         return value.to_mapping(recursive=True)
 
-    elif is_dataclass(value):
+    elif _is_dataclass_instance(value):
         return {
             field.name: _recursive_mapping(getattr(value, field.name))
             for field in dataclass_fields(value)

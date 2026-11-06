@@ -377,12 +377,24 @@ def test_updating_rejects_unknown_keys() -> None:
     assert example.updating() is example
 
 
-def test_initialization_handles_conflicting_alias_and_field() -> None:
+def test_initialization_refuses_alias_and_field_together() -> None:
     class Example(State):
         value: Annotated[int, Alias("external")]
 
-    assert Example(value=1, external=2).value == 2
-    assert Example(external=2, value=1).value == 2
+    with raises(TypeError, match="Duplicate attribute 'value' with alias 'external'"):
+        Example(value=1, external=2)  # pyright: ignore[reportCallIssue]
+
+    with raises(TypeError, match="Duplicate attribute"):
+        Example(external=2, value=1)  # pyright: ignore[reportCallIssue]
+
+    with raises(TypeError, match="Duplicate attribute"):
+        Example(value=1).updating(value=2, external=3)  # pyright: ignore[reportCallIssue]
+
+    with raises(TypeError, match="Duplicate attribute"):
+        Example.validate({"value": 1, "external": 2})
+
+    assert Example(external=2).value == 2
+    assert Example(value=1).updating(external=5).value == 5
 
 
 def test_initialization_allows_missing_properties() -> None:

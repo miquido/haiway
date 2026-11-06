@@ -69,8 +69,10 @@ class StringSpecification(AnchoredSpecification, total=False):
             "date",
             "time",
             "date-time",
+            "duration",
         ]
     ]
+    contentEncoding: NotRequired[Literal["base64"]]
     description: NotRequired[str]
 
 
@@ -118,6 +120,7 @@ class UnionSpecification(AnchoredSpecification, total=False):
 class ArraySpecification(AnchoredSpecification, total=False):
     type: Required[Literal["array"]]
     items: NotRequired[TypeSpecification]
+    uniqueItems: NotRequired[bool]
     description: NotRequired[str]
 
 

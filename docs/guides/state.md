@@ -115,13 +115,15 @@ class Invoice(State):
 Supported annotations include:
 
 - `Alias("external_name")` — maps the attribute to an alternate key when using `to_mapping`,
-  `from_mapping`, JSON helpers, and `updating`.
+  `from_mapping`, JSON helpers, and `updating`. Both the name and the alias are accepted as input,
+  but giving the same attribute under both of them is refused with a `TypeError`.
 - `Description("text")` — surfaces in generated JSON schemas and downstream documentation.
 - `Meta.of({...})` — attaches structured metadata that you can later inspect from field definitions.
 - `Specification({...})` — overrides the JSON Schema fragment when the inferred schema is
   insufficient.
 - `Validator(callable)` — applies additional validation or coercion logic before the base attribute
-  validation runs.
+  validation runs. It always receives the raw input, including for nested State attributes and for
+  custom classes providing their own `validate`, which validate the value afterwards.
 - `Verifier(callable)` — applies an additional check after the base attribute has been validated and
   typed.
 - `Sensitive` — marks the attribute as carrying a secret or personal data. `str()`, `repr()`, and
@@ -200,6 +202,22 @@ The type parameter is enforced during validation:
 int_container.updating(value="string")  # Raises TypeError
 ```
 
+Each specialization is a distinct class - `Container[int]` is not `Container[str]` - while the
+relation between the arguments is preserved: `Container[Dog]` is a subclass of `Container[Animal]`
+when `Dog` inherits from `Animal`, also through nested arguments such as
+`Container[Container[Dog]]`. `isinstance(Container(value=1), Container[int])` checks the held values
+of an unspecialized instance against the arguments.
+
+Bounds and constraints of the type parameters are checked when the class is specialized:
+
+```python
+class Shelf[T: Animal](State):
+    item: T
+
+Shelf[Dog]  # fine
+Shelf[int]  # raises TypeError - T is bound to Animal
+```
+
 ### State Classes Are Final
 
 A `State` class that declares attributes cannot be inherited from:
@@ -241,6 +259,19 @@ class Admin(State):
 A specialization such as `Container[int]` declares the attributes of its origin, so it is final too
 \- it names a typed variant rather than opening a base to derive from.
 
+### Copying, Pickling and Representation
+
+`copy.copy` returns the same instance, `copy.deepcopy` creates an equal one, and `copy.replace` (or
+`updating`) produces a validated variant. `pickle` is deliberately not supported and raises a
+`TypeError` pointing at `to_json` / `to_basic_object` - rebuilding a State would have to skip
+validation, and a specialized variant such as `Box[int]` has no importable name. This also applies
+to values crossing a process pool.
+
+`str(state)` renders values as they read (`User(name: Alice)`), while `repr(state)` spells each
+value with its own `repr` (`User(name: 'Alice')`) so a string and a number can be told apart.
+Attributes marked `Sensitive` render their redaction in both. `inspect.signature(User)` lists the
+attributes as keyword-only parameters.
+
 ### Conversion to Mappings and JSON
 
 You can convert a State instance to a dictionary using the `to_mapping` method:
@@ -281,7 +312,7 @@ State classes perform thorough type validation for all supported Python types:
 - **Basic Types**: int, str, bool, float, bytes
 - **Container Types**:
   - **Sequence[T]**: sequence-like inputs are normalized to immutable tuples
-  - **Mapping[K, V]**: mappings are validated recursively and remain regular dict-like values
+  - **Mapping[K, V]**: mappings are validated recursively and converted to immutable `Map` values
   - **Set[T]**: set-like inputs are normalized to immutable frozensets
   - **tuple[T, ...]**: Fixed or variable-length tuples
 - **Special Types**: UUID, datetime, date, time, timedelta, timezone, Path, re.Pattern
@@ -341,10 +372,14 @@ Every State exposes a JSON Schema fragment through the `__SPECIFICATION__` attri
 schema = Invoice.json_schema(indent=2)
 ```
 
-Aliases and descriptions propagate into the schema automatically, and any custom `Specification`
-overrides are respected. If a State cannot be represented as JSON Schema (for example, when it holds
-callables), `json_schema(required=True)` raises a `TypeError` so you can detect unsupported shapes
-early.
+Besides the primitives, the schema covers the standard value types: `UUID`, `datetime`, `date`,
+`time`, `timedelta` and `Path` (as strings with a `format`), `bytes` (a base64 string,
+`contentEncoding`) and sets (arrays with `uniqueItems`). A `timedelta` is spelled as an ISO 8601
+duration such as `P1DT2H3M4.5S`; years and months are refused because their length depends on the
+calendar date. Aliases and descriptions propagate into the schema automatically, and any custom
+`Specification` overrides are respected. If a State cannot be represented as JSON Schema (for
+example, when it holds callables), `json_schema(required=True)` raises a `TypeError` so you can
+detect unsupported shapes early.
 
 When serialization must be guaranteed, mark the class as serializable to enforce schema generation
 at definition time:

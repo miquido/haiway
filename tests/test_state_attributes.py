@@ -14,7 +14,6 @@ from haiway import State
 from haiway.attributes.annotations import (
     AliasAttribute,
     AttributeAnnotation,
-    CustomAttribute,
     DatetimeAttribute,
     IntegerAttribute,
     MetaAttribute,
@@ -23,6 +22,7 @@ from haiway.attributes.annotations import (
     PathAttribute,
     StrEnumAttribute,
     TimeAttribute,
+    TimedeltaAttribute,
     TupleAttribute,
     TypedDictAttribute,
     UUIDAttribute,
@@ -315,7 +315,7 @@ def test_generic_alias_preserves_specialized_base() -> None:
             box: Box[int]
 
     annotation = attribute_of(Container, "box")
-    assert isinstance(annotation, ValidableAttribute)
+    assert isinstance(annotation, ObjectAttribute)
     assert annotation.base is Box[int]
 
 
@@ -394,16 +394,19 @@ def test_tuple_attribute_requires_fixed_length() -> None:
         annotation.validate([1])
 
 
-def test_timedelta_attribute_requires_explicit_timedelta() -> None:
+def test_timedelta_attribute_accepts_timedelta_and_iso_duration() -> None:
     class Example(State):
         timeout: datetime.timedelta
 
     annotation = attribute_of(Example, "timeout")
-    assert isinstance(annotation, CustomAttribute)
+    assert isinstance(annotation, TimedeltaAttribute)
     valid = annotation.validate(datetime.timedelta(seconds=5))
     assert valid == datetime.timedelta(seconds=5)
+    assert annotation.validate("PT5S") == datetime.timedelta(seconds=5)
     with pytest.raises(TypeError):
         annotation.validate(1.5)
+    with pytest.raises(ValueError):
+        annotation.validate("5 seconds")
 
 
 def test_path_attribute_accepts_path_like_values() -> None:
