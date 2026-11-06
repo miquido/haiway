@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from haiway import ctx
+from haiway.context import Disposables
 from haiway.helpers import cache_externally
 
 
@@ -95,3 +96,84 @@ async def test_external_cache_write_failure_does_not_fail_scope() -> None:
 
     async with ctx.scope("cache"):
         assert await compute() == 1
+
+
+@pytest.mark.asyncio
+async def test_ctx_disposables_forbid_spawning_while_disposing() -> None:
+    async def noop() -> None:
+        pass
+
+    class Spawning:
+        async def __aenter__(self) -> tuple[()]:
+            return ()
+
+        async def __aexit__(self, *args: object) -> None:
+            ctx.spawn(noop)
+
+    async with ctx.scope("disposables"):
+        with pytest.raises(RuntimeError):
+            async with ctx.disposables(Spawning()):
+                pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hops", range(4))
+async def test_disposal_errors_are_logged_when_cancellation_lands_on_completion(
+    hops: int,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # the cancellation is delayed by a number of loop iterations, so that one of
+    # them lands exactly when the disposal has completed but the caller did not resume
+    loop = asyncio.get_running_loop()
+    caller: asyncio.Task[None] | None = None
+
+    def cancel_later(remaining: int) -> None:
+        if remaining > 0:
+            loop.call_soon(cancel_later, remaining - 1)
+
+        elif caller is not None:
+            caller.cancel()
+
+    class Failing:
+        async def __aenter__(self) -> tuple[()]:
+            return ()
+
+        async def __aexit__(self, *args: object) -> None:
+            cancel_later(hops)
+            raise OSError("close failed")
+
+    disposables = Disposables.of(Failing())
+    await disposables.__aenter__()
+
+    async def dispose() -> None:
+        await disposables.__aexit__(None, None, None)
+
+    caller = asyncio.create_task(dispose())
+    with caplog.at_level("ERROR"), pytest.raises(asyncio.CancelledError):
+        await caller
+
+    assert any(
+        record.exc_info is not None and record.exc_info[0] is OSError for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_background_task_is_logged_to_root_after_scope_exit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def failing() -> None:
+        await asyncio.sleep(0.01)
+        raise ValueError("background")
+
+    with caplog.at_level("ERROR"):
+        async with ctx.scope("background"):
+            task = ctx.spawn_background(failing)
+
+        with pytest.raises(ValueError):
+            await task
+
+        await asyncio.sleep(0)
+
+    records = [record for record in caplog.records if record.getMessage() == "Background task failed"]
+    assert len(records) == 1
+    assert records[0].name == "root"
