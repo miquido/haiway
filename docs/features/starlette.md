@@ -172,10 +172,12 @@ included - through untouched. For each request it:
   `http.route` is what makes the requests of a parameterized route findable as one, since the scope
   name carries the path which was actually requested rather than the template behind it. The routing
   of both Starlette and FastAPI leaves the matched route in the request scope, so it is recorded for
-  every request which matched one. Resolving it in the middleware would mean matching the route
-  table a second time for every request. The query string and the address of the caller are
-  deliberately left out - the first carries credentials often enough that recording it by default
-  would leak them, the second identifies the caller
+  the requests whose route is there - not every matched route leaves one, the `/docs` and
+  `/openapi.json` routes FastAPI adds on its own among them, and those requests carry no
+  `http.route`. Resolving it in the middleware would mean matching the route table a second time for
+  every request. The query string and the address of the caller are deliberately left out - the
+  first carries credentials often enough that recording it by default would leak them, the second
+  identifies the caller
 
 - records `http.server.response.start.duration` among those same attributes when a response was
   started - the seconds its consumer waited for the headers of an answer, which the span holding the
