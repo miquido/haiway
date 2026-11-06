@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from typing import Annotated, Any, Generic, TypeVar
+from typing import Annotated, Any, Concatenate, Generic, TypeVar
 
 import pytest
 
@@ -389,3 +389,24 @@ def test_specialized_instance_check_trusts_the_construction() -> None:
     assert isinstance(box, Box[int])  # pyright: ignore[reportArgumentType]
     assert checks == []  # nothing is verified again - the instance can't have changed
     assert not isinstance(Box[str](value="x"), Box[int])  # pyright: ignore[reportArgumentType]
+
+
+# what a type alias and a Concatenate say about a parameter
+
+type Callback[T] = Callable[[T], None]
+
+
+def test_variance_is_read_through_a_type_alias() -> None:
+    class Wrapped[T](State):
+        call: Callback[T]
+
+    assert issubclass(Wrapped[Animal], Wrapped[Dog])  # pyright: ignore[reportArgumentType]
+    assert not issubclass(Wrapped[Dog], Wrapped[Animal])  # pyright: ignore[reportArgumentType]
+
+
+def test_variance_is_read_through_a_concatenate() -> None:
+    class Prefixed[**P](State):
+        call: Callable[Concatenate[int, P], None]
+
+    assert issubclass(Prefixed[[Animal]], Prefixed[[Dog]])  # pyright: ignore[reportArgumentType]
+    assert not issubclass(Prefixed[[Dog]], Prefixed[[Animal]])  # pyright: ignore[reportArgumentType]

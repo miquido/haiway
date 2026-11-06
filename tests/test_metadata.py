@@ -3,6 +3,7 @@ from copy import copy, deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -671,3 +672,22 @@ def test_meta_hash_follows_contents() -> None:
 
     with raises(TypeError):
         hash(Meta({"a": [1]}))
+
+
+def test_repr_of_a_meta_which_holds_itself_does_not_recurse() -> None:
+    items: list[Any] = []
+    meta = Meta({"items": items})
+    items.append(meta)
+
+    assert "..." in repr(meta)
+
+
+@pytest.mark.skipif(
+    not hasattr(builtins, "frozendict"),
+    reason="a dict is the only mapping which has no frozendict to be left of",
+)
+def test_dict_or_meta_is_a_plain_dict_where_meta_is_a_frozendict() -> None:
+    merged = {"a": 1} | Meta({"b": 2})
+
+    assert type(merged) is dict
+    assert merged == {"a": 1, "b": 2}

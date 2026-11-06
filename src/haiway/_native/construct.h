@@ -262,8 +262,16 @@ instance_from_mapping(PyObject *cls, PyObject *mapping)
     }
 
     PyObject *empty = PyTuple_New(0);
-    PyObject *self = empty == NULL ? NULL : struct_new(type, empty, kwargs);
-    if (self != NULL && struct_init(self, empty, kwargs) < 0) Py_CLEAR(self);
+    PyObject *self = NULL;
+    if (empty == NULL) {
+        /* nothing to build with */
+    } else if (type->tp_new != StructType.tp_new || type->tp_init != StructType.tp_init) {
+        /* the class takes over its construction - what it makes of the keys is its own */
+        self = PyObject_Call(cls, empty, kwargs);
+    } else {
+        self = struct_new(type, empty, kwargs);
+        if (self != NULL && struct_init(self, empty, kwargs) < 0) Py_CLEAR(self);
+    }
     Py_XDECREF(empty);
     Py_DECREF(kwargs);
     return self;

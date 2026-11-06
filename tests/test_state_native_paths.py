@@ -292,3 +292,22 @@ def test_deep_copy_is_equal_and_independent_of_the_original() -> None:
 
     assert duplicate == rich
     assert duplicate is not rich
+
+
+# a class which constructs itself
+
+
+class Renamed(State):
+    _value: int
+
+    def __init__(self, value: int) -> None:
+        super().__init__(_value=value)
+
+
+def test_validate_calls_a_class_which_constructs_itself() -> None:
+    assert Renamed(3)._value == 3  # pyright: ignore[reportPrivateUsage]
+    assert Renamed.validate(Renamed(4))._value == 4  # pyright: ignore[reportPrivateUsage]
+
+    # the keys are given to its own constructor, which does not know them by these names
+    with pytest.raises(TypeError):
+        Renamed.validate({"_value": 3})

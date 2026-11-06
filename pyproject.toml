@@ -12,7 +12,6 @@ maintainers = [
 ]
 requires-python = ">=3.14"
 classifiers = [
-  "License :: OSI Approved :: MIT License",
   "Intended Audience :: Developers",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
@@ -23,7 +22,8 @@ classifiers = [
   "Topic :: Software Development",
   "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = ["typing-extensions~=4.16"]
 
 [project.urls]
@@ -69,7 +69,7 @@ docs = [
 [tool.uv]
 required-version = "==0.13.7"
 default-groups = "all"
-cache-keys = [{ file = "pyproject.toml" }, { file = "setup.py" }, { file = "src/haiway/_native/**/*.c" }]
+cache-keys = [{ file = "pyproject.toml" }, { file = "setup.py" }, { file = "src/haiway/_native/**/*.c" }, { file = "src/haiway/_native/**/*.h" }]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

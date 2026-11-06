@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from contextvars import ContextVar, Token
-from random import getrandbits
+from os import register_at_fork
+from random import Random
 from types import TracebackType
 from typing import Any, ClassVar, Literal, Self, final
 from uuid import UUID
@@ -21,21 +22,27 @@ _UUID4_CLEARED: int = ~((0xF000 << 64) | (0xC000 << 48)) & ((1 << 128) - 1)
 _UUID4_FIXED: int = (0x4000 << 64) | (0x8000 << 48)
 
 
+# a generator of its own - the one of the `random` module can be reseeded by the application,
+# and a repeated seed would repeat the identifiers. it is seeded by the operating system,
+# and again in a forked process, which would otherwise continue the same sequence
+_generator: Random = Random()  # nosec: B311
+register_at_fork(after_in_child=_generator.seed)
+
+
 def random_identifier() -> UUID:
     """
     Create a random version 4 UUID, the identifier of a scope or a trace.
 
     Identifiers tell scopes and traces apart, they are not secrets - so they are not
     drawn from the operating system the way ``uuid4`` does, which costs a system call
-    each. The generator of the ``random`` module is seeded from it, and again in a
-    forked process.
+    each. A generator of their own is seeded from it, and again in a forked process.
 
     Returns
     -------
     UUID
         New identifier.
     """
-    return UUID(int=(getrandbits(128) & _UUID4_CLEARED) | _UUID4_FIXED)  # nosec: B311
+    return UUID(int=(_generator.getrandbits(128) & _UUID4_CLEARED) | _UUID4_FIXED)  # nosec: B311
 
 
 @final

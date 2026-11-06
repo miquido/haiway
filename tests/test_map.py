@@ -167,3 +167,15 @@ def test_map_cannot_be_mutated_through_the_dict_methods() -> None:
         dict.__setitem__(mapping, "b", 2)  # pyright: ignore[reportArgumentType]
 
     assert mapping == {"a": 1}
+
+
+def test_repr_of_a_map_which_holds_itself_does_not_recurse() -> None:
+    items: list[Any] = []
+    mapping = Map({"items": items})
+    items.append(mapping)
+
+    assert "..." in repr(mapping)
+
+
+def test_repr_is_the_one_of_a_dict() -> None:
+    assert repr(Map({"a": 1, "b": (2,)})) == repr({"a": 1, "b": (2,)})

@@ -1,3 +1,4 @@
+import random
 import uuid
 from collections.abc import Mapping, Sequence
 
@@ -77,3 +78,27 @@ def test_scopes_are_given_identifiers_of_that_kind() -> None:
 
     assert scope.scope_id.version == 4
     assert scope.parent_id == scope.scope_id  # the root is its own parent
+
+
+def test_scope_identifiers_do_not_repeat_when_random_is_reseeded() -> None:
+    random.seed(7)
+    first = random_identifier()
+    random.seed(7)
+    second = random_identifier()
+
+    assert first != second
+
+
+def test_paths_reached_by_items_are_kept_up_to_a_limit() -> None:
+    leaves = Branch._.leaves  # pyright: ignore[reportAttributeAccessIssue]
+    paths = [leaves[index] for index in range(1_000)]
+
+    assert len(leaves.__children__) <= 256
+    # a path which was not kept works as well as the ones which were
+    branch = Branch(
+        leaf=Leaf(number=0),
+        leaves=[Leaf(number=index) for index in range(1_000)],
+        named={},
+    )
+    assert paths[999].number(branch) == 999
+    assert paths[1] is leaves[1]

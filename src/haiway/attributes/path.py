@@ -6,7 +6,7 @@ from collections import abc as collections_abc
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from copy import copy
-from typing import Any, NoReturn, TypeAliasType, final, get_args, get_origin, overload
+from typing import Any, Final, NoReturn, TypeAliasType, final, get_args, get_origin, overload
 
 from haiway.attributes.annotations import ObjectAttribute
 from haiway.types import MISSING, Missing, not_missing
@@ -898,7 +898,11 @@ class AttributePath[Root, Attribute]:
             return known
 
         extended: AttributePath[Root, Any] = _extended_by_item(self, key)
-        children[item] = extended
+        # the keys of items are whatever the code indexes with, so what is kept is bounded -
+        # the attributes of a class are not, they can't outgrow its annotations
+        if len(children) < _ITEM_PATHS_KEPT:
+            children[item] = extended
+
         return extended
 
     @overload
@@ -995,6 +999,9 @@ class AttributePath[Root, Attribute]:
             )
 
             return resolved
+
+
+_ITEM_PATHS_KEPT: Final[int] = 256
 
 
 def _extended_by_item(

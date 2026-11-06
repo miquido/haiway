@@ -2,7 +2,16 @@ import collections.abc
 import threading
 import typing
 from collections.abc import Mapping, MutableMapping, Sequence
-from typing import Any, ParamSpec, TypeVar, TypeVarTuple, cast, get_args, get_origin
+from typing import (
+    Any,
+    ParamSpec,
+    TypeAliasType,
+    TypeVar,
+    TypeVarTuple,
+    cast,
+    get_args,
+    get_origin,
+)
 
 __all__ = (
     "Variance",
@@ -365,6 +374,9 @@ def _collect_positions(
     if origin in (collections.abc.Callable, typing.Callable):  # pyright: ignore[reportUnknownMemberType]
         _collect_callable_positions(arguments, name, positive, seen, depth)
 
+    elif isinstance(origin, TypeAliasType):
+        _collect_alias_positions(origin, arguments, name, positive, seen, depth)
+
     elif (
         getattr(origin, "__ANNOTATED__", None) is not None and origin not in _computing_variances()
     ):
@@ -374,6 +386,24 @@ def _collect_positions(
         # `Annotated` carries its metadata along as arguments, which are not types
         for argument in arguments[:1] if origin is typing.Annotated else arguments:
             _collect_positions(argument, name, positive, seen, depth + 1)
+
+
+def _collect_alias_positions(
+    alias: TypeAliasType,
+    arguments: Sequence[Any],
+    name: str,
+    positive: bool,
+    seen: set[bool],
+    depth: int,
+    /,
+) -> None:
+    # `type Callback[T] = Callable[[T], None]` - an argument is used the way the alias
+    # uses its parameter, which is what its value says
+    for parameter, argument in zip(alias.__type_params__, arguments, strict=False):
+        used: set[bool] = set()
+        _collect_positions(alias.__value__, parameter.__name__, True, used, depth + 1)
+        for read in used:
+            _collect_positions(argument, name, positive if read else not positive, seen, depth + 1)
 
 
 def _collect_callable_positions(
@@ -391,6 +421,9 @@ def _collect_callable_positions(
 
     elif arguments and isinstance(arguments[0], ParamSpec):
         given = (arguments[0],)  # `Callable[P, R]` - all of its arguments are given to it
+
+    elif arguments and get_origin(arguments[0]) is typing.Concatenate:
+        given = get_args(arguments[0])  # the types before the signature, and the signature
 
     for argument in given:
         _collect_positions(argument, name, not positive, seen, depth + 1)

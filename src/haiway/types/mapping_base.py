@@ -1,5 +1,7 @@
 import builtins
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from reprlib import recursive_repr
+from typing import TYPE_CHECKING, Final
 
 __all__ = (
     "FROZEN",
@@ -20,6 +22,7 @@ else:
 FROZEN: Final[bool] = MapBase is not dict
 
 
-def plain_repr(mapping: Any) -> str:
+@recursive_repr()
+def plain_repr[Key, Element](mapping: Mapping[Key, Element]) -> str:
     """The way a `dict` is printed, which `frozendict` does with the name of its class."""
     return repr({**mapping})
