@@ -67,7 +67,8 @@ docs = [
 ]
 
 [tool.uv]
-required-version = "==0.13.7"
+# a range - cibuildwheel runs the uv of the build image (0.13.5), not the one pinned in CI
+required-version = ">=0.13.5,<0.14"
 default-groups = "all"
 cache-keys = [{ file = "pyproject.toml" }, { file = "setup.py" }, { file = "src/haiway/_native/**/*.c" }, { file = "src/haiway/_native/**/*.h" }]
 
@@ -134,7 +135,7 @@ haiway = ["py.typed", "**/*.pyi"]
 # interpreter, nor for the platforms nobody installs it on
 build = "cp314-* cp315-*"
 skip = "*-musllinux_i686 *-manylinux_i686 *-win32 *_ppc64le *_s390x *_riscv64"
-build-frontend = "build[uv]"
+build-frontend = "uv"
 environment = { HAIWAY_NATIVE = "1" }
 # a file rather than a command line - the quoting of a multi-line one differs per shell
 test-command = "python {project}/.github/wheel_smoke.py"
