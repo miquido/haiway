@@ -1,6 +1,9 @@
+import multiprocessing
 import random
 import uuid
 from collections.abc import Mapping, Sequence
+
+import pytest
 
 from haiway import State
 from haiway.context.identifier import ContextIdentifier, random_identifier
@@ -87,6 +90,27 @@ def test_scope_identifiers_do_not_repeat_when_random_is_reseeded() -> None:
     second = random_identifier()
 
     assert first != second
+
+
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(),
+    reason="the process has to be forked",
+)
+def test_identifiers_of_a_forked_process_do_not_continue_its_parents() -> None:
+    context = multiprocessing.get_context("fork")
+    receiving, sending = context.Pipe(duplex=False)
+
+    def child() -> None:
+        sending.send([random_identifier() for _ in range(5)])
+
+    process = context.Process(target=child)
+    process.start()
+    forked: list[uuid.UUID] = receiving.recv()
+    process.join()
+    own: list[uuid.UUID] = [random_identifier() for _ in range(5)]
+
+    assert not set(forked) & set(own)
+    assert len(set(forked)) == len(forked)
 
 
 def test_paths_reached_by_items_are_kept_up_to_a_limit() -> None:
