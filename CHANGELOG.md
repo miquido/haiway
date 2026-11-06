@@ -174,9 +174,9 @@ Windows with Python 3.14 and 3.15.
 - **Variadic parameters (PEP 646) and parameter specifications (PEP 612)** are specialized and
   validated position by position, and given to a generic attribute of another generic class.
 - **Variance** is honored when declared, and inferred for parameters of the `class Box[T]` syntax
-  from where the attributes use them - read from only is covariant, used as an argument of a callable
-  is contravariant, both is invariant. It is followed through nested generic States, type aliases
-  and `Concatenate`. A parameter declared without a variance keeps being covariant.
+  from where the attributes use them - read from only is covariant, used as an argument of a
+  callable is contravariant, both is invariant. It is followed through nested generic States, type
+  aliases and `Concatenate`. A parameter declared without a variance keeps being covariant.
 
   Migration: a generic `State` using its parameter as an argument of a callable attribute now
   accepts and rejects other variants than before, in `isinstance`, `issubclass` and validation.
