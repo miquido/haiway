@@ -1,0 +1,15 @@
+{
+  "starlette/bare": 4.868556389813443,
+  "starlette/haiway": 24.132433638799412,
+  "starlette/haiway, incoming traceparent": 24.81293928891549,
+  "starlette/bare, 50 concurrent": 4.8095295513356415,
+  "starlette/haiway, 50 concurrent": 23.84305546681086,
+  "starlette stream/bare": 12.173803716568441,
+  "starlette stream/haiway": 35.17414686734338,
+  "fastapi/bare": 18.35539223403909,
+  "fastapi/haiway": 45.48959843050024,
+  "fastapi/bare, 50 concurrent": 18.292912598518495,
+  "fastapi/haiway, 50 concurrent": 45.22930575712096,
+  "trace context/with traceparent": 0.3337629185989499,
+  "trace context/without headers": 0.067498330026865
+}
