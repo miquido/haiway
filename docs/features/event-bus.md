@@ -94,7 +94,8 @@ async def main():
 
 `ctx.spawn()` ties tasks to the current scope's task group. Scope exit waits for unfinished tasks;
 it does not automatically cancel healthy long-running processors unless the scope itself is
-cancelled, fails, or you cancel the task explicitly.
+cancelled, its body fails, or you cancel the task explicitly. A failing task does not cancel the
+scope - its error is raised when the scope exits.
 
 ### Multiple Subscribers
 

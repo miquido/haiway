@@ -15,7 +15,7 @@ from haiway.context.observability import ContextObservability, Observability, Ob
 # Import after other imports to avoid circular dependencies
 from haiway.context.presets import ContextPresets, ContextPresetsRegistry
 from haiway.context.state import ContextState
-from haiway.context.tasks import ContextTaskGroup
+from haiway.context.tasks import ScopeTaskGroup
 from haiway.context.types import ContextMissing
 from haiway.utils.exceptions import raise_collected
 
@@ -94,7 +94,7 @@ class ContextScope:
             # with - it is joined on exit before the state and the disposables
             # are released, so a task spawned within the scope can't keep running
             # against a connection pool or a client which was already closed
-            task_group: ContextTaskGroup = ContextTaskGroup()
+            task_group: ScopeTaskGroup = ScopeTaskGroup(isolated=self._isolated)
             await task_group.__aenter__()
             unwinds.append(task_group.__aexit__)
 
@@ -175,8 +175,21 @@ class ContextScope:
         unwinds: MutableSequence[_Unwind],
         /,
     ) -> Any:
-        prepared: Any = await disposables.__aenter__()
-        unwinds.append(disposables.__aexit__)
+        # scoped tasks can't be spawned while disposables are prepared or disposed -
+        # the task group of the scope is not available yet and is already joined, so
+        # they would end up attached to an enclosing scope or detached entirely
+        with ScopeTaskGroup.forbidding():
+            prepared: Any = await disposables.__aenter__()
+
+        async def dispose(
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            with ScopeTaskGroup.forbidding():
+                await disposables.__aexit__(exc_type, exc_val, exc_tb)
+
+        unwinds.append(dispose)
         return prepared
 
     async def __aexit__(

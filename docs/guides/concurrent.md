@@ -12,9 +12,14 @@ in.
 - `ctx.spawn(...)` keeps work tied to the current scope. A task is awaited by the scope it was
   spawned in - never by an enclosing one.
 - Scope exit waits for in-scope tasks to settle.
-- Child task failures surface through the task group unless explicitly handled. A single failed task
-  raises its error as is, while multiple tasks failing together raise an `ExceptionGroup` of their
-  errors - never the `unhandled errors in a TaskGroup` wrapper of `asyncio.TaskGroup`.
+- A failed task does not cancel the scope body, its siblings, or the code awaiting it. The body runs
+  to its end and the failures are raised when the scope exits: a single failed task raises its error
+  as is, while multiple failed tasks raise an `ExceptionGroup` of their errors - never the
+  `unhandled errors in a TaskGroup` wrapper of `asyncio.TaskGroup`. An error the body already
+  handled by awaiting the task is still raised on exit, so no failure is silently lost.
+- When the body itself fails, its tasks are cancelled and its error takes precedence - the errors of
+  tasks which failed alongside it are chained as its `__cause__`.
+- Cancelling the scope cancels its tasks, and the cancellation is delivered once they have finished.
 - State, logging, and observability remain available inside spawned tasks, and stay valid for as
   long as the task runs.
 
@@ -27,6 +32,36 @@ Two shapes cannot:
   subscription ends when the scope owning the event bus exits, and a nested non-isolated scope
   shares the bus of an ancestor, so consume it with a bound or spawn the consumer in the scope
   owning the bus - a root or `isolated=True` scope.
+
+### Isolated scopes
+
+`isolated=True` gives a scope its own event bus and shields its tasks from cancellation. When the
+body of an isolated scope is cancelled - or the cancellation arrives while the scope is joining its
+tasks - the tasks are not cancelled but run to completion, and the scope exit still waits for them
+before delivering the cancellation. Failures of the tasks stay within the isolated scope: they are
+raised from its exit, like in any other scope, and do not cancel the enclosing one. A body failing
+with any other error still cancels its tasks.
+
+Because the shield waits for the tasks, an isolated scope needs tasks which finish on their own.
+
+### Spawning outside of the task group
+
+Tasks can't be spawned with `ctx.spawn(...)` while the disposables of a scope are being prepared or
+disposed - the task group of the scope does not exist yet, respectively is already joined, so the
+task would end up attached to an enclosing scope or detached entirely. Such a call raises
+`RuntimeError`; use `ctx.spawn_background(...)` for work which has to outlive the preparation, and
+dispose of it in the disposable itself.
+
+Calling `ctx.spawn(...)` outside of any scope falls back to `ctx.spawn_background(...)` and logs a
+debug message about it, as it is rarely intended.
+
+### Disposal
+
+Disposables of a scope are prepared and disposed concurrently - none of them may depend on another
+being available. Disposal is never abandoned: a cancellation delivered while the disposables are
+exiting - even repeatedly - lets every one of them finish first, and is raised afterwards (their
+failures are then logged instead of raised). The closing future of a scope, `ContextClosing`, always
+completes with the scope identifier - the error of the scope body is not a result of waiting for it.
 
 If work must outlive the current scope, use `ctx.spawn_background(...)` instead of `ctx.spawn(...)`.
 Such a task is fully detached - it runs with an empty context, so `ctx.state(...)` and

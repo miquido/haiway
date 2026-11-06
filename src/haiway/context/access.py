@@ -29,7 +29,7 @@ from haiway.context.observability import (
 from haiway.context.presets import ContextPresets, ContextPresetsRegistry
 from haiway.context.scope import ContextScope
 from haiway.context.state import ContextState
-from haiway.context.tasks import BackgroundTaskGroup, ContextTaskGroup
+from haiway.context.tasks import BackgroundTaskGroup, ContextTaskGroup, ScopeTaskGroup
 from haiway.utils.context import NoopAsyncContext, NoopContext
 
 __all__ = ("ctx",)
@@ -202,10 +202,12 @@ class ctx:
         isolated: bool = False
             controls whether event handling is isolated from the parent scope. When set to
             True, the scope uses its own event bus, so events sent within it do not reach
-            the subscribers of enclosing scopes. Every scope owns its TaskGroup regardless
-            of this flag. State inheritance still flows from parent to child when the scope
-            is entered, but updates remain local to the child scope. Root scope is always
-            isolated.
+            the subscribers of enclosing scopes. Every scope owns its task group, an
+            isolated one additionally shields its tasks from cancellation - when its body
+            is cancelled, or the cancellation arrives while it joins them, the tasks run
+            to completion and the cancellation is delivered afterwards. State inheritance
+            still flows from parent to child when the scope is entered, but updates remain
+            local to the child scope. Root scope is always isolated.
 
         Returns
         -------
@@ -347,6 +349,16 @@ class ctx:
         ``task.cancel()`` or ``ctx.spawn_background(...)`` when different lifetime
         semantics are required.
 
+        A failed task does not cancel the scope body or its sibling tasks - the
+        errors of all failed tasks are raised when the scope exits, even when the
+        body handled them by awaiting the task. When the body itself fails, its
+        tasks are cancelled and its error takes precedence.
+
+        Tasks can't be spawned while the disposables of a scope are being prepared
+        or disposed, ``RuntimeError`` is raised - use ``ctx.spawn_background(...)``.
+        Outside of any scope the task is spawned in the background, which is logged
+        at debug level.
+
         A task consuming ``ctx.subscribe(...)`` ends together with the scope the
         subscription was created in, including a nested non isolated one sharing
         the event bus of an ancestor. That scope completes its closing future
@@ -370,7 +382,7 @@ class ctx:
             task for tracking function execution and result
         """
 
-        return ContextTaskGroup.run(coro, *args, **kwargs)
+        return ScopeTaskGroup.run(coro, *args, **kwargs)
 
     @overload
     @staticmethod

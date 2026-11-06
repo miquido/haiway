@@ -15,7 +15,7 @@ from haiway.context import (
 )
 from haiway.context import tasks as tasks_module
 from haiway.context.state import ContextState
-from haiway.context.tasks import ContextTaskGroup
+from haiway.context.tasks import ContextTaskGroup, ScopeTaskGroup
 
 
 class ExampleState(State):
@@ -185,14 +185,14 @@ async def test_scope_task_group_waits_for_spawned_tasks():
 @mark.asyncio
 async def test_nested_scope_uses_own_task_group():
     async with ctx.scope("parent"):
-        parent_group = ContextTaskGroup._context.get()
+        parent_group = ScopeTaskGroup._context.get()
 
         async with ctx.scope("child"):
-            child_group = ContextTaskGroup._context.get()
+            child_group = ScopeTaskGroup._context.get()
             assert child_group is not parent_group
 
         # parent task group context should be restored after nested scope exit
-        assert ContextTaskGroup._context.get() is parent_group
+        assert ScopeTaskGroup._context.get() is parent_group
 
 
 @mark.asyncio
@@ -214,7 +214,7 @@ async def test_nested_scope_awaits_own_spawned_tasks():
 @mark.asyncio
 async def test_isolated_scope_uses_separate_task_group():
     async with ctx.scope("parent"):
-        parent_group = ContextTaskGroup._context.get()
+        parent_group = ScopeTaskGroup._context.get()
         completion = asyncio.Event()
 
         async def worker() -> None:
@@ -222,13 +222,13 @@ async def test_isolated_scope_uses_separate_task_group():
             completion.set()
 
         async with ctx.scope("child", isolated=True):
-            isolated_group = ContextTaskGroup._context.get()
+            isolated_group = ScopeTaskGroup._context.get()
             assert isolated_group is not parent_group
             ctx.spawn(worker)
 
         assert completion.is_set()
         # Parent task group context should be restored after isolated scope exit
-        assert ContextTaskGroup._context.get() is parent_group
+        assert ScopeTaskGroup._context.get() is parent_group
 
 
 @mark.asyncio
@@ -299,9 +299,9 @@ async def test_scope_task_group_exit_preserves_spawned_task_error_chain():
     with raises(FakeException) as failure:
         async with ctx.scope("task-group-error-chain"):
             ctx.spawn(worker)
-            # still running when the spawned task fails, so the task group cancels
-            # this body - that cancellation must not become the error context
-            await asyncio.sleep(1)
+            # the body is not cancelled by the failure of the task - the error is
+            # raised once the body is done
+            await asyncio.sleep(0.05)
 
     assert isinstance(failure.value.__cause__, ValueError)
     assert failure.value.__suppress_context__
@@ -474,7 +474,7 @@ async def test_spawned_task_error_propagates_out_of_scope():
             ctx.spawn(failing)
             # still running when the spawned task fails, so the task group
             # cancels this body - that cancellation must not replace the error
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.05)
 
     with raises(ValueError, match="spawned failure"):
         await scope_with_failing_task()
@@ -488,7 +488,7 @@ async def test_spawned_task_error_is_visible_to_enclosing_task_group():
     async def scope_with_failing_task() -> None:
         async with ctx.scope("test"):
             ctx.spawn(failing)
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.05)
 
     # an enclosing task group has to observe the failure instead of
     # treating the inner task as merely cancelled
