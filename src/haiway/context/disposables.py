@@ -1,9 +1,10 @@
-from asyncio import Future, gather, shield, sleep
+from asyncio import CancelledError, Future, gather, shield, sleep
 from collections.abc import Collection, Iterable, Iterator, MutableSequence, Sequence
 from types import TracebackType
 from typing import Protocol, Self, final, runtime_checkable
 
 from haiway.attributes import State
+from haiway.context.observability import ContextObservability, ObservabilityLevel
 from haiway.context.state import ContextState
 from haiway.utils.exceptions import raise_collected
 
@@ -195,7 +196,9 @@ class Disposables:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        results: Iterable[BaseException | None] = await gather(
+        # disposal is never abandoned - the shield keeps it running when the caller
+        # is cancelled, and the cancellation is delivered only once it completed
+        disposing: Future[list[BaseException | None]] = gather(
             *(
                 disposable.__aexit__(
                     exc_type,
@@ -207,10 +210,40 @@ class Disposables:
             return_exceptions=True,
         )
 
-        raise_collected(
-            tuple(result for result in results if isinstance(result, BaseException)),
-            message="Disposables disposal errors",
+        cancellation: CancelledError | None = None
+        while True:
+            try:
+                results: Iterable[BaseException | None] = await shield(disposing)
+                break
+
+            except CancelledError as exc:
+                if disposing.done():
+                    # the disposal itself got cancelled, nothing is left running
+                    cancellation = cancellation or exc
+                    results = ()
+                    break
+
+                cancellation = cancellation or exc  # keep waiting, deliver it afterwards
+
+        errors: Sequence[BaseException] = tuple(
+            result for result in results if isinstance(result, BaseException)
         )
+        if cancellation is None:
+            raise_collected(
+                errors,
+                message="Disposables disposal errors",
+            )
+            return
+
+        # the cancellation takes precedence, yet the failures of disposal are not lost
+        for error in errors:
+            ContextObservability.record_log(
+                ObservabilityLevel.ERROR,
+                "Disposable failed while being disposed during cancellation",
+                exception=error,
+            )
+
+        raise cancellation
 
     def extended(
         self,

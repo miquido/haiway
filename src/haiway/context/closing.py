@@ -61,13 +61,10 @@ class ContextClosing:
         try:
             # complete before releasing - everything waiting for the scope to end is
             # unblocked while the scope is still unwinding, before its tasks are joined
-            if exc_val is None:
-                self._future.set_result(self._identifier)
-                self._future.result()  # silence warning
-
-            else:
-                self._future.set_exception(exc_val)
-                self._future.exception()  # silence warning
+            # always with the identifier - the way a scope ends is not a result of
+            # waiting for it, a waiter must not receive the error of the scope body
+            self._future.set_result(self._identifier)
+            self._future.result()  # silence warning
 
         finally:  # released even when completing fails - the scope is spent either way
             ContextClosing._context.reset(self._token)
