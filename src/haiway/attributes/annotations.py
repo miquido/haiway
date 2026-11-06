@@ -4105,11 +4105,36 @@ def _resolve_generic_alias(
 def _resolve_typeddict(
     annotation: Any,
     *,
+    arguments: Sequence[Any],
     localns: Mapping[str, Any] | None,
     module: str,
     resolved_parameters: Mapping[str, AttributeAnnotation],
     recursion_guard: MutableMapping[str, AttributeAnnotation],
 ) -> AttributeAnnotation:
+    parameters: Sequence[AttributeAnnotation] = tuple(
+        resolve_attribute(
+            argument,
+            localns=localns,
+            module=module,
+            resolved_parameters=resolved_parameters,
+            recursion_guard=recursion_guard,
+        )
+        for argument in arguments
+    )
+    if parameters:
+        resolved_parameters = {
+            **resolved_parameters,
+            **{
+                parameter.__name__: resolved
+                for parameter, resolved in zip(
+                    getattr(annotation, "__parameters__", ()),
+                    parameters,
+                    strict=False,
+                )
+                if hasattr(parameter, "__name__")
+            },
+        }
+
     attributes: MutableMapping[str, AttributeAnnotation] = {}
     resolved_attribute: TypedDictAttribute = TypedDictAttribute(
         base=annotation,
@@ -4118,7 +4143,7 @@ def _resolve_typeddict(
 
     recursion_key: str = _recursion_key(
         origin=annotation,
-        # TODO: parameters?
+        parameters=parameters,
     )
 
     if guard := recursion_guard.get(recursion_key):
@@ -4190,6 +4215,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
         case typeddict if is_typeddict(typeddict) or is_typeddict_ext(typeddict):
             return _resolve_typeddict(
                 typeddict,
+                arguments=get_args(annotation),
                 localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
