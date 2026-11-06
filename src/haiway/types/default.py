@@ -48,6 +48,7 @@ class DefaultValue:
     __slots__ = (
         "_resolve",
         "available",
+        "constant",
         "env",
     )
 
@@ -61,6 +62,9 @@ class DefaultValue:
     ) -> None:
         self._resolve: Callable[[], Any | Missing]
         self.available: bool
+        # resolves to the very same value each time, which is the case of a plain
+        # default only - a factory or an environment variable is read on every use
+        self.constant: bool
         # the variable backing this default, kept to name it when it is not set -
         # an unset variable resolves to MISSING, which would otherwise fail deep
         # within type validation without ever mentioning what has to be provided
@@ -124,6 +128,12 @@ class DefaultValue:
                 "available",
                 default is not MISSING,
             )
+
+        object.__setattr__(
+            self,
+            "constant",
+            default_factory is MISSING and env is MISSING,
+        )
 
     def __call__(self) -> Any | Missing:
         return self._resolve()

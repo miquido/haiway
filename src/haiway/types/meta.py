@@ -5,6 +5,7 @@ from typing import Any, ClassVar, NoReturn, Self, TypeGuard, cast, final, overlo
 from uuid import UUID
 
 from haiway.types.basic import BasicValue, basic_value
+from haiway.types.mapping_base import FROZEN, MapBase, plain_repr
 
 __all__ = (
     "Meta",
@@ -18,7 +19,7 @@ type MetaTags = Collection[str]
 
 
 @final
-class Meta(dict[str, BasicValue]):
+class Meta(MapBase[str, BasicValue]):
     """
     Immutable metadata container with type-safe access to common fields.
 
@@ -28,11 +29,12 @@ class Meta(dict[str, BasicValue]):
     nested mappings to immutable ``Map`` instances so metadata stays immutable
     through the full object graph.
 
-    The class inherits from ``dict`` for storage and read access, but blocks all
-    mutating methods. Prefer ``Meta.of(...)``, ``Meta.from_mapping(...)``, or
-    ``Meta.from_json(...)`` when constructing values that should be validated.
-    Direct ``Meta({...})`` construction preserves the base ``dict`` behavior and
-    therefore does not perform recursive validation on its own.
+    The class inherits from ``frozendict`` where there is one, ``dict`` otherwise,
+    for storage and read access, and blocks all mutating methods. Prefer
+    ``Meta.of(...)``, ``Meta.from_mapping(...)``, or ``Meta.from_json(...)`` when
+    constructing values that should be validated. Direct ``Meta({...})``
+    construction preserves the base mapping behavior and therefore does not
+    perform recursive validation on its own.
 
     Examples
     --------
@@ -659,6 +661,12 @@ class Meta(dict[str, BasicValue]):
         **values: BasicValue,
     ) -> Self:
         return self.__replace__(**values)
+
+    if FROZEN:
+        # a `frozendict` spells itself with the name of its class, which is not how the
+        # mapping it replaces has ever been printed
+        def __repr__(self) -> str:
+            return plain_repr(self)
 
     def __hash__(self) -> int:  # pyright: ignore[reportIncompatibleVariableOverride, reportIncompatibleMethodOverride]
         # an immutable mapping is as hashable as its contents are - a value which

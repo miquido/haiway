@@ -660,6 +660,7 @@ class AttributePath[Root, Attribute]:
 
     __slots__ = (
         "__attribute__",
+        "__children__",
         "__components__",
         "__root__",
     )
@@ -719,6 +720,14 @@ class AttributePath[Root, Attribute]:
             self,
             "__components__",
             components,
+        )
+        # a path is immutable, so the one reached by an attribute or an item is always the
+        # same - it is made once and kept, instead of resolving its annotation again
+        self.__children__: dict[Any, AttributePath[Root, Any]]
+        object.__setattr__(
+            self,
+            "__children__",
+            {},
         )
 
     def __setattr__(
@@ -812,6 +821,10 @@ class AttributePath[Root, Attribute]:
         AttributeError
             If the attribute is not found or cannot be accessed
         """
+        children: dict[Any, AttributePath[Root, Any]] = self.__children__
+        if (known := children.get(name)) is not None:
+            return known
+
         try:
             return object.__getattribute__(self, name)
 
@@ -834,7 +847,7 @@ class AttributePath[Root, Attribute]:
                 f" type annotation for '{name}' within '{self.__attribute__.__name__}'"
             ) from exc
 
-        return AttributePath[Root, Any](
+        extended: AttributePath[Root, Any] = AttributePath(
             self.__root__,
             *(
                 *self.__components__,
@@ -846,6 +859,8 @@ class AttributePath[Root, Attribute]:
             ),
             attribute=annotation,
         )
+        children[name] = extended
+        return extended
 
     def __getitem__(
         self,
@@ -876,97 +891,15 @@ class AttributePath[Root, Attribute]:
             If the key type is incompatible with the attribute type or if the
             attribute type does not support item access
         """
-        unaliased_attribute: Any = _unaliased_required(self.__attribute__)
+        # the items of the same kind, from the same path, are the same path
+        item: tuple[str, str | int] = (type(key).__name__, key)
+        children: dict[Any, AttributePath[Root, Any]] = self.__children__
+        if (known := children.get(item)) is not None:
+            return known
 
-        match get_origin(unaliased_attribute) or unaliased_attribute:
-            case collections_abc.Mapping | typing.Mapping | builtins.dict:
-                match get_args(unaliased_attribute):
-                    case (builtins.str | builtins.int, element_annotation):
-                        return AttributePath[Root, Any](
-                            self.__root__,
-                            *(
-                                *self.__components__,
-                                MappingItemAttributePathComponent(
-                                    root=self.__attribute__,  # pyright: ignore[reportArgumentType]
-                                    attribute=element_annotation,
-                                    key=key,
-                                ),
-                            ),
-                            attribute=element_annotation,
-                        )
-
-                    case other:
-                        raise TypeError(
-                            "Unsupported Mapping type annotation",
-                            self.__attribute__.__name__,
-                        )
-
-            case builtins.tuple:
-                if not isinstance(key, int):
-                    raise TypeError(
-                        "Unsupported tuple type annotation",
-                        self.__attribute__.__name__,
-                    )
-
-                match get_args(unaliased_attribute):
-                    case (element_annotation, builtins.Ellipsis | types.EllipsisType):
-                        return AttributePath[Root, Any](
-                            self.__root__,
-                            *(
-                                *self.__components__,
-                                SequenceItemAttributePathComponent(
-                                    root=self.__attribute__,  # pyright: ignore[reportArgumentType]
-                                    attribute=element_annotation,
-                                    index=key,
-                                ),
-                            ),
-                            attribute=element_annotation,
-                        )
-
-                    case other:
-                        return AttributePath[Root, Any](
-                            self.__root__,
-                            *(
-                                *self.__components__,
-                                SequenceItemAttributePathComponent(
-                                    root=self.__attribute__,  # pyright: ignore[reportArgumentType]
-                                    attribute=other[key],
-                                    index=key,
-                                ),
-                            ),
-                            attribute=other[key],
-                        )
-
-            case collections_abc.Sequence | typing.Sequence | builtins.list:
-                if not isinstance(key, int):
-                    raise TypeError(
-                        "Unsupported Sequence type annotation",
-                        self.__attribute__.__name__,
-                    )
-
-                match get_args(unaliased_attribute):
-                    case (element_annotation,):
-                        return AttributePath[Root, Any](
-                            self.__root__,
-                            *(
-                                *self.__components__,
-                                SequenceItemAttributePathComponent(
-                                    root=self.__attribute__,  # pyright: ignore[reportArgumentType]
-                                    attribute=element_annotation,
-                                    index=key,
-                                ),
-                            ),
-                            attribute=element_annotation,
-                        )
-
-                    case other:
-                        raise TypeError(
-                            "Unsupported Seqence type annotation",
-                            self.__attribute__.__name__,
-                        )
-
-            case other:
-                raise TypeError("Unsupported type annotation", other)
+        extended: AttributePath[Root, Any] = _extended_by_item(self, key)
+        children[item] = extended
+        return extended
 
     @overload
     def __call__(
@@ -1062,6 +995,104 @@ class AttributePath[Root, Attribute]:
             )
 
             return resolved
+
+
+def _extended_by_item(
+    path: AttributePath[Any, Any],
+    key: str | int,
+    /,
+) -> AttributePath[Any, Any]:
+    unaliased_attribute: Any = _unaliased_required(path.__attribute__)
+
+    match get_origin(unaliased_attribute) or unaliased_attribute:
+        case collections_abc.Mapping | typing.Mapping | builtins.dict:
+            match get_args(unaliased_attribute):
+                case (builtins.str | builtins.int, element_annotation):
+                    return AttributePath(
+                        path.__root__,
+                        *(
+                            *path.__components__,
+                            MappingItemAttributePathComponent(
+                                root=path.__attribute__,  # pyright: ignore[reportArgumentType]
+                                attribute=element_annotation,
+                                key=key,
+                            ),
+                        ),
+                        attribute=element_annotation,
+                    )
+
+                case other:
+                    raise TypeError(
+                        "Unsupported Mapping type annotation",
+                        path.__attribute__.__name__,
+                    )
+
+        case builtins.tuple:
+            if not isinstance(key, int):
+                raise TypeError(
+                    "Unsupported tuple type annotation",
+                    path.__attribute__.__name__,
+                )
+
+            match get_args(unaliased_attribute):
+                case (element_annotation, builtins.Ellipsis | types.EllipsisType):
+                    return AttributePath(
+                        path.__root__,
+                        *(
+                            *path.__components__,
+                            SequenceItemAttributePathComponent(
+                                root=path.__attribute__,  # pyright: ignore[reportArgumentType]
+                                attribute=element_annotation,
+                                index=key,
+                            ),
+                        ),
+                        attribute=element_annotation,
+                    )
+
+                case other:
+                    return AttributePath(
+                        path.__root__,
+                        *(
+                            *path.__components__,
+                            SequenceItemAttributePathComponent(
+                                root=path.__attribute__,  # pyright: ignore[reportArgumentType]
+                                attribute=other[key],
+                                index=key,
+                            ),
+                        ),
+                        attribute=other[key],
+                    )
+
+        case collections_abc.Sequence | typing.Sequence | builtins.list:
+            if not isinstance(key, int):
+                raise TypeError(
+                    "Unsupported Sequence type annotation",
+                    path.__attribute__.__name__,
+                )
+
+            match get_args(unaliased_attribute):
+                case (element_annotation,):
+                    return AttributePath(
+                        path.__root__,
+                        *(
+                            *path.__components__,
+                            SequenceItemAttributePathComponent(
+                                root=path.__attribute__,  # pyright: ignore[reportArgumentType]
+                                attribute=element_annotation,
+                                index=key,
+                            ),
+                        ),
+                        attribute=element_annotation,
+                    )
+
+                case other:
+                    raise TypeError(
+                        "Unsupported Seqence type annotation",
+                        path.__attribute__.__name__,
+                    )
+
+        case other:
+            raise TypeError("Unsupported type annotation", other)
 
 
 def _attribute_annotation(

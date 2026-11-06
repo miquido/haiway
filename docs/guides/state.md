@@ -218,6 +218,49 @@ Shelf[Dog]  # fine
 Shelf[int]  # raises TypeError - T is bound to Animal
 ```
 
+#### Defaults of type parameters
+
+A type parameter may declare a default (PEP 696). Leaving the argument out of a specialization uses
+it, and the variant is the same class however it is spelled:
+
+```python
+class Pair[A, B = str](State):
+    first: A
+    second: B
+
+assert Pair[int] is Pair[int, str]
+```
+
+An unspecialized generic stands for its defaults, so `Pair(first=1, second=2)` fails validation
+because `second` is a `str`. A parameter without a default stands for its bound, or for any value.
+
+#### Variadic parameters and parameter specifications
+
+A `TypeVarTuple` binds the arguments the other parameters leave over, and each position of a
+`tuple[*Ts]` attribute is validated against its own argument. A `ParamSpec` is given the signature
+it stands for, written as a list of types or as `...`:
+
+```python
+class Row[*Ts](State):
+    cells: tuple[*Ts]
+
+Row[int, str](cells=(1, "a"))  # validated position by position
+
+class Handler[**P, R](State):
+    call: Callable[P, R]
+
+Handler[[int], bool](call=lambda value: value > 0)
+```
+
+#### Variance
+
+Whether `Box[Dog]` is a subclass of `Box[Animal]` follows the variance of the parameter. A declared
+one is honored, so a `TypeVar("T", contravariant=True)` reverses the relation. A parameter whose
+variance is inferred, as in `class Box[T]`, is worked out from the attributes using it: read from
+only, it is covariant, which is all an immutable State can do with a value. Used as an argument of a
+callable attribute it is contravariant, and used both ways it is invariant - neither variant is a
+subclass of the other.
+
 ### State Classes Are Final
 
 A `State` class that declares attributes cannot be inherited from:
@@ -501,6 +544,34 @@ user3 = user.updating(
 new_address = user.address.updating(street="456 Oak Ave")
 user4 = user.updating(address=new_address)
 ```
+
+### Native Storage
+
+Haiway ships a compiled extension which stores the attributes of a State inline in the instance,
+validates the common types without calling back into Python, and converts to mappings and JSON
+natively. It makes the immutability real - an attribute can't be rebound through
+`object.__setattr__` either, and an instance has no `__dict__` or `__weakref__`. That holds for the
+native storage only: the pure Python implementation refuses `setattr` and `delattr`, but
+`object.__setattr__` can still rebind an attribute there.
+
+The pure Python implementation is the default. The extension is opt-in: `HAIWAY_NATIVE=1` uses it
+and fails, rather than falling back, when it is not built. It behaves the same for everything but a
+few details: calling `__init__` a second time on an instance raises natively and re-initializes it
+in Python, and a key which is not an attribute is reported after the values before it were validated
+rather than ahead of them, so a validator or a default factory may have run by then.
+`HAIWAY_NATIVE=1` fails instead of falling back when the extension is missing - that is what the
+build uses. After changing the C source run `make native`, as `uv sync` does not recompile it.
+
+`to_json`, `from_json` and `from_json_array` read and write the JSON natively as well, without the
+intermediate Python objects - for the default `json.JSONEncoder` and `json.JSONDecoder`, and with no
+`indent`. A document which is not the usual case, or a value with no native spelling, is handed to
+the Python implementation, which is also what reports every error, so the result is the same either
+way. Passing an `encoder_class`, a `decoder` or an `indent` uses the Python implementation directly.
+
+Calling a class with keyword arguments, `Point(x=1, y=2)`, and updating, `point.updating(x=3)`, are
+the fastest ways to build and change an instance natively. Unpacking a mapping into the call,
+`Point(**values)`, costs a little more than it did - to build an instance from a mapping use
+`Point.validate(values)` instead, which is faster than either.
 
 ### Performance Considerations
 

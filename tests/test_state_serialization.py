@@ -1,5 +1,5 @@
 import json
-from collections.abc import Sequence, Set
+from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -19,6 +19,7 @@ from haiway import (
     State,
     ValidationError,
 )
+from haiway.types import Map
 
 
 class Point(State):
@@ -652,3 +653,40 @@ def test_recursive_state_has_schema_with_reference() -> None:
 
     assert Node.__SERIALIZABLE__ is True
     assert Node.from_json(node.to_json()) == node
+
+
+def test_serialization_walks_nested_states_sequences_and_maps() -> None:
+    class Inner(State):
+        number: int
+
+    class Outer(State):
+        inner: Inner
+        many: Sequence[Inner]
+        named: Mapping[str, Inner]
+
+    outer = Outer(
+        inner=Inner(number=1),
+        many=[Inner(number=2)],
+        named={"k": Inner(number=3)},
+    )
+    expected: dict[str, Any] = {
+        "inner": {"number": 1},
+        "many": ({"number": 2},),
+        "named": {"k": {"number": 3}},
+    }
+
+    assert outer.to_basic_object() == expected
+    assert outer.to_mapping() == {
+        "inner": {"number": 1},
+        "many": [{"number": 2}],
+        "named": {"k": {"number": 3}},
+    }
+    assert isinstance(outer.to_basic_object(), Map)
+
+
+def test_strict_conversion_names_the_path_of_the_failure() -> None:
+    class Holder(State):
+        values: Any
+
+    with raises(TypeError, match=r"\[\"values\"\]\[1\]\[\"k\"\]"):
+        Holder(values=(1, {"k": Decimal(1)})).to_basic_object()

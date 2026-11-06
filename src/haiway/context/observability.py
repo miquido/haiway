@@ -19,9 +19,9 @@ from typing import (
     final,
     runtime_checkable,
 )
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from haiway.context.identifier import ContextIdentifier
+from haiway.context.identifier import ContextIdentifier, random_identifier
 from haiway.context.types import ContextMissing
 from haiway.types import Missing
 from haiway.utils.formatting import escape_controls, format_log_message, format_str
@@ -564,7 +564,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         store: ScopeStore = ScopeStore(
             scope,
             # one trace per tree - a root starts it, everything below inherits it
-            trace_id=parent.trace_id if parent is not None else uuid4(),
+            trace_id=parent.trace_id if parent is not None else random_identifier(),
             logger=parent.logger if parent is not None else logger or getLogger(scope.name),
         )
         if parent is not None:

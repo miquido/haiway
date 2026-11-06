@@ -40,6 +40,7 @@ import typing_extensions
 from typing_extensions import is_typeddict as is_typeddict_ext  # keep this particular import
 
 from haiway import types as haiway_types
+from haiway.attributes.generics import is_open_type_argument
 from haiway.attributes.validation import (
     Validating,
     ValidationError,
@@ -3735,6 +3736,105 @@ def _recursion_key(
     return recursion_key
 
 
+def _variadic_parameter(argument: Any, /) -> str | None:
+    # the name of the variadic parameter an unpacked argument stands for, `*Ts`
+    if get_origin(argument) is typing.Unpack:
+        unpacked: Any = get_args(argument)[0]
+        if isinstance(unpacked, typing.TypeVarTuple):
+            return unpacked.__name__
+
+    return None
+
+
+def _resolve_tuple(
+    annotation: Any,
+    *,
+    localns: Mapping[str, Any] | None,
+    module: str,
+    resolved_parameters: Mapping[str, AttributeAnnotation],
+    recursion_guard: MutableMapping[Any, AttributeAnnotation],
+) -> AttributeAnnotation:
+    values: MutableSequence[AttributeAnnotation] = []
+    open_at: int | None = None
+    for argument in get_args(annotation):
+        if (name := _variadic_parameter(argument)) is None:
+            values.append(
+                resolve_attribute(
+                    argument,
+                    localns=localns,
+                    module=module,
+                    resolved_parameters=resolved_parameters,
+                    recursion_guard=recursion_guard,
+                )
+            )
+            continue
+
+        # a variadic parameter stands for the arguments it was given, which is
+        # a tuple of them - and for any number of anything when it was not
+        resolved: AttributeAnnotation | None = resolved_parameters.get(name)
+        if isinstance(resolved, TupleAttribute):
+            values.extend(resolved.values)
+            continue
+
+        open_at = len(values)
+
+    if open_at is None:
+        return TupleAttribute(
+            base=annotation,
+            values=tuple(values),
+        )
+
+    # a variadic parameter with no arguments given stands for any number of anything -
+    # the elements around it are still what they are declared to be
+    return _open_tuple(values, open_at)
+
+
+def _open_tuple(
+    values: Sequence[AttributeAnnotation],
+    open_at: int,
+    /,
+) -> AttributeAnnotation:
+    leading: Sequence[AttributeAnnotation] = values[:open_at]
+    trailing: Sequence[AttributeAnnotation] = values[open_at:]
+    anything: AttributeAnnotation = SequenceAttribute(
+        base=Sequence[Any],
+        values=ANY_ATTRIBUTE,
+    )
+    if not leading and not trailing:
+        return anything
+
+    def validate_fixed(value: Any) -> Any:
+        if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+            return value  # reported as what it is by the validation which follows
+
+        elements: Sequence[Any] = cast(Sequence[Any], value)
+        if len(elements) < len(leading) + len(trailing):
+            raise ValueError(
+                f"'tuple' of length {len(elements)} is shorter than the"
+                f" {len(leading) + len(trailing)} elements it has to start and end with"
+            )
+
+        checked: list[Any] = list(elements)
+        for index, attribute in enumerate(leading):
+            try:
+                checked[index] = attribute.validate(elements[index])
+
+            except Exception as exc:
+                ValidationError.report(f"[{index}]", exc)
+
+        for offset, attribute in enumerate(trailing):
+            index = len(elements) - len(trailing) + offset
+            try:
+                checked[index] = attribute.validate(elements[index])
+
+            except Exception as exc:
+                ValidationError.report(f"[{index}]", exc)
+
+        return tuple(checked)
+
+    return anything.annotated((Validator(validate_fixed),))
+
+
 def _resolve_parameters(
     annotation: Any,
     *,
@@ -4007,6 +4107,38 @@ def _resolve_type_alias(
     return resolved_attribute
 
 
+def _resolved_alias_arguments(
+    arguments: Sequence[Any],
+    resolved_parameters: Mapping[str, AttributeAnnotation],
+    /,
+) -> Sequence[Any] | None:
+    resolved: list[Any] = []
+    for argument in arguments:
+        if isinstance(argument, TypeVar):
+            if parameter := resolved_parameters.get(argument.__name__):
+                resolved.append(parameter.base)
+
+            else:
+                resolved.append(argument.__bound__ or Any)
+
+        elif isinstance(argument, typing.ParamSpec):
+            # the signature it stands for, `...` while the class is not specialized
+            parameter = resolved_parameters.get(argument.__name__)
+            resolved.append(parameter.base if parameter else Ellipsis)
+
+        elif (name := _variadic_parameter(argument)) is not None:
+            parameter = resolved_parameters.get(name)
+            if parameter is None:
+                return None
+
+            resolved.extend(get_args(parameter.base))
+
+        else:
+            resolved.append(argument)
+
+    return resolved
+
+
 def _resolve_generic_alias(
     annotation: GenericAlias,
     *,
@@ -4026,23 +4158,23 @@ def _resolve_generic_alias(
         )
 
     # try to resolve the alias with available types
-    def _resolve_type_argument(argument: Any) -> Any:
-        if not isinstance(argument, TypeVar):
-            return argument
-
-        resolved: Any
-        if parameter := resolved_parameters.get(
-            argument.__name__,
-        ):
-            resolved = parameter.base
-
-        else:
-            resolved = argument.__bound__ or Any
-
-        return resolved
+    resolved_arguments_of_alias: Sequence[Any] | None = _resolved_alias_arguments(
+        get_args(annotation),
+        resolved_parameters,
+    )
+    if resolved_arguments_of_alias is None:
+        # a variadic parameter which is not given its arguments - no number of them
+        # to specialize with, the generic is taken unspecialized
+        return resolve_attribute(
+            origin_type,
+            localns=localns,
+            module=module,
+            resolved_parameters=resolved_parameters,
+            recursion_guard=recursion_guard,
+        )
 
     resolved_origin: Any = origin_type.__class_getitem__(  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-        tuple(_resolve_type_argument(arg) for arg in get_args(annotation))
+        tuple(resolved_arguments_of_alias)
     )
 
     # if we have resolved it use what we got
@@ -4330,15 +4462,12 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     )
 
                 case _:
-                    return TupleAttribute(
-                        base=annotation,
-                        values=_resolve_parameters(
-                            annotation,
-                            localns=localns,
-                            module=module,
-                            resolved_parameters=resolved_parameters,
-                            recursion_guard=recursion_guard,
-                        ),
+                    return _resolve_tuple(
+                        annotation,
+                        localns=localns,
+                        module=module,
+                        resolved_parameters=resolved_parameters,
+                        recursion_guard=recursion_guard,
                     )
 
         case (
@@ -4439,7 +4568,11 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
     origin: Any | None = get_origin(annotation)
 
     if isinstance(annotation, types.GenericAlias | typing._GenericAlias) and any(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        isinstance(argument, TypeVar) for argument in get_args(annotation)
+        isinstance(argument, TypeVar)
+        # a variadic parameter or a parameter specification is only given to a generic
+        # State - elsewhere it is part of what the annotation is made of
+        or (is_open_type_argument(argument) and hasattr(origin, "__ANNOTATED__"))
+        for argument in get_args(annotation)
     ):
         return _resolve_generic_alias(
             annotation,

@@ -4,16 +4,19 @@ import json
 from collections.abc import Mapping
 from typing import Any, NoReturn, Self, final
 
+from haiway.types.mapping_base import FROZEN, MapBase, plain_repr
+
 __all__ = ("Map",)
 
 
 @final
-class Map[Key, Element](dict[Key, Element]):
+class Map[Key, Element](MapBase[Key, Element]):
     """
-    Immutable ``dict`` subclass with JSON helpers and persistent-style merges.
+    Immutable mapping with JSON helpers and persistent-style merges.
 
-    ``Map`` behaves like a normal mapping for reads, but all mutating
-    operations raise ``AttributeError``. Merge operators create new ``Map``
+    ``Map`` subclasses the builtin ``frozendict`` where there is one, and
+    ``dict`` otherwise. It behaves like a normal mapping for reads, but all
+    mutating operations raise ``AttributeError``. Merge operators create new ``Map``
     instances instead of changing the original object.
     """
 
@@ -85,6 +88,12 @@ class Map[Key, Element](dict[Key, Element]):
             If any key or value has no JSON representation.
         """
         return json.dumps(self)
+
+    if FROZEN:
+        # a `frozendict` spells itself with the name of its class, which is not how the
+        # mapping it replaces has ever been printed
+        def __repr__(self) -> str:
+            return plain_repr(self)
 
     def __hash__(self) -> int:  # pyright: ignore[reportIncompatibleVariableOverride, reportIncompatibleMethodOverride]
         # an immutable mapping is as hashable as its contents are - a value which
