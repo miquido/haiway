@@ -1,6 +1,7 @@
+import os
+import sys
 from collections.abc import Sequence
 from contextvars import ContextVar, Token
-from os import register_at_fork
 from random import Random
 from types import TracebackType
 from typing import Any, ClassVar, Literal, Self, final
@@ -26,7 +27,8 @@ _UUID4_FIXED: int = (0x4000 << 64) | (0x8000 << 48)
 # and a repeated seed would repeat the identifiers. it is seeded by the operating system,
 # and again in a forked process, which would otherwise continue the same sequence
 _generator: Random = Random()  # nosec: B311
-register_at_fork(after_in_child=_generator.seed)
+if sys.platform != "win32":  # where there is no fork, there is nothing to reseed after
+    os.register_at_fork(after_in_child=_generator.seed)
 
 
 def random_identifier() -> UUID:
