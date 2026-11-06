@@ -40,3 +40,20 @@ Recorded with CPython 3.15.1 on an Apple silicon laptop (macOS).
 The `reference/` cases are a frozen dataclass doing the same work without validation - the floor a
 `State` operation can not go below. Conversion cases (`to_basic_object`, `to_json`) are the slowest
 relative to the size of the data, and the first candidates for optimization.
+
+## Server integrations
+
+`server_benchmark.py` measures the Starlette and FastAPI integrations. Requests are driven through
+the ASGI interface in process, so the numbers are the cost of the application stack alone. Each
+`haiway` case has a `bare` counterpart - the same application without the integration - and the
+difference between them is its overhead per request. It takes the same `--json`, `--compare`,
+`--filter` and `--budget` options.
+
+```bash
+make benchmark-server                                              # run with -O
+make benchmark-server ARGS="--compare benchmarks/server_baseline.json"
+```
+
+It runs with `python -O`, as production does - without it observability keeps debug bookkeeping
+which roughly doubles the overhead. `server_baseline.json` was recorded the same way as
+`baseline.json`, in microseconds per request.
