@@ -147,30 +147,29 @@ class Paginated[Element](Sequence[Element]):
     pagination information needed to fetch subsequent pages.
     """
 
-    @classmethod
-    def of(
-        cls,
-        items: Iterable[Element],
+    @staticmethod
+    def of[Item](
+        items: Iterable[Item],
         /,
         *,
         pagination: Pagination,
-    ) -> Self:
+    ) -> Paginated[Item]:
         """
         Construct an immutable page from iterable items and pagination state.
 
         Parameters
         ----------
-        items : Iterable[Element]
+        items : Iterable[Item]
             Elements contained in the page.
         pagination : Pagination
             Pagination metadata associated with this page.
 
         Returns
         -------
-        Self
+        Paginated[Item]
             New immutable paginated result.
         """
-        return cls(
+        return Paginated(
             items=items,
             pagination=pagination,
         )

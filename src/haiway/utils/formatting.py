@@ -213,7 +213,7 @@ def _attribute_str(
         return f"{indent_str}┝ {key}:\n{value}"
 
     else:
-        return f"{indent_str}┝ {key}: {value}"
+        return f"{indent_str}┝ {key}: {value.lstrip(' ')}"
 
 
 def _element_str(
@@ -228,7 +228,7 @@ def _element_str(
         return f"{indent_str}[{key}]:\n{value}"
 
     else:
-        return f"{indent_str}[{key}]: {value}"
+        return f"{indent_str}[{key}]: {value.lstrip(' ')}"
 
 
 def _object_variables(

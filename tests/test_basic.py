@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
+import pytest
 from pytest import raises
 
 from haiway import MISSING, BasicObject, Map, Missing, State
 from haiway.types import Sensitive
-from haiway.types.basic import basic_object, basic_value
+from haiway.types.basic import basic_key, basic_object, basic_value
 
 
 class Shade(StrEnum):
@@ -356,3 +357,45 @@ def test_to_json_converts_a_leaf_through_its_to_mapping() -> None:
     # validation of the annotation would read back
     with raises(TypeError, match="Can't convert 'Custom' to a basic value"):
         instance.to_basic_object()
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("text", "text"),
+        ("", ""),
+        (None, "null"),
+        (True, "true"),
+        (False, "false"),
+        (0, "0"),
+        (-5, "-5"),
+        (1.5, "1.5"),
+        (UUID("12345678-1234-5678-1234-567812345678"), "12345678-1234-5678-1234-567812345678"),
+        (datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC), "2024-01-02T03:04:05+00:00"),
+        (date(2024, 1, 2), "2024-01-02"),
+        (Shade.RED, "red"),
+    ],
+)
+def test_basic_key_spells_keys_like_json(key: Any, expected: str) -> None:
+    assert basic_key(key) == expected
+
+
+@pytest.mark.parametrize("key", [object(), (1, 2), frozenset({1})])
+def test_basic_key_rejects_unsupported_keys_when_strict(key: Any) -> None:
+    with pytest.raises(TypeError, match="key"):
+        basic_key(key)
+
+
+def test_basic_key_encodes_bytes_as_base64() -> None:
+    assert basic_key(b"hello") == "aGVsbG8="
+
+
+def test_basic_key_reports_the_path_of_a_rejected_key() -> None:
+    with pytest.raises(TypeError, match=r"\[\"outer\"\]"):
+        basic_key(object(), path=('["outer"]',))
+
+
+def test_basic_key_non_strict_returns_unsupported_keys_unchanged() -> None:
+    key = object()
+
+    assert basic_key(key, strict=False) is key

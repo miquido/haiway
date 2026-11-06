@@ -205,3 +205,46 @@ async def test_external_cache_clear_supports_key_and_global_flush() -> None:
 
     assert backend == {}
     assert cleared_keys[-1] is None
+
+
+@mark.asyncio
+async def test_external_cache_clear_without_backend_is_a_noop() -> None:
+    backend: dict[str, int] = {}
+
+    def make_key(value: str) -> str:
+        return f"cache:{value}"
+
+    async def read_from_store(key: str) -> int | None:
+        return backend.get(key)
+
+    async def write_to_store(key: str, value: int) -> None:
+        backend[key] = value
+
+    @cache_externally(
+        make_key=make_key,
+        read=read_from_store,
+        write=write_to_store,
+    )
+    async def compute(value: str) -> int:
+        return len(value)
+
+    async with ctx.scope("external-cache-no-clear"):
+        await compute("alpha")
+        await _wait_for(lambda: "cache:alpha" in backend)
+
+        await compute.clear_cache("cache:alpha")
+        await compute.clear_cache()
+
+    assert backend == {"cache:alpha": 5}
+
+
+def test_local_cache_rejects_method_binding() -> None:
+    class Holder:
+        @cache
+        async def method(self) -> int:
+            return 1
+
+    assert callable(Holder.method)
+
+    with raises(AssertionError, match="does not work for classes"):
+        Holder().method  # noqa: B018
