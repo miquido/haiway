@@ -11,18 +11,24 @@ from collections.abc import (
     Sequence,
     Set,
 )
+from contextlib import suppress
 from copy import deepcopy
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
+from datetime import date, datetime, time
+from pathlib import Path
 from types import GenericAlias, MemberDescriptorType
 from typing import (
+    TYPE_CHECKING,
     Any,
     ClassVar,
     Generic,
     Literal,
     NoReturn,
+    ParamSpec,
     Self,
     TypeVar,
+    TypeVarTuple,
     cast,
     dataclass_transform,
     final,
@@ -30,13 +36,23 @@ from typing import (
     get_origin,
     overload,
 )
+from uuid import UUID
 
+from haiway._native import nstruct
+from haiway.attributes import native
 from haiway.attributes.annotations import (
     ObjectAttribute,
     attribute_redaction,
     resolve_self_attribute,
 )
 from haiway.attributes.attribute import Attribute
+from haiway.attributes.generics import (
+    Variance,
+    argument_variances,
+    bind_type_arguments,
+    is_open_type_argument,
+    unspecialized_defaults,
+)
 from haiway.attributes.path import AttributePath
 from haiway.attributes.specification import object_specification
 from haiway.attributes.validation import ValidationError
@@ -51,6 +67,7 @@ from haiway.types import (
 )
 from haiway.types.basic import basic_key, basic_value
 from haiway.types.immutable import attribute_names, namespace_annotations
+from haiway.types.mapping_base import MapBase
 
 __all__ = ("State",)
 
@@ -116,15 +133,7 @@ class StateMeta(type):
         # afterwards is not seen. the nominal identity that equality, the
         # instance checks and the schema are built on stops holding along with it
         if not type_parameters:
-            for base in bases:
-                if getattr(base, "__FIELDS__", ()):
-                    raise TypeError(
-                        f"{name} can't inherit from {base.__name__} - a State declaring"
-                        " attributes is final. Parametrize a generic State to type a"
-                        " variant of it, inherit from an attribute-less base to share"
-                        " behavior, or hold an instance as an attribute to reuse its"
-                        " attributes"
-                    )
+            _refuse_inheriting(name, bases)
 
         # the names are resolved first, so the declared defaults can leave the
         # namespace before the annotations are resolved against it. resolving them
@@ -158,11 +167,14 @@ class StateMeta(type):
         # declared within the namespace handed to it - assigning `__slots__` to a
         # finished class defines no descriptors and leaves the instances with a
         # `__dict__`, which is what the whole slot declaration exists to avoid
-        namespace["__slots__"] = _declared_slots(
+        owned_names: tuple[str, ...] = _declared_slots(
             name,
             names=names,
             bases=bases,
         )
+        # natively stored fields live inline in the instance, behind descriptors
+        # installed below - there are no slots to declare, and no `__dict__` either
+        namespace["__slots__"] = () if nstruct is not None else owned_names
 
         cls = type.__new__(
             mcs,
@@ -201,7 +213,9 @@ class StateMeta(type):
         # handed over - it would only be used to resolve them in place of it
         self_attribute: ObjectAttribute = resolve_self_attribute(
             cls,
-            parameters=parameters or {},
+            # a generic which is not specialized stands for its defaults (PEP 696), and
+            # for anything where a parameter declares none
+            parameters=parameters or unspecialized_defaults(cls),
             defaults=defaulted,
             annotations=annotations,
         )
@@ -214,7 +228,8 @@ class StateMeta(type):
         cls.__SPECIALIZED__ = bool(type_parameters)  # pyright: ignore[reportConstantRedefinition]
         cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
 
-        if not bases:  # handle base class - no fields specified
+        if not any(isinstance(base, StateMeta) for base in bases):
+            # the base class - no fields specified
             assert not type_parameters  # nosec: B101
             cls.__SPECIFICATION__ = {  # pyright: ignore[reportConstantRedefinition]
                 "type": "object",
@@ -223,6 +238,9 @@ class StateMeta(type):
                 "additionalProperties": False,
             }
             cls.__FIELDS__ = ()  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
+            if nstruct is not None:
+                native.install(cls, (), (), is_state=_is_plain_state)
+
             cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
             cls.__ALIASES__ = {}  # pyright: ignore[reportConstantRedefinition]
             cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
@@ -270,6 +288,9 @@ class StateMeta(type):
             cls.__SPECIFICATION__ = _no_specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
 
         cls.__FIELDS__ = fields  # pyright: ignore[reportConstantRedefinition]
+        if nstruct is not None:
+            native.install(cls, fields, owned_names, is_state=_is_plain_state)
+
         cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
         # resolved here so that updates can be normalized to canonical names
         # without rebuilding this mapping of the class on each of them
@@ -309,6 +330,12 @@ class StateMeta(type):
         # and it is the only reason to look at them at all
         if not self.__SPECIALIZED__:
             return type.__instancecheck__(self, instance)
+
+        # constructed as this very specialization, an instance has had each of its
+        # attributes validated against the arguments, and they can't change after -
+        # there is nothing left to check it against
+        if type(instance) is cast(Any, self):
+            return True
 
         if not self.__subclasscheck__(type(instance)):  # pyright: ignore[reportUnknownArgumentType]
             return False
@@ -367,28 +394,159 @@ class StateMeta(type):
         if len(self_args) != len(subclass_args):
             return False
 
-        # Check if the type parameters are compatible (covariant)
-        for self_arg, subclass_arg in zip(
+        # each argument against its parameter - covariant when it is only ever read,
+        # which is all a `State` does with one, unless the parameter is used the other
+        # way around or declares otherwise
+        for self_arg, subclass_arg, variance in zip(
             self_args,
             subclass_args,
+            argument_variances(self.__origin__, len(self_args)),
             strict=True,
         ):
-            if self_arg is Any or subclass_arg is Any or self_arg == subclass_arg:
-                continue
-
-            # For covariance: GenericState[Child] should be subclass of GenericState[Parent]
-            # This means subclass_param should be a subclass of self_param
-            try:
-                if not issubclass(subclass_arg, self_arg):
-                    return False
-
-            except TypeError:
-                # an argument which is not a class - a parameterized generic, a
-                # union, a literal - has no subclass relation to resolve, so it
-                # only ever matches the equal argument admitted above
+            if not _compatible(self_arg, subclass_arg, variance):
                 return False
 
         return True
+
+
+if TYPE_CHECKING:
+
+    class _StateBase:
+        pass
+
+else:
+    _StateBase = nstruct.Struct if nstruct is not None else object
+
+
+def _is_plain_state(cls: Any, /) -> bool:
+    # a State which validates the usual way - one with a validation of its own is called,
+    # not skipped over, so the native code must not decide for it
+    return (
+        nstruct is not None
+        and isinstance(cls, StateMeta)
+        and inspect.getattr_static(cls, "validate", None) is nstruct.Struct.__dict__["validate"]
+    )
+
+
+def _check_keys(
+    cls: Any,
+    kwargs: Mapping[str, Any],
+    /,
+) -> None:
+    # what the constructor and `__replace__` refuse before looking at any value -
+    # the native code hands over the moment it finds a key which is not right
+    if unexpected := kwargs.keys() - cls.__ALLOWED_FIELDS__:
+        raise _unexpected_attributes(cls, unexpected)
+
+    for alias, name in cls.__ALIASES__.items():
+        if alias in kwargs and name in kwargs:
+            raise _duplicate_attribute(cls, name, alias)
+
+
+def _specialize(
+    cls: Any,
+    type_arguments: tuple[Any, ...],
+    /,
+) -> Any:
+    # held by the class which is specialized rather than by a registry of the
+    # module - a registry would keep every class created at runtime, together
+    # with all of its variants, alive for as long as the process runs. here
+    # the variants reference their origin and are referenced by it, a cycle
+    # which is collected along with it
+    specializations: MutableMapping[tuple[Any, ...], Any] | None = cls.__dict__.get(
+        "__SPECIALIZATIONS__"
+    )
+    if specializations is None:
+        specializations = {}
+        cls.__SPECIALIZATIONS__ = specializations
+
+    # the arguments as they bind - the defaults are given, the arguments of a
+    # variadic parameter are its own, a list is a tuple. a variant is the same
+    # whichever way it was spelled out
+    bindings, bound_arguments = bind_type_arguments(cls, type_arguments)
+    cacheable: bool = True
+    cached: Any | None = None
+    try:
+        cached = specializations.get(bound_arguments)
+
+    except TypeError:
+        cacheable = False  # i.e. an annotation carrying an unhashable value
+
+    # the lookup comes first - the arguments of a variant which exists have
+    # been checked when it was created
+    if cached is not None:
+        if type_arguments != bound_arguments:
+            with suppress(TypeError):  # spelled with an unhashable argument
+                specializations[type_arguments] = cached
+
+        return cached
+
+    _check_type_arguments(cls, bindings)
+
+    parameter_names: str = ",".join(
+        getattr(argument, "__name__", str(argument)) for argument in bound_arguments
+    )
+    parametrized_type: Any = StateMeta.__new__(
+        cls.__class__,
+        name=f"{cls.__name__}[{parameter_names}]",
+        bases=(cls,),
+        # the origin and the arguments the subclass checks are made of are
+        # declared within the namespace rather than assigned afterwards -
+        # the class is asked about them as soon as it exists
+        namespace={
+            "__module__": cls.__module__,
+            "__origin__": cls,
+            "__args__": bound_arguments,
+        },
+        type_parameters={
+            parameter.__name__: _bound_argument(parameter, argument)
+            for parameter, argument in bindings
+        },
+    )
+    if cacheable:
+        specializations[bound_arguments] = parametrized_type
+        if type_arguments != bound_arguments:
+            with suppress(TypeError):  # spelled with an unhashable argument
+                specializations[type_arguments] = parametrized_type
+
+    return parametrized_type
+
+
+def _known_specialization(
+    cls: Any,
+    type_argument: Any,
+    /,
+) -> Any:
+    known: MutableMapping[tuple[Any, ...], Any] | None = cls.__dict__.get("__SPECIALIZATIONS__")
+    if not known:
+        return None
+
+    try:
+        key: tuple[Any, ...] = (
+            cast(tuple[Any, ...], type_argument)
+            if isinstance(type_argument, tuple)
+            else (type_argument,)
+        )
+        return known.get(key)
+
+    except TypeError:
+        return None  # an unhashable argument is never cached
+
+
+def _refuse_inheriting(
+    name: str,
+    bases: tuple[type, ...],
+    /,
+) -> None:
+    for base in bases:
+        if getattr(base, "__FIELDS__", ()):
+            raise TypeError(
+                f"{name} can't inherit from {base.__name__} - a State declaring"
+                " attributes is final. Parametrize a generic State to type a"
+                " variant of it, inherit from an attribute-less base to share"
+                " behavior, or hold an instance as an attribute to reuse its"
+                " attributes"
+            )
 
 
 def _declared_slots(
@@ -467,23 +625,103 @@ def _resolve_default(
     return DefaultValue(default=value)
 
 
-def _check_type_arguments(
-    cls: type[Any],
-    type_arguments: tuple[Any, ...],
+def _compatible(
+    self_arg: Any,
+    subclass_arg: Any,
+    variance: Variance,
     /,
-) -> None:
-    if len(type_arguments) != len(cls.__type_params__):
-        raise TypeError(
-            f"{cls.__name__} takes {len(cls.__type_params__)} type arguments,"
-            f" {len(type_arguments)} given"
+) -> bool:
+    if self_arg is Any or subclass_arg is Any or self_arg == subclass_arg:
+        return True
+
+    # the signature of a `ParamSpec` - its types are compared position by position
+    if isinstance(self_arg, tuple) and isinstance(subclass_arg, tuple):
+        return _compatible_signatures(
+            cast(tuple[Any, ...], self_arg),
+            cast(tuple[Any, ...], subclass_arg),
+            variance,
         )
 
-    for parameter, argument in zip(
-        cls.__type_params__,
-        type_arguments,
-        strict=True,
+    # the relation of two classes is all there is to decide it on - an argument
+    # which is not one, a parameterized generic, a union or a literal, only ever
+    # matches the equal argument admitted above
+    try:
+        match variance:
+            case "co":
+                return issubclass(subclass_arg, cast(Any, self_arg))
+
+            case "contra":
+                return issubclass(cast(Any, self_arg), subclass_arg)
+
+            case "inv":
+                return False
+
+    except TypeError:
+        return False
+
+
+def _compatible_signatures(
+    own: tuple[Any, ...],
+    other: tuple[Any, ...],
+    variance: Variance,
+    /,
+) -> bool:
+    return len(own) == len(other) and all(
+        _compatible(own_type, other_type, variance)
+        for own_type, other_type in zip(own, other, strict=True)
+    )
+
+
+def _bound_argument(
+    parameter: Any,
+    argument: Any,
+    /,
+) -> Any:
+    # what a variadic parameter stands for within an annotation is the tuple of
+    # its arguments, which is spelled out as one
+    if isinstance(parameter, TypeVarTuple):
+        return tuple[*argument]
+
+    return argument
+
+
+def _check_type_arguments(
+    cls: type[Any],
+    bindings: Sequence[tuple[Any, Any]],
+    /,
+) -> None:
+    for parameter, argument in bindings:
+        if isinstance(parameter, TypeVarTuple):
+            for element in argument:
+                _check_type_argument(cls, parameter, element)
+
+        elif isinstance(parameter, ParamSpec):
+            _check_parameter_specification(cls, parameter, argument)
+
+        else:
+            _check_type_argument(cls, parameter, argument)
+
+
+def _check_parameter_specification(
+    cls: type[Any],
+    parameter: Any,
+    argument: Any,
+    /,
+) -> None:
+    # the signature a callable is parametrized by - the types of its arguments,
+    # an ellipsis for any of them, or the parameter of another generic
+    if (
+        argument is Ellipsis
+        or isinstance(argument, tuple | ParamSpec)
+        or get_origin(argument) is typing.Concatenate
     ):
-        _check_type_argument(cls, parameter, argument)
+        return
+
+    raise TypeError(
+        f"{cls.__name__} can't be specialized with '{_type_name(argument)}' -"
+        f" '{parameter.__name__}' is a ParamSpec taking a list of types, `...` or"
+        " a ParamSpec"
+    )
 
 
 def _check_type_argument(
@@ -590,7 +828,7 @@ class _NoSpecification:
 _no_specification: _NoSpecification = _NoSpecification()
 
 
-class State(metaclass=StateMeta):
+class State(_StateBase, metaclass=StateMeta):
     """
     Base class for immutable data structures.
 
@@ -653,10 +891,10 @@ class State(metaclass=StateMeta):
     Notes
     -----
     Instances can't be pickled - serialize them with ``to_json`` or ``to_basic_object``.
-    Instances are not weak referenceable - attributes are held in slots and no
-    slot list declares ``__weakref__``, keeping instances as small as they can
-    be. A ``State`` can't be held by ``weakref.ref`` or a ``WeakValueDictionary``
-    because of that.
+    Instances are not weak referenceable - attributes are held inline in the
+    instance, with neither a ``__dict__`` nor a ``__weakref__``. A ``State``
+    can't be held by ``weakref.ref`` or a ``WeakValueDictionary`` because of
+    that, and its attributes can't be rebound by any means.
     """
 
     _: ClassVar[Self]
@@ -687,6 +925,12 @@ class State(metaclass=StateMeta):
             If an argument does not satisfy the bound or the constraints of its
             type parameter.
         """
+        # a variant which exists is looked up as the arguments were written - it was
+        # checked when it was created, and only a class which can be specialized
+        # ever holds any. what is not found goes through the checks below
+        if (variant := _known_specialization(cls, type_argument)) is not None:
+            return variant
+
         # the parameters bound by a specialization above are inherited, so only
         # being a specialization rules out specializing this class again
         if cls.__SPECIALIZED__:
@@ -703,73 +947,11 @@ class State(metaclass=StateMeta):
             case argument:
                 type_arguments = (argument,)
 
-        if any(isinstance(argument, TypeVar) for argument in type_arguments):  # pyright: ignore[reportUnnecessaryIsInstance]
+        if any(is_open_type_argument(argument) for argument in type_arguments):
             # if we got unfinished type treat it as an alias instead of resolving
             return cast(type[Self], GenericAlias(cls, type_arguments))
 
-        # held by the class which is specialized rather than by a registry of the
-        # module - a registry would keep every class created at runtime, together
-        # with all of its variants, alive for as long as the process runs. here
-        # the variants reference their origin and are referenced by it, a cycle
-        # which is collected along with it
-        specializations: MutableMapping[tuple[Any, ...], Any] | None = cls.__dict__.get(
-            "__SPECIALIZATIONS__"
-        )
-        if specializations is None:
-            specializations = {}
-            cls.__SPECIALIZATIONS__ = specializations  # pyright: ignore[reportAttributeAccessIssue]
-
-        cacheable: bool = True
-        cached: Any | None = None
-        try:
-            cached = specializations.get(type_arguments)
-
-        except TypeError:
-            cacheable = False  # i.e. an annotation carrying an unhashable value
-
-        # the lookup comes first - the arguments of a variant which exists have
-        # been checked when it was created, and this is the path taken each time
-        # the variant is spelled out
-        if cached is not None:
-            return cached
-
-        _check_type_arguments(cls, type_arguments)
-
-        type_parameters: dict[str, Any] = {
-            parameter.__name__: argument
-            for (parameter, argument) in zip(
-                cls.__type_params__,
-                type_arguments,
-                strict=True,
-            )
-        }
-
-        parameter_names: str = ",".join(
-            getattr(
-                argument,
-                "__name__",
-                str(argument),
-            )
-            for argument in type_arguments
-        )
-        parametrized_type: type[Self] = StateMeta.__new__(
-            cls.__class__,
-            name=f"{cls.__name__}[{parameter_names}]",
-            bases=(cls,),
-            # the origin and the arguments the subclass checks are made of are
-            # declared within the namespace rather than assigned afterwards -
-            # the class is asked about them as soon as it exists
-            namespace={
-                "__module__": cls.__module__,
-                "__origin__": cls,
-                "__args__": type_arguments,
-            },
-            type_parameters=type_parameters,
-        )
-        if cacheable:
-            specializations[type_arguments] = parametrized_type
-
-        return parametrized_type
+        return cast(type[Self], _specialize(cls, type_arguments))
 
     @classmethod
     def validate(
@@ -913,6 +1095,13 @@ class State(metaclass=StateMeta):
             If the payload cannot be decoded or fails State validation.
         """
         try:
+            if nstruct is not None and decoder is json.JSONDecoder:
+                # read natively when it is the usual document - anything else is read
+                # below, which is also what says what is wrong with it
+                decoded: Any = nstruct.from_json(cls, value, False)
+                if decoded is not None:
+                    return decoded
+
             return cls.validate(
                 json.loads(
                     value,
@@ -952,6 +1141,11 @@ class State(metaclass=StateMeta):
         """
         payload: Any
         try:
+            if nstruct is not None and decoder is json.JSONDecoder:
+                decoded: Any = nstruct.from_json(cls, value, True)
+                if decoded is not None:
+                    return decoded
+
             payload = json.loads(
                 value,
                 cls=decoder,
@@ -1001,6 +1195,13 @@ class State(metaclass=StateMeta):
             a redacted attribute into a log through the error path.
         """
         try:
+            if nstruct is not None and indent is None and encoder_class is json.JSONEncoder:
+                # written natively when every value has a spelling it knows - anything
+                # else is written below, where the encoder of the caller is
+                written: str | None = nstruct.to_json(self)
+                if written is not None:
+                    return written
+
             # non-strict - `encoder_class` is the extension point for the types
             # which have no basic spelling, so those have to reach it unchanged
             return json.dumps(
@@ -1043,14 +1244,9 @@ class State(metaclass=StateMeta):
         # an unmatched key is a mistake rather than an extra - accepting it would
         # construct a plausible instance out of a misspelled attribute, which the
         # defaults then hide. `validate` refuses the same input for a mapping
-        if unexpected := kwargs.keys() - self.__ALLOWED_FIELDS__:
-            raise _unexpected_attributes(self.__class__, unexpected)
-
         # the same attribute given under its name and its alias is ambiguous -
         # accepting it would silently let one of them win
-        for alias, name in self.__ALIASES__.items():
-            if alias in kwargs and name in kwargs:
-                raise _duplicate_attribute(self.__class__, name, alias)
+        _check_keys(self.__class__, kwargs)
 
         for field in self.__FIELDS__:
             validated: Any
@@ -1126,6 +1322,9 @@ class State(metaclass=StateMeta):
             A mapping keyed by attribute aliases when present, otherwise by
             canonical field names. Values equal to ``MISSING`` are omitted.
         """
+        if nstruct is not None:
+            return nstruct.to_mapping(self, recursive)
+
         dict_result: MutableMapping[str, Any] = {}
         for field in self.__FIELDS__:
             value: Any | Missing = getattr(self, field.name, MISSING)
@@ -1422,13 +1621,9 @@ class State(metaclass=StateMeta):
         if not kwargs:
             return self  # do not make a copy when nothing will be updated
 
-        if unexpected := kwargs.keys() - self.__ALLOWED_FIELDS__:
-            raise _unexpected_attributes(self.__class__, unexpected)
+        _check_keys(self.__class__, kwargs)
 
         aliases: Mapping[str, str] = self.__ALIASES__
-        for alias, name in aliases.items():
-            if alias in kwargs and name in kwargs:
-                raise _duplicate_attribute(self.__class__, name, alias)
 
         # both names and aliases are accepted, the aliases are the only keys
         # which have to be normalized - and only when the class declares any
@@ -1475,6 +1670,9 @@ def _basic_object(
     strict: bool,
     path: tuple[str, ...] = (),
 ) -> BasicObject:
+    if nstruct is not None:
+        return nstruct.basic_object(instance, strict, path)
+
     return Map(_basic_attributes(instance, strict=strict, path=path))
 
 
@@ -1632,3 +1830,56 @@ def _recursive_mapping(  # noqa: PLR0911
 
     else:
         return deepcopy(value)
+
+
+def _unexpected_key(cls: Any, key: Any) -> NoReturn:
+    raise TypeError(f"Unexpected attribute '{key}' for {cls.__name__}")
+
+
+def _basic_fallback(value: Any, strict: bool, path: tuple[str, ...]) -> Any:
+    return _basic_mapping(value, strict=strict, path=path)
+
+
+def _basic_key_fallback(key: Any, strict: bool, path: tuple[str, ...]) -> Any:
+    return basic_key(key, strict=strict, path=path)
+
+
+if nstruct is not None:
+    # construction, replacement, equality, hashing and the refusal to be modified
+    # are implemented by the native base - the declarations above are what the same
+    # contract reads as in Python, and the ones used when it is not available
+    for _name in (
+        "__init__",
+        "__eq__",
+        "__hash__",
+        "__setattr__",
+        "__delattr__",
+        "__replace__",
+        "__deepcopy__",
+        "updating",
+        "validate",
+    ):
+        delattr(State, _name)
+
+    del _name
+    native.configure(
+        native.ValidationHooks(
+            missing=MISSING,
+            check=_check_keys,
+            report=ValidationError.report,
+            unexpected=_unexpected_key,
+            mapping=Mapping,
+        ),
+        native.ConversionHooks(
+            map=Map,
+            map_types=(dict, MapBase, Map),
+            basic_value=_basic_fallback,
+            basic_key=_basic_key_fallback,
+            recursive=_recursive_mapping,
+        ),
+        native.SpellingHooks(
+            uuid_type=UUID,
+            temporal_types=(datetime, date, time),
+            path_type=Path,
+        ),
+    )

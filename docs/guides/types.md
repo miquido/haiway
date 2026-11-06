@@ -164,7 +164,10 @@ instance because the object is immutable.
 
 ## `Map`
 
-`Map[K, V]` is an immutable `dict` subclass with JSON helpers:
+`Map[K, V]` is an immutable mapping with JSON helpers. It subclasses the builtin `frozendict` where
+Python has one (3.15), so it can't be mutated through the `dict` methods either, and `dict` with the
+mutators refused on 3.14. It is therefore not a `dict` on 3.15, and `{} | map` is a plain `dict`
+(`Meta` is built the same way and behaves the same, `{} | meta` included):
 
 ```python
 from haiway import Map

@@ -1,3 +1,4 @@
+import builtins
 import copy
 import json
 from typing import Any
@@ -39,6 +40,12 @@ def test_map_or_returns_map() -> None:
     assert mapping is not merged
 
 
+# a builtin `frozendict` is not a `dict` subclass, so `dict.__or__` answers a `dict | Map`
+# itself - there is no reflected operand to give precedence to
+@pytest.mark.skipif(
+    hasattr(builtins, "frozendict"),
+    reason="dict.__or__ handles a frozendict operand and returns a dict",
+)
 def test_map_ror_right_hand_precedence() -> None:
     mapping = Map({"a": 2, "b": 2})
 
@@ -150,3 +157,25 @@ def test_copies_are_the_same_instance() -> None:
     assert mapping.copy() is mapping
     assert copy.copy(mapping) is mapping
     assert copy.deepcopy(mapping) is mapping
+
+
+@pytest.mark.skipif(not hasattr(builtins, "frozendict"), reason="requires frozendict")
+def test_map_cannot_be_mutated_through_the_dict_methods() -> None:
+    mapping = Map({"a": 1})
+
+    with pytest.raises(TypeError):
+        dict.__setitem__(mapping, "b", 2)  # pyright: ignore[reportArgumentType]
+
+    assert mapping == {"a": 1}
+
+
+def test_repr_of_a_map_which_holds_itself_does_not_recurse() -> None:
+    items: list[Any] = []
+    mapping = Map({"items": items})
+    items.append(mapping)
+
+    assert "..." in repr(mapping)
+
+
+def test_repr_is_the_one_of_a_dict() -> None:
+    assert repr(Map({"a": 1, "b": (2,)})) == repr({"a": 1, "b": (2,)})

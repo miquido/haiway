@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      HAIWAY_NATIVE: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -37,21 +39,72 @@ jobs:
         run: uv run pytest --rootdir= ./tests --doctest-modules
           --junitxml=junit/test-results.xml
 
+      - name: Test without the native extension
+        run: uv run pytest --rootdir= ./tests -q
+        env:
+          HAIWAY_NATIVE: "0"
+
+  # the sdist carries the C source - installing it compiles the extension, and a
+  # machine which can't falls back to the pure Python implementation
+  sdist:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.7"
+          python-version: "3.15"
+
       - name: Build
-        run: uv build
+        run: uv build --sdist
 
       - name: Upload distributions
         uses: actions/upload-artifact@v7
         with:
-          name: distributions
+          name: dist-sdist
           path: dist/
           if-no-files-found: error
           retention-days: 1
 
-  # only this job can mint the PyPI token, and it installs nothing from the
-  # project - it just uploads the artifact built and tested above
-  publish:
+  # one wheel per platform and interpreter - the extension is compiled, so a wheel
+  # is only good for the one it was built on. manylinux tags come from cibuildwheel
+  wheels:
     needs: verify
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v4.3.5
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+          retention-days: 1
+
+  # only this job can mint the PyPI token, and it installs nothing from the
+  # project - it just uploads the artifacts built and tested above
+  publish:
+    needs: [verify, sdist, wheels]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -65,7 +118,8 @@ jobs:
       - name: Download distributions
         uses: actions/download-artifact@v8
         with:
-          name: distributions
+          pattern: dist-*
+          merge-multiple: true
           path: dist/
 
       - name: Publish

@@ -4,6 +4,13 @@
 
 - Python 3.14 or higher
 
+## Native extension
+
+Wheels carry a compiled extension speeding up `State`, which is not used unless asked for: set
+`HAIWAY_NATIVE=1` to use it, and to fail when it is not available. Installing from the source
+distribution compiles it, and goes without it when there is no compiler. Without the variable the
+pure Python implementation runs.
+
 ## Install from PyPI
 
 ```bash

@@ -1,9 +1,12 @@
+import builtins
 from copy import copy, deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from pytest import raises
 
 from haiway.types import Map, Meta
@@ -642,6 +645,10 @@ def test_meta_or_with_non_mapping_is_unsupported() -> None:
         1 | meta  # pyright: ignore[reportUnusedExpression, reportOperatorIssue]
 
 
+@pytest.mark.skipif(
+    hasattr(builtins, "frozendict"),
+    reason="dict.__or__ handles a frozendict operand and returns a dict",
+)
 def test_meta_ror_validates_and_prefers_meta_values() -> None:
     merged = {"a": 1, "b": (1, 2)} | Meta({"a": 2})
 
@@ -655,8 +662,9 @@ def test_meta_or_and_ror_reject_non_str_keys() -> None:
     with raises(TypeError, match="Invalid Meta key"):
         meta | {1: "x"}  # pyright: ignore[reportUnusedExpression, reportOperatorIssue]
 
-    with raises(TypeError, match="Invalid Meta key"):
-        {1: "x"} | meta  # pyright: ignore[reportUnusedExpression, reportOperatorIssue]
+    if not hasattr(builtins, "frozendict"):  # otherwise dict.__or__ answers it
+        with raises(TypeError, match="Invalid Meta key"):
+            {1: "x"} | meta  # pyright: ignore[reportUnusedExpression, reportOperatorIssue]
 
 
 def test_meta_hash_follows_contents() -> None:
@@ -664,3 +672,22 @@ def test_meta_hash_follows_contents() -> None:
 
     with raises(TypeError):
         hash(Meta({"a": [1]}))
+
+
+def test_repr_of_a_meta_which_holds_itself_does_not_recurse() -> None:
+    items: list[Any] = []
+    meta = Meta({"items": items})
+    items.append(meta)
+
+    assert "..." in repr(meta)
+
+
+@pytest.mark.skipif(
+    not hasattr(builtins, "frozendict"),
+    reason="a dict is the only mapping which has no frozendict to be left of",
+)
+def test_dict_or_meta_is_a_plain_dict_where_meta_is_a_frozendict() -> None:
+    merged = {"a": 1} | Meta({"b": 2})
+
+    assert type(merged) is dict
+    assert merged == {"a": 1, "b": 2}

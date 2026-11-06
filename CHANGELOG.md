@@ -128,3 +128,66 @@ exported. No public signature was changed incompatibly.
 - RabbitMQ consuming records settle events only - the message carries the trace context of the
   publisher in its headers, but a scope nested within the one of the consumer loop stays in the
   trace of that loop.
+
+### Native State (opt-in)
+
+A C extension takes over the storage, validation, updating, equality, hashing, conversion to
+mappings and JSON of `State`. The pure Python implementation is the default and stays complete -
+nothing changes unless `HAIWAY_NATIVE=1` is set, which uses the extension and fails, rather than
+falling back, when it is not built. Both implementations run the same test suite on Linux, macOS and
+Windows with Python 3.14 and 3.15.
+
+#### Added
+
+- **Native `State`** (`HAIWAY_NATIVE=1`). Instances hold their attributes inline, with no `__dict__`
+  or `__weakref__`, so an attribute can't be rebound through `object.__setattr__` either. Creating,
+  updating, validating a mapping and comparing an instance is 4 to 10 times faster, converting to a
+  mapping, a basic object or JSON up to 100 times for large states. Attribute reads and request
+  handling are unchanged, and an instance is slightly larger than one with slots.
+- **JSON in both directions.** `to_json`, `from_json` and `from_json_array` write and read the JSON
+  without the intermediate Python objects, for the default `JSONEncoder` and `JSONDecoder` and no
+  `indent`. Anything else - another encoder or decoder, a value with no native spelling, a malformed
+  or unusual document - is handled by the Python implementation, which also reports every error.
+- `make native` rebuilds the extension, `make test-native` runs the tests against it.
+- Wheels carry the extension (`cp314` and `cp315`, Linux, macOS and Windows), the source
+  distribution compiles it when there is a compiler and goes without it otherwise.
+
+#### Changed
+
+- **The build backend is `setuptools`**, as no backend of `uv` compiles C. `uv` stays the tool for
+  everything else.
+- `State.__init__` of the native implementation refuses to initialize an instance a second time,
+  and reports a key which is not an attribute after the values before it were validated, not ahead
+  of them. The Python implementation is unchanged.
+- `Map` and `Meta` subclass the builtin `frozendict` where Python has one (3.15), so they can't be
+  mutated through the `dict` methods either. They stay `dict` based on 3.14.
+
+  Migration: `isinstance(map, dict)` is `False` on 3.15 - check against `Mapping`. `{} | map` and
+  `{} | meta` are plain `dict`s, as `dict.__or__` handles a `frozendict` itself.
+
+### Generics
+
+- **Type parameter defaults (PEP 696).** A defaulted parameter may be left out of a specialization,
+  and an unspecialized generic stands for its defaults, so `Box(value="x")` fails validation when
+  `Box` is `class Box[T = int](State)`. A parameter without a default stands for its bound, or for
+  anything, as before.
+- **Variadic parameters (PEP 646) and parameter specifications (PEP 612)** are specialized and
+  validated position by position, and given to a generic attribute of another generic class.
+- **Variance** is honored when declared, and inferred for parameters of the `class Box[T]` syntax
+  from where the attributes use them - read from only is covariant, used as an argument of a
+  callable is contravariant, both is invariant. It is followed through nested generic States, type
+  aliases and `Concatenate`. A parameter declared without a variance keeps being covariant.
+
+  Migration: a generic `State` using its parameter as an argument of a callable attribute now
+  accepts and rejects other variants than before, in `isinstance`, `issubclass` and validation.
+- `class Box(State, Generic[T])` can be specialized. It was refused with "takes 0 type arguments".
+- Specializing a generic looks up an existing variant first - `Box[int]` is about twice as fast.
+
+### Other changes
+
+- `AttributePath` keeps the path reached by an attribute or an item, up to 256 item paths for each
+  path - `State._.attribute` is about four times faster.
+- Identifiers of scopes and traces come from a generator of their own - a random version 4 UUID
+  without a system call - which also reseeds in a forked process. They are not secrets, and are no
+  longer drawn from the operating system. Request handling is about 8% cheaper.
+- The license metadata is the SPDX expression `MIT`.

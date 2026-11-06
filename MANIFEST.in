@@ -1,0 +1,19 @@
+# what an installation from the source distribution needs - the C source of the
+# native extension is compiled on install, and the rest of the repository is not
+include LICENSE README.md setup.py
+recursive-include src *.c *.h *.pyi py.typed
+
+prune tests
+prune docs
+prune benchmarks
+prune config
+prune site
+prune stubs
+prune .github
+prune .vscode
+prune .claude
+prune .codex
+prune .zed
+
+exclude llms.txt mkdocs.yml Makefile AGENTS.md uv.lock
+global-exclude .DS_Store *.pyc __pycache__ *.so

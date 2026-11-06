@@ -1,6 +1,6 @@
 [build-system]
-requires = ["uv_build>=0.13.7,<0.14.0"]
-build-backend = "uv_build"
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "haiway"
@@ -12,7 +12,6 @@ maintainers = [
 ]
 requires-python = ">=3.14"
 classifiers = [
-  "License :: OSI Approved :: MIT License",
   "Intended Audience :: Developers",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
@@ -23,7 +22,8 @@ classifiers = [
   "Topic :: Software Development",
   "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = ["typing-extensions~=4.16"]
 
 [project.urls]
@@ -69,6 +69,7 @@ docs = [
 [tool.uv]
 required-version = "==0.13.7"
 default-groups = "all"
+cache-keys = [{ file = "pyproject.toml" }, { file = "setup.py" }, { file = "src/haiway/_native/**/*.c" }, { file = "src/haiway/_native/**/*.h" }]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -113,29 +114,27 @@ project_excludes = [
 ]
 python_version = "3.14"
 
-[tool.uv-build]
-packages = [{ include = "haiway", from = "src" }]
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
 
-[tool.uv-build.sdist]
-exclude = [
-  "site",
-  "docs",
-  "tests",
-  ".github",
-  "stubs",
-  "config",
-  "llms.txt",
-  ".vscode",
-  ".claude",
-  ".codex",
-  ".zed",
-  ".venv",
-  "**/.DS_Store",
-  "**/__pycache__",
-  ".ruff_cache",
-  ".pytest_cache",
-  ".mypy_cache",
-]
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["haiway*"]
 
-[tool.uv-build.wheel]
-exclude = ["**/.DS_Store", "**/__pycache__", "**/*.pyc"]
+[tool.setuptools.package-data]
+haiway = ["py.typed", "**/*.pyi"]
+
+# the source of the extension is in the source distribution, not in a wheel
+[tool.setuptools.exclude-package-data]
+"haiway._native" = ["*.c", "*.h"]
+
+[tool.cibuildwheel]
+# the extension is written against the GIL and is not built for a free-threaded
+# interpreter, nor for the platforms nobody installs it on
+build = "cp314-* cp315-*"
+skip = "*-musllinux_i686 *-manylinux_i686 *-win32 *_ppc64le *_s390x *_riscv64"
+build-frontend = "build[uv]"
+environment = { HAIWAY_NATIVE = "1" }
+# a file rather than a command line - the quoting of a multi-line one differs per shell
+test-command = "python {project}/.github/wheel_smoke.py"

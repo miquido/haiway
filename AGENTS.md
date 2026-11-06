@@ -10,12 +10,14 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
 - Formatting: Ruff formatter (`make format`), no other formatter
 - Linters/Type-checkers: Ruff, Bandit, Pyright (strict). Run via `make lint`
 - Tests: using pytest, run using `make test` or targeted `pytest tests/test_...::test_...`
+- Native extension (opt-in): `src/haiway/_native/` holds a C implementation of `State` storage, validation and JSON. The pure Python implementation is the default and always complete - `HAIWAY_NATIVE=1` selects the native one and fails when it is not built. `make native` recompiles it (`uv sync` does not), `make test-native` runs the tests against it. Every behavior has to hold in both modes, and the native code hands anything unusual back to Python, which is what reports errors
 - Benchmarks: `make benchmark` measures State operations (`benchmarks/state_benchmark.py`); save a run with `ARGS="--json before.json"` and compare after a change with `ARGS="--compare before.json"`. Compare on the same machine, alternating runs, since single runs are noisy
 
 ## Project Layout
 
 - `src/haiway/`: Core framework package.
-  - `attributes/`: Attribute annotations, state objects, and validation helpers.
+  - `attributes/`: Attribute annotations, state objects, and validation helpers. `generics.py` binds type arguments and works out variance, `native.py` describes annotations to the native extension.
+  - `_native/`: C sources of the native extension, one header per concern, compiled as a single unit by `_nstruct.c`; `_nstruct.pyi` is its stub.
   - `context/`: Structured-concurrency context management, scopes, and lifecycle utilities.
   - `helpers/`: Cross-cutting helpers for configuration, async orchestration, retries, throttling, HTTP adapters, file access, and message queues.
   - `fastapi/`: FastAPI application factory reusing the Starlette integration pieces, built on top of `fastapi`.
@@ -123,6 +125,6 @@ Apply to every design decision, new or changed code, and review:
 
 - Build: `make format` succeeds
 - Quality: `make lint` is clean (Ruff, Bandit, Pyright strict)
-- Tests: `make test` passes, add/update tests if behavior changes
+- Tests: `make test` and `make test-native` pass, add/update tests if behavior changes
 - Types: strict, no ignores, no loosening of typing
 - API surface: update `src/haiway/__init__.py` for core exports or the relevant integration subpackage exports for optional packages, and update docs if needed
