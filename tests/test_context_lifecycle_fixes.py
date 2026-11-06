@@ -174,6 +174,8 @@ async def test_failed_background_task_is_logged_to_root_after_scope_exit(
 
         await asyncio.sleep(0)
 
-    records = [record for record in caplog.records if record.getMessage() == "Background task failed"]
+    records = [
+        record for record in caplog.records if record.getMessage() == "Background task failed"
+    ]
     assert len(records) == 1
     assert records[0].name == "root"
