@@ -180,6 +180,35 @@ def test_failed_union_alternative_runs_none_of_its_validators() -> None:
     assert calls == [3]
 
 
+def test_failed_union_alternative_drops_what_its_nested_states_kept_pending() -> None:
+    calls: list[Any] = []
+
+    def recording(value: Any) -> Any:
+        calls.append(value)
+        return value
+
+    class Recorded(State):
+        x: Annotated[int, Validator(recording)]
+
+    class Wrapping(State):
+        inner: Recorded
+        tag: str
+
+    class Loose(State):
+        inner: Any
+        other: int
+
+    class Holder(State):
+        value: Wrapping | Loose
+
+    # the nested instance is read in full before its enclosing one fails at `other`
+    for _ in range(200):
+        holder = Holder.from_json('{"value": {"inner": {"x": 1}, "other": 2}}')
+        assert type(holder.value) is Loose
+
+    assert calls == []
+
+
 def test_construction_and_update_do_not_leak() -> None:
     rich: Rich = _rich(random.Random(1))
     values: Mapping[str, Any] = {"number": 1, "text": "x"}
@@ -191,7 +220,7 @@ def test_construction_and_update_do_not_leak() -> None:
         rich.updating(display="y")
         _swallow(lambda: Leaf(number="x"))  # pyright: ignore[reportArgumentType]
         _swallow(lambda: Leaf(number=1, unknown=2))  # pyright: ignore[reportCallIssue]
-        _swallow(Leaf)
+        _swallow(lambda: Leaf())  # noqa: PLW0108  # pyright: ignore[reportCallIssue]
         _swallow(lambda: Rich.validate({"named": "a", "display": "b"}))
         _swallow(lambda: rich.updating(tags=1))  # pyright: ignore[reportArgumentType]
 
@@ -256,7 +285,7 @@ def test_immutable_records_do_not_leak() -> None:
     def operation() -> None:
         record = Record(a=1, b=[1])
         object.__setattr__(record, "a", 2)
-        _swallow(Record)
+        _swallow(lambda: Record())  # noqa: PLW0108  # pyright: ignore[reportCallIssue]
 
     _assert_no_leak(operation)
 

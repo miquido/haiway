@@ -160,3 +160,14 @@ def test_attribute_names_skips_dunders_and_class_variables() -> None:
 def test_attribute_names_without_annotations_is_empty() -> None:
     assert attribute_names(None) == ()
     assert attribute_names({}) == ()
+
+
+def test_immutable_equality_and_inequality_both_compare_identity() -> None:
+    first = Probed(required=1)
+    same = first
+    second = Probed(required=1)
+
+    assert first == same
+    assert (first != same) is False
+    assert first != second
+    assert (first == second) is False

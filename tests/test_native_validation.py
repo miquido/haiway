@@ -278,3 +278,26 @@ def test_function_arguments_validate_the_same() -> None:
     assert str(exc.value) == (
         "Validation of .value failed: 'str' value is not matching expected format of 'int'"
     )
+
+
+@pytest.mark.parametrize(
+    ("annotation", "given", "expected"),
+    [
+        (Set[int], frozenset({"1", "2"}), frozenset({1, 2})),
+        (
+            Set[UUID],
+            frozenset({"12345678-1234-5678-1234-567812345678"}),
+            frozenset({UUID("12345678-1234-5678-1234-567812345678")}),
+        ),
+        (Set[Mode], frozenset({"fast"}), frozenset({Mode.FAST})),
+        (Set[int], {"3"}, frozenset({3})),
+    ],
+)
+def test_set_elements_are_converted_whatever_set_holds_them(
+    annotation: Any,
+    given: Any,
+    expected: Any,
+) -> None:
+    validated = _holder(annotation)(value=given).value  # pyright: ignore[reportCallIssue, reportAttributeAccessIssue]
+    assert validated == expected
+    assert all(type(element) is type(next(iter(expected))) for element in validated)

@@ -429,6 +429,9 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
     if (plan == NULL || type->tp_new != struct_new || type->tp_init != struct_init) return NULL;
     if (d->p >= d->end || *d->p != '{') return NULL;
     d->p++;
+    /* what is kept pending from here on is kept for this instance and those within it -
+     * if reading it fails, all of it is dropped before the instance is freed */
+    Py_ssize_t pending_mark = d->pending_count;
 
     PyObject *self = type->tp_alloc(type, 0);
     if (self == NULL) return NULL;
@@ -505,6 +508,7 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
 
 fail:
     if (given != stack) PyMem_Free(given);
+    rollback_pending(d, pending_mark);
     Py_DECREF(self);
     return NULL;
 }
@@ -658,10 +662,9 @@ decode_spec(Decoder *d, Spec *spec)
                     Spec *alternative = spec->children[i];
                     if (alternative->kind != SPEC_STATE || alternative->validating != NULL || alternative->verifying != NULL) continue;
                     const char *start = d->p;
-                    Py_ssize_t pending = d->pending_count;
+                    /* a failed alternative dropped what it kept pending itself */
                     PyObject *instance = decode_struct(d, (PyTypeObject *)alternative->base);
                     if (instance != NULL || PyErr_Occurred()) return instance;
-                    rollback_pending(d, pending);  /* the instance it was kept for is gone */
                     d->p = start;
                 }
             }

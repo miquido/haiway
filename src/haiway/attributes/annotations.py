@@ -2993,6 +2993,23 @@ def _resolve_tuple(
     return _open_tuple(values, open_at)
 
 
+def _compile_once(
+    compiled: list[Any],
+    attributes: Sequence[AttributeAnnotation],
+    /,
+) -> None:
+    if compiled:
+        return
+
+    from haiway.attributes import native  # noqa: PLC0415 - it describes this module
+
+    # compiled in full before it is published - compiling runs Python code, and a thread
+    # validating at the same time must never see a part of the list
+    specs: list[Any] = [native.compile(attribute) for attribute in attributes]
+    if not compiled:
+        compiled.extend(specs)
+
+
 def _open_tuple(
     values: Sequence[AttributeAnnotation],
     open_at: int,
@@ -3024,9 +3041,7 @@ def _open_tuple(
 
         from haiway.attributes import native  # noqa: PLC0415 - it describes this module
 
-        if not compiled:
-            compiled.extend(native.compile(attribute) for attribute in (*leading, *trailing))
-
+        _compile_once(compiled, (*leading, *trailing))
         checked: list[Any] = list(elements)
         for index in range(len(leading)):
             try:

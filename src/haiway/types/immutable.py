@@ -265,8 +265,13 @@ class Immutable(nstruct.Struct, metaclass=ImmutableMeta):
         # attributes, and a subclass with a constructor of its own delegates to it
         def __init__(self, **kwargs: Any) -> None: ...
 
+    # a record is the one it is, not its values - both operators are declared, as the
+    # native storage defines each of them to compare the values
     def __eq__(self, other: object) -> bool:
-        return object.__eq__(self, other)  # a record is the one it is, not its values
+        return object.__eq__(self, other)
+
+    def __ne__(self, other: object) -> bool:
+        return object.__ne__(self, other)
 
     def __hash__(self) -> int:
         return object.__hash__(self)

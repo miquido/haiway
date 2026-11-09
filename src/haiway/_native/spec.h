@@ -1037,11 +1037,14 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
         int owned;
         PyObject *items = iterable_snapshot(state, value, &owned);
         if (items == NULL) return PyErr_Occurred() ? NULL : type_error("Set", value);
-        PyObject *checked = validate_elements(state, spec, 0, items, owned);
+        /* the snapshot of a frozenset is not changed in place - it would hide a converted
+         * element, and the frozenset itself would be returned with it unconverted */
+        int given_frozen = PyFrozenSet_CheckExact(value);
+        PyObject *checked = validate_elements(state, spec, 0, items, owned && !given_frozen);
         int unchanged = checked == items;
         Py_DECREF(items);
         if (checked == NULL) return NULL;
-        if (unchanged && PyFrozenSet_CheckExact(value)) {
+        if (unchanged && given_frozen) {
             Py_DECREF(checked);
             return Py_NewRef(value);
         }
