@@ -63,7 +63,10 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   and take the memory a `__slots__` object would. Creating, updating, validating a mapping and
   comparing an instance is 4 to 10 times faster than the Python implementation was, converting to a
   mapping, a basic object or JSON up to 100 times for large states, reading JSON 5 to 14 times.
-  An instance holding nothing the garbage collector tracks is left out of its collections.
+  An instance which can't be part of a reference cycle - which is what validated values are,
+  being made of tuples, frozensets, `Map`s, UUIDs and other instances - is left out of the
+  collections of the garbage collector together with those containers, and is reclaimed by
+  reference counting alone, however many are kept alive.
 - **Native validation of every built-in annotation**, with the messages the annotations have always
   raised with. The code of the user - a `Validator`, a `Verifier`, a class validating itself, a
   default factory - is what still runs in Python.
@@ -72,11 +75,30 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `indent`. A union of `State` classes is read without a second pass, and reading validates as it
   goes, running the code of the user only once the document is known to be right.
 - `make native` rebuilds the extension.
+- `make benchmark-http` measures the HTTP client - responses, the facade and the HTTPX backend -
+  against `httpx2` alone, through its `MockTransport` (`benchmarks/http_benchmark.py`).
 
 #### Changed
 
 - **The build backend is `setuptools`**, as no backend of `uv` compiles C. `uv` stays the tool for
   everything else.
+- **UUIDs, dates, times and datetimes convert faster.** `to_json` and `to_basic_object` spell them
+  natively - exactly as `str` and `isoformat` do - for the exact types, naive or in UTC, so a state
+  holding them converts about a third faster. Other timezones and subclasses keep their own
+  spelling.
+- **The HTTP client costs less per request.** The facade reads the URL of a request once for what
+  it records, and a streamed body hands its chunks over with fewer frames.
+
+#### Fixed
+
+- A validator or verifier of a union alternative runs once for a value - it ran a second time when
+  the value matched the alternative but failed its validation, and its error was reported twice.
+- A mapping whose `items()` does not yield pairs of a key and a value is read through its keys, as
+  it always was outside of a union, rather than crashing the validation of a union holding a
+  `Mapping`.
+- `@asynchronous` submits its calls from an empty context, so a thread the executor starts for one
+  never keeps the context of the caller - on the free-threaded build threads inherit it, which kept
+  the state of the first scope using it alive for as long as the thread lived.
 
 ## 0.60.0
 

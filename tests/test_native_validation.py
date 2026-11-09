@@ -1,4 +1,4 @@
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from datetime import date, datetime, time, timedelta
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -8,6 +8,7 @@ from uuid import UUID
 import pytest
 
 from haiway import Map, Meta, State, ValidationError, Validator, Verifier
+from haiway._native import nstruct
 from haiway.attributes.function import Function
 
 # Every kind of annotation is validated natively - what each accepts and converts, and
@@ -239,6 +240,63 @@ def test_union_failure_collects_every_alternative() -> None:
         "'str' is not matching any of the allowed alternatives: int | None"
     )
     assert len(cause.exceptions) == 2
+
+
+def test_union_attempts_each_alternative_once() -> None:
+    # the first pass validates what the value already matches - the second one leaves it
+    # out, so the code of the user runs once, and fails into a single error
+    calls: list[int] = []
+
+    def rejecting(value: int) -> int:
+        calls.append(value)
+        raise ValueError("rejected")
+
+    holder = _holder(Annotated[int, Verifier(rejecting)] | str)
+    with pytest.raises(ValidationError) as exc:
+        holder(value=1)  # pyright: ignore[reportCallIssue]
+
+    assert calls == [1]
+    cause = exc.value.cause
+    assert isinstance(cause, ExceptionGroup)
+    assert len(cause.exceptions) == 2
+
+
+class _PairsAsLists(Mapping[str, int]):
+    # a mapping of the user may spell its items as anything - it is read through its keys
+    def __getitem__(self, key: str) -> int:
+        return {"a": 1}[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(("a",))
+
+    def __len__(self) -> int:
+        return 1
+
+    def items(self) -> Any:
+        return [["a", 1]]
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [Mapping[str, int], Mapping[str, int] | int],
+    ids=["mapping", "union"],
+)
+def test_mapping_is_read_through_its_keys_rather_than_its_items(annotation: Any) -> None:
+    holder = _holder(annotation)
+    assert dict(holder(value=_PairsAsLists()).value) == {"a": 1}  # pyright: ignore[reportCallIssue, reportAttributeAccessIssue]
+
+
+@pytest.mark.parametrize(
+    ("kind", "error"),
+    [(99, ValueError), (-1, ValueError), (1 << 70, OverflowError)],
+    ids=["unknown", "negative", "overflowing"],
+)
+def test_specs_of_kinds_the_module_does_not_have_are_refused(
+    kind: int,
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        nstruct.compile_spec((kind, None, None, None, None, None, ()))
 
 
 def test_validator_sees_the_raw_value_before_the_annotation() -> None:
