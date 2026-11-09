@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, NoReturn, Self, final
 
-from haiway.types.mapping_base import FROZEN, MapBase, plain_repr
+from haiway.types.mapping_base import MapBase, plain_repr
 
 __all__ = ("Map",)
 
@@ -14,10 +14,9 @@ class Map[Key, Element](MapBase[Key, Element]):
     """
     Immutable mapping with JSON helpers and persistent-style merges.
 
-    ``Map`` subclasses the builtin ``frozendict`` where there is one, and
-    ``dict`` otherwise. It behaves like a normal mapping for reads, but all
-    mutating operations raise ``AttributeError``. Merge operators create new ``Map``
-    instances instead of changing the original object.
+    ``Map`` subclasses the builtin ``frozendict``. It behaves like a normal mapping
+    for reads, but all mutating operations raise ``AttributeError``. Merge operators
+    create new ``Map`` instances instead of changing the original object.
     """
 
     __slots__ = ()
@@ -89,16 +88,11 @@ class Map[Key, Element](MapBase[Key, Element]):
         """
         return json.dumps(self)
 
-    if FROZEN:
-        # a `frozendict` spells itself with the name of its class, which is not how the
-        # mapping it replaces has ever been printed
-        def __repr__(self) -> str:
-            return plain_repr(self)
-
-    def __hash__(self) -> int:  # pyright: ignore[reportIncompatibleVariableOverride, reportIncompatibleMethodOverride]
-        # an immutable mapping is as hashable as its contents are - a value which
-        # is not raises `TypeError`, the same way a tuple holding it would
-        return hash(frozenset(self.items()))
+    # a `frozendict` spells itself with the name of its class, which is not how the
+    # mapping it replaces has ever been printed. its hash is the one of `frozendict`:
+    # as hashable as the contents are, a value which is not raises `TypeError`
+    def __repr__(self) -> str:
+        return plain_repr(self)
 
     def __setattr__(
         self,

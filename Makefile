@@ -10,7 +10,7 @@ BENCHMARKS_PATH := benchmarks
 # load environment config from .env if able
 -include .env
 
-# a UV_PYTHON set in .env (e.g. UV_PYTHON=3.14) selects the interpreter for every uv command
+# a UV_PYTHON set in .env (e.g. UV_PYTHON=3.15.2) selects the interpreter for every uv command
 ifdef UV_PYTHON
 export UV_PYTHON
 endif
@@ -19,7 +19,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.13.7
 endif
 
-.PHONY: native uv_check venv sync update format lint test test-native benchmark benchmark-server benchmark-otel docs docs-server docs-format docs-lint release
+.PHONY: native uv_check venv sync update format lint test benchmark benchmark-server benchmark-otel docs docs-server docs-format docs-lint release
 
 
 # Check installed UV version and install the pinned one if needed
@@ -69,7 +69,7 @@ sync: uv_check
 # Rebuild the native extension in place - a changed C source is not picked up by sync
 native: uv_check
 	@echo '# Building native extension...'
-	@HAIWAY_NATIVE=1 uv run --with setuptools python setup.py build_ext --inplace --force
+	@uv run --with setuptools python setup.py build_ext --inplace --force
 	@echo '...finished!'
 
 # Update and lock dependencies from pyproject.toml
@@ -105,10 +105,6 @@ docs-lint:
 # Run tests suite.
 test:
 	@uv run --frozen python -B -m pytest -v --cov=$(SOURCES_PATH)
-
-# The same tests against the native implementation, which is opt-in.
-test-native:
-	@HAIWAY_NATIVE=1 uv run --frozen python -B -m pytest -v
 
 # Measure the performance of State operations, pass ARGS for the options of the script i.e.
 # make benchmark ARGS="--json before.json" or make benchmark ARGS="--compare before.json".

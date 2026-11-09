@@ -73,14 +73,13 @@ which roughly doubles the overhead. `server_baseline.json` was recorded the same
 
 ## Native storage
 
-`native_baseline.json` is the same set of cases taken with the compiled extension, to measure
-changes of it against. `baseline.json` stays what the pure Python implementation measured, so the
-two files together are the speedup. The pure Python implementation is what runs by default, and
-`HAIWAY_NATIVE=1` selects the native one:
+`native_baseline.json` is the same set of cases taken with the compiled extension, which is what
+runs - the file to measure a change against. `baseline.json` is what the pure Python implementation
+measured before it was dropped, so the two files together are the speedup:
 
 ```bash
+make benchmark ARGS="--compare benchmarks/native_baseline.json"
 make benchmark ARGS="--compare benchmarks/baseline.json"
-HAIWAY_NATIVE=1 make benchmark ARGS="--compare benchmarks/native_baseline.json"
 ```
 
 A class called with keyword arguments is built without a dictionary of them, which is why
@@ -89,8 +88,8 @@ A class called with keyword arguments is built without a dictionary of them, whi
 back into keywords for the call. Validating a mapping (`Simple.validate(values)`) does not pay for
 it.
 
-## What is measured by the pure Python implementation
+## Improvements outside the native code
 
-Some of the improvements do not depend on the native code: `read/path` (the paths of `State._`
+Some of the improvements are made in Python: `read/path` (the paths of `State._`
 are kept once they are made), and the identifiers of scopes and traces (a random version 4 UUID
 without a system call) which the `haiway` cases of `server_benchmark.py` pay for twice a request.

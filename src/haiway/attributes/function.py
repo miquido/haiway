@@ -5,6 +5,7 @@ from inspect import _empty as INSPECT_EMPTY  # pyright: ignore[reportPrivateUsag
 from inspect import signature
 from typing import Any, get_type_hints
 
+from haiway.attributes import native
 from haiway.attributes.annotations import AttributeAnnotation, resolve_attribute
 from haiway.attributes.attribute import Attribute
 from haiway.attributes.validation import ValidationError
@@ -267,6 +268,7 @@ def _resolve_parameter(
             name=parameter.name,
             annotation=attribute,
             default=parameter.default,
+            spec=native.compile(attribute),
         )
 
     else:
@@ -276,4 +278,5 @@ def _resolve_parameter(
             default=DefaultValue(
                 default=MISSING if parameter.default is INSPECT_EMPTY else parameter.default,
             ),
+            spec=native.compile(attribute),
         )

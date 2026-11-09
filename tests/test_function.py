@@ -261,12 +261,12 @@ def test_validates_resolved_default_marker() -> None:
 
 
 def test_keeps_plain_defaults_untouched() -> None:
-    sentinel: list[int] = []
+    marker: list[int] = []
 
-    def foo(value: list[int] = sentinel) -> list[int]:
+    def foo(value: list[int] = marker) -> list[int]:
         return value
 
     parametrized = Function(foo)
 
     # a plain default is bound by python and is not validated or coerced
-    assert parametrized() is sentinel
+    assert parametrized() is marker

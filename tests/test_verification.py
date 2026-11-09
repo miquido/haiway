@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal, Protocol, TypedDict, runtime_checkab
 import pytest
 
 from haiway import MISSING, Map, Meta, Missing, State, Verifier
+from haiway.attributes import native
 from haiway.attributes.annotations import AttributeAnnotation, resolve_attribute
 
 
@@ -129,7 +130,7 @@ def test_verifier_receives_the_validated_value(
 
     attribute: AttributeAnnotation = annotation_of(Annotated[annotation, Verifier(verify)])
 
-    assert attribute.validate(value) == expected
+    assert native.validate(native.compile(attribute), value) == expected
     assert verified == [expected]
 
 
@@ -150,7 +151,7 @@ def test_verifier_failure_is_reported_instead_of_the_conversion(
     # the verification failure is the failure of the attribute - a conversion
     # which succeeded before it can't report a failure of its own instead
     with pytest.raises(ValueError, match="refused"):
-        attribute.validate(value)
+        native.validate(native.compile(attribute), value)
 
 
 def test_verifier_result_replaces_the_validated_value() -> None:
@@ -159,4 +160,4 @@ def test_verifier_result_replaces_the_validated_value() -> None:
 
     attribute: AttributeAnnotation = annotation_of(Annotated[str, Verifier(normalized)])
 
-    assert attribute.validate(" value ") == "value"
+    assert native.validate(native.compile(attribute), " value ") == "value"

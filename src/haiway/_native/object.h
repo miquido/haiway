@@ -3,7 +3,8 @@
 static int
 struct_traverse(PyObject *self, visitproc visit, void *arg)
 {
-    Py_ssize_t n = Py_SIZE(self);
+    Py_VISIT(Py_TYPE(self));
+    Py_ssize_t n = ITEM_COUNT(self);
     PyObject **items = ITEMS(self);
     for (Py_ssize_t i = 0; i < n; i++) Py_VISIT(items[i]);
     return 0;
@@ -12,7 +13,7 @@ struct_traverse(PyObject *self, visitproc visit, void *arg)
 static int
 struct_clear(PyObject *self)
 {
-    Py_ssize_t n = Py_SIZE(self);
+    Py_ssize_t n = ITEM_COUNT(self);
     PyObject **items = ITEMS(self);
     for (Py_ssize_t i = 0; i < n; i++) Py_CLEAR(items[i]);
     return 0;
@@ -23,10 +24,9 @@ struct_dealloc(PyObject *self)
 {
     PyTypeObject *tp = Py_TYPE(self);
     PyObject_GC_UnTrack(self);
-    Py_ssize_t n = Py_SIZE(self);
-    PyObject **items = ITEMS(self);
-    for (Py_ssize_t i = 0; i < n; i++) Py_CLEAR(items[i]);
+    struct_clear(self);
     tp->tp_free(self);
+    Py_DECREF(tp);  /* the type is a heap type, which its instances keep alive */
 }
 
 static int
@@ -43,14 +43,23 @@ struct_setattro(PyObject *self, PyObject *name, PyObject *value)
     return -1;
 }
 
+/* the MISSING marker, which the values of an instance are compared with by identity */
+static inline PyObject *
+missing_of(PyObject *self)
+{
+    CompiledPlan *plan = PLAN_OF(Py_TYPE(self));
+    return plan == NULL ? NULL : plan->state->missing;
+}
+
 static Py_hash_t
 struct_hash_unbounded(PyObject *self)
 {
-    Py_ssize_t n = Py_SIZE(self);
+    Py_ssize_t n = ITEM_COUNT(self);
     PyObject **items = ITEMS(self);
+    PyObject *missing = missing_of(self);
     Py_uhash_t acc = (Py_uhash_t)(uintptr_t)Py_TYPE(self) * 1000003UL;
     for (Py_ssize_t i = 0; i < n; i++) {
-        if (items[i] == NULL || items[i] == hook_missing) continue;  /* MISSING never takes part */
+        if (items[i] == NULL || items[i] == missing) continue;  /* MISSING never takes part */
         Py_hash_t h = PyObject_Hash(items[i]);
         if (h == -1) {
             if (!PyErr_ExceptionMatches(PyExc_TypeError)) return -1;
@@ -82,7 +91,7 @@ struct_richcompare(PyObject *a, PyObject *b, int op)
         if (Py_TYPE(a) != Py_TYPE(b)) {
             eq = 0;  /* only the same concrete class is ever equal */
         } else {
-            Py_ssize_t n = Py_SIZE(a);
+            Py_ssize_t n = ITEM_COUNT(a);
             for (Py_ssize_t i = 0; i < n && eq; i++) {
                 PyObject *x = ITEMS(a)[i], *y = ITEMS(b)[i];
                 if (x == NULL || y == NULL) {  /* never initialized */
@@ -99,4 +108,42 @@ struct_richcompare(PyObject *a, PyObject *b, int op)
         }
     }
     return PyBool_FromLong(op == Py_EQ ? eq : !eq);
+}
+
+/* ------------------------------------------------------------ metaclass */
+
+static int
+structmeta_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    CompiledPlan *plan = PLAN_OF(self);
+    if (plan != NULL) {
+        Py_VISIT(plan->owner);
+        Py_VISIT(plan->keys);
+        Py_VISIT(plan->cached);
+    }
+    return PyType_Type.tp_traverse(self, visit, arg);
+}
+
+static int
+structmeta_clear(PyObject *self)
+{
+    CompiledPlan *plan = PLAN_OF(self);
+    if (plan != NULL) {
+        /* the names stay - the descriptors of the class read them until it is freed */
+        Py_CLEAR(plan->owner);
+        Py_CLEAR(plan->keys);
+        Py_CLEAR(plan->cached);
+    }
+    return PyType_Type.tp_clear(self);
+}
+
+static void
+structmeta_dealloc(PyObject *self)
+{
+    PyTypeObject *metatype = Py_TYPE(self);
+    CompiledPlan *plan = PLAN_OF(self);
+    PLAN_OF(self) = NULL;
+    PyType_Type.tp_dealloc(self);  /* clears the class, its descriptors with it */
+    plan_free(plan);
+    Py_DECREF(metatype);
 }

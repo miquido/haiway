@@ -547,31 +547,31 @@ user4 = user.updating(address=new_address)
 
 ### Native Storage
 
-Haiway ships a compiled extension which stores the attributes of a State inline in the instance,
-validates the common types without calling back into Python, and converts to mappings and JSON
-natively. It makes the immutability real - an attribute can't be rebound through
-`object.__setattr__` either, and an instance has no `__dict__` or `__weakref__`. That holds for the
-native storage only: the pure Python implementation refuses `setattr` and `delattr`, but
-`object.__setattr__` can still rebind an attribute there.
+A compiled extension stores the attributes of a State inline in the instance, validates every
+built-in annotation without calling back into Python, and converts to mappings and JSON natively.
+The immutability is real - an attribute can't be rebound through `object.__setattr__` either, and an
+instance has no `__dict__` or `__weakref__`. Calling `__init__` a second time on an instance raises.
+An instance takes the memory a `__slots__` object of the same attributes would, and one holding
+nothing the garbage collector tracks is left out of its collections.
 
-The pure Python implementation is the default. The extension is opt-in: `HAIWAY_NATIVE=1` uses it
-and fails, rather than falling back, when it is not built. It behaves the same for everything but a
-few details: calling `__init__` a second time on an instance raises natively and re-initializes it
-in Python, and a key which is not an attribute is reported after the values before it were validated
-rather than ahead of them, so a validator or a default factory may have run by then.
-`HAIWAY_NATIVE=1` fails instead of falling back when the extension is missing - that is what the
-build uses. After changing the C source run `make native`, as `uv sync` does not recompile it.
+What runs Python is the code of the user alone: a `Validator`, a `Verifier`, a class validating
+itself, a default factory. `ValidationError` reports a failure at its position the same way for
+every kind. When reading JSON, such code runs once the whole document is known to be right, so a
+document refused for something else never runs it.
 
-`to_json`, `from_json` and `from_json_array` read and write the JSON natively as well, without the
+`to_json`, `from_json` and `from_json_array` read and write the JSON natively, without the
 intermediate Python objects - for the default `json.JSONEncoder` and `json.JSONDecoder`, and with no
-`indent`. A document which is not the usual case, or a value with no native spelling, is handed to
-the Python implementation, which is also what reports every error, so the result is the same either
-way. Passing an `encoder_class`, a `decoder` or an `indent` uses the Python implementation directly.
+`indent`. A document which is not the usual case, or a value with no native spelling, is read or
+written through the standard library instead, which is also what reports an error of the document
+itself. Passing an `encoder_class`, a `decoder` or an `indent` uses the standard library directly.
 
 Calling a class with keyword arguments, `Point(x=1, y=2)`, and updating, `point.updating(x=3)`, are
-the fastest ways to build and change an instance natively. Unpacking a mapping into the call,
-`Point(**values)`, costs a little more than it did - to build an instance from a mapping use
-`Point.validate(values)` instead, which is faster than either.
+the fastest ways to build and change an instance. To build an instance from a mapping use
+`Point.validate(values)` rather than unpacking it into the call, `Point(**values)`.
+
+`Immutable` is stored the same way. It validates nothing and refuses `setattr` and `delattr` as it
+always has, while `object.__setattr__` can still rebind an attribute of it. After changing the C
+source run `make native`, as `uv sync` does not recompile it.
 
 ### Performance Considerations
 

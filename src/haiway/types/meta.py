@@ -5,7 +5,7 @@ from typing import Any, ClassVar, NoReturn, Self, TypeGuard, cast, final, overlo
 from uuid import UUID
 
 from haiway.types.basic import BasicValue, basic_value
-from haiway.types.mapping_base import FROZEN, MapBase, plain_repr
+from haiway.types.mapping_base import MapBase, plain_repr
 
 __all__ = (
     "Meta",
@@ -29,8 +29,8 @@ class Meta(MapBase[str, BasicValue]):
     nested mappings to immutable ``Map`` instances so metadata stays immutable
     through the full object graph.
 
-    The class inherits from ``frozendict`` where there is one, ``dict`` otherwise,
-    for storage and read access, and blocks all mutating methods. Prefer
+    The class inherits from ``frozendict`` for storage and read access, and blocks
+    all mutating methods. Prefer
     ``Meta.of(...)``, ``Meta.from_mapping(...)``, or ``Meta.from_json(...)`` when
     constructing values that should be validated. Direct ``Meta({...})``
     construction preserves the base mapping behavior and therefore does not
@@ -662,16 +662,11 @@ class Meta(MapBase[str, BasicValue]):
     ) -> Self:
         return self.__replace__(**values)
 
-    if FROZEN:
-        # a `frozendict` spells itself with the name of its class, which is not how the
-        # mapping it replaces has ever been printed
-        def __repr__(self) -> str:
-            return plain_repr(self)
-
-    def __hash__(self) -> int:  # pyright: ignore[reportIncompatibleVariableOverride, reportIncompatibleMethodOverride]
-        # an immutable mapping is as hashable as its contents are - a value which
-        # is not raises `TypeError`, the same way a tuple holding it would
-        return hash(frozenset(self.items()))
+    # a `frozendict` spells itself with the name of its class, which is not how the
+    # mapping it replaces has ever been printed. its hash is the one of `frozendict`:
+    # as hashable as the contents are, a value which is not raises `TypeError`
+    def __repr__(self) -> str:
+        return plain_repr(self)
 
     def __replace__(
         self,

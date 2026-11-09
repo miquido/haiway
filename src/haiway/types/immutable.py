@@ -1,16 +1,19 @@
 import annotationlib
 import inspect
-from collections.abc import Mapping, MutableMapping, Sequence
+import sys
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from typing import (
+    TYPE_CHECKING,
     Any,
     ClassVar,
-    NoReturn,
+    Final,
     Self,
     dataclass_transform,
     get_origin,
     get_type_hints,
 )
 
+from haiway._native import nstruct
 from haiway.types.default import DefaultValue
 
 __all__ = ("Immutable",)
@@ -21,7 +24,7 @@ __all__ = ("Immutable",)
     kw_only_default=True,
     frozen_default=True,
 )
-class ImmutableMeta(type):
+class ImmutableMeta(nstruct.StructMeta):  # a class of the native storage - its plan is kept there
     __ATTRIBUTES__: Mapping[str, DefaultValue | None]
     __slots__: tuple[str, ...]
     __match_args__: tuple[str, ...]
@@ -52,13 +55,13 @@ class ImmutableMeta(type):
         # resolved again, now that no declared default can answer for a type of
         # the same name - see the note on the names above
         annotations: Mapping[str, Any] | None = namespace_annotations(namespace)
-        # slots are only ever created by `type.__new__`, so they have to be
-        # declared within the namespace handed to it - assigning `__slots__` to a
-        # finished class defines no descriptors and leaves the instances with a
-        # `__dict__`, which is what the whole slot declaration exists to avoid
-        namespace["__slots__"] = tuple(
+        # the attributes live inline in the instance, behind descriptors installed
+        # below - there are no slots to declare, and no `__dict__` either, which is
+        # what an empty declaration here keeps out
+        slots: tuple[str, ...] = tuple(
             key for key in names if not any(hasattr(base, key) for base in bases)
         )
+        namespace["__slots__"] = ()
 
         state_type = type.__new__(
             mcs,
@@ -74,8 +77,55 @@ class ImmutableMeta(type):
             defaults=defaults,
         )
         state_type.__match_args__ = tuple(state_type.__ATTRIBUTES__.keys())  # pyright: ignore[reportAttributeAccessIssue]
+        # the names this class stores - kept for what reads them, the values
+        # themselves live inline in the instance, not in slots
+        state_type.__slots__ = slots  # pyright: ignore[reportConstantRedefinition]
+        _install(state_type, attributes=state_type.__ATTRIBUTES__, owned=slots)
 
         return state_type
+
+
+def _required(
+    cls: type[Any],
+    name: str,
+) -> Callable[[], Any]:
+    # the default of an attribute which has none - asking for it is the error
+    def missing() -> Any:
+        raise AttributeError(f"Missing required attribute: {name}@{cls.__qualname__}")
+
+    return missing
+
+
+def _install(
+    cls: type[Any],
+    /,
+    attributes: Mapping[str, DefaultValue | None],
+    owned: Sequence[str],
+) -> None:
+    # the plan of a plain record, as the extension reads it - an entry for each attribute,
+    # (name, alias, spec, default, constant), accepting anything, with no alias, and the
+    # failures raised as they are. the names are interned, as the names of the keyword
+    # arguments of a call are, which lets the native code tell them apart by identity
+    nstruct.compile_plan(
+        cls,
+        tuple(
+            (
+                sys.intern(name),
+                None,
+                _ANY_SPEC,
+                default if default is not None else _required(cls, name),
+                default is not None and default.constant,
+            )
+            for name, default in attributes.items()
+        ),
+        tuple(sys.intern(name) for name in owned),
+        False,
+    )
+
+
+# the description of an annotation accepting anything - compiled once, shared by every
+# attribute of every plain record
+_ANY_SPEC: Final[Any] = nstruct.compile_spec((nstruct.SPEC_ANY, None, None, None, None, None, ()))
 
 
 def namespace_annotations(
@@ -184,7 +234,7 @@ def _collect_attributes(
     return attributes
 
 
-class Immutable(metaclass=ImmutableMeta):
+class Immutable(nstruct.Struct, metaclass=ImmutableMeta):
     """
     Base class for frozen, slot-based Haiway value objects.
 
@@ -206,48 +256,20 @@ class Immutable(metaclass=ImmutableMeta):
         initialization.
     """
 
-    def __init__(
-        self,
-        **kwargs: Any,
-    ) -> None:
-        for name, default in self.__ATTRIBUTES__.items():
-            if name in kwargs:
-                object.__setattr__(
-                    self,
-                    name,
-                    kwargs[name],
-                )
+    # construction, and the refusal to be modified, are the native storage's - what it
+    # raises is the `AttributeError` this class has always raised. `object.__setattr__`
+    # remains the one way around it, as it has always been for a plain record
 
-            elif default is not None:
-                object.__setattr__(
-                    self,
-                    name,
-                    default(),
-                )
+    if TYPE_CHECKING:
+        # what a type checker reads the constructor as - the native base binds the
+        # attributes, and a subclass with a constructor of its own delegates to it
+        def __init__(self, **kwargs: Any) -> None: ...
 
-            else:
-                raise AttributeError(
-                    f"Missing required attribute: {name}@{self.__class__.__qualname__}"
-                )
+    def __eq__(self, other: object) -> bool:
+        return object.__eq__(self, other)  # a record is the one it is, not its values
 
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> NoReturn:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__}"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> NoReturn:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__}"
-            f" attribute - '{name}' cannot be deleted"
-        )
+    def __hash__(self) -> int:
+        return object.__hash__(self)
 
     def __str__(self) -> str:
         # `__slots__` holds the names declared by this class alone, the attributes

@@ -1,15 +1,7 @@
 # Run by cibuildwheel against each built wheel, from outside the checkout. The test suite runs
 # in CI against the checkout - a wheel only has to load its extension and build a working State,
 # which is what differs between the wheels.
-import os
-
-# the native implementation is opt-in - this checks the wheel carries a working one
-os.environ["HAIWAY_NATIVE"] = "1"
-
-from haiway import State  # noqa: E402
-from haiway._native import NATIVE  # noqa: E402
-
-assert NATIVE, "the wheel carries no working native extension"
+from haiway import State
 
 
 class Point(State):

@@ -4,13 +4,13 @@ Haiway is a Python framework helping to build high-quality codebases. It focuses
 
 ## Development Toolchain
 
-- Python: 3.15 by default (`.python-version`), 3.14 still supported - keep code 3.14 compatible (ruff and pyright target 3.14, CI tests both). Where 3.15 is unavailable, fall back with `UV_PYTHON=3.14` (environment or `.env`), which every uv command and make target honors
+- Python: 3.15 only (`.python-version`) - ruff and pyright target 3.15, CI tests 3.15. The free-threaded build is not supported yet, but the native code has to stay ready for it (see below)
 - uv: pinned to 0.13.7 (`[tool.uv] required-version`, `UV_VERSION` in `Makefile`)
 - Virtualenv: managed by uv at `./.venv`; `uv sync` installs every dependency group and integration extra it needs. Run tools through make targets or `uv run`, no activation required
 - Formatting: Ruff formatter (`make format`), no other formatter
 - Linters/Type-checkers: Ruff, Bandit, Pyright (strict). Run via `make lint`
 - Tests: using pytest, run using `make test` or targeted `pytest tests/test_...::test_...`
-- Native extension (opt-in): `src/haiway/_native/` holds a C implementation of `State` storage, validation and JSON. The pure Python implementation is the default and always complete - `HAIWAY_NATIVE=1` selects the native one and fails when it is not built. `make native` recompiles it (`uv sync` does not), `make test-native` runs the tests against it. Every behavior has to hold in both modes, and the native code hands anything unusual back to Python, which is what reports errors
+- Native extension: `src/haiway/_native/` holds the C implementation of `State` and `Immutable` storage, of the validation of every built-in annotation, and of the JSON and mapping conversions - there is no Python implementation of those. `make native` recompiles it (`uv sync` does not). Python keeps annotation resolution, generics, schemas and the hooks of the user; the extension calls Python only for those, and for the errors it reports through `ValidationError`. It still requires the GIL (`Py_mod_gil` in `_nstruct.c`), but is written to run without it: no borrowed reference into a container another thread could change, inputs snapshotted before user code runs on them, Python-side caches shared across threads guarded by a lock. Check readiness by running the suite on 3.15t with the GIL overridden: `UV_PROJECT_ENVIRONMENT=.venv-ft UV_PYTHON=3.15t PYTHON_GIL=0 uv run pytest` after building the extension for that interpreter
 - Benchmarks: `make benchmark` measures State operations (`benchmarks/state_benchmark.py`); save a run with `ARGS="--json before.json"` and compare after a change with `ARGS="--compare before.json"`. Compare on the same machine, alternating runs, since single runs are noisy
 
 ## Project Layout
@@ -52,7 +52,7 @@ Apply to every design decision, new or changed code, and review:
 
 ### Typing & Immutability
 
-- Ensure latest, most strict typing syntax available from python 3.14+
+- Ensure latest, most strict typing syntax available from python 3.15+
 - Strict typing only: no untyped public APIs, no loose `Any` unless required by third-party boundaries
 - Prefer explicit attribute access with static types. Avoid dynamic `getattr` except at narrow boundaries.
 - Prefer abstract immutable protocols: `Mapping`, `Sequence`, `Iterable` over `dict`/`list`/`set` in public types.
@@ -125,6 +125,6 @@ Apply to every design decision, new or changed code, and review:
 
 - Build: `make format` succeeds
 - Quality: `make lint` is clean (Ruff, Bandit, Pyright strict)
-- Tests: `make test` and `make test-native` pass, add/update tests if behavior changes
+- Tests: `make test` passes, add/update tests if behavior changes
 - Types: strict, no ignores, no loosening of typing
 - API surface: update `src/haiway/__init__.py` for core exports or the relevant integration subpackage exports for optional packages, and update docs if needed

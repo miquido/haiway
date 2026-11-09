@@ -3,6 +3,7 @@ import weakref
 from collections.abc import Mapping, Sequence, Set
 from typing import Annotated, Any
 
+import pytest
 from pytest import mark, raises
 
 from haiway import MISSING, Alias, Missing, State, ValidationError
@@ -259,3 +260,78 @@ def test_str_and_repr_and_to_str_agree() -> None:
     point: Any = Point(x=1, y=2)
 
     assert str(point) == repr(point) == point.to_str() == "Point(x: 1, y: 2)"
+
+
+class Origin(State):
+    x: int
+    y: int = 0
+
+
+def test_object_setattr_cannot_bypass_immutability() -> None:
+    point = Origin(x=1)
+
+    with pytest.raises(AttributeError):
+        object.__setattr__(point, "x", 2)  # pyright: ignore[reportAttributeAccessIssue]
+
+    with pytest.raises(AttributeError):
+        object.__setattr__(point, "extra", 2)
+
+    with pytest.raises(AttributeError):
+        _ = point.__dict__  # pyright: ignore[reportAttributeAccessIssue]
+
+    with pytest.raises(TypeError):
+        weakref.ref(point)
+
+    assert point.x == 1
+
+
+def test_initialized_instance_refuses_a_second_initialization() -> None:
+    point = Origin(x=1)
+
+    with pytest.raises(TypeError, match="initialized already"):
+        point.__init__(x=2)  # pyright: ignore[reportCallIssue]
+
+    assert point.x == 1
+
+
+def test_custom_init_delegating_to_super_binds_the_attributes() -> None:
+    class Renamed(State):
+        _value: int
+
+        def __init__(self, value: int) -> None:
+            super().__init__(_value=value)
+
+    assert Renamed(3)._value == 3  # pyright: ignore[reportPrivateUsage]
+
+
+def test_instance_which_skipped_init_is_safe_to_inspect() -> None:
+    class Skipping(State):
+        value: int
+
+        def __init__(self) -> None:
+            pass
+
+    instance = Skipping()
+
+    with pytest.raises(AttributeError):
+        _ = instance.value
+
+    assert instance == Skipping()
+    assert isinstance(hash(instance), int)
+
+
+def test_hashing_a_deeply_nested_state_does_not_overflow_the_stack() -> None:
+    class Node(State):
+        child: Any = None
+
+    node = Node()
+    for _ in range(300_000):
+        node = Node(child=node)
+
+    # how deep it goes before it is refused depends on the stack of the platform - what
+    # it must never do is crash, which a hash of the whole chain used to
+    try:
+        assert isinstance(hash(node), int)
+
+    except RecursionError:
+        pass

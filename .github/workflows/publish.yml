@@ -14,8 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      HAIWAY_NATIVE: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -39,13 +37,8 @@ jobs:
         run: uv run pytest --rootdir= ./tests --doctest-modules
           --junitxml=junit/test-results.xml
 
-      - name: Test without the native extension
-        run: uv run pytest --rootdir= ./tests -q
-        env:
-          HAIWAY_NATIVE: "0"
-
-  # the sdist carries the C source - installing it compiles the extension, and a
-  # machine which can't falls back to the pure Python implementation
+  # the sdist carries the C source - installing it compiles the extension, which needs
+  # a compiler
   sdist:
     runs-on: ubuntu-latest
     permissions:

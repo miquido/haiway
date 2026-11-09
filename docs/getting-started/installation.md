@@ -2,14 +2,13 @@
 
 ## Requirements
 
-- Python 3.14 or higher
+- Python 3.15 or higher
 
 ## Native extension
 
-Wheels carry a compiled extension speeding up `State`, which is not used unless asked for: set
-`HAIWAY_NATIVE=1` to use it, and to fail when it is not available. Installing from the source
-distribution compiles it, and goes without it when there is no compiler. Without the variable the
-pure Python implementation runs.
+`State` and `Immutable` are stored by a compiled extension, which the wheels carry for Linux, macOS
+and Windows. Installing from the source distribution compiles it, which needs a C compiler. The
+extension requires the GIL - on a free-threaded interpreter, importing it enables the GIL.
 
 ## Install from PyPI
 

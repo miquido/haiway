@@ -1,13 +1,26 @@
 /* ------------------------------------------------------------ json decoding */
 
+/*
+ * An instance read from JSON without the intermediate Python containers, validated as
+ * it is read. The decoder is not the authority on what is wrong with a document: a
+ * syntax error, a key which is not an attribute, a value which does not validate - any
+ * of them makes it decline, and the standard library reads the document again and
+ * raises the error with its position. A document which is right is read once.
+ *
+ * What runs code of the user - a validator, a verifier, a class validating itself, a
+ * default which is computed - is kept pending and run once the whole document is known
+ * to be right, so a document refused for something else never runs it.
+ */
+
 typedef struct {
     PyObject *owner;     /* the instance the value belongs to */
     Py_ssize_t index;
-    FieldPlan *field;
+    Spec *spec;
     PyObject *value;     /* what was read, NULL for the default */
 } Pending;
 
 typedef struct {
+    ModuleState *state;
     const char *p;
     const char *end;
     Pending *pending;
@@ -17,14 +30,8 @@ typedef struct {
     int limit;  /* how deep a document goes, which is as far as Python recurses */
 } Decoder;
 
-static inline void
-skip_whitespace(Decoder *d)
-{
-    while (d->p < d->end && (*d->p == ' ' || *d->p == '\t' || *d->p == '\n' || *d->p == '\r')) d->p++;
-}
-
 static int
-add_pending(Decoder *d, PyObject *owner, Py_ssize_t index, FieldPlan *field, PyObject *value)
+add_pending(Decoder *d, PyObject *owner, Py_ssize_t index, Spec *spec, PyObject *value)
 {
     if (d->pending_count == d->pending_capacity) {
         Py_ssize_t capacity = d->pending_capacity == 0 ? 8 : d->pending_capacity * 2;
@@ -39,7 +46,7 @@ add_pending(Decoder *d, PyObject *owner, Py_ssize_t index, FieldPlan *field, PyO
     Pending *item = &d->pending[d->pending_count++];
     item->owner = owner;
     item->index = index;
-    item->field = field;
+    item->spec = spec;
     item->value = value;
     return 1;
 }
@@ -53,9 +60,23 @@ release_pending(Decoder *d)
     d->pending_count = 0;
 }
 
+static inline void
+skip_whitespace(Decoder *d)
+{
+    while (d->p < d->end && (*d->p == ' ' || *d->p == '\t' || *d->p == '\n' || *d->p == '\r')) d->p++;
+}
+
 /* NULL without an error set is the decoder declining the input - NULL with one is a failure */
 static PyObject *decode_any(Decoder *d);
-static PyObject *decode_kind(Decoder *d, long kind, PyObject *arg, int *pending);
+static PyObject *decode_spec(Decoder *d, Spec *spec);
+
+/* a failed validation declines - the standard library reads it again, which reports it with its position */
+static PyObject *
+decline_failure(void)
+{
+    if (PyErr_ExceptionMatches(PyExc_Exception)) PyErr_Clear();
+    return NULL;
+}
 
 /* the bytes of a string, up to its closing quote - 0 when it is not one this reads */
 static int
@@ -83,49 +104,35 @@ string_span(Decoder *d, const char **start, Py_ssize_t *length, int *escaped)
     return 0;
 }
 
-static int
-hex4(const char *p, const char *end, Py_UCS4 *out)
+/* the text of a string as the document spells it - declined when it is not UTF-8 */
+static PyObject *
+decoded_span(const char *start, Py_ssize_t length)
 {
-    if (end - p < 4) return 0;
-    Py_UCS4 value = 0;
-    for (int i = 0; i < 4; i++) {
-        char c = p[i];
-        value <<= 4;
-        if (c >= '0' && c <= '9') value |= (Py_UCS4)(c - '0');
-        else if (c >= 'a' && c <= 'f') value |= (Py_UCS4)(c - 'a' + 10);
-        else if (c >= 'A' && c <= 'F') value |= (Py_UCS4)(c - 'A' + 10);
-        else return 0;
-    }
-    *out = value;
-    return 1;
+    PyObject *text = PyUnicode_DecodeUTF8(start, length, NULL);
+    if (text == NULL && PyErr_ExceptionMatches(PyExc_UnicodeDecodeError)) PyErr_Clear();  /* json.loads says what is wrong */
+    return text;
 }
 
-/* a string with escapes - NULL without an error when one of them is not valid */
+/* a string with escapes resolved - NULL without an error when one of them is not valid */
 static PyObject *
-unescape_string(const char *start, Py_ssize_t length)
+unescape_string(PyObject *escaped)
 {
+    Py_ssize_t length = PyUnicode_GET_LENGTH(escaped);
+    int kind = PyUnicode_KIND(escaped);
+    const void *data = PyUnicode_DATA(escaped);
     Py_UCS4 *buffer = PyMem_Malloc((size_t)(length + 1) * sizeof(Py_UCS4));
     if (buffer == NULL) return PyErr_NoMemory();
     Py_ssize_t count = 0;
-    const char *p = start;
-    const char *end = start + length;
-    while (p < end) {
-        unsigned char c = (unsigned char)*p;
+    Py_ssize_t p = 0;
+    while (p < length) {
+        Py_UCS4 c = PyUnicode_READ(kind, data, p);
         if (c != '\\') {
-            if (c < 0x80) {
-                buffer[count++] = c;
-                p++;
-            } else {  /* the text is valid UTF-8 - it came out of a str */
-                int extra = c >= 0xf0 ? 3 : (c >= 0xe0 ? 2 : 1);
-                Py_UCS4 point = c & (0x3f >> extra);
-                p++;
-                for (int i = 0; i < extra && p < end; i++, p++) point = (point << 6) | ((unsigned char)*p & 0x3f);
-                buffer[count++] = point;
-            }
+            buffer[count++] = c;
+            p++;
             continue;
         }
         p++;  /* the escape, which is known to have a character after it */
-        switch (*p) {
+        switch (PyUnicode_READ(kind, data, p)) {
         case '"': buffer[count++] = '"'; p++; break;
         case '\\': buffer[count++] = '\\'; p++; break;
         case '/': buffer[count++] = '/'; p++; break;
@@ -135,12 +142,30 @@ unescape_string(const char *start, Py_ssize_t length)
         case 'r': buffer[count++] = '\r'; p++; break;
         case 't': buffer[count++] = '\t'; p++; break;
         case 'u': {
-            Py_UCS4 point;
-            if (!hex4(p + 1, end, &point)) goto invalid;
+            Py_UCS4 point = 0;
+            if (length - p < 5) goto invalid;
+            for (int i = 1; i <= 4; i++) {
+                Py_UCS4 h = PyUnicode_READ(kind, data, p + i);
+                point <<= 4;
+                if (h >= '0' && h <= '9') point |= h - '0';
+                else if (h >= 'a' && h <= 'f') point |= h - 'a' + 10;
+                else if (h >= 'A' && h <= 'F') point |= h - 'A' + 10;
+                else goto invalid;
+            }
             p += 5;
-            if (point >= 0xd800 && point <= 0xdbff && end - p >= 6 && p[0] == '\\' && p[1] == 'u') {
-                Py_UCS4 low;
-                if (hex4(p + 2, end, &low) && low >= 0xdc00 && low <= 0xdfff) {
+            if (point >= 0xd800 && point <= 0xdbff && length - p >= 6
+                && PyUnicode_READ(kind, data, p) == '\\' && PyUnicode_READ(kind, data, p + 1) == 'u') {
+                Py_UCS4 low = 0;
+                int valid = 1;
+                for (int i = 2; i <= 5 && valid; i++) {
+                    Py_UCS4 h = PyUnicode_READ(kind, data, p + i);
+                    low <<= 4;
+                    if (h >= '0' && h <= '9') low |= h - '0';
+                    else if (h >= 'a' && h <= 'f') low |= h - 'a' + 10;
+                    else if (h >= 'A' && h <= 'F') low |= h - 'A' + 10;
+                    else valid = 0;
+                }
+                if (valid && low >= 0xdc00 && low <= 0xdfff) {
                     point = 0x10000 + (((point - 0xd800) << 10) | (low - 0xdc00));
                     p += 6;
                 }
@@ -167,8 +192,28 @@ decode_string(Decoder *d)
     Py_ssize_t length;
     int escaped;
     if (!string_span(d, &start, &length, &escaped)) return NULL;
-    if (!escaped) return PyUnicode_DecodeUTF8(start, length, NULL);
-    return unescape_string(start, length);
+    PyObject *text = decoded_span(start, length);
+    if (text == NULL || !escaped) return text;
+    PyObject *unescaped = unescape_string(text);
+    Py_DECREF(text);
+    return unescaped;
+}
+
+/* the attribute a key names, told by its bytes where they are spelled plainly - -1 for none */
+static Py_ssize_t
+field_for_span(CompiledPlan *plan, const char *start, Py_ssize_t length, int escaped)
+{
+    if (!escaped) return field_for_bytes(plan, start, length);
+    PyObject *key = decoded_span(start, length);
+    if (key != NULL && escaped) {
+        PyObject *unescaped = unescape_string(key);
+        Py_DECREF(key);
+        key = unescaped;
+    }
+    if (key == NULL) return -1;
+    Py_ssize_t index = field_for_key(plan, key);
+    Py_DECREF(key);
+    return index;
 }
 
 static PyObject *
@@ -202,6 +247,15 @@ decode_number(Decoder *d)
         is_float = 1;
     }
     Py_ssize_t length = p - start;
+    if (!is_float && length <= 18) {  /* what fits a machine word for sure, read in place */
+        const char *q = start;
+        int negative = *q == '-';
+        if (negative) q++;
+        long long magnitude = 0;
+        for (; q < p; q++) magnitude = magnitude * 10 + (*q - '0');
+        d->p = p;
+        return PyLong_FromLongLong(negative ? -magnitude : magnitude);
+    }
     char small[64];
     char *text = length < (Py_ssize_t)sizeof(small) ? small : PyMem_Malloc((size_t)length + 1);
     if (text == NULL) return PyErr_NoMemory();
@@ -341,18 +395,6 @@ decode_any(Decoder *d)
     return result;
 }
 
-/* a key of an object, matched with the names and aliases of the attributes - -1 for none */
-static Py_ssize_t
-field_for_key(CompiledPlan *plan, PyObject *key)
-{
-    PyObject *index = PyDict_GetItemWithError(plan->keys, key);
-    if (index == NULL) {
-        PyErr_Clear();
-        return -1;
-    }
-    return PyLong_AsSsize_t(index);
-}
-
 static PyObject *decode_struct_unbounded(Decoder *d, PyTypeObject *type);
 
 static PyObject *
@@ -367,22 +409,26 @@ decode_struct(Decoder *d, PyTypeObject *type)
     return result;
 }
 
+/* an instance read from an object - declined before anything is consumed when the class
+ * is not read here, declined after when the object does not fit it */
 static PyObject *
 decode_struct_unbounded(Decoder *d, PyTypeObject *type)
 {
-    CompiledPlan *plan = compiled_plan_of(type);
-    if (plan == NULL || type->tp_new != StructType.tp_new || type->tp_init != StructType.tp_init) return NULL;
+    CompiledPlan *plan = PLAN_OF(type);
+    if (plan == NULL || type->tp_new != struct_new || type->tp_init != struct_init) return NULL;
     if (d->p >= d->end || *d->p != '{') return NULL;
     d->p++;
 
-    StructObject *self = (StructObject *)type->tp_alloc(type, plan->count);
+    PyObject *self = type->tp_alloc(type, 0);
     if (self == NULL) return NULL;
     PyObject **items = ITEMS(self);
-    char *given = PyMem_Calloc((size_t)plan->count + 1, 1);
+    char stack[FAST_MAX_FIELDS] = {0};
+    char *given = plan->count <= FAST_MAX_FIELDS ? stack : PyMem_Calloc((size_t)plan->count, 1);
     if (given == NULL) {
         Py_DECREF(self);
         return PyErr_NoMemory();
     }
+    int deferred = 0;  /* whether a value of this instance is bound later */
 
     skip_whitespace(d);
     if (d->p < d->end && *d->p == '}') {
@@ -390,10 +436,11 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
     } else {
         for (;;) {
             skip_whitespace(d);
-            PyObject *key = decode_string(d);
-            if (key == NULL) goto fail;
-            Py_ssize_t index = field_for_key(plan, key);
-            Py_DECREF(key);
+            const char *key_start;
+            Py_ssize_t key_length;
+            int key_escaped;
+            if (!string_span(d, &key_start, &key_length, &key_escaped)) goto fail;
+            Py_ssize_t index = field_for_span(plan, key_start, key_length, key_escaped);
             if (index < 0 || given[index]) goto fail;  /* not an attribute, or given twice */
             given[index] = 1;
             skip_whitespace(d);
@@ -402,16 +449,19 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
             skip_whitespace(d);
 
             FieldPlan *field = &plan->fields[index];
-            int pending = 0;
-            PyObject *value = decode_kind(d, field->kind, field->arg, &pending);
-            if (value == NULL) goto fail;
-            if (pending) {
-                if (!add_pending(d, (PyObject *)self, index, field, value)) {
-                    Py_DECREF(value);
+            if (field->spec->pure) {
+                PyObject *value = decode_spec(d, field->spec);
+                if (value == NULL) goto fail;
+                items[index] = value;
+            } else {
+                /* code of the user validates - once the document is known to be right */
+                PyObject *raw = decode_any(d);
+                if (raw == NULL) goto fail;
+                if (!add_pending(d, self, index, field->spec, raw)) {
+                    Py_DECREF(raw);
                     goto fail;
                 }
-            } else {
-                items[index] = value;
+                deferred = 1;
             }
 
             skip_whitespace(d);
@@ -430,144 +480,263 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
     for (Py_ssize_t i = 0; i < plan->count; i++) {
         if (given[i]) continue;
         FieldPlan *field = &plan->fields[i];
-        if (field->cached != NULL) items[i] = Py_NewRef(field->cached);
-        else if (!add_pending(d, (PyObject *)self, i, field, NULL)) goto fail;  /* the default is called later */
+        if (field->cached != NULL) {
+            items[i] = Py_NewRef(field->cached);
+        } else {
+            /* the default is computed - once the document is known to be right */
+            if (!add_pending(d, self, i, NULL, NULL)) goto fail;
+            deferred = 1;
+        }
     }
-    PyMem_Free(given);
-    return (PyObject *)self;
+    if (given != stack) PyMem_Free(given);
+    if (!deferred) finish_construction(self);
+    return self;
 
 fail:
-    PyMem_Free(given);
+    if (given != stack) PyMem_Free(given);
     Py_DECREF(self);
     return NULL;
 }
 
-/* a value read the way the annotation which validates it accepts it */
-static PyObject *
-decode_kind(Decoder *d, long kind, PyObject *arg, int *pending)
-{
-    switch (kind) {
-    case K_INSTANCE:
-        if (d->p < d->end && *d->p == '{') return decode_struct(d, (PyTypeObject *)arg);
-        break;
-    case K_OPTIONAL:
-        if (d->p < d->end && *d->p == 'n') {
-            PyObject *singletons = PyTuple_GET_ITEM(arg, 0);
-            for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(singletons); i++) {
-                if (PyTuple_GET_ITEM(singletons, i) == Py_None) {
-                    return match_word(d, "null", 4) ? Py_NewRef(Py_None) : NULL;
-                }
-            }
-        }
-        return decode_kind(d, PyLong_AsLong(PyTuple_GET_ITEM(arg, 1)), PyTuple_GET_ITEM(arg, 2), pending);
-    case K_SEQUENCE:
-        if (d->p < d->end && *d->p == '[') {
-            long element_kind = PyLong_AsLong(PyTuple_GET_ITEM(arg, 0));
-            PyObject *element_arg = PyTuple_GET_ITEM(arg, 1);
-            d->p++;
-            PyObject *list = PyList_New(0);
-            if (list == NULL) return NULL;
-            skip_whitespace(d);
-            if (d->p < d->end && *d->p == ']') {
-                d->p++;
-            } else {
-                for (;;) {
-                    skip_whitespace(d);
-                    int element_pending = 0;
-                    PyObject *element = decode_kind(d, element_kind, element_arg, &element_pending);
-                    if (element == NULL || element_pending || PyList_Append(list, element) < 0) {
-                        Py_XDECREF(element);
-                        Py_DECREF(list);
-                        return NULL;
-                    }
-                    Py_DECREF(element);
-                    skip_whitespace(d);
-                    if (d->p < d->end && *d->p == ',') {
-                        d->p++;
-                        continue;
-                    }
-                    if (d->p < d->end && *d->p == ']') {
-                        d->p++;
-                        break;
-                    }
-                    Py_DECREF(list);
-                    return NULL;
-                }
-            }
-            PyObject *tuple = PyList_AsTuple(list);
-            Py_DECREF(list);
-            return tuple;
-        }
-        break;
-    default:
-        break;
-    }
+/* an array read as a tuple of what its elements are accepted as - the elements are gathered
+ * on the stack, or in memory growing past it, and the tuple is made once, at their count */
+#define SHORT_ARRAY 32
 
-    /* a leaf, or a container which is not read in the shape of its annotation - read as it is */
-    PyObject *raw = decode_any(d);
-    if (raw == NULL) return NULL;
-    if (kind == K_CALL) {
-        *pending = 1;  /* an annotation of Python code - called once everything else is known to be valid */
-        return raw;
+static PyObject *
+decode_sequence(Decoder *d, Spec *element_spec)
+{
+    d->p++;  /* [ */
+    PyObject *stack[SHORT_ARRAY];
+    PyObject **elements = stack;
+    Py_ssize_t capacity = SHORT_ARRAY;
+    Py_ssize_t count = 0;
+    skip_whitespace(d);
+    if (d->p < d->end && *d->p == ']') {
+        d->p++;
+        return PyTuple_New(0);
     }
-    PyObject *out = NULL;
-    int r = fast_validate(kind, arg, raw, &out);
-    Py_DECREF(raw);
-    return r > 0 ? out : NULL;  /* undecided is for Python to decide */
+    for (;;) {
+        skip_whitespace(d);
+        PyObject *element = decode_spec(d, element_spec);
+        if (element == NULL) goto fail;
+        if (count == capacity) {
+            capacity *= 2;
+            PyObject **grown = elements == stack ? PyMem_Malloc((size_t)capacity * sizeof(PyObject *))
+                                                 : PyMem_Realloc(elements, (size_t)capacity * sizeof(PyObject *));
+            if (grown == NULL) {
+                Py_DECREF(element);
+                PyErr_NoMemory();
+                goto fail;
+            }
+            if (elements == stack) memcpy(grown, stack, sizeof(stack));
+            elements = grown;
+        }
+        elements[count++] = element;
+        skip_whitespace(d);
+        if (d->p < d->end && *d->p == ',') {
+            d->p++;
+            continue;
+        }
+        if (d->p < d->end && *d->p == ']') {
+            d->p++;
+            break;
+        }
+        goto fail;
+    }
+    PyObject *tuple = PyTuple_New(count);
+    if (tuple == NULL) goto fail;
+    for (Py_ssize_t i = 0; i < count; i++) PyTuple_SET_ITEM(tuple, i, elements[i]);
+    if (elements != stack) PyMem_Free(elements);
+    return tuple;
+
+fail:
+    for (Py_ssize_t i = 0; i < count; i++) Py_DECREF(elements[i]);
+    if (elements != stack) PyMem_Free(elements);
+    return NULL;
 }
 
-/* the validators and the defaults of Python code, in the order the values were read */
+/* an object read as the Map of what its keys and values are accepted as */
+static PyObject *
+decode_mapping(Decoder *d, Spec *spec)
+{
+    d->p++;  /* { */
+    PyObject *dict = PyDict_New();
+    if (dict == NULL) return NULL;
+    skip_whitespace(d);
+    if (d->p < d->end && *d->p == '}') {
+        d->p++;
+    } else {
+        for (;;) {
+            skip_whitespace(d);
+            PyObject *key = decode_string(d);
+            if (key == NULL) goto fail;
+            PyObject *checked_key = validate_spec(d->state, spec->children[0], key);
+            Py_DECREF(key);
+            if (checked_key == NULL) {
+                decline_failure();
+                goto fail;
+            }
+            skip_whitespace(d);
+            if (d->p >= d->end || *d->p != ':') {
+                Py_DECREF(checked_key);
+                goto fail;
+            }
+            d->p++;
+            skip_whitespace(d);
+            PyObject *value = decode_spec(d, spec->children[1]);
+            if (value == NULL || PyDict_SetItem(dict, checked_key, value) < 0) {  /* the last of a repeated key stays */
+                Py_DECREF(checked_key);
+                Py_XDECREF(value);
+                goto fail;
+            }
+            Py_DECREF(checked_key);
+            Py_DECREF(value);
+            skip_whitespace(d);
+            if (d->p < d->end && *d->p == ',') {
+                d->p++;
+                continue;
+            }
+            if (d->p < d->end && *d->p == '}') {
+                d->p++;
+                break;
+            }
+            goto fail;
+        }
+    }
+    PyObject *mapped = PyObject_CallOneArg(d->state->map, dict);
+    Py_DECREF(dict);
+    return mapped;
+
+fail:
+    Py_DECREF(dict);
+    return NULL;
+}
+
+/* whether a union has an alternative of the kind */
+static inline int
+union_has(Spec *spec, int kind)
+{
+    for (Py_ssize_t i = 0; i < spec->count; i++) {
+        if (spec->children[i]->kind == kind) return 1;
+    }
+    return 0;
+}
+
+/* a value read the way the spec accepts it - validated as it is read */
+static PyObject *
+decode_spec(Decoder *d, Spec *spec)
+{
+    if (d->p >= d->end) return NULL;
+    /* the shapes read directly - only when nothing of the user runs on the raw value */
+    if (spec->validating == NULL && spec->verifying == NULL) {
+        switch (spec->kind) {
+        case SPEC_STATE:
+            if (*d->p == '{') {
+                const char *start = d->p;
+                PyObject *instance = decode_struct(d, (PyTypeObject *)spec->base);
+                if (instance != NULL || PyErr_Occurred() || d->p != start) return instance;
+            }
+            break;
+        case SPEC_UNION:
+            if (*d->p == 'n' && union_has(spec, SPEC_NONE)) {
+                return match_word(d, "null", 4) ? Py_NewRef(Py_None) : NULL;
+            }
+            if (*d->p == '{') {
+                /* the first class the object fits - the alternatives are tried in order */
+                for (Py_ssize_t i = 0; i < spec->count; i++) {
+                    Spec *alternative = spec->children[i];
+                    if (alternative->kind != SPEC_STATE || alternative->validating != NULL || alternative->verifying != NULL) continue;
+                    const char *start = d->p;
+                    PyObject *instance = decode_struct(d, (PyTypeObject *)alternative->base);
+                    if (instance != NULL || PyErr_Occurred()) return instance;
+                    d->p = start;
+                }
+            }
+            break;
+        case SPEC_SEQUENCE:
+            if (*d->p == '[') return decode_sequence(d, spec->children[0]);
+            break;
+        case SPEC_MAPPING:
+            if (*d->p == '{') return decode_mapping(d, spec);
+            break;
+        default:
+            break;
+        }
+    }
+
+    /* anything else is read as it is and validated */
+    PyObject *raw = decode_any(d);
+    if (raw == NULL) return NULL;
+    PyObject *validated = validate_spec(d->state, spec, raw);
+    Py_DECREF(raw);
+    return validated != NULL ? validated : decline_failure();
+}
+
+/* what was kept pending, in the order it was read - 0 declining when any of it fails */
 static int
 apply_pending(Decoder *d)
 {
     for (Py_ssize_t i = 0; i < d->pending_count; i++) {
         Pending *item = &d->pending[i];
-        PyObject *validated = item->value != NULL ? validate_field(item->field, item->value)
-                                                  : PyObject_CallNoArgs(item->field->default_value);
+        PyObject *validated;
+        if (item->value != NULL) {
+            validated = validate_spec(d->state, item->spec, item->value);
+        } else {
+            validated = field_default(&PLAN_OF(Py_TYPE(item->owner))->fields[item->index]);
+        }
         if (validated == NULL) {
-            if (!PyErr_ExceptionMatches(PyExc_Exception)) return JSON_ERROR;
-            PyErr_Clear();  /* the Python implementation reports it with its position */
-            return JSON_BAIL;
+            if (!PyErr_ExceptionMatches(PyExc_Exception)) return -1;
+            decline_failure();
+            return 0;
         }
         PyObject **slot = &ITEMS(item->owner)[item->index];
         Py_XSETREF(*slot, validated);
     }
-    return JSON_OK;
+    /* the instances bound late are let go of by the collector now, where they can be */
+    for (Py_ssize_t i = 0; i < d->pending_count; i++) finish_construction(d->pending[i].owner);
+    return 1;
 }
 
-/* the text of a json document as UTF-8 - NULL without an error when it is not one this reads */
+/*
+ * The text of a json document, read in place - NULL without an error when it is not one
+ * this reads. Bytes are read as UTF-8, which is what json.loads reads without a mark of
+ * another encoding; the strings of the document are decoded one by one, and one which
+ * is not UTF-8 declines, so anything else is for json.loads to detect.
+ */
 static const char *
-document_text(PyObject *value, Py_ssize_t *length, PyObject **owner)
+document_text(PyObject *value, Py_ssize_t *length)
 {
-    *owner = NULL;
-    if (PyUnicode_Check(value)) return PyUnicode_AsUTF8AndSize(value, length);
+    if (PyUnicode_Check(value)) {
+        if (PyUnicode_IS_ASCII(value)) {  /* as it is - no UTF-8 of it is kept on the str */
+            *length = PyUnicode_GET_LENGTH(value);
+            return PyUnicode_DATA(value);
+        }
+        return PyUnicode_AsUTF8AndSize(value, length);
+    }
     if (PyBytes_Check(value)) {
-        /* what json.loads reads as UTF-8 - anything else is for it to detect */
-        *owner = PyUnicode_DecodeUTF8(PyBytes_AS_STRING(value), PyBytes_GET_SIZE(value), "strict");
-        if (*owner == NULL) return NULL;
-        return PyUnicode_AsUTF8AndSize(*owner, length);
+        *length = PyBytes_GET_SIZE(value);
+        return PyBytes_AS_STRING(value);
     }
     return NULL;
 }
 
-/* from_json(cls, text) - an instance, or None when the Python implementation has to read it */
+/* from_json(cls, text, array) - an instance, or None when the standard library has to read it */
 static PyObject *
 from_json_native(PyObject *mod, PyObject *args)
 {
+    ModuleState *state = module_state(mod);
     PyObject *cls;
     PyObject *text;
     int array;
     if (!PyArg_ParseTuple(args, "OOp", &cls, &text, &array)) return NULL;
-    if (!PyType_Check(cls) || !PyType_IsSubtype((PyTypeObject *)cls, &StructType)) {
+    if (!PyType_Check(cls) || !PyType_IsSubtype((PyTypeObject *)cls, state->struct_type)) {
         PyErr_SetString(PyExc_TypeError, "from_json expects a Struct class");
         return NULL;
     }
 
     Py_ssize_t length;
-    PyObject *owner;
-    const char *data = document_text(text, &length, &owner);
+    const char *data = document_text(text, &length);
     if (data == NULL) {
-        Py_XDECREF(owner);
         if (PyErr_Occurred()) {
             if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
             PyErr_Clear();  /* not valid text - json.loads says so */
@@ -575,7 +744,7 @@ from_json_native(PyObject *mod, PyObject *args)
         Py_RETURN_NONE;
     }
 
-    Decoder decoder = {data, data + length, NULL, 0, 0, 0, Py_GetRecursionLimit()};
+    Decoder decoder = {state, data, data + length, NULL, 0, 0, 0, Py_GetRecursionLimit()};
     PyObject *result = NULL;
     skip_whitespace(&decoder);
     if (!array) {
@@ -623,12 +792,8 @@ from_json_native(PyObject *mod, PyObject *args)
         skip_whitespace(&decoder);
         if (decoder.p != decoder.end) Py_CLEAR(result);  /* something after the document */
     }
-    if (result != NULL) {
-        int status = apply_pending(&decoder);
-        if (status != JSON_OK) Py_CLEAR(result);
-    }
+    if (result != NULL && apply_pending(&decoder) <= 0) Py_CLEAR(result);
     release_pending(&decoder);
-    Py_XDECREF(owner);
     if (result == NULL && !PyErr_Occurred()) Py_RETURN_NONE;
     return result;
 }
