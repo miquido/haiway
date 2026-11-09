@@ -112,7 +112,13 @@ spec_compile(PyObject *description)
         PyErr_NoMemory();
         return NULL;
     }
-    spec->kind = (int)PyLong_AsLong(D_KIND(description));
+    long kind = PyLong_AsLong(D_KIND(description));
+    if (kind < SPEC_ANY || kind > SPEC_ALIAS) {
+        if (!PyErr_Occurred()) PyErr_Format(PyExc_ValueError, "unknown spec kind %ld", kind);
+        PyMem_RawFree(spec);
+        return NULL;
+    }
+    spec->kind = (int)kind;
     spec->annotation = Py_NewRef(D_ANNOTATION(description));
     spec->base = D_BASE(description) == Py_None ? NULL : Py_NewRef(D_BASE(description));
     spec->validating = D_VALIDATING(description) == Py_None ? NULL : Py_NewRef(D_VALIDATING(description));
@@ -355,15 +361,22 @@ iterable_snapshot(ModuleState *state, PyObject *value, int *owned)
     return PySequence_Tuple(value);
 }
 
-/* the items of a mapping as a list of pairs - NULL without an error for what is not one */
+/*
+ * The entries of a mapping as a dictionary to walk - NULL without an error for what is not
+ * one. Read the way `validate_mapping` reads it, through its keys and its items rather than
+ * through what `items()` hands over, which a mapping of the user could spell as anything:
+ * a private copy of a dictionary, a frozendict as it is, any other mapping copied.
+ */
 static PyObject *
 mapping_snapshot(ModuleState *state, PyObject *value)
 {
-    if (!PyAnyDict_Check(value)) {
-        int r = PyObject_IsInstance(value, state->mapping);
-        if (r <= 0) return NULL;
-    }
-    return PyMapping_Items(value);
+    if (PyDict_Check(value)) return PyDict_Copy(value);
+    if (PyFrozenDict_Check(value)) return Py_NewRef(value);
+    int r = PyObject_IsInstance(value, state->mapping);
+    if (r <= 0) return NULL;
+    PyObject *copy = PyDict_New();
+    if (copy != NULL && PyDict_Update(copy, value) < 0) Py_CLEAR(copy);
+    return copy;
 }
 
 static int
@@ -450,15 +463,17 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
         return r;
     }
     case SPEC_MAPPING: {
-        PyObject *items = mapping_snapshot(state, value);
-        if (items == NULL) return PyErr_Occurred() ? -1 : 0;
+        PyObject *entries = mapping_snapshot(state, value);
+        if (entries == NULL) return PyErr_Occurred() ? -1 : 0;
         int r = 1;
-        for (Py_ssize_t i = 0; r > 0 && i < PyList_GET_SIZE(items); i++) {
-            PyObject *pair = PyList_GET_ITEM(items, i);
-            r = spec_check(state, spec->children[0], PyTuple_GET_ITEM(pair, 0));
-            if (r > 0) r = spec_check(state, spec->children[1], PyTuple_GET_ITEM(pair, 1));
+        PyObject *key;
+        PyObject *item;
+        Py_ssize_t position = 0;
+        while (r > 0 && PyDict_Next(entries, &position, &key, &item)) {
+            r = spec_check(state, spec->children[0], key);
+            if (r > 0) r = spec_check(state, spec->children[1], item);
         }
-        Py_DECREF(items);
+        Py_DECREF(entries);
         return r;
     }
     case SPEC_TYPED_DICT: {
@@ -803,11 +818,22 @@ fail:
     return NULL;
 }
 
+/* the alternatives of a union a first pass attempted, at most this many kept on the stack */
+#define UNION_STACK 64
+
 static PyObject *
 validate_union(ModuleState *state, Spec *spec, PyObject *value)
 {
     PyObject *errors = PyList_New(0);
     if (errors == NULL) return NULL;
+    /* each alternative is attempted once - the second pass leaves out what the first one
+     * attempted, so the code of the user runs once, and fails into one error, for each */
+    unsigned char stack[UNION_STACK] = {0};
+    unsigned char *attempted = spec->count <= UNION_STACK ? stack : PyMem_Calloc((size_t)spec->count, 1);
+    if (attempted == NULL) {
+        Py_DECREF(errors);
+        return PyErr_NoMemory();
+    }
     /* an alternative the value already matches wins over one which would only convert
      * it - resolving in the declaration order alone would let the `float` of
      * `str | float | int` turn every int into a float */
@@ -818,6 +844,7 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
                 int r = spec_check(state, alternative, value);
                 if (r < 0) {
                     if (!PyErr_ExceptionMatches(PyExc_Exception)) goto fail;
+                    attempted[i] = 1;  /* refused already - its validation would refuse it too */
                     PyObject *exc = PyErr_GetRaisedException();
                     int failed = PyList_Append(errors, exc) < 0;
                     Py_DECREF(exc);
@@ -825,9 +852,13 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
                     continue;
                 }
                 if (!r) continue;
+                attempted[i] = 1;
+            } else if (attempted[i]) {
+                continue;
             }
             PyObject *validated = validate_spec(state, alternative, value);
             if (validated != NULL) {
+                if (attempted != stack) PyMem_Free(attempted);
                 Py_DECREF(errors);
                 return validated;
             }
@@ -866,9 +897,12 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
         PyErr_SetRaisedException(group);
     }
 fail:
+    if (attempted != stack) PyMem_Free(attempted);
     Py_DECREF(errors);
     return NULL;
 }
+
+#undef UNION_STACK
 
 static PyObject *
 validate_kind(ModuleState *state, Spec *spec, PyObject *value)

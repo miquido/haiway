@@ -14,10 +14,12 @@
 
 typedef struct {
     PyObject *owner;     /* the instance the value belongs to */
-    Py_ssize_t index;
+    Py_ssize_t index;    /* FINISHING for the instance to let go of, once all of it is bound */
     Spec *spec;
     PyObject *value;     /* what was read, NULL for the default */
 } Pending;
+
+#define FINISHING -1
 
 typedef struct {
     ModuleState *state;
@@ -442,7 +444,6 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
         Py_DECREF(self);
         return PyErr_NoMemory();
     }
-    int deferred = 0;  /* whether a value of this instance is bound later */
 
     skip_whitespace(d);
     if (d->p < d->end && *d->p == '}') {
@@ -475,7 +476,6 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
                     Py_DECREF(raw);
                     goto fail;
                 }
-                deferred = 1;
             }
 
             skip_whitespace(d);
@@ -499,11 +499,19 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
         } else {
             /* the default is computed - once the document is known to be right */
             if (!add_pending(d, self, i, NULL, NULL)) goto fail;
-            deferred = 1;
         }
     }
     if (given != stack) PyMem_Free(given);
-    if (!deferred) finish_construction(self);
+    /* an instance with a value bound later - of its own, or of one within it - is let go
+     * of by the collector once all of them are bound, after those within it, which are
+     * kept for it before it, being read first. Before then it holds them unfinished */
+    if (d->pending_count == pending_mark) {
+        finish_construction(self);
+    } else if (!add_pending(d, self, FINISHING, NULL, NULL)) {
+        rollback_pending(d, pending_mark);
+        Py_DECREF(self);
+        return NULL;
+    }
     return self;
 
 fail:
@@ -694,6 +702,7 @@ apply_pending(Decoder *d)
 {
     for (Py_ssize_t i = 0; i < d->pending_count; i++) {
         Pending *item = &d->pending[i];
+        if (item->index == FINISHING) continue;
         PyObject *validated;
         if (item->value != NULL) {
             validated = validate_spec(d->state, item->spec, item->value);
@@ -708,8 +717,11 @@ apply_pending(Decoder *d)
         PyObject **slot = &ITEMS(item->owner)[item->index];
         Py_XSETREF(*slot, validated);
     }
-    /* the instances bound late are let go of by the collector now, where they can be */
-    for (Py_ssize_t i = 0; i < d->pending_count; i++) finish_construction(d->pending[i].owner);
+    /* the instances bound late are let go of by the collector now, where they can be -
+     * those within another first, in the order they were read to the end */
+    for (Py_ssize_t i = 0; i < d->pending_count; i++) {
+        if (d->pending[i].index == FINISHING) finish_construction(d->pending[i].owner);
+    }
     return 1;
 }
 
@@ -813,3 +825,5 @@ from_json_native(PyObject *mod, PyObject *args)
     if (result == NULL && !PyErr_Occurred()) Py_RETURN_NONE;
     return result;
 }
+
+#undef FINISHING

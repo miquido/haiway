@@ -14,7 +14,7 @@ from datetime import date, datetime, time, timedelta
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal, NotRequired, TypedDict
-from uuid import UUID
+from uuid import UUID, SafeUUID
 
 import pytest
 
@@ -553,6 +553,195 @@ def test_cycle_through_a_record_is_collected() -> None:
     del state, record, loop
     gc.collect()
     assert finalized == [True]
+
+
+class _Checked(State):
+    value: Annotated[int, Validator(_passing)]
+
+
+class _Within(State):
+    checked: _Checked
+    items: Sequence[_Checked] = ()
+
+
+def test_instances_read_from_json_holding_checked_ones_are_left_to_reference_counting() -> None:
+    # what holds an instance bound late is let go of once that one is - from the innermost
+    within = _Within.from_json('{"checked": {"value": 1}, "items": [{"value": 2}]}')
+    assert not gc.is_tracked(within)
+    assert not gc.is_tracked(within.checked)
+    assert not gc.is_tracked(within.items)
+    assert not gc.is_tracked(within.items[0])
+
+
+_reentering: list[bool] = []
+
+
+def _reentrant(value: int) -> int:
+    # the class being validated, created and converted while one of its values validates
+    if not _reentering:
+        _reentering.append(True)
+        try:
+            _Reentrant(value=value).to_json()
+            _Reentrant.from_json(f'{{"value": {value}}}')
+
+        finally:
+            _reentering.clear()
+
+    return value
+
+
+class _Reentrant(State):
+    value: Annotated[int, Validator(_reentrant)]
+
+
+def test_validation_entering_the_class_it_validates_does_not_leak() -> None:
+    reentrant = _Reentrant(value=1)
+
+    def operation() -> None:
+        _Reentrant(value=2)
+        reentrant.updating(value=3)
+        _Reentrant.validate({"value": 4})
+        _Reentrant.from_json('{"value": 5}')
+
+    _assert_no_leak(operation)
+
+
+def _interrupting(value: int) -> int:
+    if value:  # the default is let through, what is given interrupts
+        raise KeyboardInterrupt
+
+    return value
+
+
+class _Interrupted(State):
+    first: Leaf
+    value: Annotated[int, Validator(_interrupting)] = 0
+
+
+def _interrupted(call: Callable[[], Any]) -> None:
+    # an exception which is not an error is passed on as it is - never wrapped, or swallowed
+    try:
+        call()
+
+    except KeyboardInterrupt:
+        return
+
+    raise AssertionError("KeyboardInterrupt was not passed on")
+
+
+def test_interruptions_pass_through_without_leaking() -> None:
+    instance = _Interrupted(first=Leaf(number=1))
+
+    def operation() -> None:
+        _interrupted(lambda: _Interrupted(first=Leaf(number=1), value=1))
+        _interrupted(lambda: instance.updating(value=1))
+        _interrupted(lambda: _Interrupted.validate({"first": {"number": 1}, "value": 1}))
+        _interrupted(lambda: _Interrupted.from_json('{"first": {"number": 1}, "value": 1}'))
+
+    _assert_no_leak(operation)
+
+
+def _interrupting_default() -> Any:
+    raise KeyboardInterrupt
+
+
+def test_a_plan_failing_while_it_is_compiled_does_not_leak() -> None:
+    # a constant default is validated while the plan is compiled, and an interruption there
+    # gives the plan up with what it allocated already
+    def operation() -> None:
+        cls: Any = nstruct.StructMeta("Failing", (nstruct.Struct,), {"__slots__": ()})
+        entries = (
+            _entry("first"),
+            (sys.intern("second"), None, _ANY, _interrupting_default, True),
+        )
+        _interrupted(lambda: nstruct.compile_plan(cls, entries, ("first", "second"), False))
+        with pytest.raises(TypeError, match="never given a plan"):
+            cls()
+
+    _assert_no_leak(operation, rounds=300)
+
+
+def test_specializations_are_collected_with_their_origin() -> None:
+    # an origin and its variants refer to each other - a cycle the collector breaks
+    def define() -> tuple[weakref.ref[type[Any]], weakref.ref[type[Any]]]:
+        class Box[Value](State):
+            value: Value
+
+        variant: Any = Box[int]
+        variant(value=1).to_json()
+        return weakref.ref(Box), weakref.ref(variant)
+
+    references = [define() for _ in range(10)]
+    gc.collect()
+    assert all(origin() is None and variant() is None for origin, variant in references)
+
+
+def _random_items(generator: random.Random, depth: int) -> list[Any]:
+    return [_random_value(generator, depth + 1) for _ in range(generator.randrange(3))]
+
+
+_LEAVES: Mapping[str, Callable[[random.Random, int], Any]] = {
+    "int": lambda generator, depth: generator.randrange(1000),
+    "str": lambda generator, depth: "x" * generator.randrange(3),
+    "uuid": lambda generator, depth: UUID(int=generator.randrange(1 << 64)),
+    "none": lambda generator, depth: None,
+}
+
+_CONTAINERS: Mapping[str, Callable[[random.Random, int], Any]] = {
+    "tuple": lambda generator, depth: tuple(_random_items(generator, depth)),
+    "list": _random_items,
+    "dict": lambda generator, depth: dict(enumerate(_random_items(generator, depth))),
+    "frozenset": lambda generator, depth: frozenset(range(generator.randrange(3))),
+    "map": lambda generator, depth: Map(dict(enumerate(_random_items(generator, depth)))),
+    "leaf": lambda generator, depth: Leaf(number=generator.randrange(10)),
+    "record": lambda generator, depth: _Outer(f=_random_value(generator, depth + 1)),
+}
+
+
+def _random_value(generator: random.Random, depth: int) -> Any:
+    kinds: Mapping[str, Callable[[random.Random, int], Any]] = (
+        {**_LEAVES, **_CONTAINERS} if depth < 3 else _LEAVES
+    )
+    return kinds[generator.choice(tuple(kinds))](generator, depth)
+
+
+def _can_lead_back(value: Any) -> bool:
+    # whether anything reachable from a value could ever refer back to what holds it
+    pending: list[Any] = [value]
+    seen: set[int] = set()
+    while pending:
+        current: Any = pending.pop()
+        if id(current) in seen or (not gc.is_tracked(current) and type(current) in (int, str)):
+            continue
+
+        seen.add(id(current))
+        if isinstance(current, (list, dict, set)) or (
+            isinstance(current, type) and current is not type(current)
+        ):
+            if isinstance(current, (list, dict, set)):
+                return True
+
+            continue  # a class is not followed - every instance refers to its own
+
+        if isinstance(current, SafeUUID):
+            continue
+
+        pending.extend(
+            referent for referent in gc.get_referents(current) if not isinstance(referent, type)
+        )
+
+    return False
+
+
+def test_untracked_instances_never_reach_what_could_lead_back_to_them() -> None:
+    generator = random.Random(23)
+    for _ in range(3000):
+        value: Any = _random_value(generator, 0)
+        instance = _Loose(value=value)
+        if gc.is_tracked(instance):
+            continue
+
+        assert not _can_lead_back(instance), value
 
 
 def test_classes_are_collected() -> None:
