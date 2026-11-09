@@ -968,15 +968,32 @@ def test_checking_function_arguments_does_not_leak() -> None:
     _assert_no_leak(operation)
 
 
+def test_owners_of_builtins_held_as_functions_are_collected() -> None:
+    class Holding(State):
+        function: Callable[[str], object]
+
+    def define() -> weakref.ref[type[Any]]:
+        class Temporary(dict[str, Any]):
+            pass
+
+        Holding(function=Temporary().get)
+        return weakref.ref(Temporary)
+
+    references = [define() for _ in range(20)]
+    gc.collect()
+    assert all(reference() is None for reference in references)
+
+
 def test_classes_held_as_functions_are_collected() -> None:
     class Holding(State):
         factory: Callable[[], object]
 
     def define() -> weakref.ref[type[Any]]:
         class Temporary:
-            pass
+            def method(self) -> None: ...
 
         Holding(factory=Temporary)
+        Holding(factory=Temporary().method)
         return weakref.ref(Temporary)
 
     references = [define() for _ in range(20)]

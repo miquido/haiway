@@ -2417,6 +2417,12 @@ class FunctionAttribute(Immutable):
         return self
 
 
+def _unpacked(argument: Any, /) -> bool:
+    return get_origin(argument) in (typing.Unpack, typing_extensions.Unpack) or getattr(
+        argument, "__unpacked__", False
+    )
+
+
 def _callable_arguments(
     annotation: Any,
     /,
@@ -2429,7 +2435,10 @@ def _callable_arguments(
 
     signature: Any = arguments[0]
     if isinstance(signature, list | tuple):
-        return (tuple(cast(Sequence[Any], signature)), False)
+        given: Sequence[Any] = cast(Sequence[Any], signature)
+        # an unpacked TypeVarTuple stands for any number of arguments, none included
+        told: tuple[Any, ...] = tuple(argument for argument in given if not _unpacked(argument))
+        return (told, len(told) < len(given))
 
     if get_origin(signature) in (typing.Concatenate, typing_extensions.Concatenate):
         return (get_args(signature)[:-1], True)  # the types before the signature

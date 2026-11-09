@@ -3,7 +3,14 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from enum import IntEnum
 from threading import Lock
-from types import BuiltinFunctionType, ModuleType
+from types import (
+    BuiltinFunctionType,
+    ClassMethodDescriptorType,
+    MethodDescriptorType,
+    MethodWrapperType,
+    ModuleType,
+    WrapperDescriptorType,
+)
 from typing import TYPE_CHECKING, Any, Final
 from weakref import WeakKeyDictionary
 
@@ -438,41 +445,72 @@ def accepts(
         ``False`` only when its signature proves it can't take them - a callable without
         a signature to read is accepted.
     """
-    answers: dict[tuple[int, bool], bool] | None = _answers(value)
-    if answers is None:
+    found: tuple[_Answers, Any] | None = _answers(value)
+    if found is None:
         return _accepts(value, positional, extensible)
 
+    answers, name = found
     with _ANSWERS_LOCK:
-        accepted: bool | None = answers.get((positional, extensible))
+        accepted: bool | None = answers.get((name, positional, extensible))
 
     if accepted is None:
         accepted = _accepts(value, positional, extensible)
         with _ANSWERS_LOCK:
-            answers[(positional, extensible)] = accepted
+            answers[(name, positional, extensible)] = accepted
 
     return accepted
 
 
-# what classes and builtins of modules were told to take - those are called the same way as
-# long as they live, and reading a signature takes microseconds. A class is not kept alive
-# by having been asked about, and a builtin of a module lives as long as the module does
-_CLASS_ANSWERS: Final[WeakKeyDictionary[type[Any], dict[tuple[int, bool], bool]]] = (
-    WeakKeyDictionary()
-)
-_BUILTIN_ANSWERS: Final[dict[BuiltinFunctionType, dict[tuple[int, bool], bool]]] = {}
+# what callables were told to take, by what owns their signature - a class, the type of
+# what a builtin is bound to, the type a descriptor is of, or the class of an object - as
+# reading a signature takes microseconds. Held weakly by that owner, so nothing is kept alive
+# by having been asked about
+type _Answers = dict[tuple[Any, int, bool], bool]
+_ANSWERS: Final[WeakKeyDictionary[Any, _Answers]] = WeakKeyDictionary()
 _ANSWERS_LOCK: Final[Lock] = Lock()
+_DESCRIPTORS: Final[tuple[type[Any], ...]] = (
+    MethodDescriptorType,
+    WrapperDescriptorType,
+    ClassMethodDescriptorType,
+)
 
 
-def _answers(value: Any, /) -> dict[tuple[int, bool], bool] | None:
+def _owner(value: Any, /) -> tuple[Any, Any] | None:
+    # what owns the signature of a callable, and its name within that owner
+    kind: Any = value.__class__
     if isinstance(value, type):
-        with _ANSWERS_LOCK:
-            return _CLASS_ANSWERS.setdefault(value, {})
+        return (value, None)
 
-    if isinstance(value, BuiltinFunctionType) and isinstance(value.__self__, ModuleType | None):
-        with _ANSWERS_LOCK:
-            return _BUILTIN_ANSWERS.setdefault(value, {})
+    if isinstance(value, BuiltinFunctionType | MethodWrapperType):
+        bound: Any = value.__self__
+        if bound is None:
+            return None  # nothing to hold it by
 
-    return None  # bound to what it is given with, which may be gone the next time
+        owner: Any = bound if isinstance(bound, ModuleType) else bound.__class__
+        return (owner, ("bound", value.__name__))
+
+    if isinstance(value, _DESCRIPTORS):
+        objclass: Any = value.__objclass__
+        return (objclass, ("descriptor", value.__name__))
+
+    if isinstance(kind.__call__, _DESCRIPTORS):
+        return (kind, ("called", None))  # called through a __call__ of C
+
+    return None  # its own signature, which may differ for every one of its kind
+
+
+def _answers(value: Any, /) -> tuple[_Answers, Any] | None:
+    owned: tuple[Any, Any] | None = _owner(value)
+    if owned is None:
+        return None
+
+    owner, name = owned
+    try:
+        with _ANSWERS_LOCK:
+            return (_ANSWERS.setdefault(owner, {}), name)
+
+    except TypeError:  # an owner which can't be referred to weakly
+        return None
 
 
 def _accepts(value: Any, positional: int, extensible: bool, /) -> bool:

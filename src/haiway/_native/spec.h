@@ -156,6 +156,8 @@ spec_compile(PyObject *description)
         }
     }
     spec->count = n;
+    /* a function stays pure - reading the signature of an exotic callable may run its code,
+     * but nothing read from JSON is callable, and a default is validated once, failing late */
     spec->pure = spec->validating == NULL && spec->verifying == NULL && spec->kind != SPEC_CUSTOM
         && spec->kind != SPEC_CUSTOM_STATE && spec->kind != SPEC_ALIAS;
     spec->nested = n > 0 || spec->kind == SPEC_ALIAS || spec->kind == SPEC_STATE || spec->kind == SPEC_CUSTOM_STATE
@@ -566,6 +568,55 @@ failed:
     return NULL;
 }
 
+/* the function an object is called through - the __call__ its class defines, found as the call
+ * itself finds it, along the classes it is made of rather than on the object. A new reference
+ * to that function, given what it binds first, or NULL when it is not a function written in
+ * Python - 0, or -1 on an error */
+static int
+class_call(ModuleState *state, PyTypeObject *type, PyObject **function, Py_ssize_t *bound)
+{
+    *function = NULL;
+    PyObject *mro = PyObject_GetAttrString((PyObject *)type, "__mro__");
+    if (mro == NULL) return -1;
+    if (!PyTuple_Check(mro)) {
+        Py_DECREF(mro);
+        return 0;
+    }
+    PyObject *found = NULL;
+    for (Py_ssize_t i = 0; found == NULL && i < PyTuple_GET_SIZE(mro); i++) {
+        PyObject *base = PyTuple_GET_ITEM(mro, i);
+        if (!PyType_Check(base)) continue;
+        PyObject *namespace = PyType_GetDict((PyTypeObject *)base);
+        if (namespace == NULL) {
+            Py_DECREF(mro);
+            return -1;
+        }
+        int r = PyDict_GetItemRef(namespace, state->str_call, &found);
+        Py_DECREF(namespace);
+        if (r < 0) {
+            Py_DECREF(mro);
+            return -1;
+        }
+    }
+    Py_DECREF(mro);
+    if (found == NULL) return 0;
+    if (PyFunction_Check(found)) {
+        *function = found;
+        *bound = 1; /* the object itself comes first */
+        return 0;
+    }
+    if (Py_IS_TYPE(found, &PyStaticMethod_Type)) {
+        PyObject *wrapped = PyObject_GetAttrString(found, "__func__");
+        Py_DECREF(found);
+        if (wrapped == NULL) return -1;
+        if (PyFunction_Check(wrapped)) *function = wrapped; /* given nothing first */
+        else Py_DECREF(wrapped);
+        return 0;
+    }
+    Py_DECREF(found); /* a descriptor of another kind - asked of Python */
+    return 0;
+}
+
 /* whether a callable takes the arguments a function annotation gives it - 1, 0, or -1 on an
  * error. A function is read from its code, and so is a method bound to one, a partial of one
  * and an object called through one - every other callable is asked of Python, which accepts
@@ -587,15 +638,13 @@ function_accepts(ModuleState *state, Spec *spec, PyObject *value)
         function = Py_NewRef(PyMethod_GET_FUNCTION(callee)); /* a method never changes what it binds */
         given += 1;                                           /* what it is bound to comes first */
     } else if (!PyType_Check(callee)) {
-        /* an object is called through the __call__ of its class - looked up on the class, as
-         * the call itself does, which is a function when the class is written in Python */
-        function = PyObject_GetAttr((PyObject *)Py_TYPE(callee), state->str_call);
-        if (function == NULL) {
+        Py_ssize_t bound = 0;
+        if (class_call(state, Py_TYPE(callee), &function, &bound) < 0) {
             Py_DECREF(callee);
             Py_XDECREF(keywords);
             return -1;
         }
-        given += 1;
+        given += bound;
     }
     Py_XDECREF(callee);
     int r;

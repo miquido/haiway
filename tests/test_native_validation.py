@@ -1,4 +1,5 @@
 import inspect
+import operator
 import random
 from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from datetime import date, datetime, time, timedelta
@@ -570,3 +571,61 @@ def test_functions_are_accepted_exactly_when_their_signature_binds() -> None:
                 positional,
                 extensible,
             )
+
+
+class _Unpacking[*Arguments](State):
+    function: Callable[[int, *Arguments], None]
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted"),
+    [
+        param(_one, True, id="none unpacked"),
+        param(_two, True, id="one unpacked"),
+        param(_three, True, id="two unpacked"),
+        param(lambda: None, False, id="the one told missing"),
+    ],
+)
+def test_unpacked_arguments_stand_for_any_number_of_them(value: Any, accepted: bool) -> None:
+    if accepted:
+        assert _Unpacking(function=value).function is value
+
+    else:
+        with pytest.raises(ValidationError):
+            _Unpacking(function=value)
+
+
+class _StaticCallee:
+    @staticmethod
+    def __call__(first: int, second: str) -> None: ...
+
+
+class _StaticCalleeOfOne:
+    @staticmethod
+    def __call__(first: int) -> None: ...
+
+
+class _InheritedCallee(_Callee):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted"),
+    [
+        param(_StaticCallee(), True, id="static"),
+        param(_StaticCalleeOfOne(), False, id="static, too few"),
+        param(_InheritedCallee(), True, id="inherited"),
+        param({}.get, True, id="bound builtin"),
+        param(str.replace, False, id="method descriptor"),
+        param(operator.itemgetter(0), False, id="object of a builtin class, taking one"),
+    ],
+)
+def test_objects_are_called_the_way_their_class_tells(value: Any, accepted: bool) -> None:
+    holder = _holder(Callable[[int, str], None])
+    for _ in range(2):  # told once, then answered from what was told
+        if accepted:
+            assert holder(value=value).value is value  # pyright: ignore[reportCallIssue]
+
+        else:
+            with pytest.raises(ValidationError):
+                holder(value=value)  # pyright: ignore[reportCallIssue]
