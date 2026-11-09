@@ -273,6 +273,22 @@ class Admin(User):  # TypeError - User declares attributes
     privileges: Sequence[str]
 ```
 
+Nor can a `State` have more than one base. `State` is for passing state around, not for building
+objects out of mixins, so a class inherits from a single `State` - plus `Generic`, which a class
+declaring type parameters gets - and anything else is refused:
+
+```python
+class Named:
+    def label(self) -> str: ...
+
+class Item(State, Named):  # TypeError - a State inherits from a single State
+    name: str
+```
+
+The values of a `State` live inline in the instance, right after its header, so a base which brings
+slots, a `__dict__` or a layout of its own (as `int` does) could never be combined with it safely
+anyway. `Immutable` follows the same rule - its records inherit from `Immutable` alone.
+
 Slots, defaults, annotations, and type arguments are all resolved once, when the class is created,
 and the nominal identity that equality, instance checks, and schema generation rely on assumes they
 describe the whole class. There are three ways to get what inheritance would have given you:

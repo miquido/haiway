@@ -7,6 +7,7 @@ from typing import (
     Any,
     ClassVar,
     Final,
+    Generic,
     Self,
     dataclass_transform,
     get_origin,
@@ -39,6 +40,17 @@ class ImmutableMeta(nstruct.StructMeta):  # a class of the native storage - its 
         if any(isinstance(base, ImmutableMeta) and base.__name__ != "Immutable" for base in bases):
             raise TypeError(
                 "Immutable subclasses cannot be inherited; inherit directly from Immutable"
+            )
+
+        # a record has a single base, Immutable, and `Generic` when it declares type
+        # parameters - the root itself, built on the native storage, is the only other
+        if any(isinstance(base, ImmutableMeta) for base in bases) and any(
+            not isinstance(base, ImmutableMeta) and base is not Generic for base in bases
+        ):
+            raise TypeError(
+                f"{name} can't inherit from {', '.join(base.__name__ for base in bases)} -"
+                " an Immutable inherits from Immutable alone, and Generic when it declares"
+                " type parameters. Hold instances as attributes to compose them"
             )
 
         # the names are resolved first, so the declared defaults can leave the

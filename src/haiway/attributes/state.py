@@ -535,7 +535,21 @@ def _refuse_inheriting(
     bases: tuple[type, ...],
     /,
 ) -> None:
-    for base in bases:
+    states: tuple[type, ...] = tuple(base for base in bases if isinstance(base, StateMeta))
+    if not states:
+        return  # the root State itself
+
+    # a State carries state - it is not a building block of objects. it has a single
+    # base, the State it refines, and `Generic` when it declares type parameters
+    if len(states) > 1 or any(base is not Generic for base in bases if base not in states):
+        raise TypeError(
+            f"{name} can't inherit from {', '.join(base.__name__ for base in bases)} - a"
+            " State inherits from a single State, and Generic alone when it declares type"
+            " parameters. Hold instances as attributes to compose them, or share behavior"
+            " through an attribute-less State base"
+        )
+
+    for base in states:
         if getattr(base, "__FIELDS__", ()):
             raise TypeError(
                 f"{name} can't inherit from {base.__name__} - a State declaring"

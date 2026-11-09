@@ -83,6 +83,17 @@ fail:
     return 0;
 }
 
+/* whether any value is bound already - a plain record can unbind some of its values
+ * (`object.__delattr__`), which must not make it initializable again */
+static inline int
+any_bound(PyObject **items, Py_ssize_t n)
+{
+    for (Py_ssize_t i = 0; i < n; i++) {
+        if (items[i] != NULL) return 1;
+    }
+    return 0;
+}
+
 static int
 struct_init(PyObject *obj, PyObject *args, PyObject *kwargs)
 {
@@ -95,7 +106,7 @@ struct_init(PyObject *obj, PyObject *args, PyObject *kwargs)
     if (plan == NULL) return -1;
     Py_ssize_t n = plan->count;
     PyObject **items = ITEMS(obj);
-    if (n > 0 && items[0] != NULL) {
+    if (any_bound(items, n)) {
         PyErr_Format(PyExc_TypeError, "%s is initialized already and immutable", type->tp_name);
         return -1;
     }
@@ -110,7 +121,7 @@ struct_init(PyObject *obj, PyObject *args, PyObject *kwargs)
     int bound = 0;
     if (bind_values(plan, type, kwargs, values)) {
         Py_BEGIN_CRITICAL_SECTION(obj);
-        if (n == 0 || items[0] == NULL) {
+        if (!any_bound(items, n)) {
             for (Py_ssize_t i = 0; i < n; i++) items[i] = values[i];
             bound = 1;
         }
@@ -172,7 +183,7 @@ struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
         raise_key_error(plan->state, type, kwargs);
         goto fail;
     }
-    finish_construction(copy);
+    finish_update(copy, self);
     return copy;
 
 fail:
@@ -408,7 +419,7 @@ struct_replace_fast(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyO
         }
         target[i] = validated;
     }
-    finish_construction(copy);
+    finish_update(copy, self);
     return copy;
 }
 
@@ -522,9 +533,11 @@ struct_deep_copy(ModuleState *state, PyObject *self, PyObject *memo)
         return NULL;
     }
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *value = ITEMS(self)[i];
+        /* held while it is copied - a plain record can be rebound by the code copying calls */
+        PyObject *value = Py_XNewRef(ITEMS(self)[i]);
         if (value == NULL) continue;
         PyObject *copied = deep_copy(state, value, memo);
+        Py_DECREF(value);
         if (copied == NULL) {
             Py_DECREF(copy);
             return NULL;

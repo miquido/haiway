@@ -6,6 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
+from types import new_class
 from typing import (
     Annotated,
     Any,
@@ -237,6 +238,44 @@ def test_attribute_less_state_can_be_inherited() -> None:
 
     assert [field.name for field in Concrete.__FIELDS__] == ["value"]
     assert Concrete(value=1).described() == "behavior:Concrete"
+
+
+class _SlottedMixin:
+    __slots__ = ("extra",)
+
+
+class _PlainMixin:
+    pass
+
+
+class _AttributeLessState(State):
+    pass
+
+
+class _OtherAttributeLessState(State):
+    pass
+
+
+@mark.parametrize(
+    "other",
+    [_SlottedMixin, _PlainMixin, int, _OtherAttributeLessState],
+    ids=["slotted", "plain", "builtin", "second state"],
+)
+def test_state_can_not_be_combined_with_another_base(other: type) -> None:
+    # a State is not a building block of objects - and a base with a layout of its
+    # own would overlap the values the native storage keeps inline
+    with raises(TypeError, match="inherits from a single State"):
+        new_class("Combined", (_AttributeLessState, other))
+
+    with raises(TypeError, match="inherits from a single State"):
+        new_class("Combined", (State, other))
+
+
+def test_generic_state_keeps_generic_as_its_second_base() -> None:
+    class Box[T](State):
+        value: T
+
+    assert Box[int](value=1).value == 1
 
 
 def test_to_mapping_uses_alias_for_nested_states() -> None:

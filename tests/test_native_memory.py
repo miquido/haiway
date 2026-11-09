@@ -5,7 +5,9 @@ import math
 import os
 import random
 import sys
+import sysconfig
 import threading
+import types
 import weakref
 from collections.abc import Callable, Mapping, Sequence, Set
 from datetime import date, datetime, time, timedelta
@@ -288,6 +290,206 @@ def test_immutable_records_do_not_leak() -> None:
         _swallow(lambda: Record())  # noqa: PLW0108  # pyright: ignore[reportCallIssue]
 
     _assert_no_leak(operation)
+
+
+class _Slotted:
+    __slots__ = ("a", "b", "c")
+
+
+class _Weakly:
+    __slots__ = ("__weakref__",)
+
+
+class _Plain:
+    pass
+
+
+_ANY: Any = nstruct.compile_spec((nstruct.SPEC_ANY, None, None, None, None, None, ()))
+
+
+def _entry(name: str) -> tuple[Any, ...]:
+    return (sys.intern(name), None, _ANY, lambda: None, False)
+
+
+@pytest.mark.parametrize(
+    "other",
+    [_Slotted, _Weakly, _Plain, int],
+    ids=["slots", "weakref", "dict", "builtin"],
+)
+def test_native_storage_refuses_a_layout_it_does_not_own(other: type) -> None:
+    # checked natively, whatever the metaclass in front of it lets through - the values
+    # live right after the header, where a base like these keeps its own data
+    cls: Any = nstruct.StructMeta("Foreign", (nstruct.Struct, other), {"__slots__": ()})
+    with pytest.raises(TypeError, match=r"layout of its own|slots, a __dict__"):
+        nstruct.compile_plan(cls, (_entry("value"),), ("value",), False)
+
+
+def test_native_storage_refuses_a_class_reordering_the_attributes_of_its_base() -> None:
+    base: Any = nstruct.StructMeta("Base", (nstruct.Struct,), {"__slots__": ()})
+    nstruct.compile_plan(base, (_entry("first"), _entry("second")), ("first", "second"), False)
+    derived: Any = nstruct.StructMeta("Derived", (base,), {"__slots__": ()})
+    with pytest.raises(TypeError, match="keep the attributes of Base first"):
+        nstruct.compile_plan(derived, (_entry("second"), _entry("first")), (), False)
+
+    shorter: Any = nstruct.StructMeta("Shorter", (base,), {"__slots__": ()})
+    with pytest.raises(TypeError, match="keep the attributes of Base first"):
+        nstruct.compile_plan(shorter, (_entry("first"),), (), False)
+
+
+class _Inner(Immutable):
+    a: Any
+    b: Any
+    c: Any
+
+
+class _Outer(Immutable):
+    f: Any
+
+
+class _Holder(State):
+    inner: Any
+
+
+def test_writing_a_record_rebound_while_it_is_written_is_memory_safe() -> None:
+    # the code writing calls can rebind a plain record - what it held is kept until the
+    # writer is done with it. AddressSanitizer reports a use after free otherwise
+    holder: list[_Outer] = []
+
+    class Rebinding(datetime):
+        def isoformat(self, sep: str = "T", timespec: str = "auto") -> str:
+            object.__setattr__(holder[0], "f", None)
+            return "2020-01-01T00:00:00"
+
+    for method in ("to_json", "to_mapping"):
+        outer = _Outer(f=_Inner(a=Rebinding(2020, 1, 1), b="b", c=["c"]))
+        holder[:] = [outer]
+        getattr(_Holder(inner=outer), method)()
+
+
+def test_record_with_an_unbound_value_can_not_be_initialized_again() -> None:
+    record = _Inner(a=1, b=object(), c=2)
+    bound: Any = record.b
+    references: int = sys.getrefcount(bound)
+    object.__delattr__(record, "a")
+    with pytest.raises(TypeError, match="initialized already"):
+        record.__init__(a=2, b=3, c=4)  # pyright: ignore[reportUnknownMemberType]
+
+    assert record.b is bound
+    assert sys.getrefcount(bound) == references
+
+
+def test_conversions_of_records_rebound_while_converted_do_not_leak() -> None:
+    holder: list[_Outer] = []
+
+    class Rebinding(datetime):
+        def isoformat(self, sep: str = "T", timespec: str = "auto") -> str:
+            object.__setattr__(holder[0], "f", _Inner(a=1, b=2, c=3))
+            return "2020-01-01T00:00:00"
+
+    def operation() -> None:
+        outer = _Outer(f=_Inner(a=Rebinding(2020, 1, 1), b="b", c=[Leaf(number=1)]))
+        holder[:] = [outer]
+        state = _Holder(inner=outer)
+        state.to_json()
+        state.to_mapping()
+        state.to_basic_object()
+        state.to_mapping(recursive=False)
+        hash(state)
+        _ = state == _Holder(inner=outer)
+        copy.deepcopy(state)
+        holder.clear()
+
+    _assert_no_leak(operation)
+
+
+def test_refused_classes_do_not_leak() -> None:
+    def operation() -> None:
+        _swallow(lambda: types.new_class("Combined", (State, _Slotted)))
+        _swallow(lambda: types.new_class("Combined", (Immutable, _Plain)))
+        foreign: Any = nstruct.StructMeta("Foreign", (nstruct.Struct, _Slotted), {"__slots__": ()})
+        _swallow(lambda: nstruct.compile_plan(foreign, (_entry("value"),), ("value",), False))
+
+    _assert_no_leak(operation)
+
+
+class _Frozen(State):
+    tags: Sequence[str] = ()
+    scores: Mapping[str, int] = {}
+    unique: Set[int] = frozenset()
+    leaves: Sequence[Leaf] = ()
+    nested: Sequence[Sequence[int]] = ()
+    leaf: Leaf | None = None
+
+
+def _frozen_instances() -> Sequence[_Frozen]:
+    full: _Frozen = _Frozen(
+        tags=["a"],
+        scores={"a": 1},
+        unique={1},
+        leaves=[Leaf(number=1)],
+        nested=[[1, 2], [3]],
+        leaf=Leaf(number=2),
+    )
+    instances: list[_Frozen] = [
+        _Frozen(),
+        full,
+        _Frozen.from_json(full.to_json()),
+        _Frozen.validate(full.to_mapping()),
+        full.updating(tags=("b",)),
+    ]
+    # without the GIL only a container nothing else holds is untracked - and the memo of
+    # a deep copy holds the containers it copies, so those are left to the collector
+    if not sysconfig.get_config_var("Py_GIL_DISABLED"):
+        instances.append(copy.deepcopy(full))
+
+    return instances
+
+
+def test_instances_holding_nothing_cyclic_are_left_to_reference_counting() -> None:
+    # neither the instance nor the frozen containers it holds can ever be part of a
+    # cycle, so none of them is left for the collector to walk
+    for instance in _frozen_instances():
+        assert not gc.is_tracked(instance)
+        for name in instance.__match_args__:
+            assert not gc.is_tracked(getattr(instance, name)), name
+
+
+class _Loose(State):
+    value: Any
+
+
+def test_instances_which_can_be_part_of_a_cycle_stay_tracked() -> None:
+    record = _Outer(f=None)
+    for value in ([1], ([1],), (record,), {"a": [1]}, Map({"a": (record,)})):
+        assert gc.is_tracked(_Loose(value=value)), value
+
+    # an update looks at what replaced the values of an untracked instance
+    untracked = _Loose(value=(1,))
+    assert not gc.is_tracked(untracked)
+    assert gc.is_tracked(untracked.updating(value=[1]))
+    assert gc.is_tracked(untracked.updating(value=(record,)))
+    assert not gc.is_tracked(gc_free := untracked.updating(value=(2,)))
+    assert gc.is_tracked(gc_free.updating(value=([1],)))
+
+    deep: Any = ()
+    for _ in range(1_000):  # deeper than is looked into, without exhausting the stack
+        deep = (deep,)
+    assert gc.is_tracked(_Loose(value=deep))
+
+
+def test_cycle_through_a_rebound_record_is_collected() -> None:
+    finalized: list[bool] = []
+
+    class Finalized:
+        def __del__(self) -> None:
+            finalized.append(True)
+
+    record = _Outer(f=None)
+    state = _Loose(value=(record, Finalized()))
+    object.__setattr__(record, "f", state)  # the cycle: state -> tuple -> record -> state
+    del state, record
+    gc.collect()
+    assert finalized == [True]
 
 
 def test_classes_are_collected() -> None:

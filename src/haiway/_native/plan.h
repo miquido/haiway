@@ -24,6 +24,7 @@ typedef struct {
     Spec *spec;       /* owned by the spec object the plan tuple holds */
     PyObject *default_value;  /* () -> the validated default */
     PyObject *cached;  /* the validated default, when it is a constant nothing can change - NULL otherwise */
+    int cached_acyclic;  /* whether the cached default can never be part of a cycle - settled once */
     PyMemberDef member;  /* what the descriptor of the attribute reads */
 } FieldPlan;
 
@@ -180,19 +181,142 @@ field_for_key(CompiledPlan *plan, PyObject *key)
 }
 
 /*
+ * What the garbage collector has to look at. A value can be part of a cycle when it is
+ * tracked, or when it is untracked for now but can become tracked later - which only
+ * the containers which can never change are safe of: an exact tuple, frozenset,
+ * frozendict or Map, and a validated instance, each untracked only once nothing it
+ * holds can be part of a cycle. That is the rule of CPython itself, for its tuples.
+ */
+static inline int
+is_frozen_container(ModuleState *state, PyObject *value)
+{
+    return PyTuple_CheckExact(value) || PyFrozenSet_CheckExact(value) || PyFrozenDict_CheckExact(value)
+        || Py_IS_TYPE(value, (PyTypeObject *)state->map);
+}
+
+/* the rule for a value the collector tracks no longer, or never did */
+static inline int
+untracked_may_join_cycle(ModuleState *state, PyObject *value)
+{
+    if (is_frozen_container(state, value)) return 0;
+    if (is_struct(state, value)) {
+        CompiledPlan *plan = PLAN_OF(Py_TYPE(value));
+        return plan == NULL || !plan->reporting;  /* a plain record can be rebound */
+    }
+    return 1;
+}
+
+/* how deep `settle` looks into nested containers - what is deeper stays tracked */
+#define SETTLE_DEPTH 32
+
+/*
+ * Whether a value can be part of a cycle, untracking on the way the frozen containers
+ * holding nothing which can - so that an instance holding them is untracked as well,
+ * rather than every one of them waiting for the collector to find that out. No code of
+ * the user runs here. Without the GIL only a container nothing else holds is untracked,
+ * as the collector alone changes the tracking of what other threads can reach.
+ */
+static int settle_tracked(ModuleState *state, PyObject *value, int depth);
+
+/* `settle` of a value which is not a scalar - those are checked inline, being most of them */
+static int
+settle_gc(ModuleState *state, PyObject *value, int depth)
+{
+    if (!PyObject_GC_IsTracked(value)) return untracked_may_join_cycle(state, value);
+    return settle_tracked(state, value, depth);
+}
+
+static inline int
+settle(ModuleState *state, PyObject *value, int depth)
+{
+    return PyObject_IS_GC(value) && settle_gc(state, value, depth);
+}
+
+static int
+settle_tracked(ModuleState *state, PyObject *value, int depth)
+{
+    if (!is_frozen_container(state, value) || depth >= SETTLE_DEPTH) return 1;
+#ifdef Py_GIL_DISABLED
+    if (Py_REFCNT(value) != 1) return 1;
+#endif
+    if (PyTuple_CheckExact(value)) {
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(value); i++) {
+            if (settle(state, PyTuple_GET_ITEM(value, i), depth + 1)) return 1;
+        }
+    } else if (PyFrozenSet_CheckExact(value)) {
+        PyObject *iterator = PyObject_GetIter(value);
+        if (iterator == NULL) {
+            PyErr_Clear();
+            return 1;
+        }
+        PyObject *item;
+        int cyclic = 0;
+        while (!cyclic && (item = PyIter_Next(iterator)) != NULL) {
+            cyclic = settle(state, item, depth + 1);
+            Py_DECREF(item);
+        }
+        Py_DECREF(iterator);
+        if (PyErr_Occurred()) {
+            PyErr_Clear();
+            return 1;
+        }
+        if (cyclic) return 1;
+    } else {
+        /* a frozendict, or a Map - which is one, holding nothing else */
+        PyObject *key;
+        PyObject *item;
+        Py_ssize_t position = 0;
+        while (PyDict_Next(value, &position, &key, &item)) {
+            if (settle(state, key, depth + 1) || settle(state, item, depth + 1)) return 1;
+        }
+    }
+    PyObject_GC_UnTrack(value);
+    return 0;
+}
+
+/*
  * An instance is tracked by the garbage collector from its allocation. One holding
- * nothing the collector tracks can never be part of a cycle - and since nothing can
+ * nothing which can be part of a cycle never can be either - and since nothing can
  * ever be bound to it later, it is let go of for good once it is built. A plain record
  * can be rebound, so it stays tracked.
  */
 static inline void
 finish_construction(PyObject *self)
 {
-    if (!PLAN_OF(Py_TYPE(self))->reporting) return;
+    CompiledPlan *plan = PLAN_OF(Py_TYPE(self));
+    if (!plan->reporting) return;
     Py_ssize_t n = ITEM_COUNT(self);
     PyObject **items = ITEMS(self);
     for (Py_ssize_t i = 0; i < n; i++) {
-        if (items[i] != NULL && PyObject_GC_IsTracked(items[i])) return;
+        PyObject *value = items[i];
+        if (value == NULL || (value == plan->fields[i].cached && plan->fields[i].cached_acyclic)) continue;
+        if (settle(plan->state, value, 0)) return;
+    }
+    PyObject_GC_UnTrack(self);
+}
+
+/*
+ * An instance made of another by replacing some of its values. When the other is let
+ * go of by the collector, nothing it holds can be part of a cycle - so only the values
+ * which replaced its own are looked at.
+ */
+static inline void
+finish_update(PyObject *self, PyObject *source)
+{
+    CompiledPlan *plan = PLAN_OF(Py_TYPE(self));
+    if (!plan->reporting) return;
+    if (PyObject_GC_IsTracked(source)) {
+        finish_construction(self);
+        return;
+    }
+    Py_ssize_t n = ITEM_COUNT(self);
+    PyObject **items = ITEMS(self);
+    PyObject **carried = ITEMS(source);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject *value = items[i];
+        if (value == NULL || value == carried[i]) continue;
+        if (value == plan->fields[i].cached && plan->fields[i].cached_acyclic) continue;
+        if (settle(plan->state, value, 0)) return;
     }
     PyObject_GC_UnTrack(self);
 }
@@ -207,6 +331,59 @@ static int struct_init(PyObject *obj, PyObject *args, PyObject *kwargs);
 #define E_SPEC(e) PyTuple_GET_ITEM((e), 2)
 #define E_DEFAULT(e) PyTuple_GET_ITEM((e), 3)
 #define E_CONSTANT(e) PyTuple_GET_ITEM((e), 4)
+
+#ifndef Py_TPFLAGS_INLINE_VALUES
+#define Py_TPFLAGS_INLINE_VALUES 0
+#endif
+
+/*
+ * The values of an instance live right after its header, sized by its plan - which holds
+ * only when nothing else gives the instance a layout. CPython takes the layout of a class
+ * from `tp_base`, the one base adding the most to it, so that base has to be a Struct
+ * itself, and the class must not add anything of its own: no __dict__, no __weakref__,
+ * no slots, no variable size. The attributes of a base are read through its descriptors,
+ * by position, so they have to be the first of the class, in the same order.
+ */
+static int
+check_layout(ModuleState *state, PyTypeObject *type, PyObject *entries)
+{
+    PyTypeObject *base = type->tp_base;
+    if (base == NULL || !PyType_IsSubtype(base, state->struct_type)) {
+        PyErr_Format(
+            PyExc_TypeError, "%s can't be combined with %s, which gives its instances a layout of its own",
+            type->tp_name, base == NULL ? "nothing" : base->tp_name);
+        return -1;
+    }
+    if (type->tp_basicsize != base->tp_basicsize || type->tp_itemsize != 0 || type->tp_dictoffset != 0
+        || type->tp_weaklistoffset != 0
+        || (type->tp_flags & (Py_TPFLAGS_MANAGED_DICT | Py_TPFLAGS_MANAGED_WEAKREF | Py_TPFLAGS_INLINE_VALUES))) {
+        PyErr_Format(PyExc_TypeError, "%s can't have slots, a __dict__ or a __weakref__", type->tp_name);
+        return -1;
+    }
+    CompiledPlan *inherited = PLAN_OF(base);
+    if (inherited == NULL) {
+        /* Struct and Validated themselves - a class which failed to get a plan is no base */
+        if (base->tp_basicsize == (Py_ssize_t)sizeof(PyObject)) return 0;
+        PyErr_Format(PyExc_TypeError, "%s can't inherit from %s, which was never given a plan", type->tp_name, base->tp_name);
+        return -1;
+    }
+    Py_ssize_t n = PyTuple_GET_SIZE(entries);
+    int prefix = inherited->count <= n;
+    for (Py_ssize_t i = 0; prefix && i < inherited->count; i++) {
+        PyObject *name = E_NAME(PyTuple_GET_ITEM(entries, i));
+        if (name == inherited->fields[i].name) continue;
+        int same = PyUnicode_Compare(name, inherited->fields[i].name);
+        if (same == -1 && PyErr_Occurred()) return -1;
+        prefix = same == 0;
+    }
+    if (!prefix) {
+        PyErr_Format(
+            PyExc_TypeError, "%s has to keep the attributes of %s first, in the same order", type->tp_name,
+            base->tp_name);
+        return -1;
+    }
+    return 0;
+}
 
 /*
  * compile_plan(cls, plan, owned, reporting) - the plan of the class as C data, kept on
@@ -256,6 +433,7 @@ compile_plan(PyObject *mod, PyObject *args)
             return NULL;
         }
     }
+    if (check_layout(state, type, entries) < 0) return NULL;
 
     CompiledPlan *plan = PyMem_RawMalloc(sizeof(CompiledPlan) + (size_t)n * sizeof(FieldPlan));
     if (plan == NULL) return PyErr_NoMemory();
@@ -291,6 +469,7 @@ compile_plan(PyObject *mod, PyObject *args)
         field->spec = ((SpecObject *)E_SPEC(entry))->spec;
         field->default_value = E_DEFAULT(entry);
         field->cached = NULL;
+        field->cached_acyclic = 0;
         PyTuple_SET_ITEM(plan->names, 2 * i, Py_NewRef(field->name));
         PyTuple_SET_ITEM(plan->names, 2 * i + 1, Py_NewRef(field->alias != NULL ? field->alias : Py_None));
         /* the spellings point into the strings, which the plan holds */
@@ -336,6 +515,7 @@ compile_plan(PyObject *mod, PyObject *args)
                 Py_DECREF(validated);
                 if (failed) goto fail;
                 field->cached = validated;  /* the list holds it */
+                field->cached_acyclic = !settle(state, validated, 0);
             }
         }
     }

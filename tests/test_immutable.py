@@ -1,5 +1,6 @@
 import copy
 from collections.abc import Mapping
+from types import new_class
 from typing import Any, ClassVar
 
 from pytest import raises
@@ -35,6 +36,20 @@ def test_immutable_subclasses_cannot_be_inherited() -> None:
 
         class ChildImmutable(ParentImmutable):
             b: int
+
+
+class _SlottedMixin:
+    __slots__ = ("extra",)
+
+
+class _PlainMixin:
+    pass
+
+
+def test_immutable_can_not_be_combined_with_another_base() -> None:
+    for other in (_SlottedMixin, _PlainMixin, int):
+        with raises(TypeError, match="inherits from Immutable alone"):
+            new_class("Combined", (Immutable, other))
 
 
 class SlottedImmutable(Immutable):
