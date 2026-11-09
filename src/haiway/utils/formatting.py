@@ -58,6 +58,9 @@ def escape_controls(
     containing a line feed would otherwise be written as an additional,
     seemingly independent line.
     """
+    if text.isprintable():
+        return text  # every character escaped is a non-printable one - nothing to escape
+
     return text.translate(_CONTROL_ESCAPES_KEEPING_NEWLINES if allow_newlines else _CONTROL_ESCAPES)
 
 

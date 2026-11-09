@@ -19,7 +19,7 @@ from collections.abc import (
 from contextlib import contextmanager
 from contextvars import Context, ContextVar, Token, copy_context
 from inspect import iscoroutine
-from types import TracebackType
+from types import CoroutineType, FunctionType, MethodType, TracebackType
 from typing import Any, ClassVar, Self, cast, final
 from weakref import WeakKeyDictionary
 
@@ -140,6 +140,26 @@ class BackgroundTaskGroup:
     def shutdown_all(cls) -> None:
         for loop in tuple(cls._loops_tasks.keys()):
             cls.shutdown(loop=loop)
+
+
+def _coroutine[Result, **Arguments](
+    coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result],
+    /,
+    *args: Arguments.args,
+    **kwargs: Arguments.kwargs,
+) -> Coroutine[None, None, Result]:
+    # the coroutine a task runs - given, or made by calling what was given. a coroutine
+    # and a function, what is given the most, are told apart by their type: a function
+    # or a method is never a coroutine, and `iscoroutine` falls back to an abstract check
+    # for anything which is not one. the types are spelled for the checker alone, as
+    # they would be built anew on every call
+    if type(coro) is CoroutineType:
+        return cast("Coroutine[None, None, Result]", coro)
+
+    if type(coro) in (FunctionType, MethodType) or not iscoroutine(coro):
+        return cast("Callable[Arguments, Coroutine[None, None, Result]]", coro)(*args, **kwargs)
+
+    return cast("Coroutine[None, None, Result]", coro)
 
 
 @final
@@ -266,14 +286,7 @@ class ScopeTaskGroup:
                 "they would outlive the scope owning them - use ctx.spawn_background instead"
             )
 
-        coroutine: Coroutine[None, None, Result]
-        if iscoroutine(coro):
-            coroutine = cast(Coroutine[None, None, Result], coro)
-
-        else:
-            coroutine = cast(Callable[Arguments, Coroutine[None, None, Result]], coro)(
-                *args, **kwargs
-            )
+        coroutine: Coroutine[None, None, Result] = _coroutine(coro, *args, **kwargs)
 
         return tasks.create_task(
             coroutine,
@@ -413,14 +426,7 @@ class ContextTaskGroup:
                 **kwargs,
             )
 
-        coroutine: Coroutine[None, None, Result]
-        if iscoroutine(coro):
-            coroutine = cast(Coroutine[None, None, Result], coro)
-
-        else:
-            coroutine = cast(Callable[Arguments, Coroutine[None, None, Result]], coro)(
-                *args, **kwargs
-            )
+        coroutine: Coroutine[None, None, Result] = _coroutine(coro, *args, **kwargs)
 
         return task_group.create_task(
             coroutine,
@@ -435,14 +441,7 @@ class ContextTaskGroup:
         *args: Arguments.args,
         **kwargs: Arguments.kwargs,
     ) -> Task[Result]:
-        coroutine: Coroutine[None, None, Result]
-        if iscoroutine(coro):
-            coroutine = cast(Coroutine[None, None, Result], coro)
-
-        else:
-            coroutine = cast(Callable[Arguments, Coroutine[None, None, Result]], coro)(
-                *args, **kwargs
-            )
+        coroutine: Coroutine[None, None, Result] = _coroutine(coro, *args, **kwargs)
 
         # detached tasks run outside of any scope - inheriting the spawning
         # context would bind them to a scope which is free to complete while

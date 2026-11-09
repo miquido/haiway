@@ -81,19 +81,10 @@ class ContextIdentifier:
         /,
         kind: ScopeKind = "internal",
     ) -> Self:
-        try:  # check for current scope
-            current: Self = cls._context.get()
-            scope_id: UUID = random_identifier()
-            return cls(
-                name=name,
-                kind=kind,
-                scope_id=scope_id,
-                # create nested scope
-                parent_id=current.scope_id,
-                path=(*current.path, scope_id),
-            )
-
-        except LookupError:  # create root scope when missing
+        # read without raising - a root scope, entered with no scope around it, is
+        # entered for every request a server handles
+        current: Self | None = cls._context.get(None)
+        if current is None:  # create root scope when missing
             root_id: UUID = random_identifier()
             return cls(
                 name=name,
@@ -102,6 +93,16 @@ class ContextIdentifier:
                 parent_id=root_id,  # own id is parent_id for root
                 path=(root_id,),
             )
+
+        scope_id: UUID = random_identifier()
+        return cls(
+            name=name,
+            kind=kind,
+            scope_id=scope_id,
+            # create nested scope
+            parent_id=current.scope_id,
+            path=(*current.path, scope_id),
+        )
 
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextIdentifier")
 

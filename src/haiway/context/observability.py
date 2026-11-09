@@ -705,13 +705,15 @@ class ContextObservability:
         observability: Observability | Logger | None,
     ) -> Self:
         if observability is None:
-            try:  # check for current scope
+            # read without raising - a root scope has no observability around it
+            current: Self | None = cls._context.get(None)
+            if current is not None:  # inherit the one of the current scope
                 return cls(
                     scope=scope,
-                    observability=cls._context.get().observability,
+                    observability=current.observability,
                 )
 
-            except LookupError:  # create default logger observability on missing
+            else:  # create default logger observability on missing
                 return cls(
                     scope=scope,
                     observability=LoggerObservability(
