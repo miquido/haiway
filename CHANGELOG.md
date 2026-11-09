@@ -63,10 +63,11 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   and take the memory a `__slots__` object would. Creating, updating, validating a mapping and
   comparing an instance is 4 to 10 times faster than the Python implementation was, converting to a
   mapping, a basic object or JSON up to 100 times for large states, reading JSON 5 to 14 times.
-  An instance which can't be part of a reference cycle - which is what validated values are,
-  being made of tuples, frozensets, `Map`s, UUIDs and other instances - is left out of the
-  collections of the garbage collector together with those containers, and is reclaimed by
-  reference counting alone, however many are kept alive.
+  An instance proven unable to be part of a reference cycle - one holding scalars, tuples,
+  frozensets, `Map`s, UUIDs and other such instances only - is left out of the collections of the
+  garbage collector together with those containers, and is reclaimed by reference counting alone,
+  however many are kept alive. Instances holding mutable objects, through `Any` for example, or
+  containers nested too deep to check cheaply stay tracked.
 - **Native validation of every built-in annotation**, with the messages the annotations have always
   raised with. The code of the user - a `Validator`, a `Verifier`, a class validating itself, a
   default factory - is what still runs in Python.
@@ -83,11 +84,15 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
 - **The build backend is `setuptools`**, as no backend of `uv` compiles C. `uv` stays the tool for
   everything else.
 - **UUIDs, dates, times and datetimes convert faster.** `to_json` and `to_basic_object` spell them
-  natively - exactly as `str` and `isoformat` do - for the exact types, naive or in UTC, so a state
-  holding them converts about a third faster. Other timezones and subclasses keep their own
-  spelling.
+  natively - exactly as `str` and `isoformat` do - for the exact types, naive or, for datetimes,
+  in UTC, so a state holding them converts about a third faster. Times with a timezone, datetimes
+  in other timezones and subclasses keep their own spelling.
 - **The HTTP client costs less per request.** The facade reads the URL of a request once for what
   it records, and a streamed body hands its chunks over with fewer frames.
+- **Scopes cost less to enter and exit.** A nested scope is about 28% cheaper and a root scope
+  about 23%, reading the context no longer raises on a miss, and `ctx.spawn` skips the type checks
+  of a plain coroutine function, so a request handled through Starlette or FastAPI costs about 10%
+  less. `make benchmark-scope` measures the context (`benchmarks/scope_benchmark.py`).
 
 #### Fixed
 
