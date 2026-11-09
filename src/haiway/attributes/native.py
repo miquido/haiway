@@ -3,6 +3,7 @@ import inspect
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from enum import IntEnum
+from functools import partial
 from threading import Lock
 from types import (
     BuiltinFunctionType,
@@ -513,24 +514,44 @@ _DESCRIPTORS: Final[tuple[type[Any], ...]] = (
 
 def _owner(value: Any, /) -> tuple[Any, Any] | None:
     # what owns the signature of a callable, and its name within that owner
-    kind: Any = value.__class__
     if isinstance(value, type):
         return (value, None)
 
     if isinstance(value, BuiltinFunctionType | MethodWrapperType):
-        bound: Any = value.__self__
-        if bound is None:
-            return None  # nothing to hold it by
-
-        owner: Any = bound if isinstance(bound, ModuleType) else bound.__class__
-        return (owner, ("bound", value.__name__))
+        return _bound_owner(value)
 
     if isinstance(value, _DESCRIPTORS):
         objclass: Any = value.__objclass__
         return (objclass, ("descriptor", value.__name__))
 
+    return _object_owner(value)
+
+
+def _bound_owner(value: BuiltinFunctionType | MethodWrapperType, /) -> tuple[Any, Any] | None:
+    bound: Any = value.__self__
+    if bound is None:
+        return None  # nothing to hold it by
+
+    owner: Any = bound if isinstance(bound, ModuleType) else bound.__class__
+    return (owner, ("bound", value.__name__))
+
+
+def _object_owner(value: Any, /) -> tuple[Any, Any] | None:
+    # read of the object itself rather than of its kind - told apart by what it is
+    kind: Any = value.__class__
+    namespace: Any = getattr(value, "__dict__", None)
+    if isinstance(value, partial) or (isinstance(namespace, dict) and "__signature__" in namespace):
+        return None  # a signature of its own, which may differ for every one of its kind
+
+    if getattr(value, "__wrapped__", None) is not None:
+        try:  # a wrapper - a cached function, a static method - is called as what it wraps
+            return (inspect.unwrap(value), ("wrapped", kind))
+
+        except ValueError:
+            return None  # wrapping itself, without an end
+
     if isinstance(kind.__call__, _DESCRIPTORS):
-        return (kind, ("called", None))  # called through a __call__ of C
+        return (kind, ("called", None))  # called through a __call__ of C, the same for its kind
 
     return None  # its own signature, which may differ for every one of its kind
 

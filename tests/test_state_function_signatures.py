@@ -1,14 +1,16 @@
+import functools
 import inspect
 import itertools
 import random
-from collections.abc import Callable, Coroutine, Iterator, Sequence
+from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from functools import partial
 from typing import Any, Concatenate, Protocol, runtime_checkable
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from pytest import param
 
-from haiway import State, ValidationError
+from haiway import State, ValidationError, asynchronous, cache, retry, throttle, timeout
 from haiway._native import nstruct
 from haiway.attributes import native
 
@@ -578,3 +580,217 @@ def test_replaced_code_is_read_when_validating() -> None:
     function.__code__ = _renamed.__code__
     with pytest.raises(ValidationError):
         Holding(handler=function)
+
+
+# --- what is told of callables by their kind, without telling them apart wrongly ------------
+
+
+@functools.cache
+def _cached_one(first: int, /) -> int:
+    return first
+
+
+@functools.cache
+def _cached_two(first: int, second: int, /) -> int:
+    return first + second
+
+
+class _TakingTwo(State):
+    function: Callable[[int, int], int]
+
+
+@pytest.mark.parametrize("first", [_cached_one, _cached_two])
+def test_wrappers_of_one_kind_are_told_by_what_they_wrap(first: Any) -> None:
+    # whichever is told first, the other is told on its own - not by the answer of its kind
+    for value in (first, _cached_two if first is _cached_one else _cached_one):
+        if value is _cached_two:
+            assert _TakingTwo(function=value).function is value
+
+        else:
+            with pytest.raises(ValidationError):
+                _TakingTwo(function=value)
+
+
+def test_static_methods_held_are_told_by_what_they_wrap() -> None:
+    def two(first: int, second: int) -> int:
+        return first + second
+
+    def one(first: int) -> int:
+        return first
+
+    assert _TakingTwo(function=staticmethod(two)).function is not None  # pyright: ignore[reportArgumentType]
+    with pytest.raises(ValidationError):
+        _TakingTwo(function=staticmethod(one))  # pyright: ignore[reportArgumentType]
+
+
+def test_partials_giving_names_twice_are_told_each_on_its_own() -> None:
+    def three(first: int, second: int, *, third: int, fourth: int) -> int:
+        return first
+
+    def two(first: int, *, third: int, fourth: int) -> int:
+        return first
+
+    # a partial of a partial, both giving names - read by Python, never by the kind
+    taking = partial(partial(three, third=1), fourth=1)
+    refused = partial(partial(two, third=1), fourth=1)
+    assert _TakingTwo(function=taking).function is taking
+    with pytest.raises(ValidationError):
+        _TakingTwo(function=refused)
+
+    assert _TakingTwo(function=taking).function is taking
+
+
+class _Signed:
+    def __init__(self, signature: inspect.Signature) -> None:
+        self.__signature__ = signature
+
+    def __call__(self, *arguments: Any) -> int:
+        return 0
+
+
+def test_objects_with_signatures_of_their_own_are_told_each_on_its_own() -> None:
+    two = inspect.Signature(
+        [inspect.Parameter(name, inspect.Parameter.POSITIONAL_ONLY) for name in ("a", "b")]
+    )
+    one = inspect.Signature([inspect.Parameter("a", inspect.Parameter.POSITIONAL_ONLY)])
+    assert _TakingTwo(function=_Signed(two)) is not None  # pyright: ignore[reportArgumentType]
+    assert _TakingTwo(function=_Signed(one)) is not None  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.parametrize("mock", [Mock, MagicMock, AsyncMock], ids=["mock", "magic", "async"])
+def test_mocks_are_taken_for_any_function(mock: type[Any]) -> None:
+    value: Any = mock()
+    assert Holding(handler=value).handler is value
+    assert _TakingTwo(function=value).function is value
+
+
+async def _fetch(key: str, /, *, fresh: bool = False) -> str:
+    return key
+
+
+def _fetch_blocking(key: str, /, *, fresh: bool = False) -> str:
+    return key
+
+
+class Fetching(Protocol):
+    async def __call__(self, key: str, /, *, fresh: bool = False) -> str: ...
+
+
+@pytest.mark.parametrize(
+    "decorated",
+    [
+        param(lambda: cache(_fetch), id="cache"),
+        param(lambda: cache(limit=2)(_fetch), id="cache with a limit"),
+        param(lambda: retry(_fetch), id="retry"),
+        param(lambda: retry(limit=2)(_fetch), id="retry with a limit"),
+        param(lambda: asynchronous()(_fetch_blocking), id="asynchronous"),
+        param(lambda: throttle(limit=2)(_fetch), id="throttle"),
+        param(lambda: timeout(1)(_fetch), id="timeout"),
+    ],
+)
+def test_decorated_functions_are_taken_as_what_they_decorate(
+    decorated: Callable[[], Any],
+) -> None:
+    class Holder(State):
+        fetching: Fetching
+
+    class Plain(State):
+        fetching: Callable[[str], Coroutine[Any, Any, str]]
+
+    value: Any = decorated()
+    assert Holder(fetching=value).fetching is value
+    assert Plain(fetching=value).fetching is value
+
+
+# --- every call of told parameters which more may follow, completed somehow -----------------
+
+
+def _completes_every_call(
+    value: Any,
+    told: Sequence[inspect.Parameter],
+    taking: Sequence[inspect.Parameter],
+) -> bool:
+    # each call of the told parameters has to be made to work by giving more - positional
+    # arguments, or the names of what is left - as a parameter specification may give anything
+    # a partial given its first argument takes the rest at the positions of the parameters
+    keywords: Mapping[str, Any] = value.keywords if isinstance(value, partial) else {}
+    positional: list[inspect.Parameter] = [
+        parameter
+        for parameter in taking
+        if parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    for arguments, named in _calls(told):
+        for extra in range(6):
+            given: int = len(arguments) + extra
+            completed: dict[str, Any] = {
+                parameter.name: 0
+                for index, parameter in enumerate(taking)
+                if parameter.name not in keywords
+                and parameter.name not in named
+                and (
+                    parameter.kind is parameter.KEYWORD_ONLY
+                    or (
+                        parameter.kind is parameter.POSITIONAL_OR_KEYWORD
+                        and positional.index(parameter) >= given
+                    )
+                )
+            }
+            try:
+                value(*arguments, *((0,) * extra), **named, **completed)
+
+            except TypeError:
+                continue
+
+            break
+
+        else:
+            return False
+
+    return True
+
+
+def _open_protocol(told: Sequence[inspect.Parameter]) -> type[State]:
+    namespace: dict[str, Any] = {"Protocol": Protocol, "State": State}
+    signature: str = str(inspect.Signature(told))[1:-1]
+    exec(  # nosec: B102
+        "class Told[**P](Protocol):\n"
+        f"    def __call__(self, {signature + ', ' if signature else ''}"
+        "*args: P.args, **kwargs: P.kwargs): ...\n"
+        "class Holder(State):\n"
+        "    value: Told[...]\n",
+        namespace,
+    )
+    return namespace["Holder"]
+
+
+def test_functions_are_accepted_exactly_when_they_complete_every_call_of_an_open_protocol() -> None:
+    generator = random.Random(41)
+    checked: dict[bool, int] = {True: 0, False: 0}
+    for _ in range(150):
+        told: list[inspect.Parameter] = [
+            parameter
+            for parameter in _random_parameters(generator)
+            if parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD)
+        ]
+        holder: type[State] = _open_protocol(told)
+        for _ in range(12):
+            taking: list[inspect.Parameter] = _random_parameters(generator)
+            for kind, value in _variants(generator, taking):
+                expected: bool = _completes_every_call(value, told, taking)
+                try:
+                    holder(value=value)  # pyright: ignore[reportCallIssue]
+                    accepted = True
+
+                except ValidationError:
+                    accepted = False
+
+                checked[expected] += 1
+                assert accepted == expected, (
+                    kind,
+                    inspect.Signature(told),
+                    inspect.Signature(taking),
+                    value,
+                )
+
+    assert checked[True] > 500
+    assert checked[False] > 100

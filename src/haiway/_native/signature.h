@@ -196,6 +196,41 @@ calls_taken(const Parameter *taking, Py_ssize_t taking_count, const Parameter *t
     return 1;
 }
 
+/* the fewest told positional parameters given by position - every one after it can be given
+ * by name, or left out for its default */
+static Py_ssize_t
+fewest_positional(const Parameter *told, Py_ssize_t told_positional)
+{
+    Py_ssize_t fewest = told_positional;
+    while (fewest > 0
+        && (told[fewest - 1].kind == PARAMETER_POSITIONAL_OR_KEYWORD || told[fewest - 1].defaulted)) {
+        fewest--;
+    }
+    return fewest;
+}
+
+/* whether parameters take the calls of told parameters which more may follow - those of a
+ * parameter specification, of which nothing is known. The told ones have to fit, by position
+ * and by name - what follows may give whatever else the parameters need, so none of them has
+ * to be given. A name given past more positional arguments is the harder to take, so each is
+ * tried given at its own position - 1, 0, or -1 on an error */
+static int
+open_calls_taken(const Parameter *taking, Py_ssize_t taking_count, const Parameter *told, Py_ssize_t told_count)
+{
+    Py_ssize_t taking_positional = positional_count(taking, taking_count);
+    Py_ssize_t told_positional = positional_count(told, told_count);
+    if (told_positional > taking_positional && !has_parameter(taking, taking_count, PARAMETER_VAR_POSITIONAL)) {
+        return 0;
+    }
+    int any_keywords = has_parameter(taking, taking_count, PARAMETER_VAR_KEYWORD);
+    for (Py_ssize_t i = fewest_positional(told, told_positional); i < told_positional; i++) {
+        if (told[i].kind != PARAMETER_POSITIONAL_OR_KEYWORD) continue;
+        int r = name_taken(taking, taking_count, any_keywords, told[i].name, i);
+        if (r <= 0) return r;
+    }
+    return 1;
+}
+
 /* whether parameters take every call the told ones are made with - 1, 0, or -1 on an error.
  * The told positional parameters are given by position up to some of them, the rest by name
  * or left out for their defaults, and the variadic ones some more - each such number of them
@@ -206,18 +241,12 @@ signature_fits(const Parameter *taking, Py_ssize_t taking_count, const Parameter
 {
     Py_ssize_t taking_positional = positional_count(taking, taking_count);
     Py_ssize_t told_positional = positional_count(told, told_count);
-    int taking_variadic = has_parameter(taking, taking_count, PARAMETER_VAR_POSITIONAL);
-    if (extensible) return told_positional <= taking_positional || taking_variadic;
+    if (extensible) return open_calls_taken(taking, taking_count, told, told_count);
     if (has_parameter(told, told_count, PARAMETER_VAR_KEYWORD)
         && !has_parameter(taking, taking_count, PARAMETER_VAR_KEYWORD)) {
         return 0; /* given a name nothing else takes */
     }
-    /* the fewest given by position - all after it are given by name, or left out */
-    Py_ssize_t fewest = told_positional;
-    while (fewest > 0
-        && (told[fewest - 1].kind == PARAMETER_POSITIONAL_OR_KEYWORD || told[fewest - 1].defaulted)) {
-        fewest--;
-    }
+    Py_ssize_t fewest = fewest_positional(told, told_positional);
     int told_variadic = has_parameter(told, told_count, PARAMETER_VAR_POSITIONAL);
     for (Py_ssize_t positional = fewest; positional <= told_positional; positional++) {
         int r = calls_taken(taking, taking_count, told, told_count, positional, positional);
