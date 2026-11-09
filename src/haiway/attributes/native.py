@@ -1,3 +1,4 @@
+import annotationlib
 import inspect
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -11,7 +12,7 @@ from types import (
     ModuleType,
     WrapperDescriptorType,
 )
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, get_origin
 from weakref import WeakKeyDictionary
 
 from haiway._native import nstruct
@@ -47,6 +48,7 @@ from haiway.attributes.annotations import (
     UUIDAttribute,
     ValidableAttribute,
     _no_verify,  # pyright: ignore[reportPrivateUsage]
+    is_callback_protocol,
 )
 from haiway.attributes.attribute import Attribute
 from haiway.types.immutable import Immutable
@@ -219,16 +221,13 @@ def _describe_compound(  # noqa: C901, PLR0911, PLR0912
 
     match annotation:
         case FunctionAttribute():
-            positional: int = annotation.positional
-            extensible: bool = annotation.extensible
             return (
                 Kind.FUNCTION,
                 annotation,
                 None,
                 None,
                 _verifying(annotation),
-                # the arguments a value has to take - none to check when anything goes
-                None if extensible and not positional else (positional, extensible),
+                _signature_description(annotation),
                 (),
             )
 
@@ -421,42 +420,79 @@ def validate(
     return nstruct.validate(spec, value)
 
 
+# how a function is called - the parameters it is told, whether others may follow, and how
+# the errors word it - the data of the spec of a function
+type SignatureDescription = tuple[tuple[tuple[str | None, int, bool], ...], bool, str]
+
+
+def _parameters(
+    parameters: Sequence[inspect.Parameter],
+    /,
+) -> tuple[tuple[str | None, int, bool], ...]:
+    return tuple(
+        (
+            None if parameter.kind is parameter.POSITIONAL_ONLY else parameter.name,
+            int(parameter.kind),
+            parameter.default is not parameter.empty,
+        )
+        for parameter in parameters
+    )
+
+
+def _signature_description(annotation: FunctionAttribute, /) -> SignatureDescription | None:
+    parameters: Sequence[inspect.Parameter] = annotation.parameters
+    extensible: bool = annotation.extensible
+    if extensible and not parameters:
+        return None  # called any way at all - nothing to check
+
+    origin: Any = get_origin(annotation.base) or annotation.base
+    description: str
+    if is_callback_protocol(origin):
+        description = f"as {origin.__name__}{inspect.Signature(parameters)}"
+
+    else:
+        description = (
+            f"with {len(parameters)} positional argument{'' if len(parameters) == 1 else 's'}"
+        )
+
+    return (_parameters(parameters), extensible, description)
+
+
 def accepts(
     value: Any,
-    positional: int,
-    extensible: bool,
+    described: SignatureDescription,
     /,
 ) -> bool:
     """
-    Tell whether a callable which is not a plain function takes the arguments it is given.
+    Tell whether a callable which is not a plain function can be called the way described.
 
     Parameters
     ----------
     value : Any
-        A callable - a class, a partial, a builtin or an object with ``__call__``.
-    positional : int
-        The number of arguments it is given positionally.
-    extensible : bool
-        Whether arguments the annotation does not tell may follow.
+        A callable - a class, a builtin, a descriptor or an object called through a ``__call__``
+        which is not a function.
+    described : SignatureDescription
+        The parameters the callable is called with, whether others may follow, and how the
+        errors word it.
 
     Returns
     -------
     bool
-        ``False`` only when its signature proves it can't take them - a callable without
-        a signature to read is accepted.
+        ``False`` only when its signature proves it can't be called that way - a callable
+        without a signature to read is accepted.
     """
     found: tuple[_Answers, Any] | None = _answers(value)
     if found is None:
-        return _accepts(value, positional, extensible)
+        return _accepts(value, described)
 
     answers, name = found
     with _ANSWERS_LOCK:
-        accepted: bool | None = answers.get((name, positional, extensible))
+        accepted: bool | None = answers.get((name, described))
 
     if accepted is None:
-        accepted = _accepts(value, positional, extensible)
+        accepted = _accepts(value, described)
         with _ANSWERS_LOCK:
-            answers[(name, positional, extensible)] = accepted
+            answers[(name, described)] = accepted
 
     return accepted
 
@@ -465,7 +501,7 @@ def accepts(
 # what a builtin is bound to, the type a descriptor is of, or the class of an object - as
 # reading a signature takes microseconds. Held weakly by that owner, so nothing is kept alive
 # by having been asked about
-type _Answers = dict[tuple[Any, int, bool], bool]
+type _Answers = dict[tuple[Any, SignatureDescription], bool]
 _ANSWERS: Final[WeakKeyDictionary[Any, _Answers]] = WeakKeyDictionary()
 _ANSWERS_LOCK: Final[Lock] = Lock()
 _DESCRIPTORS: Final[tuple[type[Any], ...]] = (
@@ -513,26 +549,23 @@ def _answers(value: Any, /) -> tuple[_Answers, Any] | None:
         return None
 
 
-def _accepts(value: Any, positional: int, extensible: bool, /) -> bool:
+def _accepts(value: Any, described: SignatureDescription, /) -> bool:
     signature: inspect.Signature
     try:
-        signature = inspect.signature(value)
+        signature = inspect.signature(
+            value,
+            annotation_format=annotationlib.Format.FORWARDREF,
+        )
 
     except TypeError, ValueError:
         return True  # what can't be told is not refused
 
-    arguments: tuple[None, ...] = (None,) * positional
-    try:
-        if extensible:  # the arguments which follow are not known - only these have to fit
-            signature.bind_partial(*arguments)
-
-        else:
-            signature.bind(*arguments)
-
-    except TypeError:
-        return False
-
-    return True
+    # compared the way the parameters of a function are - one rule for both
+    return nstruct.signature_fits(
+        _parameters(tuple(signature.parameters.values())),
+        described[0],
+        described[1],
+    )
 
 
 def enum_values(
@@ -604,7 +637,7 @@ class ValidationHooks(Immutable):
     report: Callable[[str, Exception], Any]  # raises a failure with its position
     unexpected: Callable[[type[Any], Any], Any]  # refuses a key of a mapping
     describe: Callable[[Any], Description]  # the description of an annotation resolved late
-    accepts: Callable[[Any, int, bool], bool]  # whether a callable takes the arguments given
+    accepts: Callable[[Any, Any], bool]  # whether a callable can be called the way described
     enum_values: Callable[[Any, bool], str]
     literal_values: Callable[[Sequence[Any]], str]
     b64decode: Callable[[str], bytes]

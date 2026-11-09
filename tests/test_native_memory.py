@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence, Set
 from datetime import date, datetime, time, timedelta
 from enum import IntEnum, StrEnum
 from pathlib import Path
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict
 from uuid import UUID, SafeUUID
 
 import pytest
@@ -999,3 +999,96 @@ def test_classes_held_as_functions_are_collected() -> None:
     references = [define() for _ in range(20)]
     gc.collect()
     assert all(reference() is None for reference in references)
+
+
+class _CalledBack(Protocol):
+    def __call__(self, request: str, /, retries: int, *, timeout: float = 1.0) -> str: ...
+
+
+def test_checking_protocol_functions_does_not_leak() -> None:
+    class Holding(State):
+        handler: _CalledBack
+
+    def exact(request: str, /, retries: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def renamed(request: str, /, attempts: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def based(client: object, request: str, /, retries: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def named(request: str, /, retries: int, *, timeout: float = 1.0, client: object) -> str:
+        return request
+
+    class Service:
+        def __call__(self, request: str, /, retries: int, *, timeout: float = 1.0) -> str:
+            return request
+
+    class Constructed:
+        def __init__(self, request: str, /, retries: int, *, timeout: float = 1.0) -> None:
+            pass
+
+    told = (("a", 1, False), (None, 0, True), ("b", 3, False), ("keywords", 4, False))
+
+    def operation() -> None:
+        Holding(handler=exact)
+        Holding(handler=Service())
+        Holding(handler=functools.partial(based, object()))
+        Holding(handler=functools.partial(named, client=object()))
+        Holding(handler=Constructed)  # pyright: ignore[reportArgumentType]
+        _swallow(lambda: Holding(handler=renamed))  # pyright: ignore[reportArgumentType]
+        _swallow(lambda: Holding(handler=functools.partial(exact, "request")))  # pyright: ignore[reportArgumentType]
+        _swallow(lambda: Holding(handler=functools.partial(exact, unknown=1)))  # pyright: ignore[reportArgumentType]
+        _swallow(lambda: Holding(handler=1))  # pyright: ignore[reportArgumentType]
+        nstruct.signature_fits(told, told, False)
+        _swallow(lambda: nstruct.signature_fits(((1, 1, False),), told, False))
+        _swallow(lambda: nstruct.signature_fits(told, "not a tuple", False))  # pyright: ignore[reportArgumentType]
+
+    _assert_no_leak(operation)
+
+
+def test_functions_are_checked_from_many_threads_at_once() -> None:
+    # every kind of callable at once - the answers Python caches are shared by the threads
+    class Holding(State):
+        handler: _CalledBack
+
+    class Factory(State):
+        factory: Callable[[], object]
+
+    def exact(request: str, /, retries: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def renamed(request: str, /, attempts: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    class Constructed:
+        def __init__(self, request: str, /, retries: int, *, timeout: float = 1.0) -> None:
+            pass
+
+    failures: list[BaseException] = []
+    barrier = threading.Barrier(8)
+
+    def work(index: int) -> None:
+        try:
+            barrier.wait()
+            for _ in range(200):
+                assert Holding(handler=exact).handler is exact
+                assert Holding(handler=functools.partial(exact, timeout=index)) is not None
+                Holding(handler=Constructed)  # pyright: ignore[reportArgumentType]
+                Factory(factory=dict)
+                Factory(factory=object)
+                with pytest.raises(ValidationError):
+                    Holding(handler=renamed)  # pyright: ignore[reportArgumentType]
+
+        except BaseException as exc:
+            failures.append(exc)
+
+    threads = [threading.Thread(target=work, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    assert failures == []

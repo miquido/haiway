@@ -1,6 +1,7 @@
 /* The native storage and conversions of haiway.State - see common.h. */
 
 #include "common.h"
+#include "signature.h"
 #include "spec.h"
 #include "plan.h"
 #include "construct.h"
@@ -182,6 +183,7 @@ add_kinds(PyObject *module)
 
 static PyMethodDef module_methods[] = {
     {"compile_spec", compile_spec, METH_O, NULL},
+    {"signature_fits", (PyCFunction)(void (*)(void))signature_fits_native, METH_FASTCALL, NULL},
     {"validate", (PyCFunction)(void (*)(void))validate_native, METH_FASTCALL, NULL},
     {"check", (PyCFunction)(void (*)(void))check_native, METH_FASTCALL, NULL},
     {"compile_plan", compile_plan, METH_VARARGS, NULL},

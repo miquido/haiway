@@ -56,13 +56,17 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `case Missing:` captures the value.
 - The `validate` and `check` methods of the attribute annotations are gone - the compiled spec of
   an `Attribute` validates (`haiway.attributes.native.compile` and `validate`).
-- **`Callable` fields check that a value takes the arguments the annotation gives it.** A
+- **Function fields check that a value can be called the way the annotation says.** A
   `Callable[[int, str], None]` refuses a function of one argument, or one requiring a third, when
-  the state is created instead of failing once it is called. Arguments left open - `...`, a
-  `ParamSpec`, what follows `Concatenate` - and the types of arguments are not checked.
-  `FunctionAttribute.arguments`, which was always empty, is replaced by `positional` and
-  `extensible`, read from the annotation. Migration: fix the functions the check refuses - they
-  could not have been called the way the annotation says.
+  the state is created instead of failing once it is called. A protocol whose only member is
+  `__call__` is checked by that signature - every call it allows has to be one the value takes,
+  so a parameter which may be given by name has to have the same name, and one which may be left
+  out a default - where it accepted anything callable before, and a protocol of `__call__` alone
+  no longer needs `@runtime_checkable`. Arguments left open - `...`, a `ParamSpec`, what follows
+  `Concatenate`, `*Ts` - and the types of arguments are not checked. `FunctionAttribute.arguments`,
+  which was always empty, is replaced by `parameters` and `extensible`, read from the annotation.
+  Migration: fix the functions the check refuses - they could not have been called the way the
+  annotation says.
 - **`ContextObservability.record_log` takes the format arguments as one tuple** -
   `record_log(level, message, (first, second), exception=None)` - handing them on without
   unpacking and packing them again. Migration: wrap the arguments in a tuple; `ctx.log_*` are
