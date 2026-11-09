@@ -1,12 +1,12 @@
 import copy
 import weakref
 from collections.abc import Mapping, Sequence, Set
-from typing import Annotated, Any
+from typing import Annotated, Any, Self
 
 import pytest
 from pytest import mark, raises
 
-from haiway import Alias, Missing, State, ValidationError
+from haiway import Alias, Immutable, Missing, State, ValidationError
 
 
 class Point(State):
@@ -113,6 +113,52 @@ def test_deepcopy_never_exposes_a_partially_copied_instance() -> None:
         copy.deepcopy(_Holding(first=1, rest=Failing()), memo)
 
     assert not any(isinstance(value, _Holding) for value in (*seen, *memo.values()))
+
+
+class _Record(Immutable):
+    value: int
+
+
+class _Recording(State):
+    record: _Record
+
+
+class _CopiedAsItself(State):
+    value: int
+
+    def __deepcopy__(self, memo: dict[int, Any] | None) -> Self:
+        return self
+
+
+class _Wrapping(State):
+    inner: _CopiedAsItself
+
+
+def test_deepcopy_uses_the_copy_of_held_instances_defining_their_own() -> None:
+    # an Immutable is its own copy, and equal to itself alone - the copy holding it has to
+    # hold the very record, or it would not be equal to what it was copied from
+    recording = _Recording(record=_Record(value=1))
+    duplicate = copy.deepcopy(recording)
+    assert duplicate == recording
+    assert duplicate.record is recording.record
+
+    wrapping = _Wrapping(inner=_CopiedAsItself(value=1))
+    assert copy.deepcopy(wrapping).inner is wrapping.inner
+
+
+class _Hashable:
+    # mutable, and hashable by identity
+    def __init__(self) -> None:
+        self.items: list[int] = []
+
+
+def test_deepcopy_copies_a_frozenset_the_way_copy_does() -> None:
+    held = _Hashable()
+    duplicate = copy.deepcopy(_Holding(first=1, rest=frozenset({held})))
+    assert next(iter(duplicate.rest)) is not held  # copied with what it holds
+
+    atomic = frozenset({1, "a"})
+    assert copy.deepcopy(_Holding(first=1, rest=atomic)).rest is atomic
 
 
 def test_deepcopy_keeps_a_value_referring_back_to_the_instance() -> None:

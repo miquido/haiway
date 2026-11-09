@@ -45,6 +45,7 @@ typedef struct CompiledPlan {
     KeySlot *key_slots;  /* every name and alias by the hash of its bytes, open addressing */
     size_t key_mask;
     int reporting;    /* whether a failure is reported at its position, and a key which is not an attribute refused */
+    int native_copy;  /* whether `__deepcopy__` is the native one - a class overriding it is copied through it */
     Py_ssize_t count;
     FieldPlan fields[];
 } CompiledPlan;
@@ -438,6 +439,7 @@ compile_plan(PyObject *mod, PyObject *args)
     plan->cached = NULL;
     plan->key_slots = NULL;
     plan->reporting = reporting;
+    plan->native_copy = 1;
     plan->count = n;
     plan->names = PyTuple_New(2 * n);
     plan->json_keys = PyTuple_New(n);
@@ -542,6 +544,18 @@ compile_plan(PyObject *mod, PyObject *args)
     /* the size of an instance, and the call of the class - a class taking over its
      * construction, or one with more attributes than the fast path matches, is called
      * the usual way */
+    /* a class with a `__deepcopy__` of its own - an Immutable returning itself, say - is copied
+     * by it, also where it is held by another instance */
+    PyObject *own_copy = PyObject_GetAttrString(cls, "__deepcopy__");
+    PyObject *native_copy = own_copy == NULL ? NULL : PyObject_GetAttrString((PyObject *)state->struct_type, "__deepcopy__");
+    if (native_copy == NULL) {
+        Py_XDECREF(own_copy);
+        goto fail;
+    }
+    plan->native_copy = own_copy == native_copy;
+    Py_DECREF(own_copy);
+    Py_DECREF(native_copy);
+
     type->tp_basicsize = (Py_ssize_t)sizeof(PyObject) + n * (Py_ssize_t)sizeof(PyObject *);
     PLAN_OF(type) = plan;
     if (type->tp_new == struct_new && type->tp_init == struct_init && n <= FAST_MAX_FIELDS) {

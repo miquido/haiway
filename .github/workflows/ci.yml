@@ -9,6 +9,10 @@ on:
     branches:
       - "*"
 
+# both jobs only build and test - the token reads the repository and nothing else
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -21,6 +25,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install uv and set the python version
         uses: astral-sh/setup-uv@v10.3.3
@@ -60,6 +66,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install uv and set the python version
         uses: astral-sh/setup-uv@v10.3.3

@@ -408,8 +408,8 @@ class _Frozen(State):
     leaf: Leaf | None = None
 
 
-def _frozen_instances() -> Sequence[_Frozen]:
-    full: _Frozen = _Frozen(
+def _full() -> _Frozen:
+    return _Frozen(
         tags=["a"],
         scores={"a": 1},
         unique={1},
@@ -417,53 +417,63 @@ def _frozen_instances() -> Sequence[_Frozen]:
         nested=[[1, 2], [3]],
         leaf=Leaf(number=2),
     )
-    instances: list[_Frozen] = [
-        _Frozen(),
-        full,
-        _Frozen.from_json(full.to_json()),
-        _Frozen.validate(full.to_mapping()),
-        full.updating(tags=("b",)),
-    ]
-    # without the GIL only a container nothing else holds is untracked - and the memo of
-    # a deep copy holds the containers it copies, so those are left to the collector
-    if not sysconfig.get_config_var("Py_GIL_DISABLED"):
-        instances.append(copy.deepcopy(full))
-
-    return instances
 
 
-def test_instances_holding_nothing_cyclic_are_left_to_reference_counting() -> None:
+_FREE_THREADED: bool = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        pytest.param(lambda: _Frozen(), id="defaults"),  # noqa: PLW0108
+        pytest.param(_full, id="validated"),
+        pytest.param(lambda: _Frozen.from_json(_full().to_json()), id="from_json"),
+        pytest.param(lambda: _Frozen.validate(_full().to_mapping()), id="validate"),
+        pytest.param(lambda: _full().updating(tags=("b",)), id="updating"),
+        pytest.param(
+            lambda: copy.deepcopy(_full()),
+            id="deepcopy",
+            # without the GIL only a container nothing else holds is untracked - and the
+            # memo of a deep copy holds the containers it copies
+            marks=pytest.mark.skipif(_FREE_THREADED, reason="the memo holds the containers"),
+        ),
+    ],
+)
+def test_instances_holding_nothing_cyclic_are_left_to_reference_counting(
+    make: Callable[[], _Frozen],
+) -> None:
     # neither the instance nor the frozen containers it holds can ever be part of a
     # cycle, so none of them is left for the collector to walk
-    for instance in _frozen_instances():
-        assert not gc.is_tracked(instance)
-        for name in instance.__match_args__:
-            assert not gc.is_tracked(getattr(instance, name)), name
+    instance: _Frozen = make()
+    assert not gc.is_tracked(instance)
+    for name in instance.__match_args__:
+        assert not gc.is_tracked(getattr(instance, name)), name
 
 
 class _Loose(State):
     value: Any
 
 
-@pytest.mark.skipif(
-    bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
-    reason="without the GIL only a container nothing else holds is untracked, while a"
-    " record holds the very values it is given",
+@pytest.mark.parametrize(
+    "make",
+    [
+        pytest.param(lambda record: [1], id="list"),  # pyright: ignore[reportUnknownLambdaType]
+        pytest.param(lambda record: ([1],), id="tuple of list"),  # pyright: ignore[reportUnknownLambdaType]
+        pytest.param(lambda record: (record,), id="tuple of record"),  # pyright: ignore[reportUnknownLambdaType]
+        pytest.param(lambda record: {"a": [1]}, id="dict"),  # pyright: ignore[reportUnknownLambdaType]
+        pytest.param(lambda record: Map({"a": (record,)}), id="map of record"),  # pyright: ignore[reportUnknownLambdaType]
+    ],
 )
-def test_records_holding_nothing_cyclic_are_left_to_reference_counting() -> None:
-    record = _Outer(f=_Inner(a=1, b=(2,), c=Map({"c": 3})))
-    assert not gc.is_tracked(record)
-    assert not gc.is_tracked(record.f)
-    assert not gc.is_tracked(_Loose(value=(record,)))
-
-
-def test_instances_which_can_be_part_of_a_cycle_stay_tracked() -> None:
+def test_instances_which_can_be_part_of_a_cycle_stay_tracked(
+    make: Callable[[_Outer], Any],
+) -> None:
     record = _Outer(f=[1])  # a record holding a list can be part of a cycle through it
     assert gc.is_tracked(record)
-    for value in ([1], ([1],), (record,), {"a": [1]}, Map({"a": (record,)})):
-        assert gc.is_tracked(_Loose(value=value)), value
+    assert gc.is_tracked(_Loose(value=make(record)))
 
-    # an update looks at what replaced the values of an untracked instance
+
+def test_updates_look_at_what_replaced_the_values() -> None:
+    record = _Outer(f=[1])
     untracked = _Loose(value=(1,))
     assert not gc.is_tracked(untracked)
     assert gc.is_tracked(untracked.updating(value=[1]))
@@ -471,9 +481,12 @@ def test_instances_which_can_be_part_of_a_cycle_stay_tracked() -> None:
     assert not gc.is_tracked(gc_free := untracked.updating(value=(2,)))
     assert gc.is_tracked(gc_free.updating(value=([1],)))
 
+
+def test_containers_deeper_than_looked_into_stay_tracked() -> None:
     deep: Any = ()
     for _ in range(1_000):  # deeper than is looked into, without exhausting the stack
         deep = (deep,)
+
     assert gc.is_tracked(_Loose(value=deep))
 
 

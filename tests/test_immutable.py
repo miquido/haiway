@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from types import new_class
 from typing import Any, ClassVar
 
-from pytest import raises
+from pytest import mark, raises
 
 from haiway import Default, Immutable
 from haiway.types.immutable import attribute_names, namespace_annotations
@@ -46,10 +46,14 @@ class _PlainMixin:
     pass
 
 
-def test_immutable_can_not_be_combined_with_another_base() -> None:
-    for other in (_SlottedMixin, _PlainMixin, int):
-        with raises(TypeError, match="inherits from Immutable alone"):
-            new_class("Combined", (Immutable, other))
+@mark.parametrize(
+    "other",
+    [_SlottedMixin, _PlainMixin, int],
+    ids=["slotted", "plain", "builtin"],
+)
+def test_immutable_can_not_be_combined_with_another_base(other: type) -> None:
+    with raises(TypeError, match="inherits from Immutable alone"):
+        new_class("Combined", (Immutable, other))
 
 
 class SlottedImmutable(Immutable):

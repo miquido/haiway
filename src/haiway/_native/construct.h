@@ -428,7 +428,7 @@ is_atomic(ModuleState *state, PyObject *value)
 {
     return value == Py_None || value == state->missing || PyUnicode_CheckExact(value) || PyLong_CheckExact(value)
         || PyFloat_CheckExact(value) || PyBool_Check(value) || PyBytes_CheckExact(value)
-        || PyFrozenSet_CheckExact(value) || Py_IS_TYPE(value, (PyTypeObject *)state->map)
+        || Py_IS_TYPE(value, (PyTypeObject *)state->map)
         || Py_IS_TYPE(value, (PyTypeObject *)state->meta) || PyType_Check(value)
         || Py_IS_TYPE(value, (PyTypeObject *)state->uuid) || Py_IS_TYPE(value, (PyTypeObject *)state->datetime)
         || Py_IS_TYPE(value, (PyTypeObject *)state->date) || Py_IS_TYPE(value, (PyTypeObject *)state->time)
@@ -499,13 +499,34 @@ tuple_deep_copy(ModuleState *state, PyObject *value, PyObject *memo)
     return copied;
 }
 
-/* the deep copy of a value - natively for what is atomic, a tuple or an instance, through
- * `copy.deepcopy` for anything else */
+/* whether a frozenset is its own deep copy - holding nothing but atomic values, as a set
+ * of anything else is copied with what it holds - 1, 0, or -1 with an error set */
+static int
+frozenset_is_atomic(ModuleState *state, PyObject *value)
+{
+    PyObject *iterator = PyObject_GetIter(value);
+    if (iterator == NULL) return -1;
+    PyObject *item;
+    int atomic = 1;
+    while (atomic && (item = PyIter_Next(iterator)) != NULL) {
+        atomic = is_atomic(state, item);
+        Py_DECREF(item);
+    }
+    Py_DECREF(iterator);
+    return PyErr_Occurred() ? -1 : atomic;
+}
+
+/* the deep copy of a value - natively for what is atomic, a tuple or an instance copied the
+ * native way, through `copy.deepcopy` for anything else */
 static PyObject *
 deep_copy(ModuleState *state, PyObject *value, PyObject *memo)
 {
     if (is_atomic(state, value)) return Py_NewRef(value);
-    if (PyTuple_CheckExact(value) || is_struct(state, value)) {
+    if (PyFrozenSet_CheckExact(value)) {
+        int atomic = frozenset_is_atomic(state, value);
+        if (atomic < 0) return NULL;
+        if (atomic) return Py_NewRef(value);
+    } else if (PyTuple_CheckExact(value) || (is_struct(state, value) && PLAN_OF(Py_TYPE(value))->native_copy)) {
         PyObject *found = memo_lookup(memo, value);
         if (found != NULL) return found;
         if (PyErr_Occurred()) return NULL;
