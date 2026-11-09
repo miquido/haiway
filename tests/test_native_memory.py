@@ -286,7 +286,8 @@ def test_immutable_records_do_not_leak() -> None:
 
     def operation() -> None:
         record = Record(a=1, b=[1])
-        object.__setattr__(record, "a", 2)
+        _swallow(lambda: object.__setattr__(record, "a", 2))
+        _swallow(lambda: object.__delattr__(record, "a"))
         _swallow(lambda: Record())  # noqa: PLW0108  # pyright: ignore[reportCallIssue]
 
     _assert_no_leak(operation)
@@ -350,27 +351,18 @@ class _Holder(State):
     inner: Any
 
 
-def test_writing_a_record_rebound_while_it_is_written_is_memory_safe() -> None:
-    # the code writing calls can rebind a plain record - what it held is kept until the
-    # writer is done with it. AddressSanitizer reports a use after free otherwise
-    holder: list[_Outer] = []
-
-    class Rebinding(datetime):
-        def isoformat(self, sep: str = "T", timespec: str = "auto") -> str:
-            object.__setattr__(holder[0], "f", None)
-            return "2020-01-01T00:00:00"
-
-    for method in ("to_json", "to_mapping"):
-        outer = _Outer(f=_Inner(a=Rebinding(2020, 1, 1), b="b", c=["c"]))
-        holder[:] = [outer]
-        getattr(_Holder(inner=outer), method)()
-
-
-def test_record_with_an_unbound_value_can_not_be_initialized_again() -> None:
+def test_records_are_bound_once_for_good() -> None:
+    # every value of a record, as of a State, is bound once - which is what lets the
+    # native code read them while code of the user runs on them
     record = _Inner(a=1, b=object(), c=2)
     bound: Any = record.b
     references: int = sys.getrefcount(bound)
-    object.__delattr__(record, "a")
+    with pytest.raises(AttributeError):
+        object.__setattr__(record, "b", None)
+
+    with pytest.raises(AttributeError):
+        object.__delattr__(record, "b")
+
     with pytest.raises(TypeError, match="initialized already"):
         record.__init__(a=2, b=3, c=4)  # pyright: ignore[reportUnknownMemberType]
 
@@ -378,17 +370,13 @@ def test_record_with_an_unbound_value_can_not_be_initialized_again() -> None:
     assert sys.getrefcount(bound) == references
 
 
-def test_conversions_of_records_rebound_while_converted_do_not_leak() -> None:
-    holder: list[_Outer] = []
-
-    class Rebinding(datetime):
+def test_conversions_of_records_running_code_of_the_user_do_not_leak() -> None:
+    class Spelled(datetime):
         def isoformat(self, sep: str = "T", timespec: str = "auto") -> str:
-            object.__setattr__(holder[0], "f", _Inner(a=1, b=2, c=3))
             return "2020-01-01T00:00:00"
 
     def operation() -> None:
-        outer = _Outer(f=_Inner(a=Rebinding(2020, 1, 1), b="b", c=[Leaf(number=1)]))
-        holder[:] = [outer]
+        outer = _Outer(f=_Inner(a=Spelled(2020, 1, 1), b="b", c=[Leaf(number=1)]))
         state = _Holder(inner=outer)
         state.to_json()
         state.to_mapping()
@@ -397,7 +385,6 @@ def test_conversions_of_records_rebound_while_converted_do_not_leak() -> None:
         hash(state)
         _ = state == _Holder(inner=outer)
         copy.deepcopy(state)
-        holder.clear()
 
     _assert_no_leak(operation)
 
@@ -458,8 +445,21 @@ class _Loose(State):
     value: Any
 
 
+@pytest.mark.skipif(
+    bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
+    reason="without the GIL only a container nothing else holds is untracked, while a"
+    " record holds the very values it is given",
+)
+def test_records_holding_nothing_cyclic_are_left_to_reference_counting() -> None:
+    record = _Outer(f=_Inner(a=1, b=(2,), c=Map({"c": 3})))
+    assert not gc.is_tracked(record)
+    assert not gc.is_tracked(record.f)
+    assert not gc.is_tracked(_Loose(value=(record,)))
+
+
 def test_instances_which_can_be_part_of_a_cycle_stay_tracked() -> None:
-    record = _Outer(f=None)
+    record = _Outer(f=[1])  # a record holding a list can be part of a cycle through it
+    assert gc.is_tracked(record)
     for value in ([1], ([1],), (record,), {"a": [1]}, Map({"a": (record,)})):
         assert gc.is_tracked(_Loose(value=value)), value
 
@@ -477,17 +477,18 @@ def test_instances_which_can_be_part_of_a_cycle_stay_tracked() -> None:
     assert gc.is_tracked(_Loose(value=deep))
 
 
-def test_cycle_through_a_rebound_record_is_collected() -> None:
+def test_cycle_through_a_record_is_collected() -> None:
     finalized: list[bool] = []
 
     class Finalized:
         def __del__(self) -> None:
             finalized.append(True)
 
-    record = _Outer(f=None)
+    loop: list[Any] = []
+    record = _Outer(f=loop)
     state = _Loose(value=(record, Finalized()))
-    object.__setattr__(record, "f", state)  # the cycle: state -> tuple -> record -> state
-    del state, record
+    loop.append(state)  # the cycle: state -> tuple -> record -> list -> state
+    del state, record, loop
     gc.collect()
     assert finalized == [True]
 

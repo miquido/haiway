@@ -22,14 +22,13 @@ from haiway.helpers import (
     HTTPResponse,
     HTTPTimeoutError,
 )
-from haiway.types import Immutable
 from haiway.utils.exceptions import thrown_exception
 
 __all__ = ("HTTPXClient",)
 
 
 @final
-class HTTPXClient(Immutable):
+class HTTPXClient:
     """HTTPX-based implementation of the HTTP client.
 
     Provides an async HTTP client using ``httpx2.AsyncClient`` as the backend.
@@ -121,6 +120,13 @@ class HTTPXClient(Immutable):
       previously closed instance creates a fresh internal
       ``httpx2.AsyncClient`` with the same configuration.
     """
+
+    # not an Immutable - the internal client is replaced when a closed instance is
+    # entered again
+    __slots__ = (
+        "_client",
+        "_prepare_client",
+    )
 
     _client: AsyncClient
     _prepare_client: Callable[[], AsyncClient]

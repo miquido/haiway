@@ -2,7 +2,7 @@ from collections.abc import Callable
 from os import getenv as os_getenv
 from typing import Any, NoReturn, cast, final, overload
 
-from haiway.types.missing import MISSING, Missing, not_missing
+from haiway.types.missing import Missing
 
 __all__ = (
     "Default",
@@ -55,10 +55,10 @@ class DefaultValue:
     def __init__(
         self,
         *,
-        default: Any | Missing = MISSING,
-        default_factory: Callable[[], Any] | Missing = MISSING,
-        env: str | Missing = MISSING,
-        mapping: Callable[[str], Any] | Missing = MISSING,
+        default: Any | Missing = Missing,
+        default_factory: Callable[[], Any] | Missing = Missing,
+        env: str | Missing = Missing,
+        mapping: Callable[[str], Any] | Missing = Missing,
     ) -> None:
         self._resolve: Callable[[], Any | Missing]
         self.available: bool
@@ -66,16 +66,16 @@ class DefaultValue:
         # default only - a factory or an environment variable is read on every use
         self.constant: bool
         # the variable backing this default, kept to name it when it is not set -
-        # an unset variable resolves to MISSING, which would otherwise fail deep
+        # an unset variable resolves to Missing, which would otherwise fail deep
         # within type validation without ever mentioning what has to be provided
         self.env: str | None
         object.__setattr__(
             self,
             "env",
-            env if not_missing(env) else None,
+            env if env is not Missing else None,
         )
-        if not_missing(default_factory):
-            assert default is MISSING and env is MISSING and mapping is MISSING  # nosec: B101
+        if default_factory is not Missing:
+            assert default is Missing and env is Missing and mapping is Missing  # nosec: B101
             object.__setattr__(
                 self,
                 "_resolve",
@@ -87,16 +87,16 @@ class DefaultValue:
                 True,
             )
 
-        elif not_missing(env):
+        elif env is not Missing:
             # the variable is read on each resolution, i.e. when the owning
             # object is constructed - reading it here would freeze the value at
             # import time, before `load_env` or a test had a chance to set it
             def resolve_env() -> Any | Missing:
                 value: str | None = os_getenv(env)
                 if value is None:
-                    return default  # MISSING unless a fallback was provided
+                    return default  # Missing unless a fallback was provided
 
-                if not_missing(mapping):
+                if mapping is not Missing:
                     try:
                         return mapping(value)
 
@@ -117,7 +117,7 @@ class DefaultValue:
             )
 
         else:
-            assert mapping is MISSING  # nosec: B101
+            assert mapping is Missing  # nosec: B101
             object.__setattr__(
                 self,
                 "_resolve",
@@ -126,13 +126,13 @@ class DefaultValue:
             object.__setattr__(
                 self,
                 "available",
-                default is not MISSING,
+                default is not Missing,
             )
 
         object.__setattr__(
             self,
             "constant",
-            default_factory is MISSING and env is MISSING,
+            default_factory is Missing and env is Missing,
         )
 
     def __call__(self) -> Any | Missing:
@@ -198,11 +198,11 @@ def Default[Value, Fallback](
 
 
 def Default[Value](
-    default: Value | Missing = MISSING,
+    default: Value | Missing = Missing,
     *,
-    factory: Callable[[], Value] | Missing = MISSING,
-    env: str | Missing = MISSING,
-    mapping: Callable[[str], Value] | Missing = MISSING,
+    factory: Callable[[], Value] | Missing = Missing,
+    env: str | Missing = Missing,
+    mapping: Callable[[str], Value] | Missing = Missing,
     # the overloads resolve the field type, an environment backed default with a
     # fallback resolves to the union of the two and cannot be stated here
 ) -> Any:

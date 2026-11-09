@@ -362,8 +362,7 @@ struct_validate_value(ModuleState *state, PyObject *cls, PyObject *value)
     if (mapping < 0) return NULL;
     if (mapping) return instance_from_mapping(state, cls, value);
 
-    PyErr_Format(PyExc_TypeError, "'%s' is not matching expected type of '%S'", Py_TYPE(value)->tp_name, cls);
-    return NULL;
+    return type_error_of(cls, value);
 }
 
 /* validate(value) - the classmethod of it */
@@ -427,7 +426,7 @@ struct_replace_fast(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyO
 static inline int
 is_atomic(ModuleState *state, PyObject *value)
 {
-    return value == Py_None || PyUnicode_CheckExact(value) || PyLong_CheckExact(value)
+    return value == Py_None || value == state->missing || PyUnicode_CheckExact(value) || PyLong_CheckExact(value)
         || PyFloat_CheckExact(value) || PyBool_Check(value) || PyBytes_CheckExact(value)
         || PyFrozenSet_CheckExact(value) || Py_IS_TYPE(value, (PyTypeObject *)state->map)
         || Py_IS_TYPE(value, (PyTypeObject *)state->meta) || PyType_Check(value)
@@ -519,33 +518,42 @@ deep_copy(ModuleState *state, PyObject *value, PyObject *memo)
     return PyObject_CallFunctionObjArgs(state->deepcopy, value, memo, NULL);
 }
 
-/* the copy is entered into the memo before its values are copied, which is what lets a
- * value referring back to the instance resolve to the copy */
+/*
+ * The values are copied first, and the copy built from them only then - nothing ever sees
+ * an instance with some of its values missing, which the code copying them could keep.
+ * A value referring back to the instance copies it while its own copy is made, the way a
+ * tuple is copied: the copy made there, complete, is entered into the memo, and is the
+ * one returned.
+ */
 static PyObject *
 struct_deep_copy(ModuleState *state, PyObject *self, PyObject *memo)
 {
     PyTypeObject *type = Py_TYPE(self);
     Py_ssize_t n = ITEM_COUNT(self);
-    PyObject *copy = type->tp_alloc(type, 0);
-    if (copy == NULL) return NULL;
-    if (memo_store(memo, self, copy) < 0) {
-        Py_DECREF(copy);
-        return NULL;
+    PyObject *stack[FAST_MAX_FIELDS];
+    PyObject **values = n <= FAST_MAX_FIELDS ? stack : PyMem_Malloc((size_t)n * sizeof(PyObject *));
+    if (values == NULL) return PyErr_NoMemory();
+    PyObject *result = NULL;
+    Py_ssize_t copied = 0;
+    for (; copied < n; copied++) {
+        PyObject *value = ITEMS(self)[copied];
+        values[copied] = value == NULL ? NULL : deep_copy(state, value, memo);
+        if (value != NULL && values[copied] == NULL) goto done;
     }
-    for (Py_ssize_t i = 0; i < n; i++) {
-        /* held while it is copied - a plain record can be rebound by the code copying calls */
-        PyObject *value = Py_XNewRef(ITEMS(self)[i]);
-        if (value == NULL) continue;
-        PyObject *copied = deep_copy(state, value, memo);
-        Py_DECREF(value);
-        if (copied == NULL) {
-            Py_DECREF(copy);
-            return NULL;
-        }
-        ITEMS(copy)[i] = copied;
-    }
-    finish_construction(copy);
-    return copy;
+
+    result = memo_lookup(memo, self);  /* entered while its values were copied */
+    if (result != NULL || PyErr_Occurred()) goto done;
+    result = type->tp_alloc(type, 0);
+    if (result == NULL) goto done;
+    for (Py_ssize_t i = 0; i < n; i++) ITEMS(result)[i] = values[i];
+    copied = 0;  /* the copy holds them now */
+    finish_construction(result);
+    if (memo_store(memo, self, result) < 0) Py_CLEAR(result);
+
+done:
+    for (Py_ssize_t i = 0; i < copied; i++) Py_XDECREF(values[i]);
+    if (values != stack) PyMem_Free(values);
+    return result;
 }
 
 /* __deepcopy__(memo) */

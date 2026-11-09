@@ -458,4 +458,4 @@ def test_int_enum_attribute_accepts_value_name_and_stringified_value() -> None:
     assert _validate(annotation, "HIGH") is Priority.HIGH
     assert _validate(annotation, "2") is Priority.HIGH
     with pytest.raises(ValueError):
-        _validate(annotation, "MISSING")
+        _validate(annotation, "Missing")

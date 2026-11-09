@@ -28,7 +28,30 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   Migration: `isinstance(map, dict)` is `False` - check against `Mapping`. `{} | map` and
   `{} | meta` are plain `dict`s, as `dict.__or__` handles a `frozendict` itself.
 - `State.__init__` refuses to initialize an instance a second time, and a `State` instance can't be
-  rebound through `object.__setattr__`. An `Immutable` still can, as before.
+  rebound through `object.__setattr__`.
+- **An `Immutable` never changes once created** - `object.__setattr__` and `object.__delattr__`
+  refuse to rebind its attributes too, as they do for a `State`. `HTTPResponse`, `HTTPXClient` and
+  `PostgresConnectionPool`, which change after they are made, are plain classes with `__slots__`
+  instead, with the same constructors and methods.
+
+  Migration: a subclass of `Immutable` rebinding its own attributes becomes a plain class with
+  `__slots__`, or keeps what changes in a mutable holder it is given.
+- **A `State` has a single base** - the `State` it refines, which declares no attributes (or the
+  origin of a generic specialization), and `Generic` when it declares type parameters. Mixins and
+  multiple inheritance are refused, and an `Immutable` inherits from `Immutable` alone.
+
+  Migration: share behavior through an attribute-less `State` base, and compose by holding instances
+  as attributes.
+- **`Missing` is a builtin PEP 661 sentinel, and `MISSING` is gone.** `Missing` is both the value
+  and the type, the way `None` is: `value: int | Missing = Missing`. It stays the one instance when
+  copied or pickled - the old `MISSING` did not, which lost it in a deep copy of a `State`.
+
+  Migration: replace `MISSING` with `Missing` and `Missing()` with `Missing`; compare with
+  `value is Missing`. The helpers `is_missing`, `not_missing` and `unwrap_missing` are gone -
+  `value is Missing` and `value is not Missing` narrow the type on their own, and
+  `default if value is Missing else value` takes the place of `unwrap_missing`. `Missing` is truthy, so `if value:` no longer tells it apart - nothing in
+  Haiway relied on that. Within `match`, use a dotted name (`case haiway.Missing:`), as a bare
+  `case Missing:` captures the value.
 - The `validate` and `check` methods of the attribute annotations are gone - the compiled spec of
   an `Attribute` validates (`haiway.attributes.native.compile` and `validate`).
 

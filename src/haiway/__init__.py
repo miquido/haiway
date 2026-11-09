@@ -71,7 +71,6 @@ from haiway.helpers import (
     timeout,
 )
 from haiway.types import (
-    MISSING,
     Alias,
     BasicObject,
     BasicValue,
@@ -89,9 +88,6 @@ from haiway.types import (
     Sensitive,
     Specification,
     TypeSpecification,
-    is_missing,
-    not_missing,
-    unwrap_missing,
 )
 from haiway.utils import (
     AsyncQueue,
@@ -119,7 +115,6 @@ from haiway.utils import (
 )
 
 __all__ = (
-    "MISSING",
     "Alias",
     "AsyncQueue",
     "AsyncQueueEmpty",
@@ -212,9 +207,7 @@ __all__ = (
     "getenv_float",
     "getenv_int",
     "getenv_str",
-    "is_missing",
     "load_env",
-    "not_missing",
     "parse_bool",
     "process_concurrently",
     "retry",
@@ -226,6 +219,5 @@ __all__ = (
     "stream_concurrently",
     "throttle",
     "timeout",
-    "unwrap_missing",
     "without_missing",
 )

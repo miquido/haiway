@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal, Protocol, TypedDict, runtime_checkab
 
 import pytest
 
-from haiway import MISSING, Map, Meta, Missing, State, Verifier
+from haiway import Map, Meta, Missing, State, Verifier
 from haiway.attributes import native
 from haiway.attributes.annotations import AttributeAnnotation, resolve_attribute
 
@@ -58,7 +58,7 @@ TIME_VALUE = datetime.time(12, 0)
 # raw one, no matter which branch produced it
 VERIFIED_CASES: Sequence[tuple[str, Any, Any, Any]] = (
     ("any", Any, 42, 42),
-    ("missing", Missing, MISSING, MISSING),
+    ("missing", Missing, Missing, Missing),
     ("none", None, None, None),
     ("literal", Literal["a"], "a", "a"),
     ("bool", bool, True, True),

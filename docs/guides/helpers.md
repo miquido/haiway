@@ -47,7 +47,9 @@ manually passing a client or repository object around.
 
 The decorator-based helpers wrap ordinary callables:
 
-- `@asynchronous` runs a synchronous function in an executor and returns an awaitable wrapper.
+- `@asynchronous` runs a synchronous function in an executor and returns an awaitable wrapper. The
+  function runs within a copy of the caller's context, so `ctx.state(...)` resolves there, while the
+  threads of the executor never keep that context once the call is done.
 - `@cache` memoizes async function results in-process with LRU eviction and optional expiration.
 - `@retry` retries sync or async functions when handled exceptions occur.
 - `@throttle` rate-limits async call starts within a time window.

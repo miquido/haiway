@@ -269,8 +269,8 @@ class Immutable(nstruct.Struct, metaclass=ImmutableMeta):
     """
 
     # construction, and the refusal to be modified, are the native storage's - what it
-    # raises is the `AttributeError` this class has always raised. `object.__setattr__`
-    # remains the one way around it, as it has always been for a plain record
+    # raises is the `AttributeError` this class has always raised. there is no way around
+    # it: each value is bound once, `object.__setattr__` refuses to rebind it as well
 
     if TYPE_CHECKING:
         # what a type checker reads the constructor as - the native base binds the

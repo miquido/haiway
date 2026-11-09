@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Final
 from uuid import UUID
 
-from haiway.types import MISSING
+from haiway.types import Missing
 
 __all__ = (
     "escape_controls",
@@ -137,13 +137,13 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
     - Sequences are formatted with positional indices
     - Objects with ``__dict__`` are rendered from their public attributes
     - Other objects fall back to ``str(obj)`` while preserving caller-managed indentation
-    - ``MISSING`` values render as empty strings and are skipped by nested formatters
+    - ``Missing`` values render as empty strings and are skipped by nested formatters
     - Nested structures maintain indentation recursively
     """
     if value is None:
         return "None"
 
-    elif value is MISSING:
+    elif value is Missing:
         return ""
 
     elif isinstance(value, str):

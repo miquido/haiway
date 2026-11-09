@@ -173,20 +173,13 @@ write_struct_json(Buffer *buffer, PyObject *self)
     if (!buffer_putc(buffer, '{')) return JSON_ERROR;
     int first = 1;
     for (Py_ssize_t i = 0; i < plan->count; i++) {
-        /* held while it is written - a plain record can be rebound by the code writing calls */
-        PyObject *value = Py_XNewRef(ITEMS(self)[i]);
-        if (value == NULL) continue;
-        if (value == buffer->state->missing) {
-            Py_DECREF(value);
-            continue;
-        }
+        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
+        if (value == NULL || value == buffer->state->missing) continue;
         FieldPlan *field = &plan->fields[i];
-        int r = JSON_OK;
-        if (!first && !buffer_put(buffer, ", ", 2)) r = JSON_ERROR;
-        else if (!buffer_put(buffer, field->json_key, field->json_key_length)) r = JSON_ERROR;
-        else r = write_json(buffer, value);
+        if (!first && !buffer_put(buffer, ", ", 2)) return JSON_ERROR;
         first = 0;
-        Py_DECREF(value);
+        if (!buffer_put(buffer, field->json_key, field->json_key_length)) return JSON_ERROR;
+        int r = write_json(buffer, value);
         if (r != JSON_OK) return r;
     }
     return buffer_putc(buffer, '}') ? JSON_OK : JSON_ERROR;

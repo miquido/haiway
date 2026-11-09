@@ -23,7 +23,7 @@ from uuid import UUID, uuid4
 
 from pytest import mark, raises
 
-from haiway import MISSING, Alias, BasicObject, Default, Missing, State, ValidationError, ctx
+from haiway import Alias, BasicObject, Default, Missing, State, ValidationError, ctx
 from haiway.types import Sensitive
 
 
@@ -210,7 +210,7 @@ def test_dict_skips_missing_properties() -> None:
         integer: int | Missing | None
 
     assert Basics(string="a", integer=1).to_mapping() == {"string": "a", "integer": 1}
-    assert Basics(string="a", integer=MISSING).to_mapping() == {"string": "a"}
+    assert Basics(string="a", integer=Missing).to_mapping() == {"string": "a"}
     assert Basics(string="a", integer=None).to_mapping() == {"string": "a", "integer": None}
 
 
@@ -443,21 +443,21 @@ def test_initialization_allows_missing_properties() -> None:
 
     assert Basics(**{"string": "a", "integer": 1}) == Basics(string="a", integer=1)
     assert Basics(**{"string": "a", "integer": None}) == Basics(string="a", integer=None)
-    assert Basics(**{"string": "a"}) == Basics(string="a", integer=MISSING)
+    assert Basics(**{"string": "a"}) == Basics(string="a", integer=Missing)
 
 
 def test_updating_clears_attribute_with_missing() -> None:
     class Basics(State):
         string: str
-        integer: int | Missing = MISSING
+        integer: int | Missing = Missing
 
     instance = Basics(string="a", integer=1)
 
-    # an absent key carries the attribute over, `MISSING` is a value like any
+    # an absent key carries the attribute over, `Missing` is a value like any
     # other - passing it clears the attribute the same way constructing with it
     assert instance.updating(string="b") == Basics(string="b", integer=1)
-    assert instance.updating(integer=MISSING) == Basics(string="a", integer=MISSING)
-    assert instance.updating(integer=MISSING).to_mapping() == {"string": "a"}
+    assert instance.updating(integer=Missing) == Basics(string="a", integer=Missing)
+    assert instance.updating(integer=Missing).to_mapping() == {"string": "a"}
 
 
 def test_updating_rejects_missing_for_required_attribute() -> None:
@@ -467,10 +467,10 @@ def test_updating_rejects_missing_for_required_attribute() -> None:
     # the same refusal the constructor gives it - `updating` does not fall back
     # to the default of an attribute which was supplied
     with raises(ValidationError):
-        Basics(integer=1).updating(integer=MISSING)
+        Basics(integer=1).updating(integer=Missing)
 
     with raises(ValidationError):
-        Basics(integer=MISSING)  # pyright: ignore[reportArgumentType]
+        Basics(integer=Missing)  # pyright: ignore[reportArgumentType]
 
 
 def test_generic_subtypes_validation() -> None:
@@ -614,8 +614,8 @@ def test_hash_consistency_with_missing_values() -> None:
         optional: int | Missing
         nullable: str | None
 
-    # Test that hash is consistent regardless of how MISSING values are specified
-    obj1 = HashTest(required="test", optional=MISSING, nullable=None)
+    # Test that hash is consistent regardless of how Missing values are specified
+    obj1 = HashTest(required="test", optional=Missing, nullable=None)
     obj2 = HashTest(required="test", nullable=None)  # optional omitted
     obj3 = HashTest(**{"required": "test", "nullable": None})  # optional missing from dict
 
@@ -766,8 +766,8 @@ def test_hash_excludes_missing_values() -> None:
 
     # Test various combinations of missing values
     obj1 = MissingTest(always_present="test", sometimes_missing=42, sometimes_none="value")
-    obj2 = MissingTest(always_present="test", sometimes_missing=MISSING, sometimes_none="value")
-    obj3 = MissingTest(always_present="test", sometimes_missing=MISSING, sometimes_none=None)
+    obj2 = MissingTest(always_present="test", sometimes_missing=Missing, sometimes_none="value")
+    obj3 = MissingTest(always_present="test", sometimes_missing=Missing, sometimes_none=None)
 
     # All should be hashable
     hash1 = hash(obj1)
@@ -781,7 +781,7 @@ def test_hash_excludes_missing_values() -> None:
     # obj2 should have different hash from obj1 since it's missing a value
     assert hash1 != hash2
 
-    # obj3 should have different hash from obj2 since None != MISSING
+    # obj3 should have different hash from obj2 since None != Missing
     assert hash2 != hash3
 
 

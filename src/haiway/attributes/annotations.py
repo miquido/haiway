@@ -425,7 +425,7 @@ class MissingAttribute(Immutable):
     redaction: str | None = None
 
     @property
-    def base(self) -> type[haiway_types.Missing]:
+    def base(self) -> Any:  # the sentinel - it is its own type
         return haiway_types.Missing
 
     def annotated(  # noqa: C901

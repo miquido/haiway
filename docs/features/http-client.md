@@ -13,7 +13,8 @@ The HTTP client in Haiway follows the framework's core principles:
 - **Context Integration**: HTTP implementations are injected into the current scope through the
   context system
 - **Protocol-Based**: Uses protocols for flexibility in backend implementations
-- **Immutable Responses**: All responses are immutable state objects
+- **Fixed Responses**: The status and headers of a response never change; its body is read and
+  cached on demand
 - **Type-Safe**: Full type hints for request/response data
 
 ## Quick Start
@@ -258,8 +259,9 @@ else:
     )
 ```
 
-`HTTPResponse` is immutable. By default the payload is read before the request returns, which hands
-the connection back to the pool right away:
+The status code and headers of an `HTTPResponse` never change, while its body is read - and cached -
+on demand. By default the payload is read before the request returns, which hands the connection
+back to the pool right away:
 
 ```python
 # buffered by default: the payload is already in memory

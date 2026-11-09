@@ -584,7 +584,7 @@ was spawned in.
 
 Before sending data to OpenTelemetry, Haiway normalizes observability attributes:
 
-- `None` and `MISSING` values are skipped
+- `None` and `Missing` values are skipped
 - sequences are filtered and exported as tuples
 - mapping values are flattened into dotted keys such as `http.request_id`
 - binary values - `bytes`, `bytearray`, `memoryview` - are rendered as a single string rather than

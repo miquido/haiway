@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from haiway import MISSING, Sensitive, State
+from haiway import Missing, Sensitive, State
 from haiway.utils.formatting import escape_controls, format_log_message, format_str
 
 
@@ -145,7 +145,7 @@ class _PlainObject:
     def __init__(self) -> None:
         self.visible = 1
         self._private = 2
-        self.absent: object = MISSING
+        self.absent: object = Missing
         self.text = "x\ny"
 
 
@@ -170,7 +170,7 @@ class _DataclassObject:
     ("value", "expected"),
     [
         (None, "None"),
-        (MISSING, ""),
+        (Missing, ""),
         (1, "1"),
         (1.5, "1.5"),
         (1j, "1j"),
@@ -208,11 +208,11 @@ def test_format_str_renders_all_elements_of_a_set() -> None:
 
 
 def test_format_str_skips_missing_elements_and_values() -> None:
-    assert format_str([MISSING, 1]) == "[\n  [1]: 1\n]"
-    assert format_str({"k": MISSING}) == "{}"
-    assert format_str({"k": MISSING, "other": 1}) == '{\n  ["other"]: 1\n}'
-    assert format_str([MISSING]) == "[]"
-    assert format_str({MISSING}) == "{}"
+    assert format_str([Missing, 1]) == "[\n  [1]: 1\n]"
+    assert format_str({"k": Missing}) == "{}"
+    assert format_str({"k": Missing, "other": 1}) == '{\n  ["other"]: 1\n}'
+    assert format_str([Missing]) == "[]"
+    assert format_str({Missing}) == "{}"
 
 
 def test_format_str_applies_indent_to_nested_output() -> None:

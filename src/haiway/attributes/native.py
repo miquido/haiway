@@ -462,7 +462,7 @@ def install(
 class ValidationHooks(Immutable):
     """What the extension asks of Python while it validates, by the names it reads them under."""
 
-    missing: Any  # the MISSING marker
+    missing: Any  # the Missing marker
     check: Callable[[type[Any], Mapping[str, Any]], None]  # refuses what is not an attribute
     report: Callable[[str, Exception], Any]  # raises a failure with its position
     unexpected: Callable[[type[Any], Any], Any]  # refuses a key of a mapping

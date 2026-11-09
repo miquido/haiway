@@ -6,7 +6,7 @@ from functools import partial
 from inspect import iscoroutinefunction
 from typing import Any, cast, overload
 
-from haiway.types.missing import MISSING, Missing
+from haiway.types.missing import Missing
 
 __all__ = ("asynchronous",)
 
@@ -22,7 +22,7 @@ def asynchronous[**Args, Result]() -> Callable[
 def asynchronous[**Args, Result](
     *,
     loop: AbstractEventLoop | None = None,
-    executor: Executor | Missing = MISSING,
+    executor: Executor | Missing = Missing,
 ) -> Callable[
     [Callable[Args, Result]],
     Callable[Args, Coroutine[None, None, Result]],
@@ -41,7 +41,7 @@ def asynchronous[**Args, Result](
     /,
     *,
     loop: AbstractEventLoop | None = None,
-    executor: Executor | Missing = MISSING,
+    executor: Executor | Missing = Missing,
 ) -> (
     Callable[
         [Callable[Args, Result]],
@@ -111,8 +111,13 @@ def asynchronous[**Args, Result](
             **kwargs: Args.kwargs,
         ) -> Result:
             context: Context = copy_context()
-            return await (loop or get_running_loop()).run_in_executor(
-                cast(Executor | None, None if executor is MISSING else executor),
+            # submitted from an empty context - a thread the executor starts for it would
+            # otherwise inherit the context of the caller (the default without the GIL),
+            # keeping its state alive for as long as the thread lives. the call itself runs
+            # within the copy of the caller's context, as ever
+            return await Context().run(
+                (loop or get_running_loop()).run_in_executor,
+                None if executor is Missing else executor,
                 context.run,
                 partial(wrapped, *args, **kwargs),
             )

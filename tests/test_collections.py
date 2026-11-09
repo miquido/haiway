@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from haiway import MISSING, Map, as_dict, as_list, as_map, as_set, as_tuple, without_missing
+from haiway import Map, Missing, as_dict, as_list, as_map, as_set, as_tuple, without_missing
 
 
 def test_as_list() -> None:
@@ -85,25 +85,25 @@ def test_as_map_accepts_custom_mappings() -> None:
 
 def test_without_missing_filters_only_missing() -> None:
     result = without_missing(
-        {"a": 1, "b": MISSING, "c": None, "d": 0, "e": "", "f": False},
+        {"a": 1, "b": Missing, "c": None, "d": 0, "e": "", "f": False},
     )
     assert result == {"a": 1, "c": None, "d": 0, "e": "", "f": False}
 
 
 def test_without_missing_returns_new_mapping() -> None:
-    source = {"a": 1, "b": MISSING}
+    source = {"a": 1, "b": Missing}
     result = without_missing(source)
     assert result is not source
-    assert source == {"a": 1, "b": MISSING}
+    assert source == {"a": 1, "b": Missing}
 
 
 def test_without_missing_empty_and_all_missing() -> None:
     assert without_missing({}) == {}
-    assert without_missing({"a": MISSING}) == {}
+    assert without_missing({"a": Missing}) == {}
 
 
 def test_without_missing_typed_returns_same_content() -> None:
-    result = without_missing({"a": 1, "b": MISSING}, typed=dict[str, Any])
+    result = without_missing({"a": 1, "b": Missing}, typed=dict[str, Any])
     assert result == {"a": 1}
 
 

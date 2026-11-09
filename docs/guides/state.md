@@ -321,10 +321,12 @@ A specialization such as `Container[int]` declares the attributes of its origin,
 ### Copying, Pickling and Representation
 
 `copy.copy` returns the same instance, `copy.deepcopy` creates an equal one, and `copy.replace` (or
-`updating`) produces a validated variant. `pickle` is deliberately not supported and raises a
-`TypeError` pointing at `to_json` / `to_basic_object` - rebuilding a State would have to skip
-validation, and a specialized variant such as `Box[int]` has no importable name. This also applies
-to values crossing a process pool.
+`updating`) produces a validated variant. A deep copy is built once its values are copied, so the
+code copying them never sees an instance with some of its attributes missing, while a value
+referring back to the instance - through a list held in an `Any` attribute, say - refers to the copy
+in turn. `pickle` is deliberately not supported and raises a `TypeError` pointing at `to_json` /
+`to_basic_object` - rebuilding a State would have to skip validation, and a specialized variant such
+as `Box[int]` has no importable name. This also applies to values crossing a process pool.
 
 `str(state)` renders values as they read (`User(name: Alice)`), while `repr(state)` spells each
 value with its own `repr` (`User(name: 'Alice')`) so a string and a number can be told apart.
@@ -567,8 +569,12 @@ A compiled extension stores the attributes of a State inline in the instance, va
 built-in annotation without calling back into Python, and converts to mappings and JSON natively.
 The immutability is real - an attribute can't be rebound through `object.__setattr__` either, and an
 instance has no `__dict__` or `__weakref__`. Calling `__init__` a second time on an instance raises.
-An instance takes the memory a `__slots__` object of the same attributes would, and one holding
-nothing the garbage collector tracks is left out of its collections.
+An instance takes the memory a `__slots__` object of the same attributes would. One holding nothing
+which can be part of a reference cycle - which is what validated values are, being made of tuples,
+frozensets, `Map`s and other instances - is left out of the collections of the garbage collector,
+together with those containers, and is reclaimed by reference counting alone. Keeping many instances
+alive therefore adds nothing for the collector to walk. One holding a mutable value, such as a
+`list` in an `Any` attribute, stays tracked, so a cycle through it is still collected.
 
 What runs Python is the code of the user alone: a `Validator`, a `Verifier`, a class validating
 itself, a default factory. `ValidationError` reports a failure at its position the same way for
@@ -585,9 +591,11 @@ Calling a class with keyword arguments, `Point(x=1, y=2)`, and updating, `point.
 the fastest ways to build and change an instance. To build an instance from a mapping use
 `Point.validate(values)` rather than unpacking it into the call, `Point(**values)`.
 
-`Immutable` is stored the same way. It validates nothing and refuses `setattr` and `delattr` as it
-always has, while `object.__setattr__` can still rebind an attribute of it. After changing the C
-source run `make native`, as `uv sync` does not recompile it.
+`Immutable` is stored the same way. It validates nothing, and once created it never changes:
+`setattr`, `delattr` and `object.__setattr__` all refuse to rebind an attribute. A class whose
+instances have to change after they are made - a client opening a connection, a response caching its
+body - is a plain class with `__slots__` instead. After changing the C source run `make native`, as
+`uv sync` does not recompile it.
 
 ### Performance Considerations
 

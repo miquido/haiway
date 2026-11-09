@@ -1,47 +1,39 @@
+import copy
+import pickle  # nosec: B403
+import typing
+
 import pytest
 
-from haiway import MISSING, Missing, is_missing, not_missing, unwrap_missing
+from haiway import Missing, State
 
 
-def test_is_missing_and_not_missing() -> None:
-    assert is_missing(MISSING) is True
-    assert not_missing(MISSING) is False
-
-    values: tuple[object, ...] = (None, 0, "", False, [], 1, "x")
-    for value in values:
-        assert is_missing(value) is False
-        assert not_missing(value) is True
+class _Optional(State):
+    value: int | Missing = Missing
 
 
-def test_unwrap_missing_default() -> None:
-    assert unwrap_missing(MISSING, default=5) == 5
-    assert unwrap_missing(3, default=5) == 3
-    assert unwrap_missing(0, default=5) == 0
-    assert unwrap_missing(None, default=5) is None
+def test_missing_stays_the_one_instance_when_copied_or_pickled() -> None:
+    # everything compares with Missing by identity - a copy of it would be a value
+    assert copy.copy(Missing) is Missing
+    assert copy.deepcopy(Missing) is Missing
+    assert pickle.loads(pickle.dumps(Missing)) is Missing  # nosec: B301
+
+    duplicate = copy.deepcopy(_Optional())
+    assert duplicate.value is Missing
+    assert duplicate.to_mapping() == {}
+    assert duplicate.to_json() == "{}"
 
 
-def test_unwrap_missing_mapping() -> None:
-    assert unwrap_missing(2, default="none", mapping=str) == "2"
-    assert unwrap_missing(MISSING, default="none", mapping=str) == "none"
-    assert unwrap_missing(0, default="none", mapping=str) == "0"
-
-
-def test_unwrap_missing_mapping_not_called_for_missing() -> None:
-    def fail(_: int) -> int:
-        raise AssertionError("mapping must not be called")
-
-    assert unwrap_missing(MISSING, default=1, mapping=fail) == 1
-
-
-def test_missing_is_singleton_falsy_and_immutable() -> None:
-    assert Missing() is MISSING
-    assert not MISSING
-    assert MISSING == Missing()
-    assert hash(MISSING) == hash(Missing())
-    assert str(MISSING) == "MISSING"
+def test_missing_is_a_sentinel_and_its_own_type() -> None:
+    # a PEP 661 sentinel - the value and the type at once, as None is
+    assert type(Missing) is sentinel
+    assert repr(Missing) == "Missing"
+    assert str(Missing) == "Missing"
+    assert bool(Missing) is True  # unlike None - compared by identity, never by truth
+    assert Missing != None  # noqa: E711
+    assert set(typing.get_args(int | Missing)) == {int, Missing}
 
     with pytest.raises(AttributeError):
-        MISSING.attribute = 1  # pyright: ignore[reportAttributeAccessIssue]
+        Missing.attribute = 1  # pyright: ignore[reportAttributeAccessIssue]
 
     with pytest.raises(AttributeError):
-        MISSING.attribute  # pyright: ignore[reportAttributeAccessIssue]  # noqa: B018
+        Missing.attribute  # pyright: ignore[reportAttributeAccessIssue]  # noqa: B018

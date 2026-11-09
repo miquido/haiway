@@ -59,7 +59,7 @@ from haiway.context import (
     ObservabilityMetricKind,
     ScopeKind,
 )
-from haiway.types import MISSING
+from haiway.types import Missing
 from haiway.utils.formatting import escape_controls
 
 __all__ = (
@@ -351,7 +351,7 @@ def _sanitized_sequence(
     /,
 ) -> Sequence[str] | Sequence[bool] | Sequence[int] | Sequence[float] | None:
     elements: list[str | bool | int | float] = [
-        _sanitized_value(item) for item in value if item is not None and item is not MISSING
+        _sanitized_value(item) for item in value if item is not None and item is not Missing
     ]
     if not elements:
         return None  # skip missing/empty
@@ -378,14 +378,14 @@ def _sanitized_attributes(
         if isinstance(value, bool | str | int | float):
             sanitized[key] = value
 
-        elif value is None or value is MISSING:
+        elif value is None or value is Missing:
             continue  # skip missing/empty
 
         elif isinstance(value, Mapping):
             # mappings are flattened into dotted keys - not part of
             # ObservabilityAttribute, yet a documented convenience of this bridge
             for name, item in cast(Mapping[str, Any], value).items():
-                if item is None or item is MISSING:
+                if item is None or item is Missing:
                     continue  # skip missing/empty
 
                 sanitized[f"{key}.{name}"] = _sanitized_value(item)

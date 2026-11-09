@@ -5,9 +5,9 @@ from haiway._native import nstruct
 from haiway.attributes.annotations import AttributeAnnotation
 from haiway.attributes.specification import type_specification
 from haiway.types import (
-    MISSING,
     DefaultValue,
     Immutable,
+    Missing,
     TypeSpecification,
 )
 
@@ -56,7 +56,7 @@ class Attribute(Immutable):
         value: Any,
         /,
     ) -> Any:
-        if value is MISSING:
+        if value is Missing:
             return self._validated_default()
 
         else:
@@ -89,10 +89,10 @@ class Attribute(Immutable):
             return self._validate(value)
 
         except Exception as exc:
-            # an environment backed default resolves to MISSING when the variable
+            # an environment backed default resolves to Missing when the variable
             # is not set - reporting the type mismatch would name the annotation
             # instead of the variable which actually has to be provided
-            if value is MISSING and self.default.env is not None:
+            if value is Missing and self.default.env is not None:
                 raise ValueError(
                     f"Required environment value `{self.default.env}` is missing!"
                 ) from exc

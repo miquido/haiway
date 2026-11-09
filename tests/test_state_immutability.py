@@ -6,7 +6,7 @@ from typing import Annotated, Any
 import pytest
 from pytest import mark, raises
 
-from haiway import MISSING, Alias, Missing, State, ValidationError
+from haiway import Alias, Missing, State, ValidationError
 
 
 class Point(State):
@@ -93,6 +93,40 @@ def test_deepcopy_without_memo_creates_equal_instance() -> None:
     assert type(duplicate) is Point
 
 
+class _Holding(State):
+    first: int
+    rest: Any
+
+
+def test_deepcopy_never_exposes_a_partially_copied_instance() -> None:
+    # the copy is built once its values are copied - the code copying them can't get
+    # hold of one with some of its attributes missing
+    seen: list[Any] = []
+
+    class Failing:
+        def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+            seen.extend(memo.values())
+            raise RuntimeError("copy failed")
+
+    memo: dict[int, Any] = {}
+    with raises(RuntimeError, match="copy failed"):
+        copy.deepcopy(_Holding(first=1, rest=Failing()), memo)
+
+    assert not any(isinstance(value, _Holding) for value in (*seen, *memo.values()))
+
+
+def test_deepcopy_keeps_a_value_referring_back_to_the_instance() -> None:
+    loop: list[Any] = []
+    original = _Holding(first=1, rest=loop)
+    loop.append(original)
+
+    duplicate = copy.deepcopy(original)
+
+    assert duplicate is not original
+    assert duplicate.rest is not loop
+    assert duplicate.rest[0] is duplicate
+
+
 # --- sources are not shared -------------------------------------------------
 
 
@@ -173,9 +207,9 @@ def test_missing_marks_optional_attribute() -> None:
     class Optional(State):
         value: int | Missing
 
-    assert Optional().value is MISSING  # pyright: ignore[reportCallIssue]
-    assert Optional(value=MISSING).value is MISSING
-    assert Optional(value=1).updating(value=MISSING).value is MISSING
+    assert Optional().value is Missing  # pyright: ignore[reportCallIssue]
+    assert Optional(value=Missing).value is Missing
+    assert Optional(value=1).updating(value=Missing).value is Missing
 
 
 # --- pattern matching -------------------------------------------------------

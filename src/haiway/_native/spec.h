@@ -209,10 +209,22 @@ spec_of(ModuleState *state, PyObject *object)
 
 /* ------------------------------------------------------------ messages */
 
+/* what a value is reported as - the name of its type, or a sentinel itself, which is its
+ * own type (`Missing` above all), as the type of every sentinel is the same - a new reference */
+static PyObject *
+reported_type(PyObject *value)
+{
+    if (PySentinel_CheckExact(value)) return PyObject_Repr(value);
+    return PyUnicode_FromString(Py_TYPE(value)->tp_name);
+}
+
 static PyObject *
 type_error(const char *expected, PyObject *value)
 {
-    PyErr_Format(PyExc_TypeError, "'%s' is not matching expected type of '%s'", Py_TYPE(value)->tp_name, expected);
+    PyObject *reported = reported_type(value);
+    if (reported == NULL) return NULL;
+    PyErr_Format(PyExc_TypeError, "'%U' is not matching expected type of '%s'", reported, expected);
+    Py_DECREF(reported);
     return NULL;
 }
 
@@ -220,7 +232,10 @@ type_error(const char *expected, PyObject *value)
 static PyObject *
 type_error_of(PyObject *expected, PyObject *value)
 {
-    PyErr_Format(PyExc_TypeError, "'%s' is not matching expected type of '%S'", Py_TYPE(value)->tp_name, expected);
+    PyObject *reported = reported_type(value);
+    if (reported == NULL) return NULL;
+    PyErr_Format(PyExc_TypeError, "'%U' is not matching expected type of '%S'", reported, expected);
+    Py_DECREF(reported);
     return NULL;
 }
 
@@ -569,7 +584,11 @@ validate_enum_str(ModuleState *state, Spec *spec, PyObject *value)
     PyObject *allowed = PyObject_CallFunction(state->enum_values, "Oi", spec->base, 0);
     PyObject *name = allowed == NULL ? NULL : PyObject_GetAttrString(spec->base, "__name__");
     if (name != NULL) {
-        PyErr_Format(PyExc_ValueError, "'%s' is not matching any of expected %U values [%U]", Py_TYPE(value)->tp_name, name, allowed);
+        PyObject *reported = reported_type(value);
+        if (reported != NULL) {
+            PyErr_Format(PyExc_ValueError, "'%U' is not matching any of expected %U values [%U]", reported, name, allowed);
+            Py_DECREF(reported);
+        }
         PyObject *exc = PyErr_GetRaisedException();
         PyException_SetCause(exc, cause);
         PyErr_SetRaisedException(exc);
@@ -592,7 +611,11 @@ validate_enum_int(ModuleState *state, Spec *spec, PyObject *value)
         PyObject *allowed = PyObject_CallFunction(state->enum_values, "Oi", spec->base, 0);
         PyObject *name = allowed == NULL ? NULL : PyObject_GetAttrString(spec->base, "__name__");
         if (name != NULL) {
-            PyErr_Format(PyExc_ValueError, "'%s' is not matching any of expected %U values [%U]", Py_TYPE(value)->tp_name, name, allowed);
+            PyObject *reported = reported_type(value);
+        if (reported != NULL) {
+            PyErr_Format(PyExc_ValueError, "'%U' is not matching any of expected %U values [%U]", reported, name, allowed);
+            Py_DECREF(reported);
+        }
             PyObject *exc = PyErr_GetRaisedException();
             PyException_SetCause(exc, cause);
             PyErr_SetRaisedException(exc);
@@ -625,7 +648,11 @@ validate_enum_int(ModuleState *state, Spec *spec, PyObject *value)
     PyObject *allowed = PyObject_CallFunction(state->enum_values, "Oi", spec->base, 1);
     PyObject *name = allowed == NULL ? NULL : PyObject_GetAttrString(spec->base, "__name__");
     if (name != NULL) {
-        PyErr_Format(PyExc_ValueError, "'%s' is not matching any of expected %U members [%U]", Py_TYPE(value)->tp_name, name, allowed);
+        PyObject *reported = reported_type(value);
+        if (reported != NULL) {
+            PyErr_Format(PyExc_ValueError, "'%U' is not matching any of expected %U members [%U]", reported, name, allowed);
+            Py_DECREF(reported);
+        }
         PyObject *exc = PyErr_GetRaisedException();
         PyException_SetCause(exc, cause);
         PyErr_SetRaisedException(exc);
@@ -827,8 +854,10 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
     Py_XDECREF(separator);
     Py_DECREF(names);
     if (joined == NULL) goto fail;
-    PyObject *message = PyUnicode_FromFormat(
-        "'%s' is not matching any of the allowed alternatives: %U", Py_TYPE(value)->tp_name, joined);
+    PyObject *reported = reported_type(value);
+    PyObject *message = reported == NULL ? NULL : PyUnicode_FromFormat(
+        "'%U' is not matching any of the allowed alternatives: %U", reported, joined);
+    Py_XDECREF(reported);
     Py_DECREF(joined);
     if (message == NULL) goto fail;
     PyObject *group = PyObject_CallFunctionObjArgs(state->exception_group, message, errors, NULL);
@@ -857,7 +886,11 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
         if (r) return Py_NewRef(value);
         PyObject *spelled = PyObject_CallOneArg(state->literal_values, spec->data);
         if (spelled == NULL) return NULL;
-        PyErr_Format(PyExc_ValueError, "'%s' is not matching any of expected literal values [%U]", Py_TYPE(value)->tp_name, spelled);
+        PyObject *reported = reported_type(value);
+        if (reported != NULL) {
+            PyErr_Format(PyExc_ValueError, "'%U' is not matching any of expected literal values [%U]", reported, spelled);
+            Py_DECREF(reported);
+        }
         Py_DECREF(spelled);
         return NULL;
     }
@@ -1089,7 +1122,12 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
     }
     case SPEC_FUNCTION:
         if (PyCallable_Check(value)) return Py_NewRef(value);
-        PyErr_Format(PyExc_TypeError, "'%s' is not matching expected function type", Py_TYPE(value)->tp_name);
+        {
+            PyObject *reported = reported_type(value);
+            if (reported == NULL) return NULL;
+            PyErr_Format(PyExc_TypeError, "'%U' is not matching expected function type", reported);
+            Py_DECREF(reported);
+        }
         return NULL;
     case SPEC_UNION:
         return validate_union(state, spec, value);

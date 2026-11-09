@@ -191,7 +191,7 @@ def test_optional_attribute_accepts_none_and_missing_by_identity() -> None:
         a: int | None
         b: str | Missing
 
-    value = Optional(a=None, b=Missing())  # pyright: ignore[reportArgumentType]
+    value = Optional(a=None, b=Missing)  # pyright: ignore[reportArgumentType]
     assert value.a is None
     assert value.to_mapping() == {"a": None}
 

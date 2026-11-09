@@ -61,7 +61,6 @@ from haiway.attributes.path import AttributePath
 from haiway.attributes.specification import object_specification
 from haiway.attributes.validation import ValidationError
 from haiway.types import (
-    MISSING,
     BasicObject,
     DefaultValue,
     Map,
@@ -254,7 +253,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
             Attribute(
                 name=key,
                 annotation=attribute,
-                default=_resolve_default(defaults.get(key, MISSING)),
+                default=_resolve_default(defaults.get(key, Missing)),
                 redaction=attribute_redaction(attribute),
                 spec=native.compile(attribute),
             )
@@ -568,13 +567,13 @@ def _declared_slots(
 ) -> tuple[str, ...]:
     slots: MutableSequence[str] = []
     for key in names:
-        inherited: Any = MISSING
+        inherited: Any = Missing
         for base in bases:
-            inherited = getattr(base, key, MISSING)
-            if inherited is not MISSING:
+            inherited = getattr(base, key, Missing)
+            if inherited is not Missing:
                 break
 
-        if inherited is MISSING:
+        if inherited is Missing:
             slots.append(key)  # nothing above declares it, this class owns the slot
             continue
 
@@ -1224,7 +1223,7 @@ class State(nstruct.Validated, metaclass=StateMeta):
         -------
         Mapping[str, Any]
             A mapping keyed by attribute aliases when present, otherwise by
-            canonical field names. Values equal to ``MISSING`` are omitted.
+            canonical field names. Values equal to ``Missing`` are omitted.
         """
         return nstruct.to_mapping(self, recursive)
 
@@ -1511,7 +1510,7 @@ def _b64decode_strict(value: str, /) -> bytes:
 # what the extension calls back - handed over once, when the module is loaded
 native.configure(
     native.ValidationHooks(
-        missing=MISSING,
+        missing=Missing,
         check=_check_keys,
         report=ValidationError.report,
         unexpected=_unexpected_key,

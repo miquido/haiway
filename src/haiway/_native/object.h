@@ -51,32 +51,19 @@ missing_of(PyObject *self)
     return plan == NULL ? NULL : plan->state->missing;
 }
 
-/*
- * Whether the values of an instance have to be held while code runs on them - those of
- * a plain record can be rebound by that very code, while a validated instance binds its
- * values once, for good, so they are read as they are.
- */
-static inline int
-rebindable(PyObject *self)
-{
-    CompiledPlan *plan = PLAN_OF(Py_TYPE(self));
-    return plan == NULL || !plan->reporting;
-}
-
+/* the values of an instance are read as they are wherever code runs on them - every one
+ * is bound once, for good, so nothing that code does can let go of it */
 static Py_hash_t
 struct_hash_unbounded(PyObject *self)
 {
     Py_ssize_t n = ITEM_COUNT(self);
     PyObject **items = ITEMS(self);
     PyObject *missing = missing_of(self);
-    int hold = rebindable(self);
     Py_uhash_t acc = (Py_uhash_t)(uintptr_t)Py_TYPE(self) * 1000003UL;
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *value = items[i];
         if (value == NULL || value == missing) continue;  /* MISSING never takes part */
-        if (hold) Py_INCREF(value);
         Py_hash_t h = PyObject_Hash(value);
-        if (hold) Py_DECREF(value);
         if (h == -1) {
             if (!PyErr_ExceptionMatches(PyExc_TypeError)) return -1;
             PyErr_Clear();  /* unhashable values are skipped */
@@ -108,23 +95,14 @@ struct_richcompare(PyObject *a, PyObject *b, int op)
             eq = 0;  /* only the same concrete class is ever equal */
         } else {
             Py_ssize_t n = ITEM_COUNT(a);
-            int hold = rebindable(a);
             for (Py_ssize_t i = 0; i < n && eq; i++) {
                 PyObject *x = ITEMS(a)[i], *y = ITEMS(b)[i];
                 if (x == NULL || y == NULL) {  /* never initialized */
                     eq = (x == y);
                     continue;
                 }
-                if (hold) {
-                    Py_INCREF(x);
-                    Py_INCREF(y);
-                }
                 /* not an identity shortcut - a NaN is not equal to itself */
                 PyObject *r = PyObject_RichCompare(x, y, Py_EQ);
-                if (hold) {
-                    Py_DECREF(x);
-                    Py_DECREF(y);
-                }
                 if (r == NULL) return NULL;
                 eq = PyObject_IsTrue(r);
                 Py_DECREF(r);

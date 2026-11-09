@@ -116,18 +116,12 @@ basic_struct(ModuleState *state, PyObject *self, int strict, PathNode *node, PyO
     if (result == NULL) return NULL;
     Py_ssize_t n = plan->count;
     for (Py_ssize_t i = 0; i < n; i++) {
-        /* held while it is converted - a plain record can be rebound by the code converting calls */
-        PyObject *value = Py_XNewRef(ITEMS(self)[i]);
-        if (value == NULL) continue;
-        if (value == state->missing) {
-            Py_DECREF(value);
-            continue;
-        }
+        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
+        if (value == NULL || value == state->missing) continue;
         FieldPlan *field = &plan->fields[i];
         PyObject *key = field_key(field);
         PathNode step = {node, key, 0};
         PyObject *converted = basic_convert(state, value, strict, &step, prefix);
-        Py_DECREF(value);
         if (converted == NULL || PyDict_SetItem(result, key, converted) < 0) {
             Py_XDECREF(converted);
             Py_DECREF(result);
@@ -269,16 +263,10 @@ recursive_struct(ModuleState *state, PyObject *self, int recursive)
     if (result == NULL) return NULL;
     Py_ssize_t n = plan->count;
     for (Py_ssize_t i = 0; i < n; i++) {
-        /* held while it is converted - a plain record can be rebound by the code converting calls */
-        PyObject *value = Py_XNewRef(ITEMS(self)[i]);
-        if (value == NULL) continue;
-        if (value == state->missing) {
-            Py_DECREF(value);
-            continue;
-        }
+        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
+        if (value == NULL || value == state->missing) continue;
         PyObject *key = field_key(&plan->fields[i]);
         PyObject *converted = recursive ? recursive_convert(state, value) : Py_NewRef(value);
-        Py_DECREF(value);
         if (converted == NULL || PyDict_SetItem(result, key, converted) < 0) {
             Py_XDECREF(converted);
             Py_DECREF(result);

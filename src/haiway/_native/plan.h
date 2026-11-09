@@ -198,12 +198,8 @@ is_frozen_container(ModuleState *state, PyObject *value)
 static inline int
 untracked_may_join_cycle(ModuleState *state, PyObject *value)
 {
-    if (is_frozen_container(state, value)) return 0;
-    if (is_struct(state, value)) {
-        CompiledPlan *plan = PLAN_OF(Py_TYPE(value));
-        return plan == NULL || !plan->reporting;  /* a plain record can be rebound */
-    }
-    return 1;
+    /* an instance is untracked only by `finish_construction`, and never changes after */
+    return !(is_frozen_container(state, value) || is_struct(state, value));
 }
 
 /* how deep `settle` looks into nested containers - what is deeper stays tracked */
@@ -277,14 +273,12 @@ settle_tracked(ModuleState *state, PyObject *value, int depth)
 /*
  * An instance is tracked by the garbage collector from its allocation. One holding
  * nothing which can be part of a cycle never can be either - and since nothing can
- * ever be bound to it later, it is let go of for good once it is built. A plain record
- * can be rebound, so it stays tracked.
+ * ever be bound to it later, it is let go of for good once it is built.
  */
 static inline void
 finish_construction(PyObject *self)
 {
     CompiledPlan *plan = PLAN_OF(Py_TYPE(self));
-    if (!plan->reporting) return;
     Py_ssize_t n = ITEM_COUNT(self);
     PyObject **items = ITEMS(self);
     for (Py_ssize_t i = 0; i < n; i++) {
@@ -304,7 +298,6 @@ static inline void
 finish_update(PyObject *self, PyObject *source)
 {
     CompiledPlan *plan = PLAN_OF(Py_TYPE(self));
-    if (!plan->reporting) return;
     if (PyObject_GC_IsTracked(source)) {
         finish_construction(self);
         return;
@@ -492,10 +485,8 @@ compile_plan(PyObject *mod, PyObject *args)
         field->member.name = utf8;
         field->member.type = Py_T_OBJECT_EX;
         field->member.offset = (Py_ssize_t)sizeof(PyObject) + i * (Py_ssize_t)sizeof(PyObject *);
-        /* a value of a validated class is bound once, for good. a plain record refuses
-         * `setattr` the same way, but keeps the way around it `object.__setattr__` has
-         * always been for it - the descriptor itself writes */
-        field->member.flags = reporting ? Py_READONLY : 0;
+        /* a value is bound once, for good - by the constructors, never by the descriptor */
+        field->member.flags = Py_READONLY;
         field->member.doc = NULL;
 
         PyObject *position = PyLong_FromSsize_t(i);

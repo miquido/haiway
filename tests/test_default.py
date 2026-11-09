@@ -2,7 +2,7 @@ from uuid import uuid4
 
 from pytest import MonkeyPatch, raises
 
-from haiway import MISSING, Default, DefaultValue, Missing, State, ValidationError
+from haiway import Default, DefaultValue, Missing, State, ValidationError
 
 
 def test_defaultvalue_resolves_a_literal() -> None:
@@ -31,7 +31,7 @@ def test_defaultvalue_without_a_source_is_unavailable() -> None:
     default_value = DefaultValue()
 
     assert not default_value.available
-    assert default_value() is MISSING
+    assert default_value() is Missing
 
 
 def test_default_resolves_a_literal() -> None:
@@ -85,7 +85,7 @@ def test_default_allows_missing_environment_variable_when_annotated(
     class Defaults(State):
         value: str | Missing = Default(env="HAIWAY_TEST_DEFAULT")
 
-    assert Defaults().value is MISSING
+    assert Defaults().value is Missing
 
 
 def test_default_environment_is_not_used_when_value_provided(monkeypatch: MonkeyPatch) -> None:

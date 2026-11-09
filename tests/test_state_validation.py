@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from haiway import MISSING, BasicObject, Missing, State, ValidationError
+from haiway import BasicObject, Missing, State, ValidationError
 
 
 class Color(Enum):
@@ -273,7 +273,7 @@ def test_none_type_validation() -> None:
 
 
 def test_missing_type_validation() -> None:
-    assert ContextStateMissingExc(value=MISSING).value is MISSING
+    assert ContextStateMissingExc(value=Missing).value is Missing
     with pytest.raises(ValidationError) as exc:
         ContextStateMissingExc(value=None)
     assert exc.value.path == (".value",)

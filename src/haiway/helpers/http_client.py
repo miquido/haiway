@@ -8,12 +8,12 @@ from re import Pattern
 from re import compile as compile_pattern
 from time import monotonic
 from types import TracebackType
-from typing import NoReturn, Protocol, Self, cast, final, overload, runtime_checkable
+from typing import Any, NoReturn, Protocol, Self, cast, final, overload, runtime_checkable
 
 from haiway.attributes import State
 from haiway.context import ctx
 from haiway.helpers.statemethods import statemethod
-from haiway.types import MISSING, Immutable, Missing
+from haiway.types import Missing
 from haiway.utils.exceptions import thrown_exception
 
 __all__ = (
@@ -156,8 +156,8 @@ class _StreamedBody(AsyncGenerator[bytes]):
 
 
 @final
-class HTTPResponse(Immutable):
-    """Immutable HTTP response container.
+class HTTPResponse:
+    """HTTP response container.
 
     Encapsulates the status code, headers, and body of a completed HTTP
     request.
@@ -214,9 +214,13 @@ class HTTPResponse(Immutable):
     >>> data = json.loads(await response.body())
     """
 
-    status_code: HTTPStatusCode
-    headers: HTTPHeaders
-    _body: HTTPBody
+    # not an Immutable - the body is read, and cached, after the response is made. the
+    # status and the headers are bound once, the body is the one thing which changes
+    __slots__ = (
+        "_body",
+        "headers",
+        "status_code",
+    )
 
     def __init__(
         self,
@@ -224,11 +228,46 @@ class HTTPResponse(Immutable):
         headers: HTTPHeaders,
         body: HTTPBody,
     ) -> None:
-        super().__init__(
-            status_code=status_code,
-            headers=headers,
-            _body=body,
+        self.status_code: HTTPStatusCode
+        object.__setattr__(
+            self,
+            "status_code",
+            status_code,
         )
+        self.headers: HTTPHeaders
+        object.__setattr__(
+            self,
+            "headers",
+            headers,
+        )
+        self._body: HTTPBody
+        object.__setattr__(
+            self,
+            "_body",
+            body,
+        )
+
+    def __setattr__(
+        self,
+        name: str,
+        value: Any,
+    ) -> NoReturn:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}"
+            f" attribute - '{name}' cannot be modified"
+        )
+
+    def __delattr__(
+        self,
+        name: str,
+    ) -> NoReturn:
+        raise AttributeError(
+            f"Can't modify immutable {self.__class__.__qualname__}"
+            f" attribute - '{name}' cannot be deleted"
+        )
+
+    def __repr__(self) -> str:
+        return f"HTTPResponse(status_code: {self.status_code}, headers: {self.headers})"
 
     async def body(self) -> bytes:
         """Read and cache the full response body.
@@ -548,7 +587,7 @@ def _recorded_host(
     """
     split: tuple[str, str] | None = _split_authority(url)
     if split is None:
-        return MISSING  # relative or opaque - no authority to read
+        return Missing  # relative or opaque - no authority to read
 
     authority: str = split[1].partition("/")[0].partition("?")[0].partition("#")[0]
     # userinfo never reaches an attribute, and the port belongs to `server.port`
@@ -1103,7 +1142,7 @@ class HTTPClient(State):
                 "url.full": recorded_url,
                 # a streamed payload has no known length - recording one would
                 # mean buffering it, which is the opposite of what it is for
-                "http.request.body.size": len(body) if isinstance(body, bytes) else MISSING,
+                "http.request.body.size": len(body) if isinstance(body, bytes) else Missing,
             },
         )
         started: float = monotonic()

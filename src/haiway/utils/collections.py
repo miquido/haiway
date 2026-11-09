@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Mapping
 from typing import Any, cast, overload
 
-from haiway.types import MISSING, Map
+from haiway.types import Map, Missing
 
 __all__ = (
     "as_dict",
@@ -261,7 +261,7 @@ def without_missing[T: Mapping[str, Any]](
     typed: type[T] | None = None,
 ) -> T | Mapping[str, Any]:
     """
-    Create a new mapping without any items that have MISSING values.
+    Create a new mapping without any items that have Missing values.
 
     Parameters
     ----------
@@ -275,7 +275,7 @@ def without_missing[T: Mapping[str, Any]](
     -------
     T | Mapping[str, Any]
         A new mapping containing all items of the input mapping,
-        except items with MISSING values. If typed is provided,
+        except items with Missing values. If typed is provided,
         the result is cast to that type.
     """
-    return cast(T, {key: value for key, value in mapping.items() if value is not MISSING})
+    return cast(T, {key: value for key, value in mapping.items() if value is not Missing})

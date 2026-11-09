@@ -61,7 +61,7 @@ class Document(State):
     pair: tuple[int, str]
     choice: Literal["a", "b"]
     aliased: Annotated[int, Alias("al")] = 0
-    missing: int | Missing = Missing()
+    missing: int | Missing = Missing
 
 
 def _document(**overrides: Any) -> Document:

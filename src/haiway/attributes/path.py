@@ -9,7 +9,7 @@ from copy import copy
 from typing import Any, Final, NoReturn, TypeAliasType, final, get_args, get_origin, overload
 
 from haiway.attributes.annotations import ObjectAttribute
-from haiway.types import MISSING, Missing, not_missing
+from haiway.types import Missing
 
 __all__ = ("AttributePath",)
 
@@ -924,7 +924,7 @@ class AttributePath[Root, Attribute]:
         self,
         root: Root,
         /,
-        updated: Attribute | Missing = MISSING,
+        updated: Attribute | Missing = Missing,
     ) -> Root | Attribute:
         """
         Read the value at this path or return an updated root object.
@@ -933,7 +933,7 @@ class AttributePath[Root, Attribute]:
         ----------
         root : Root
             Root object against which the path should be resolved.
-        updated : Attribute | Missing, default=MISSING
+        updated : Attribute | Missing, default=Missing
             When provided, the path is updated immutably and a new root object
             is returned. When omitted, the current value at the path is
             returned.
@@ -966,7 +966,7 @@ class AttributePath[Root, Attribute]:
             f"'{type(root).__name__}' instead of '{self.__root__.__name__}'"
         )
 
-        if not_missing(updated):
+        if updated is not Missing:
             assert isinstance(updated, _unaliased_origin(self.__attribute__)), (  # nosec: B101
                 f"AttributePath '{self.__repr__()}' assigning to unexpected value of "
                 f"'{type(updated).__name__}' instead of '{self.__attribute__.__name__}'"
