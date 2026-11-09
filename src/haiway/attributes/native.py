@@ -491,6 +491,7 @@ class TypeHooks(Immutable):
     set: type[Any]
     iterable: type[Any]
     uuid: type[Any]
+    safe_uuid: type[Any]  # what a UUID holds besides its number
     datetime: type[Any]
     date: type[Any]
     time: type[Any]

@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <datetime.h>
 
 /*
  * Native storage for haiway.State.
@@ -53,6 +54,7 @@ typedef struct {
     PyObject *set;               /* collections.abc.Set */
     PyObject *iterable;          /* collections.abc.Iterable */
     PyObject *uuid;              /* uuid.UUID */
+    PyObject *safe_uuid;         /* uuid.SafeUUID - what a UUID holds besides its number */
     PyObject *datetime;
     PyObject *date;
     PyObject *time;
@@ -68,6 +70,7 @@ typedef struct {
     PyObject *str_lower;
     PyObject *str_fromisoformat;
     PyObject *str_validate;
+    PyObject *str_int;
     PyObject *deepcopy;          /* copy.deepcopy */
 } ModuleState;
 

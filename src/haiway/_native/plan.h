@@ -215,11 +215,40 @@ untracked_may_join_cycle(ModuleState *state, PyObject *value)
  */
 static int settle_tracked(ModuleState *state, PyObject *value, int depth);
 
+/* what a UUID refers to - its class, an int, which the collector does not track, and a
+ * member of SafeUUID; anything else stops the traversal */
+typedef struct {
+    PyObject *type;
+    PyObject *safe_uuid;
+} UUIDReferents;
+
+static int
+visit_uuid_referent(PyObject *referent, void *arg)
+{
+    UUIDReferents *expected = (UUIDReferents *)arg;
+    if (!PyObject_IS_GC(referent) || referent == expected->type) return 0;
+    return Py_IS_TYPE(referent, (PyTypeObject *)expected->safe_uuid) ? 0 : 1;
+}
+
+/*
+ * A UUID is tracked by the collector, being an instance of a class with slots - while it
+ * holds its number and whether it is safe, a member of SafeUUID, which nothing it holds
+ * can lead back from. What it holds is checked rather than assumed, as `object.__setattr__`
+ * can rebind a slot of it. A subclass may hold anything else, so it is left as it is.
+ */
+static int
+uuid_may_join_cycle(ModuleState *state, PyObject *value)
+{
+    UUIDReferents expected = {(PyObject *)Py_TYPE(value), state->safe_uuid};
+    return Py_TYPE(value)->tp_traverse(value, visit_uuid_referent, &expected) != 0;
+}
+
 /* `settle` of a value which is not a scalar - those are checked inline, being most of them */
 static int
 settle_gc(ModuleState *state, PyObject *value, int depth)
 {
     if (!PyObject_GC_IsTracked(value)) return untracked_may_join_cycle(state, value);
+    if (Py_IS_TYPE(value, (PyTypeObject *)state->uuid)) return uuid_may_join_cycle(state, value);
     return settle_tracked(state, value, depth);
 }
 

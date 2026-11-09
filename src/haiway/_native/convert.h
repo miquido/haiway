@@ -62,10 +62,100 @@ instance_of(PyObject *value, PyObject *type)
     return PyObject_IsInstance(value, type);
 }
 
+/*
+ * The spellings of the values met most, written here rather than by the Python methods
+ * which spell them - `str` of a UUID is Python code, and `isoformat` asks the timezone for
+ * its offset through a call. Exactly what those write, for the exact types only: a
+ * subclass may spell itself otherwise. Each is NULL without an error for a value it does
+ * not spell - left to the method.
+ */
+static PyObject *
+uuid_spelling(ModuleState *state, PyObject *value)
+{
+    /* the number is read off its slot, which `object.__setattr__` could have rebound */
+    PyObject *number = PyObject_GetAttr(value, state->str_int);
+    if (number == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    unsigned char bytes[16];
+    Py_ssize_t size = PyLong_CheckExact(number)
+        ? PyLong_AsNativeBytes(number, bytes, sizeof(bytes),
+              Py_ASNATIVEBYTES_BIG_ENDIAN | Py_ASNATIVEBYTES_UNSIGNED_BUFFER | Py_ASNATIVEBYTES_REJECT_NEGATIVE)
+        : -1;
+    Py_DECREF(number);
+    if (size < 0 || size > (Py_ssize_t)sizeof(bytes)) {
+        PyErr_Clear();
+        return NULL;
+    }
+    static const char digits[] = "0123456789abcdef";
+    char text[36];
+    Py_ssize_t at = 0;
+    for (int i = 0; i < 16; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) text[at++] = '-';
+        text[at++] = digits[bytes[i] >> 4];
+        text[at++] = digits[bytes[i] & 0x0F];
+    }
+    return PyUnicode_FromStringAndSize(text, at);
+}
+
+static PyObject *
+datetime_spelling(PyObject *value)
+{
+    PyObject *tzinfo = PyDateTime_DATE_GET_TZINFO(value);
+    const char *offset;
+    if (tzinfo == Py_None) offset = "";
+    else if (tzinfo == PyDateTime_TimeZone_UTC) offset = "+00:00";
+    else return NULL;  /* any other offset is the timezone's to tell */
+    char text[48];
+    int microsecond = PyDateTime_DATE_GET_MICROSECOND(value);
+    int length = microsecond
+        ? snprintf(text, sizeof(text), "%04d-%02d-%02dT%02d:%02d:%02d.%06d%s", PyDateTime_GET_YEAR(value),
+              PyDateTime_GET_MONTH(value), PyDateTime_GET_DAY(value), PyDateTime_DATE_GET_HOUR(value),
+              PyDateTime_DATE_GET_MINUTE(value), PyDateTime_DATE_GET_SECOND(value), microsecond, offset)
+        : snprintf(text, sizeof(text), "%04d-%02d-%02dT%02d:%02d:%02d%s", PyDateTime_GET_YEAR(value),
+              PyDateTime_GET_MONTH(value), PyDateTime_GET_DAY(value), PyDateTime_DATE_GET_HOUR(value),
+              PyDateTime_DATE_GET_MINUTE(value), PyDateTime_DATE_GET_SECOND(value), offset);
+    return PyUnicode_FromStringAndSize(text, length);
+}
+
+static PyObject *
+date_spelling(PyObject *value)
+{
+    char text[16];
+    int length = snprintf(text, sizeof(text), "%04d-%02d-%02d", PyDateTime_GET_YEAR(value),
+        PyDateTime_GET_MONTH(value), PyDateTime_GET_DAY(value));
+    return PyUnicode_FromStringAndSize(text, length);
+}
+
+static PyObject *
+time_spelling(PyObject *value)
+{
+    if (PyDateTime_TIME_GET_TZINFO(value) != Py_None) return NULL;
+    char text[24];
+    int microsecond = PyDateTime_TIME_GET_MICROSECOND(value);
+    int length = microsecond
+        ? snprintf(text, sizeof(text), "%02d:%02d:%02d.%06d", PyDateTime_TIME_GET_HOUR(value),
+              PyDateTime_TIME_GET_MINUTE(value), PyDateTime_TIME_GET_SECOND(value), microsecond)
+        : snprintf(text, sizeof(text), "%02d:%02d:%02d", PyDateTime_TIME_GET_HOUR(value),
+              PyDateTime_TIME_GET_MINUTE(value), PyDateTime_TIME_GET_SECOND(value));
+    return PyUnicode_FromStringAndSize(text, length);
+}
+
 /* the spelling of a value which has one of its own, a new reference - NULL with no error for none */
 static PyObject *
 native_spelling(ModuleState *state, PyObject *value)
 {
+    PyObject *spelled = NULL;
+    if (Py_IS_TYPE(value, (PyTypeObject *)state->uuid)) {
+        spelled = uuid_spelling(state, value);
+        return spelled != NULL ? spelled : PyObject_Str(value);
+    }
+    if (Py_IS_TYPE(value, (PyTypeObject *)state->datetime)) spelled = datetime_spelling(value);
+    else if (Py_IS_TYPE(value, (PyTypeObject *)state->date)) spelled = date_spelling(value);
+    else if (Py_IS_TYPE(value, (PyTypeObject *)state->time)) spelled = time_spelling(value);
+    if (spelled != NULL || PyErr_Occurred()) return spelled;
+
     int r = instance_of(value, state->uuid);
     if (r < 0) return NULL;
     if (r) return PyObject_Str(value);

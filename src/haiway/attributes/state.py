@@ -40,7 +40,7 @@ from typing import (
     get_origin,
     overload,
 )
-from uuid import UUID
+from uuid import UUID, SafeUUID
 
 from haiway._native import nstruct
 from haiway.attributes import native
@@ -1533,6 +1533,7 @@ native.configure(
         set=Set,
         iterable=Iterable,
         uuid=UUID,
+        safe_uuid=SafeUUID,
         datetime=datetime,
         date=date,
         time=time,

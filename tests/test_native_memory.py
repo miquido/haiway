@@ -490,6 +490,55 @@ def test_containers_deeper_than_looked_into_stay_tracked() -> None:
     assert gc.is_tracked(_Loose(value=deep))
 
 
+class _Identified(State):
+    identifier: UUID
+    scores: Mapping[str, int]
+    leaves: Sequence[Leaf]
+    aliases: Sequence[UUID] = ()
+
+
+def test_instances_holding_a_uuid_are_left_to_reference_counting() -> None:
+    # a UUID is tracked by the collector, while what it holds - its number and a member of
+    # SafeUUID - can never lead back to the instance holding it
+    instance = _Identified(
+        identifier=UUID(int=7),
+        scores={"a": 1},
+        leaves=[Leaf(number=1)],
+        aliases=[UUID(int=8)],
+    )
+    assert not gc.is_tracked(instance)
+    for name in instance.__match_args__:
+        assert not gc.is_tracked(getattr(instance, name)) or name == "identifier", name
+
+
+class _UUIDSubclass(UUID):
+    __slots__ = ("extra",)
+
+
+def test_instances_holding_a_uuid_which_may_lead_back_stay_tracked() -> None:
+    rebound = UUID(int=9)
+    object.__setattr__(rebound, "is_safe", [])  # a slot can be rebound to anything
+    assert gc.is_tracked(_Loose(value=rebound))
+    assert gc.is_tracked(_Loose(value=_UUIDSubclass(int=10)))
+
+
+def test_cycle_through_a_rebound_uuid_is_collected() -> None:
+    finalized: list[bool] = []
+
+    class Finalized:
+        def __del__(self) -> None:
+            finalized.append(True)
+
+    loop: list[Any] = [Finalized()]
+    identifier = UUID(int=11)
+    object.__setattr__(identifier, "is_safe", loop)
+    state = _Loose(value=(identifier,))
+    loop.append(state)  # the cycle: state -> tuple -> uuid -> list -> state
+    del state, identifier, loop
+    gc.collect()
+    assert finalized == [True]
+
+
 def test_cycle_through_a_record_is_collected() -> None:
     finalized: list[bool] = []
 

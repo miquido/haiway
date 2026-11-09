@@ -123,7 +123,8 @@ configure(PyObject *mod, PyObject *args)
         || !bind_hook(conversion, "recursive", &state->recursive)
         || !bind_hook(types, "mapping", &state->mapping) || !bind_hook(types, "sequence", &state->sequence)
         || !bind_hook(types, "set", &state->set) || !bind_hook(types, "iterable", &state->iterable)
-        || !bind_hook(types, "uuid", &state->uuid) || !bind_hook(types, "datetime", &state->datetime)
+        || !bind_hook(types, "uuid", &state->uuid) || !bind_hook(types, "safe_uuid", &state->safe_uuid)
+        || !bind_hook(types, "datetime", &state->datetime)
         || !bind_hook(types, "date", &state->date) || !bind_hook(types, "time", &state->time)
         || !bind_hook(types, "timedelta", &state->timedelta) || !bind_hook(types, "path", &state->path)
         || !bind_hook(types, "pathlike", &state->pathlike) || !bind_hook(types, "meta", &state->meta)) {
@@ -214,9 +215,12 @@ module_exec(PyObject *module)
     if (intern(&state->str_isoformat, "isoformat") < 0 || intern(&state->str_as_posix, "as_posix") < 0
         || intern(&state->str_type_name, "type_name") < 0
         || intern(&state->str_lower, "lower") < 0 || intern(&state->str_fromisoformat, "fromisoformat") < 0
-        || intern(&state->str_validate, "validate") < 0) {
+        || intern(&state->str_validate, "validate") < 0 || intern(&state->str_int, "int") < 0) {
         return -1;
     }
+    /* the C API of datetime - what values are spelled from natively, see convert.h */
+    PyDateTime_IMPORT;
+    if (PyDateTimeAPI == NULL) return -1;
     PyObject *copy = PyImport_ImportModule("copy");
     if (copy == NULL) return -1;
     state->deepcopy = PyObject_GetAttrString(copy, "deepcopy");
@@ -238,10 +242,10 @@ module_exec(PyObject *module)
     V(missing) V(check) V(report) V(unexpected) V(describe) V(enum_values) V(literal_values) \
     V(b64decode) V(parse_duration) V(exception_group) \
     V(map) V(basic_value) V(basic_key) V(recursive) \
-    V(mapping) V(sequence) V(set) V(iterable) V(uuid) V(datetime) V(date) V(time) V(timedelta) \
+    V(mapping) V(sequence) V(set) V(iterable) V(uuid) V(safe_uuid) V(datetime) V(date) V(time) V(timedelta) \
     V(temporal) V(path) V(pathlike) V(meta) \
     V(str_isoformat) V(str_as_posix) V(str_type_name) V(str_lower) \
-    V(str_fromisoformat) V(str_validate) V(deepcopy)
+    V(str_fromisoformat) V(str_validate) V(str_int) V(deepcopy)
 
 static int
 module_traverse(PyObject *module, visitproc visit, void *arg)
