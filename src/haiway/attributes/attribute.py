@@ -1,12 +1,13 @@
 from collections.abc import Mapping
 from typing import Any
 
+from haiway._native import nstruct
 from haiway.attributes.annotations import AttributeAnnotation
 from haiway.attributes.specification import type_specification
 from haiway.types import (
-    MISSING,
     DefaultValue,
     Immutable,
+    Missing,
     TypeSpecification,
 )
 
@@ -17,6 +18,8 @@ class Attribute(Immutable):
     name: str
     annotation: AttributeAnnotation
     default: DefaultValue
+    # the compiled description of the annotation, what validates a value of it
+    spec: Any
     # text rendered instead of the value when the attribute is marked sensitive,
     # resolved once from the annotation - the renderers read it on each rendering
     redaction: str | None = None
@@ -53,11 +56,11 @@ class Attribute(Immutable):
         value: Any,
         /,
     ) -> Any:
-        if value is MISSING:
+        if value is Missing:
             return self._validated_default()
 
         else:
-            return self.annotation.validate(value)
+            return self._validate(value)
 
     def validate_from(
         self,
@@ -65,24 +68,31 @@ class Attribute(Immutable):
         /,
     ) -> Any:
         if self.alias is not None and self.alias in mapping:
-            return self.annotation.validate(mapping[self.alias])
+            return self._validate(mapping[self.alias])
 
         elif self.name in mapping:
-            return self.annotation.validate(mapping[self.name])
+            return self._validate(mapping[self.name])
 
         else:
             return self._validated_default()
 
+    def _validate(
+        self,
+        value: Any,
+        /,
+    ) -> Any:
+        return nstruct.validate(self.spec, value)
+
     def _validated_default(self) -> Any:
         value: Any = self.default()
         try:
-            return self.annotation.validate(value)
+            return self._validate(value)
 
         except Exception as exc:
-            # an environment backed default resolves to MISSING when the variable
+            # an environment backed default resolves to Missing when the variable
             # is not set - reporting the type mismatch would name the annotation
             # instead of the variable which actually has to be provided
-            if value is MISSING and self.default.env is not None:
+            if value is Missing and self.default.env is not None:
                 raise ValueError(
                     f"Required environment value `{self.default.env}` is missing!"
                 ) from exc

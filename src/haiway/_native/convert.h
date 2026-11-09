@@ -54,72 +54,164 @@ is_mapping_leaf(PyObject *value)
     return is_basic_leaf(value) || PyBytes_Check(value);
 }
 
+/* an instance of one of the types, told by the type itself first - a subclass through isinstance */
+static inline int
+instance_of(PyObject *value, PyObject *type)
+{
+    if (Py_IS_TYPE(value, (PyTypeObject *)type)) return 1;
+    return PyObject_IsInstance(value, type);
+}
+
+/*
+ * The spellings of the values met most, written here rather than by the Python methods
+ * which spell them - `str` of a UUID is Python code, and `isoformat` asks the timezone for
+ * its offset through a call. Exactly what those write, for the exact types only: a
+ * subclass may spell itself otherwise. Each is NULL without an error for a value it does
+ * not spell - left to the method.
+ */
+static PyObject *
+uuid_spelling(ModuleState *state, PyObject *value)
+{
+    /* the number is read off its slot, which `object.__setattr__` could have rebound */
+    PyObject *number = PyObject_GetAttr(value, state->str_int);
+    if (number == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    unsigned char bytes[16];
+    Py_ssize_t size = PyLong_CheckExact(number)
+        ? PyLong_AsNativeBytes(number, bytes, sizeof(bytes),
+              Py_ASNATIVEBYTES_BIG_ENDIAN | Py_ASNATIVEBYTES_UNSIGNED_BUFFER | Py_ASNATIVEBYTES_REJECT_NEGATIVE)
+        : -1;
+    Py_DECREF(number);
+    if (size < 0 || size > (Py_ssize_t)sizeof(bytes)) {
+        PyErr_Clear();
+        return NULL;
+    }
+    static const char digits[] = "0123456789abcdef";
+    char text[36];
+    Py_ssize_t at = 0;
+    for (int i = 0; i < 16; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) text[at++] = '-';
+        text[at++] = digits[bytes[i] >> 4];
+        text[at++] = digits[bytes[i] & 0x0F];
+    }
+    return PyUnicode_FromStringAndSize(text, at);
+}
+
+static PyObject *
+datetime_spelling(PyObject *value)
+{
+    PyObject *tzinfo = PyDateTime_DATE_GET_TZINFO(value);
+    const char *offset;
+    if (tzinfo == Py_None) offset = "";
+    else if (tzinfo == PyDateTime_TimeZone_UTC) offset = "+00:00";
+    else return NULL;  /* any other offset is the timezone's to tell */
+    char text[48];
+    int microsecond = PyDateTime_DATE_GET_MICROSECOND(value);
+    int length = microsecond
+        ? snprintf(text, sizeof(text), "%04d-%02d-%02dT%02d:%02d:%02d.%06d%s", PyDateTime_GET_YEAR(value),
+              PyDateTime_GET_MONTH(value), PyDateTime_GET_DAY(value), PyDateTime_DATE_GET_HOUR(value),
+              PyDateTime_DATE_GET_MINUTE(value), PyDateTime_DATE_GET_SECOND(value), microsecond, offset)
+        : snprintf(text, sizeof(text), "%04d-%02d-%02dT%02d:%02d:%02d%s", PyDateTime_GET_YEAR(value),
+              PyDateTime_GET_MONTH(value), PyDateTime_GET_DAY(value), PyDateTime_DATE_GET_HOUR(value),
+              PyDateTime_DATE_GET_MINUTE(value), PyDateTime_DATE_GET_SECOND(value), offset);
+    return PyUnicode_FromStringAndSize(text, length);
+}
+
+static PyObject *
+date_spelling(PyObject *value)
+{
+    char text[16];
+    int length = snprintf(text, sizeof(text), "%04d-%02d-%02d", PyDateTime_GET_YEAR(value),
+        PyDateTime_GET_MONTH(value), PyDateTime_GET_DAY(value));
+    return PyUnicode_FromStringAndSize(text, length);
+}
+
+static PyObject *
+time_spelling(PyObject *value)
+{
+    if (PyDateTime_TIME_GET_TZINFO(value) != Py_None) return NULL;
+    char text[24];
+    int microsecond = PyDateTime_TIME_GET_MICROSECOND(value);
+    int length = microsecond
+        ? snprintf(text, sizeof(text), "%02d:%02d:%02d.%06d", PyDateTime_TIME_GET_HOUR(value),
+              PyDateTime_TIME_GET_MINUTE(value), PyDateTime_TIME_GET_SECOND(value), microsecond)
+        : snprintf(text, sizeof(text), "%02d:%02d:%02d", PyDateTime_TIME_GET_HOUR(value),
+              PyDateTime_TIME_GET_MINUTE(value), PyDateTime_TIME_GET_SECOND(value));
+    return PyUnicode_FromStringAndSize(text, length);
+}
+
 /* the spelling of a value which has one of its own, a new reference - NULL with no error for none */
 static PyObject *
-native_spelling(PyObject *value)
+native_spelling(ModuleState *state, PyObject *value)
 {
-    int r = PyObject_IsInstance(value, hook_uuid);
+    PyObject *spelled = NULL;
+    if (Py_IS_TYPE(value, (PyTypeObject *)state->uuid)) {
+        spelled = uuid_spelling(state, value);
+        return spelled != NULL ? spelled : PyObject_Str(value);
+    }
+    if (Py_IS_TYPE(value, (PyTypeObject *)state->datetime)) spelled = datetime_spelling(value);
+    else if (Py_IS_TYPE(value, (PyTypeObject *)state->date)) spelled = date_spelling(value);
+    else if (Py_IS_TYPE(value, (PyTypeObject *)state->time)) spelled = time_spelling(value);
+    if (spelled != NULL || PyErr_Occurred()) return spelled;
+
+    int r = instance_of(value, state->uuid);
     if (r < 0) return NULL;
     if (r) return PyObject_Str(value);
 
-    r = PyObject_IsInstance(value, hook_temporal);
+    r = instance_of(value, state->datetime);
+    if (r == 0) r = instance_of(value, state->date);
+    if (r == 0) r = instance_of(value, state->time);
     if (r < 0) return NULL;
-    if (r) return PyObject_CallMethodNoArgs(value, str_isoformat);
+    if (r) return PyObject_CallMethodNoArgs(value, state->str_isoformat);
 
-    r = PyObject_IsInstance(value, hook_path);
+    r = instance_of(value, state->path);
     if (r < 0) return NULL;
-    if (r) return PyObject_CallMethodNoArgs(value, str_as_posix);
+    if (r) return PyObject_CallMethodNoArgs(value, state->str_as_posix);
 
     return NULL;
 }
 
-static inline int
-is_struct(PyObject *value)
+/*
+ * The items of a mapping walked as a dictionary - a dictionary through a snapshot, as
+ * nothing here reads what another thread could be changing while the values are
+ * converted, a frozendict as it is. `dict` is what is walked, NULL for anything else.
+ */
+static PyObject *
+dict_source(PyObject *value)
 {
-    return PyType_IsSubtype(Py_TYPE(value), &StructType);
+    if (PyFrozenDict_Check(value)) return Py_NewRef(value);
+    if (PyDict_Check(value)) return PyDict_Copy(value);
+    return NULL;
 }
 
-/* a mapping the walk treats as a dictionary: its items as a new list, NULL if it is not one */
-static PyObject *
-mapping_items(PyObject *value, int *error)
-{
-    int r = PyObject_IsInstance(value, hook_map_types);
-    if (r < 0) {
-        *error = 1;
-        return NULL;
-    }
-    if (r == 0) return NULL;
-    PyObject *items = PyMapping_Items(value);
-    if (items == NULL) *error = 1;
-    return items;
-}
-
-static PyObject *basic_convert_unbounded(PyObject *value, int strict, PathNode *node, PyObject *prefix);
+static PyObject *basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNode *node, PyObject *prefix);
 
 static PyObject *
-basic_convert(PyObject *value, int strict, PathNode *node, PyObject *prefix)
+basic_convert(ModuleState *state, PyObject *value, int strict, PathNode *node, PyObject *prefix)
 {
     if (Py_EnterRecursiveCall(" while converting a State")) return NULL;
-    PyObject *result = basic_convert_unbounded(value, strict, node, prefix);
+    PyObject *result = basic_convert_unbounded(state, value, strict, node, prefix);
     Py_LeaveRecursiveCall();
     return result;
 }
 
 static PyObject *
-basic_struct(PyObject *self, int strict, PathNode *node, PyObject *prefix)
+basic_struct(ModuleState *state, PyObject *self, int strict, PathNode *node, PyObject *prefix)
 {
     CompiledPlan *plan = plan_or_error(Py_TYPE(self));
     if (plan == NULL) return NULL;
     PyObject *result = PyDict_New();
     if (result == NULL) return NULL;
-    Py_ssize_t n = plan->count < Py_SIZE(self) ? plan->count : Py_SIZE(self);
+    Py_ssize_t n = plan->count;
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *value = ITEMS(self)[i];
-        if (value == NULL || value == hook_missing) continue;
+        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
+        if (value == NULL || value == state->missing) continue;
         FieldPlan *field = &plan->fields[i];
         PyObject *key = field_key(field);
         PathNode step = {node, key, 0};
-        PyObject *converted = basic_convert(value, strict, &step, prefix);
+        PyObject *converted = basic_convert(state, value, strict, &step, prefix);
         if (converted == NULL || PyDict_SetItem(result, key, converted) < 0) {
             Py_XDECREF(converted);
             Py_DECREF(result);
@@ -127,60 +219,67 @@ basic_struct(PyObject *self, int strict, PathNode *node, PyObject *prefix)
         }
         Py_DECREF(converted);
     }
-    PyObject *mapped = PyObject_CallOneArg(hook_map, result);
+    PyObject *mapped = PyObject_CallOneArg(state->map, result);
     Py_DECREF(result);
     return mapped;
 }
 
 static PyObject *
-basic_convert_unbounded(PyObject *value, int strict, PathNode *node, PyObject *prefix)
+basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNode *node, PyObject *prefix)
 {
     if (is_basic_leaf(value)) return Py_NewRef(value);
-    if (is_struct(value)) return basic_struct(value, strict, node, prefix);
+    if (is_struct(state, value)) return basic_struct(state, value, strict, node, prefix);
 
     if (PyTuple_CheckExact(value) || PyList_CheckExact(value)) {
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(value);
+        PyObject *items = PySequence_Tuple(value);  /* a snapshot of a list, the tuple itself otherwise */
+        if (items == NULL) return NULL;
+        Py_ssize_t n = PyTuple_GET_SIZE(items);
         PyObject *result = PyTuple_New(n);
-        if (result == NULL) return NULL;
+        if (result == NULL) {
+            Py_DECREF(items);
+            return NULL;
+        }
         for (Py_ssize_t i = 0; i < n; i++) {
             PathNode step = {node, NULL, i};
-            PyObject *converted = basic_convert(PySequence_Fast_GET_ITEM(value, i), strict, &step, prefix);
+            PyObject *converted = basic_convert(state, PyTuple_GET_ITEM(items, i), strict, &step, prefix);
             if (converted == NULL) {
+                Py_DECREF(items);
                 Py_DECREF(result);
                 return NULL;
             }
             PyTuple_SET_ITEM(result, i, converted);
         }
+        Py_DECREF(items);
         return result;
     }
 
-    PyObject *spelled = native_spelling(value);
+    PyObject *spelled = native_spelling(state, value);
     if (spelled != NULL || PyErr_Occurred()) return spelled;
 
-    int error = 0;
-    PyObject *items = mapping_items(value, &error);
-    if (error) return NULL;
-    if (items != NULL) {
+    PyObject *source = dict_source(value);
+    if (source == NULL && PyErr_Occurred()) return NULL;
+    if (source != NULL) {
         PyObject *result = PyDict_New();
         if (result == NULL) {
-            Py_DECREF(items);
+            Py_DECREF(source);
             return NULL;
         }
-        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(items); i++) {
-            PyObject *pair = PyList_GET_ITEM(items, i);
-            PyObject *key = PyTuple_GET_ITEM(pair, 0);
+        PyObject *key;
+        PyObject *item;
+        Py_ssize_t position = 0;
+        while (PyDict_Next(source, &position, &key, &item)) {
             PyObject *key_basic;
             if (PyUnicode_CheckExact(key)) {
                 key_basic = Py_NewRef(key);
             } else {
                 PyObject *path = path_tuple(node, prefix);
                 if (path == NULL) goto items_fail;
-                key_basic = PyObject_CallFunction(hook_basic_key, "OOO", key, strict ? Py_True : Py_False, path);
+                key_basic = PyObject_CallFunction(state->basic_key, "OOO", key, strict ? Py_True : Py_False, path);
                 Py_DECREF(path);
                 if (key_basic == NULL) goto items_fail;
             }
             PathNode step = {node, key_basic, 0};
-            PyObject *converted = basic_convert(PyTuple_GET_ITEM(pair, 1), strict, &step, prefix);
+            PyObject *converted = basic_convert(state, item, strict, &step, prefix);
             if (converted == NULL || PyDict_SetItem(result, key_basic, converted) < 0) {
                 Py_XDECREF(converted);
                 Py_DECREF(key_basic);
@@ -189,12 +288,12 @@ basic_convert_unbounded(PyObject *value, int strict, PathNode *node, PyObject *p
             Py_DECREF(converted);
             Py_DECREF(key_basic);
         }
-        Py_DECREF(items);
-        PyObject *mapped = PyObject_CallOneArg(hook_map, result);
+        Py_DECREF(source);
+        PyObject *mapped = PyObject_CallOneArg(state->map, result);
         Py_DECREF(result);
         return mapped;
 items_fail:
-        Py_DECREF(items);
+        Py_DECREF(source);
         Py_DECREF(result);
         return NULL;
     }
@@ -202,7 +301,7 @@ items_fail:
     /* everything else is for the leaf table and the less common containers of Python */
     PyObject *path = path_tuple(node, prefix);
     if (path == NULL) return NULL;
-    PyObject *converted = PyObject_CallFunction(hook_basic_value, "OOO", value, strict ? Py_True : Py_False, path);
+    PyObject *converted = PyObject_CallFunction(state->basic_value, "OOO", value, strict ? Py_True : Py_False, path);
     Py_DECREF(path);
     return converted;
 }
@@ -211,52 +310,53 @@ items_fail:
 static PyObject *
 basic_object(PyObject *mod, PyObject *args)
 {
+    ModuleState *state = module_state(mod);
     PyObject *self;
     int strict;
     PyObject *prefix;
     if (!PyArg_ParseTuple(args, "OpO!", &self, &strict, &PyTuple_Type, &prefix)) return NULL;
-    if (!is_struct(self)) {
+    if (!is_struct(state, self)) {
         PyErr_SetString(PyExc_TypeError, "basic_object expects a State");
         return NULL;
     }
-    return basic_struct(self, strict, NULL, prefix);
+    return basic_struct(state, self, strict, NULL, prefix);
 }
 
 /* a uuid, a date or a path - 1 for what can't change and has no copy to make, 0 otherwise */
 static int
-is_known_immutable(PyObject *value)
+is_known_immutable(ModuleState *state, PyObject *value)
 {
-    int r = PyObject_IsInstance(value, hook_uuid);
+    int r = instance_of(value, state->uuid);
     if (r != 0) return r;
-    r = PyObject_IsInstance(value, hook_temporal);
+    r = instance_of(value, state->temporal);
     if (r != 0) return r;
-    return PyObject_IsInstance(value, hook_path);
+    return instance_of(value, state->path);
 }
 
-static PyObject *recursive_convert_unbounded(PyObject *value);
+static PyObject *recursive_convert_unbounded(ModuleState *state, PyObject *value);
 
 static PyObject *
-recursive_convert(PyObject *value)
+recursive_convert(ModuleState *state, PyObject *value)
 {
     if (Py_EnterRecursiveCall(" while converting a State")) return NULL;
-    PyObject *result = recursive_convert_unbounded(value);
+    PyObject *result = recursive_convert_unbounded(state, value);
     Py_LeaveRecursiveCall();
     return result;
 }
 
 static PyObject *
-recursive_struct(PyObject *self, int recursive)
+recursive_struct(ModuleState *state, PyObject *self, int recursive)
 {
     CompiledPlan *plan = plan_or_error(Py_TYPE(self));
     if (plan == NULL) return NULL;
     PyObject *result = PyDict_New();
     if (result == NULL) return NULL;
-    Py_ssize_t n = plan->count < Py_SIZE(self) ? plan->count : Py_SIZE(self);
+    Py_ssize_t n = plan->count;
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *value = ITEMS(self)[i];
-        if (value == NULL || value == hook_missing) continue;
+        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
+        if (value == NULL || value == state->missing) continue;
         PyObject *key = field_key(&plan->fields[i]);
-        PyObject *converted = recursive ? recursive_convert(value) : Py_NewRef(value);
+        PyObject *converted = recursive ? recursive_convert(state, value) : Py_NewRef(value);
         if (converted == NULL || PyDict_SetItem(result, key, converted) < 0) {
             Py_XDECREF(converted);
             Py_DECREF(result);
@@ -268,67 +368,76 @@ recursive_struct(PyObject *self, int recursive)
 }
 
 static PyObject *
-recursive_convert_unbounded(PyObject *value)
+recursive_convert_unbounded(ModuleState *state, PyObject *value)
 {
     if (is_mapping_leaf(value)) return Py_NewRef(value);
-    if (is_struct(value)) return recursive_struct(value, 1);
+    if (is_struct(state, value)) return recursive_struct(state, value, 1);
 
     if (PyTuple_CheckExact(value) || PyList_CheckExact(value)) {
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(value);
+        PyObject *items = PySequence_Tuple(value);  /* a snapshot of a list, the tuple itself otherwise */
+        if (items == NULL) return NULL;
+        Py_ssize_t n = PyTuple_GET_SIZE(items);
         PyObject *result = PyList_New(n);
-        if (result == NULL) return NULL;
+        if (result == NULL) {
+            Py_DECREF(items);
+            return NULL;
+        }
         for (Py_ssize_t i = 0; i < n; i++) {
-            PyObject *converted = recursive_convert(PySequence_Fast_GET_ITEM(value, i));
+            PyObject *converted = recursive_convert(state, PyTuple_GET_ITEM(items, i));
             if (converted == NULL) {
+                Py_DECREF(items);
                 Py_DECREF(result);
                 return NULL;
             }
             PyList_SET_ITEM(result, i, converted);
         }
+        Py_DECREF(items);
         return result;
     }
 
-    int immutable = is_known_immutable(value);
+    int immutable = is_known_immutable(state, value);
     if (immutable < 0) return NULL;
     if (immutable) return Py_NewRef(value);
 
-    int error = 0;
-    PyObject *items = mapping_items(value, &error);
-    if (error) return NULL;
-    if (items != NULL) {
+    PyObject *source = dict_source(value);
+    if (source == NULL && PyErr_Occurred()) return NULL;
+    if (source != NULL) {
         PyObject *result = PyDict_New();
         if (result == NULL) {
-            Py_DECREF(items);
+            Py_DECREF(source);
             return NULL;
         }
-        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(items); i++) {
-            PyObject *pair = PyList_GET_ITEM(items, i);
-            PyObject *converted = recursive_convert(PyTuple_GET_ITEM(pair, 1));
-            if (converted == NULL || PyDict_SetItem(result, PyTuple_GET_ITEM(pair, 0), converted) < 0) {
+        PyObject *key;
+        PyObject *item;
+        Py_ssize_t position = 0;
+        while (PyDict_Next(source, &position, &key, &item)) {
+            PyObject *converted = recursive_convert(state, item);
+            if (converted == NULL || PyDict_SetItem(result, key, converted) < 0) {
                 Py_XDECREF(converted);
-                Py_DECREF(items);
+                Py_DECREF(source);
                 Py_DECREF(result);
                 return NULL;
             }
             Py_DECREF(converted);
         }
-        Py_DECREF(items);
+        Py_DECREF(source);
         return result;
     }
 
-    return PyObject_CallOneArg(hook_recursive, value);
+    return PyObject_CallOneArg(state->recursive, value);
 }
 
 /* to_mapping(instance, recursive) */
 static PyObject *
 to_mapping(PyObject *mod, PyObject *args)
 {
+    ModuleState *state = module_state(mod);
     PyObject *self;
     int recursive;
     if (!PyArg_ParseTuple(args, "Op", &self, &recursive)) return NULL;
-    if (!is_struct(self)) {
+    if (!is_struct(state, self)) {
         PyErr_SetString(PyExc_TypeError, "to_mapping expects a State");
         return NULL;
     }
-    return recursive_struct(self, recursive);
+    return recursive_struct(state, self, recursive);
 }

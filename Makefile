@@ -10,7 +10,7 @@ BENCHMARKS_PATH := benchmarks
 # load environment config from .env if able
 -include .env
 
-# a UV_PYTHON set in .env (e.g. UV_PYTHON=3.14) selects the interpreter for every uv command
+# a UV_PYTHON set in .env (e.g. UV_PYTHON=3.15.2) selects the interpreter for every uv command
 ifdef UV_PYTHON
 export UV_PYTHON
 endif
@@ -19,7 +19,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.13.7
 endif
 
-.PHONY: native uv_check venv sync update format lint test test-native benchmark benchmark-server benchmark-otel docs docs-server docs-format docs-lint release
+.PHONY: native uv_check venv sync update format lint test sanitize benchmark benchmark-server benchmark-otel benchmark-http docs docs-server docs-format docs-lint release
 
 
 # Check installed UV version and install the pinned one if needed
@@ -69,7 +69,7 @@ sync: uv_check
 # Rebuild the native extension in place - a changed C source is not picked up by sync
 native: uv_check
 	@echo '# Building native extension...'
-	@HAIWAY_NATIVE=1 uv run --with setuptools python setup.py build_ext --inplace --force
+	@uv run --with setuptools python setup.py build_ext --inplace --force
 	@echo '...finished!'
 
 # Update and lock dependencies from pyproject.toml
@@ -106,9 +106,29 @@ docs-lint:
 test:
 	@uv run --frozen python -B -m pytest -v --cov=$(SOURCES_PATH)
 
-# The same tests against the native implementation, which is opt-in.
-test-native:
-	@HAIWAY_NATIVE=1 uv run --frozen python -B -m pytest -v
+# Run the tests against the native extension built with AddressSanitizer and UBSan, then
+# rebuild it the usual way. Pass ARGS for pytest i.e. make sanitize ARGS="tests/test_state.py".
+# Python objects go through `malloc` (PYTHONMALLOC) so the sanitizer sees them - which `-I`
+# would ignore. Leaks are left to the refleak tests, CPython leaks at exit on purpose. The
+# tests run with the python of the environment itself - `uv run` aborts with the sanitizer
+# runtime preloaded into it.
+SANITIZE_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g -O1
+sanitize: uv_check
+	@echo '# Testing the native extension under AddressSanitizer and UBSan...'
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		runtime="DYLD_INSERT_LIBRARIES=$$(clang -print-resource-dir)/lib/darwin/libclang_rt.asan_osx_dynamic.dylib"; \
+	else \
+		export CC=gcc LDSHARED="gcc -shared"; \
+		runtime="LD_PRELOAD=$$(gcc -print-file-name=libasan.so)"; \
+	fi; \
+	CFLAGS="$(SANITIZE_FLAGS)" LDFLAGS="-fsanitize=address,undefined" uv run --frozen --with setuptools python setup.py -q build_ext --inplace --force; \
+	unset CC LDSHARED; \
+	export "$$runtime"; \
+	export ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:abort_on_error=1" UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" PYTHONMALLOC=malloc HAIWAY_FUZZ_ROUNDS="$${HAIWAY_FUZZ_ROUNDS:-20000}"; \
+	status=0; "$${UV_PROJECT_ENVIRONMENT:-.venv}/bin/python" -B -m pytest -q -p no:cacheprovider $(ARGS) || status=$$?; \
+	unset DYLD_INSERT_LIBRARIES LD_PRELOAD; \
+	uv run --frozen --with setuptools python setup.py -q build_ext --inplace --force; \
+	exit $$status
 
 # Measure the performance of State operations, pass ARGS for the options of the script i.e.
 # make benchmark ARGS="--json before.json" or make benchmark ARGS="--compare before.json".
@@ -123,6 +143,10 @@ benchmark-server:
 # Measure the OpenTelemetry bridge against the logger backend, same ARGS as benchmark.
 benchmark-otel:
 	@uv run --frozen python -O benchmarks/opentelemetry_benchmark.py $(ARGS)
+
+# Measure the HTTP client - facade, HTTPX backend and responses - same ARGS as benchmark.
+benchmark-http:
+	@uv run --frozen python -O benchmarks/http_benchmark.py $(ARGS)
 
 # Build documentation for production
 docs:

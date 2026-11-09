@@ -5,18 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "haiway"
 description = "Framework for dependency injection and state management within structured concurrency model."
-version = "0.60.0"
+version = "0.61.0"
 readme = "README.md"
 maintainers = [
   { name = "Kacper Kaliński", email = "kacper.kalinski@miquido.com" },
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 classifiers = [
   "Intended Audience :: Developers",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: 3.15",
   "Typing :: Typed",
   "Topic :: Software Development",
@@ -80,7 +79,7 @@ pythonpath = ["src"]
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py315"
 line-length = 100
 extend-exclude = [".venv", ".git", ".cache"]
 lint.select = ["E", "F", "A", "I", "B", "PL", "W", "C", "RUF", "UP"]
@@ -95,7 +94,7 @@ max-args = 12
 "./benchmarks/*.py" = ["PLR2004"]
 
 [tool.pyright]
-pythonVersion = "3.14"
+pythonVersion = "3.15"
 venvPath = "."
 venv = ".venv"
 include = ["./src"]
@@ -113,7 +112,7 @@ project_excludes = [
     "**/node_modules",
     "**/__pycache__",
 ]
-python_version = "3.14"
+python_version = "3.15"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -131,11 +130,10 @@ haiway = ["py.typed", "**/*.pyi"]
 "haiway._native" = ["*.c", "*.h"]
 
 [tool.cibuildwheel]
-# the extension is written against the GIL and is not built for a free-threaded
-# interpreter, nor for the platforms nobody installs it on
-build = "cp314-* cp315-*"
+# the extension requires the GIL, so no free-threaded wheels - nor any for the platforms
+# nobody installs it on
+build = "cp315-*"
 skip = "*-musllinux_i686 *-manylinux_i686 *-win32 *_ppc64le *_s390x *_riscv64"
 build-frontend = "uv"
-environment = { HAIWAY_NATIVE = "1" }
 # a file rather than a command line - the quoting of a multi-line one differs per shell
 test-command = "python {project}/.github/wheel_smoke.py"

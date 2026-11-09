@@ -11,7 +11,7 @@ from uuid import UUID
 import pytest
 from pytest import raises
 
-from haiway import MISSING, BasicObject, Map, Missing, State
+from haiway import BasicObject, Map, Missing, State
 from haiway.types import Sensitive
 from haiway.types.basic import basic_key, basic_object, basic_value
 
@@ -166,7 +166,7 @@ def test_bytes_decode_from_base64() -> None:
 
 
 def test_unsupported_types_are_rejected() -> None:
-    for unsupported in (Decimal("1.5"), Plain.A, MISSING, object()):
+    for unsupported in (Decimal("1.5"), Plain.A, Missing, object()):
         with raises(TypeError, match="Can't convert"):
             basic_value(unsupported)
 
@@ -324,12 +324,12 @@ def test_missing_reachable_within_a_mapping_is_rejected() -> None:
         values: Mapping[str, Any]
 
     with raises(TypeError, match="Can't convert 'Missing' to a basic value"):
-        Holder(values={"absent": MISSING}).to_basic_object()
+        Holder(values={"absent": Missing}).to_basic_object()
 
 
 def test_missing_attribute_is_omitted_rather_than_converted() -> None:
     class Optional(State):
-        value: str | Missing = MISSING
+        value: str | Missing = Missing
 
     assert Optional().to_basic_object() == {}
 

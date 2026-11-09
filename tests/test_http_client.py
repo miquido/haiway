@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from pytest import mark, raises
 
-from haiway import MISSING, ctx
+from haiway import Missing, ctx
 from haiway.context import (
     ContextIdentifier,
     Observability,
@@ -22,7 +22,7 @@ from haiway.helpers.http_client import (
     HTTPHeaders,
     HTTPResponse,
     HTTPTimeoutError,
-    _recorded_host,
+    _recorded_location,
     _recorded_url,
 )
 
@@ -440,7 +440,7 @@ async def test_http_client_records_unknown_size_of_a_streamed_body() -> None:
 
     # measuring a streamed payload would mean buffering it, which is the very
     # thing streaming avoids - the size is reported as missing instead
-    assert events[0][2]["http.request.body.size"] is MISSING
+    assert events[0][2]["http.request.body.size"] is Missing
 
 
 @mark.asyncio
@@ -729,7 +729,7 @@ async def test_http_client_measures_relative_url_without_a_host() -> None:
 
     # the base URL it resolves against belongs to the backend - reporting the
     # facade's own view of it would be a guess
-    assert metrics[0].attributes["server.address"] is MISSING
+    assert metrics[0].attributes["server.address"] is Missing
 
 
 @mark.asyncio
@@ -876,14 +876,14 @@ def test_recorded_url_redacts_credentials_of_every_url_form(url: str, expected: 
         ("//api.example.com/p", "api.example.com"),
         ("custom+scheme-1.0://api.example.com/p", "api.example.com"),
         # a URL quoted within a relative one names no authority of its own
-        ("/x?next=https://evil.example/p", MISSING),
-        ("/redirect/https://other.example/p", MISSING),
-        ("/a/b?x=1#https://frag.example", MISSING),
-        ("/relative", MISSING),
+        ("/x?next=https://evil.example/p", Missing),
+        ("/redirect/https://other.example/p", Missing),
+        ("/a/b?x=1#https://frag.example", Missing),
+        ("/relative", Missing),
     ),
 )
 def test_recorded_host_reads_only_the_authority_of_the_url_itself(
     url: str,
     expected: object,
 ) -> None:
-    assert _recorded_host(url) == expected
+    assert _recorded_location(url)[1] == expected

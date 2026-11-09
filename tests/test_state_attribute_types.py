@@ -18,7 +18,6 @@ from uuid import UUID
 from pytest import mark, param, raises
 
 from haiway import (
-    MISSING,
     Alias,
     Description,
     Meta,
@@ -503,7 +502,7 @@ def test_missing_union_clears_attribute() -> None:
 
     assert state_type().to_mapping() == {}
     assert state_type(value=1).to_mapping() == {"value": 1}
-    assert state_type(value=1).updating(value=MISSING).to_mapping() == {}
+    assert state_type(value=1).updating(value=Missing).to_mapping() == {}
 
 
 def test_not_required_typed_dict_key_is_optional() -> None:

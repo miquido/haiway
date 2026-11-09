@@ -1,65 +1,65 @@
-from collections.abc import Callable, Mapping
-from typing import Any, Protocol, Self
+from typing import Any, Self
 
-NOCACHE: object
+SPEC_ANY: int
+SPEC_NONE: int
+SPEC_MISSING: int
+SPEC_LITERAL: int
+SPEC_BOOL: int
+SPEC_INT: int
+SPEC_FLOAT: int
+SPEC_STR: int
+SPEC_BYTES: int
+SPEC_UUID: int
+SPEC_DATETIME: int
+SPEC_DATE: int
+SPEC_TIME: int
+SPEC_TIMEDELTA: int
+SPEC_PATH: int
+SPEC_STR_ENUM: int
+SPEC_INT_ENUM: int
+SPEC_TUPLE: int
+SPEC_SEQUENCE: int
+SPEC_SET: int
+SPEC_MAPPING: int
+SPEC_META: int
+SPEC_TYPED_DICT: int
+SPEC_STATE: int
+SPEC_CUSTOM_STATE: int
+SPEC_CUSTOM: int
+SPEC_FUNCTION: int
+SPEC_UNION: int
+SPEC_VALIDABLE: int
+SPEC_ALIAS: int
 
-K_ANY: int
-K_INT: int
-K_STR: int
-K_FLOAT: int
-K_BOOL: int
-K_CALL: int
-K_INSTANCE: int
-K_OPTIONAL: int
-K_SEQUENCE: int
-K_ISINSTANCE: int
-K_MAPPING: int
-K_TUPLE: int
-K_LITERAL: int
-K_SET: int
-K_UNION: int
-K_FLOAT_EXACT: int
-S_NONE: int
-S_STR: int
-S_INT: int
+class StructMeta(type): ...
 
-class ValidationHooks(Protocol):
-    missing: object
-    check: Callable[[type[Any], Mapping[str, Any]], None]
-    report: Callable[[str, Exception], Any]
-    unexpected: Callable[[type[Any], Any], Any]
-    mapping: type[Any]
-
-class ConversionHooks(Protocol):
-    map: Callable[[dict[Any, Any]], Any]
-    map_types: tuple[type[Any], ...]
-    basic_value: Callable[[Any, bool, tuple[str, ...]], Any]
-    basic_key: Callable[[Any, bool, tuple[str, ...]], Any]
-    recursive: Callable[[Any], Any]
-
-class SpellingHooks(Protocol):
-    uuid_type: type[Any]
-    temporal_types: tuple[type[Any], ...]
-    path_type: type[Any]
-
-class Struct:
+class Struct(metaclass=StructMeta):
     def __new__(cls, *args: Any, **kwargs: Any) -> Self: ...
     def __init__(self, **kwargs: Any) -> None: ...
     def __replace__(self, **kwargs: Any) -> Self: ...
     def __deepcopy__(self, memo: dict[int, Any] | None, /) -> Self: ...
     def updating(self, **kwargs: Any) -> Self: ...
+
+class Validated(Struct):
     @classmethod
     def validate(cls, value: Any, /) -> Self: ...
 
-def compile_plan(cls: type[Any], plan: tuple[Any, ...], /) -> None: ...
-def member(cls: type[Any], index: int, name: str, /) -> tuple[Any, object]: ...
+class Spec: ...
+
+def compile_spec(description: tuple[Any, ...], /) -> Spec: ...
+def validate(spec: Spec, value: Any, /) -> Any: ...
+def check(spec: Spec, value: Any, /) -> bool: ...
+def compile_plan(
+    cls: type[Any],
+    plan: tuple[Any, ...],
+    owned: tuple[str, ...],
+    reporting: bool,
+    /,
+) -> None: ...
 def to_json(instance: Struct, /) -> str | None: ...
 def from_json(cls: type[Struct], text: str | bytes, array: bool, /) -> Any: ...
 def basic_object(instance: Struct, strict: bool, path: tuple[str, ...], /) -> Any: ...
 def to_mapping(instance: Struct, recursive: bool, /) -> dict[str, Any]: ...
-def configure(
-    validation: ValidationHooks,
-    conversion: ConversionHooks,
-    spelling: SpellingHooks,
-    /,
-) -> None: ...
+
+# the hooks are read by name - `haiway.attributes.native` declares what each holds
+def configure(validation: object, conversion: object, types: object, /) -> None: ...

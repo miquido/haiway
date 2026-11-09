@@ -10,7 +10,7 @@ standalone immutable containers.
 The package groups into four areas:
 
 - JSON-like value aliases: `RawValue`, `BasicValue`, `BasicObject`, `FlatObject`
-- Sentinel and defaults: `MISSING`, `Missing`, `Default`, `DefaultValue`
+- Sentinel and defaults: `Missing`, `Default`, `DefaultValue`
 - Immutable containers: `Immutable`, `Map`, `Meta`
 - Annotation metadata: `Alias`, `Description`, `Specification`, `TypeSpecification`
 
@@ -77,32 +77,51 @@ Journal(events={UUID(int=1): event}).to_json()
 # '{"events": {"00000000-0000-0000-0000-000000000001": {"identifier": "000...", ...}}}'
 ```
 
-Anything else - a plain `Enum`, a `Decimal`, `MISSING` - has no basic spelling the validation would
-read back. Rather than encoding it into a value which could only fail on the way in,
-`to_basic_object` raises `TypeError` naming the path and the type, never the value. `to_json` leaves
-such values unchanged instead, so a custom `encoder_class` still gets to handle them.
+Anything else - a plain `Enum`, a `Decimal`, `Missing` held within a value - has no basic spelling
+the validation would read back. Rather than encoding it into a value which could only fail on the
+way in, `to_basic_object` raises `TypeError` naming the path and the type, never the value.
+`to_json` leaves such values unchanged instead, so a custom `encoder_class` still gets to handle
+them. An attribute of a `State` set to `Missing` is different: it is left out of the result
+altogether.
 
-## Missing Values with `MISSING`
+## Missing Values with `Missing`
 
-`MISSING` is Haiway's explicit "not provided" sentinel. It is different from `None`:
+`Missing` is Haiway's explicit "not provided" sentinel. It is different from `None`:
 
 - `None` means a value was provided and that value is null
-- `MISSING` means no value was provided at all
+- `Missing` means no value was provided at all
+
+Like `None`, `Missing` is both the value and its type - a builtin PEP 661 `sentinel`. A parameter
+which may be left out is annotated `int | Missing` and defaults to `Missing`. It is the one instance
+there is, kept as itself when copied or pickled, and is always compared by identity:
+`value is Missing`. Unlike `None` it is truthy, so never test it with `if value:`.
 
 ```python
-from haiway import MISSING, Missing, is_missing, not_missing, unwrap_missing
+from haiway import Missing
 
 def normalize(value: str | Missing) -> str:
-    if is_missing(value):
+    if value is Missing:
         return "fallback"
 
-    assert not_missing(value)
-    return value.upper()
+    return value.upper()  # narrowed to `str` by the identity check alone
 
-assert unwrap_missing(MISSING, default="fallback") == "fallback"
+assert normalize(Missing) == "fallback"
 ```
 
-Use `Missing` in state field types when you need three states: present, null, and omitted.
+Use `Missing` in state field types when you need three states: present, null, and omitted:
+
+```python
+from haiway import Missing, State
+
+class Patch(State):
+    name: str | Missing = Missing
+    note: str | Missing | None = Missing
+
+assert Patch(note=None).to_mapping() == {"note": None}  # `name` was never provided
+```
+
+Within a `match` statement refer to it through a module - `case haiway.Missing:` - since a bare
+`case Missing:` is a capture pattern, binding the value to a new variable named `Missing`.
 
 ## Defaults with `Default`
 
@@ -159,15 +178,20 @@ class RetryPolicy(Immutable):
     backoff_seconds: float
 ```
 
-Instances cannot be modified after construction. `copy.copy()` and `copy.deepcopy()` return the same
-instance because the object is immutable.
+The attributes of an instance are bound once - assignment, deletion and `object.__setattr__` all
+raise, and calling `__init__` again does too. `copy.copy()` and `copy.deepcopy()` return the same
+instance because the record can't be rebound. What it holds is held as given: `Immutable` validates
+and copies nothing, so a mutable value such as a `list` stays mutable - use a `State` for values
+which have to be frozen through. A record inherits from `Immutable` alone - it is final, and can't
+be combined with mixins. An object whose internals change after it is made, like a client opening
+its connection or a response caching its body, is a plain class with `__slots__` rather than an
+`Immutable`.
 
 ## `Map`
 
-`Map[K, V]` is an immutable mapping with JSON helpers. It subclasses the builtin `frozendict` where
-Python has one (3.15), so it can't be mutated through the `dict` methods either, and `dict` with the
-mutators refused on 3.14. It is therefore not a `dict` on 3.15, and `{} | map` is a plain `dict`
-(`Meta` is built the same way and behaves the same, `{} | meta` included):
+`Map[K, V]` is an immutable mapping with JSON helpers. It subclasses the builtin `frozendict`, so it
+can't be mutated through the `dict` methods either. It is therefore not a `dict`, and `{} | map` is
+a plain `dict` (`Meta` is built the same way and behaves the same, `{} | meta` included):
 
 ```python
 from haiway import Map

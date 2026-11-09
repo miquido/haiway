@@ -31,18 +31,18 @@ immutable = as_map({"a": 1})        # Map({"a": 1})
 
 All five functions return `None` when passed `None`.
 
-### Removing `MISSING` values
+### Removing `Missing` values
 
 Use `without_missing()` when building payloads or state updates from optional values that may carry
-Haiway's `MISSING` sentinel.
+Haiway's `Missing` sentinel.
 
 ```python
-from haiway import MISSING, without_missing
+from haiway import Missing, without_missing
 
 payload = without_missing(
     {
         "name": "alice",
-        "nickname": MISSING,
+        "nickname": Missing,
         "age": 30,
     }
 )
@@ -50,7 +50,7 @@ payload = without_missing(
 assert payload == {"name": "alice", "age": 30}
 ```
 
-`without_missing()` only removes values equal to `MISSING`. It does not remove `None`, `False`, or
+`without_missing()` only removes values equal to `Missing`. It does not remove `None`, `False`, or
 empty strings.
 
 ## Environment Helpers
@@ -364,7 +364,7 @@ Formatting rules include:
 - bytes-like values are rendered as `<<<N bytes>>>`
 - `datetime` values use ISO 8601
 - `UUID` values use their canonical string form
-- `MISSING` renders as an empty value and is skipped inside nested structures
+- `Missing` renders as an empty value and is skipped inside nested structures
 
 This function is primarily useful for human-readable diagnostics rather than stable serialization.
 

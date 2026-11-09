@@ -11,6 +11,7 @@ import pytest
 import typing_extensions as te
 
 from haiway import State
+from haiway.attributes import native
 from haiway.attributes.annotations import (
     AliasAttribute,
     AttributeAnnotation,
@@ -32,6 +33,10 @@ from haiway.attributes.validation import Validator
 from haiway.types import Alias, Description, Meta, Specification
 
 _SENTINEL = object()
+
+
+def _validate(annotation: Any, value: Any) -> Any:
+    return native.validate(native.compile(annotation), value)
 
 
 def ensure_positive(value: int) -> int:
@@ -78,9 +83,9 @@ def test_type_none_attribute_resolves_to_none_attribute() -> None:
 
     assert isinstance(annotation, NoneAttribute)
     assert annotation.base is None
-    assert annotation.validate(None) is None
+    assert _validate(annotation, None) is None
     with pytest.raises(TypeError):
-        annotation.validate("not-none")
+        _validate(annotation, "not-none")
 
 
 def test_attribute_annotations_handle_string_metadata_as_description() -> None:
@@ -113,9 +118,9 @@ def test_attribute_annotations_attach_validator_metadata() -> None:
 
     annotation = attribute_of(Example, "value")
     assert isinstance(annotation, ValidableAttribute)
-    assert annotation.validate(5) == 5
+    assert _validate(annotation, 5) == 5
     with pytest.raises(ValueError):
-        annotation.validate(0)
+        _validate(annotation, 0)
 
 
 class PositiveInt(int):
@@ -143,13 +148,13 @@ def test_attribute_annotations_stack_validators() -> None:
     annotation = attribute_of(Example, "value")
     assert isinstance(annotation, ValidableAttribute)
     validated_value = PositiveInt.validate(5)
-    assert annotation.validate(validated_value) == validated_value
+    assert _validate(annotation, validated_value) == validated_value
 
     with pytest.raises(ValueError):
-        annotation.validate(-1)
+        _validate(annotation, -1)
 
     with pytest.raises(ValueError):
-        annotation.validate(PositiveInt(10))
+        _validate(annotation, PositiveInt(10))
 
 
 def test_attribute_annotations_include_alias_description_specification() -> None:
@@ -215,8 +220,8 @@ def test_meta_attribute_resolution_and_specification() -> None:
     annotation = attribute_of(Example, "meta")
     assert isinstance(annotation, MetaAttribute)
     meta_value = Meta.of({"name": "example"})
-    assert annotation.validate(meta_value) is meta_value
-    validated = annotation.validate({"kind": "example"})
+    assert _validate(annotation, meta_value) is meta_value
+    validated = _validate(annotation, {"kind": "example"})
     assert isinstance(validated, Meta)
 
     specification = Example.__SPECIFICATION__
@@ -349,10 +354,10 @@ def test_uuid_attribute_accepts_string_representation() -> None:
     annotation = attribute_of(Example, "identifier")
     assert isinstance(annotation, UUIDAttribute)
     generated = uuid.uuid4()
-    assert annotation.validate(generated) is generated
-    assert annotation.validate(str(generated)) == generated
+    assert _validate(annotation, generated) is generated
+    assert _validate(annotation, str(generated)) == generated
     with pytest.raises(ValueError):
-        annotation.validate("not-a-uuid")
+        _validate(annotation, "not-a-uuid")
 
 
 def test_datetime_attribute_parses_iso_strings() -> None:
@@ -362,10 +367,10 @@ def test_datetime_attribute_parses_iso_strings() -> None:
     annotation = attribute_of(Example, "created_at")
     assert isinstance(annotation, DatetimeAttribute)
     iso_value = "2024-05-06T07:08:09"
-    parsed = annotation.validate(iso_value)
+    parsed = _validate(annotation, iso_value)
     assert parsed == datetime.datetime.fromisoformat(iso_value)
     with pytest.raises(TypeError):
-        annotation.validate(123)
+        _validate(annotation, 123)
 
 
 def test_time_attribute_parses_iso_strings() -> None:
@@ -375,10 +380,10 @@ def test_time_attribute_parses_iso_strings() -> None:
     annotation = attribute_of(Example, "scheduled_at")
     assert isinstance(annotation, TimeAttribute)
     iso_value = "07:08:09"
-    parsed = annotation.validate(iso_value)
+    parsed = _validate(annotation, iso_value)
     assert parsed == datetime.time.fromisoformat(iso_value)
     with pytest.raises(TypeError):
-        annotation.validate(123)
+        _validate(annotation, 123)
 
 
 def test_tuple_attribute_requires_fixed_length() -> None:
@@ -387,11 +392,11 @@ def test_tuple_attribute_requires_fixed_length() -> None:
 
     annotation = attribute_of(Example, "payload")
     assert isinstance(annotation, TupleAttribute)
-    result = annotation.validate([1, "ok"])
+    result = _validate(annotation, [1, "ok"])
     assert result == (1, "ok")
 
     with pytest.raises(ValueError, match="expected tuple length 2"):
-        annotation.validate([1])
+        _validate(annotation, [1])
 
 
 def test_timedelta_attribute_accepts_timedelta_and_iso_duration() -> None:
@@ -400,13 +405,13 @@ def test_timedelta_attribute_accepts_timedelta_and_iso_duration() -> None:
 
     annotation = attribute_of(Example, "timeout")
     assert isinstance(annotation, TimedeltaAttribute)
-    valid = annotation.validate(datetime.timedelta(seconds=5))
+    valid = _validate(annotation, datetime.timedelta(seconds=5))
     assert valid == datetime.timedelta(seconds=5)
-    assert annotation.validate("PT5S") == datetime.timedelta(seconds=5)
+    assert _validate(annotation, "PT5S") == datetime.timedelta(seconds=5)
     with pytest.raises(TypeError):
-        annotation.validate(1.5)
+        _validate(annotation, 1.5)
     with pytest.raises(ValueError):
-        annotation.validate("5 seconds")
+        _validate(annotation, "5 seconds")
 
 
 def test_path_attribute_accepts_path_like_values() -> None:
@@ -415,7 +420,7 @@ def test_path_attribute_accepts_path_like_values() -> None:
 
     annotation = attribute_of(Example, "location")
     assert isinstance(annotation, PathAttribute)
-    resolved = annotation.validate("data/file.txt")
+    resolved = _validate(annotation, "data/file.txt")
     assert resolved == pathlib.Path("data/file.txt")
     assert isinstance(resolved, pathlib.Path)
 
@@ -432,10 +437,10 @@ def test_str_enum_attribute_accepts_value_and_name() -> None:
 
     annotation = attribute_of(Example, "color")
     assert isinstance(annotation, StrEnumAttribute)
-    assert annotation.validate("red") is Color.RED
-    assert annotation.validate("RED") is Color.RED
+    assert _validate(annotation, "red") is Color.RED
+    assert _validate(annotation, "RED") is Color.RED
     with pytest.raises(ValueError):
-        annotation.validate("green")
+        _validate(annotation, "green")
 
 
 def test_int_enum_attribute_accepts_value_name_and_stringified_value() -> None:
@@ -449,8 +454,8 @@ def test_int_enum_attribute_accepts_value_name_and_stringified_value() -> None:
             priority: Priority
 
     annotation = attribute_of(Example, "priority")
-    assert annotation.validate(1) is Priority.LOW
-    assert annotation.validate("HIGH") is Priority.HIGH
-    assert annotation.validate("2") is Priority.HIGH
+    assert _validate(annotation, 1) is Priority.LOW
+    assert _validate(annotation, "HIGH") is Priority.HIGH
+    assert _validate(annotation, "2") is Priority.HIGH
     with pytest.raises(ValueError):
-        annotation.validate("MISSING")
+        _validate(annotation, "Missing")

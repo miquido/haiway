@@ -5,10 +5,11 @@ from inspect import _empty as INSPECT_EMPTY  # pyright: ignore[reportPrivateUsag
 from inspect import signature
 from typing import Any, get_type_hints
 
+from haiway.attributes import native
 from haiway.attributes.annotations import AttributeAnnotation, resolve_attribute
 from haiway.attributes.attribute import Attribute
 from haiway.attributes.validation import ValidationError
-from haiway.types import MISSING, DefaultValue
+from haiway.types import DefaultValue, Missing
 
 __all__ = ("Function",)
 
@@ -212,14 +213,14 @@ class Function[**Args, Result]:
             if attribute.name not in self._deferred_defaults:
                 break  # nothing to resolve here, later slots would shift
 
-            validated_args.append(_validated(attribute, attribute.name, MISSING))
+            validated_args.append(_validated(attribute, attribute.name, Missing))
             consumed_args.add(attribute.name)
 
         for name, attribute in self._keyword_arguments.items():
             if name in consumed_args or name not in self._deferred_defaults:
                 continue  # already provided, or resolved by python itself
 
-            validated_kwargs[name] = _validated(attribute, name, MISSING)
+            validated_kwargs[name] = _validated(attribute, name, Missing)
 
     def __call__(
         self,
@@ -267,6 +268,7 @@ def _resolve_parameter(
             name=parameter.name,
             annotation=attribute,
             default=parameter.default,
+            spec=native.compile(attribute),
         )
 
     else:
@@ -274,6 +276,7 @@ def _resolve_parameter(
             name=parameter.name,
             annotation=attribute,
             default=DefaultValue(
-                default=MISSING if parameter.default is INSPECT_EMPTY else parameter.default,
+                default=Missing if parameter.default is INSPECT_EMPTY else parameter.default,
             ),
+            spec=native.compile(attribute),
         )

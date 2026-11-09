@@ -3,7 +3,7 @@ from collections.abc import Callable, Coroutine, Mapping, Sequence
 from ssl import SSLContext
 from time import monotonic
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, final
 
 from asyncpg import (
     Connection,
@@ -39,13 +39,14 @@ from haiway.postgres.types import (
     PostgresTransactionIsolation,
     PostgresValue,
 )
-from haiway.types import MISSING, Immutable, Missing, not_missing
+from haiway.types import Missing
 from haiway.utils import getenv_float, getenv_int, getenv_str
 
 __all__ = ("PostgresConnectionPool",)
 
 
-class PostgresConnectionPool(Immutable):
+@final
+class PostgresConnectionPool:
     """Disposable Postgres connection pool backed by ``asyncpg``.
 
     The pool is intended to be installed into a Haiway scope via
@@ -125,6 +126,15 @@ class PostgresConnectionPool(Immutable):
     One instance owns a single pool and supports one active scope at a time.
     """
 
+    # not an Immutable - the pool is created when the instance is entered, and dropped
+    # when it is left
+    __slots__ = (
+        "_close_pool",
+        "_pool",
+        "_prepare_connection_context",
+        "_prepare_pool",
+    )
+
     _pool: Pool | None  # initialized on demand
     # the whole configuration lives in these closures - see the note above
     _prepare_pool: Callable[[], Pool]
@@ -136,11 +146,11 @@ class PostgresConnectionPool(Immutable):
         cls,
         dsn: str,
         *,
-        connection_limit: int | Missing = MISSING,
-        acquire_timeout: float | Missing = MISSING,
-        command_timeout: float | Missing = MISSING,
-        close_timeout: float | Missing = MISSING,
-        statement_cache: int | Missing = MISSING,
+        connection_limit: int | Missing = Missing,
+        acquire_timeout: float | Missing = Missing,
+        command_timeout: float | Missing = Missing,
+        close_timeout: float | Missing = Missing,
+        statement_cache: int | Missing = Missing,
         initialize: Callable[[Connection], Coroutine[None, None, None]] | None = None,
     ) -> Self:
         """Create a pool connecting through the given dsn.
@@ -168,7 +178,7 @@ class PostgresConnectionPool(Immutable):
         Returns
         -------
         Self
-            Immutable pool configuration ready to be used as a disposable.
+            Pool configuration ready to be used as a disposable.
 
         Notes
         -----
@@ -215,17 +225,17 @@ class PostgresConnectionPool(Immutable):
     def __init__(
         self,
         *,
-        host: str | Missing = MISSING,
-        port: str | Missing = MISSING,
-        database: str | Missing = MISSING,
-        user: str | Missing = MISSING,
-        password: str | Missing | None = MISSING,
-        ssl: SSLContext | str | bool | Missing | None = MISSING,
-        connection_limit: int | Missing = MISSING,
-        acquire_timeout: float | Missing = MISSING,
-        command_timeout: float | Missing = MISSING,
-        close_timeout: float | Missing = MISSING,
-        statement_cache: int | Missing = MISSING,
+        host: str | Missing = Missing,
+        port: str | Missing = Missing,
+        database: str | Missing = Missing,
+        user: str | Missing = Missing,
+        password: str | Missing | None = Missing,
+        ssl: SSLContext | str | bool | Missing | None = Missing,
+        connection_limit: int | Missing = Missing,
+        acquire_timeout: float | Missing = Missing,
+        command_timeout: float | Missing = Missing,
+        close_timeout: float | Missing = Missing,
+        statement_cache: int | Missing = Missing,
         initialize: Callable[[Connection], Coroutine[None, None, None]] | None = None,
         _dsn: str | None = None,  # provided by `of`, which owns the dsn path
     ) -> None:
@@ -238,39 +248,41 @@ class PostgresConnectionPool(Immutable):
 
         else:
             connection_arguments = {
-                "host": host if not_missing(host) else getenv_str("POSTGRES_HOST", "localhost"),
-                "port": port if not_missing(port) else getenv_str("POSTGRES_PORT", "5432"),
+                "host": host if host is not Missing else getenv_str("POSTGRES_HOST", "localhost"),
+                "port": port if port is not Missing else getenv_str("POSTGRES_PORT", "5432"),
                 "database": database
-                if not_missing(database)
+                if database is not Missing
                 else getenv_str("POSTGRES_DATABASE", "postgres"),
-                "user": user if not_missing(user) else getenv_str("POSTGRES_USER", "postgres"),
-                "password": password if not_missing(password) else getenv_str("POSTGRES_PASSWORD"),
-                "ssl": ssl if not_missing(ssl) else getenv_str("POSTGRES_SSLMODE", "require"),
+                "user": user if user is not Missing else getenv_str("POSTGRES_USER", "postgres"),
+                "password": password
+                if password is not Missing
+                else getenv_str("POSTGRES_PASSWORD"),
+                "ssl": ssl if ssl is not Missing else getenv_str("POSTGRES_SSLMODE", "require"),
             }
 
         resolved_connection_limit: int = (
             connection_limit
-            if not_missing(connection_limit)
+            if connection_limit is not Missing
             else getenv_int("POSTGRES_CONNECTIONS", 1)
         )
         resolved_command_timeout: float = (
             command_timeout
-            if not_missing(command_timeout)
+            if command_timeout is not Missing
             else getenv_float("POSTGRES_COMMAND_TIMEOUT", 0.0)
         )
         resolved_statement_cache: int = (
             statement_cache
-            if not_missing(statement_cache)
+            if statement_cache is not Missing
             else getenv_int("POSTGRES_STATEMENT_CACHE", 100)
         )
         resolved_acquire_timeout: float = (
             acquire_timeout
-            if not_missing(acquire_timeout)
+            if acquire_timeout is not Missing
             else getenv_float("POSTGRES_ACQUIRE_TIMEOUT", 30.0)
         )
         resolved_close_timeout: float = (
             close_timeout
-            if not_missing(close_timeout)
+            if close_timeout is not Missing
             else getenv_float("POSTGRES_CLOSE_TIMEOUT", 30.0)
         )
 
@@ -419,9 +431,21 @@ class PostgresConnectionPool(Immutable):
         return self._prepare_connection_context(pool)
 
 
-class _TransactionContext(Immutable):
-    _transaction_context: Transaction
-    _entered_at: float | None = None  # set when the transaction begins
+@final
+class _TransactionContext:
+    # not an Immutable - it records when the transaction begins
+    __slots__ = (
+        "_entered_at",
+        "_transaction_context",
+    )
+
+    def __init__(
+        self,
+        *,
+        _transaction_context: Transaction,
+    ) -> None:
+        self._transaction_context: Transaction = _transaction_context
+        self._entered_at: float | None = None  # set when the transaction begins
 
     async def __aenter__(self) -> None:
         try:
@@ -507,10 +531,24 @@ class _TransactionContext(Immutable):
             self._record_completed(outcome)
 
 
-class _ConnectionContext(Immutable):
-    _pool: Pool
-    _acquire_timeout: float | None
-    _pool_context: PoolAcquireContext | None = None  # set by the acquire below
+@final
+class _ConnectionContext:
+    # not an Immutable - it holds the acquired connection until it is released
+    __slots__ = (
+        "_acquire_timeout",
+        "_pool",
+        "_pool_context",
+    )
+
+    def __init__(
+        self,
+        *,
+        _pool: Pool,
+        _acquire_timeout: float | None,
+    ) -> None:
+        self._pool: Pool = _pool
+        self._acquire_timeout: float | None = _acquire_timeout
+        self._pool_context: PoolAcquireContext | None = None  # set by the acquire below
 
     def _record_acquired(
         self,

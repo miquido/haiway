@@ -1,4 +1,4 @@
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from types import TracebackType
 from typing import Any, Self, final
@@ -22,14 +22,13 @@ from haiway.helpers import (
     HTTPResponse,
     HTTPTimeoutError,
 )
-from haiway.types import Immutable
 from haiway.utils.exceptions import thrown_exception
 
 __all__ = ("HTTPXClient",)
 
 
 @final
-class HTTPXClient(Immutable):
+class HTTPXClient:
     """HTTPX-based implementation of the HTTP client.
 
     Provides an async HTTP client using ``httpx2.AsyncClient`` as the backend.
@@ -121,6 +120,13 @@ class HTTPXClient(Immutable):
       previously closed instance creates a fresh internal
       ``httpx2.AsyncClient`` with the same configuration.
     """
+
+    # not an Immutable - the internal client is replaced when a closed instance is
+    # entered again
+    __slots__ = (
+        "_client",
+        "_prepare_client",
+    )
 
     _client: AsyncClient
     _prepare_client: Callable[[], AsyncClient]
@@ -436,15 +442,17 @@ class _ResponseStream(AsyncGenerator[bytes]):
     def __aiter__(self) -> Self:
         return self
 
-    async def __anext__(self) -> bytes:
-        return await self.asend(None)
+    # handing over the awaitable of the generator itself, rather than a coroutine
+    # awaiting it - a frame less on every chunk, nothing runs until it is awaited
+    def __anext__(self) -> Coroutine[Any, Any, bytes]:
+        return self._generator.asend(None)
 
-    async def asend(
+    def asend(
         self,
         value: None = None,
         /,
-    ) -> bytes:
-        return await self._generator.asend(value)
+    ) -> Coroutine[Any, Any, bytes]:
+        return self._generator.asend(value)
 
     async def athrow(
         self,

@@ -2,6 +2,82 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.61.0
+
+### Native State
+
+The C extension introduced as opt-in in 0.60.0 becomes the only implementation: it is the storage
+of `State` and `Immutable`, and validates every built-in annotation, updates, compares, hashes and
+converts to mappings and JSON. There is no Python implementation of those any more. The extension
+is built for Linux, macOS and Windows on CPython 3.15, and the test suite runs on each.
+
+The extension is written to run without the GIL - its state is kept per module, it never holds a
+borrowed reference into a container another thread could change, and it validates snapshots of
+the inputs it is given - but it still requires the GIL: on a free-threaded interpreter, importing
+it enables the GIL. Supporting the free-threaded build is left for a later release.
+
+#### Breaking changes
+
+- **Python 3.15 or newer is required.** 3.14 is no longer supported.
+- **The compiled extension is required.** Wheels carry it (`cp315`, Linux, macOS and Windows);
+  installing from the source distribution needs a C compiler. `HAIWAY_NATIVE` has no meaning any
+  more.
+- `Map` and `Meta` subclass the builtin `frozendict`, so they can't be mutated through the `dict`
+  methods either.
+
+  Migration: `isinstance(map, dict)` is `False` - check against `Mapping`. `{} | map` and
+  `{} | meta` are plain `dict`s, as `dict.__or__` handles a `frozendict` itself.
+- `State.__init__` refuses to initialize an instance a second time, and a `State` instance can't be
+  rebound through `object.__setattr__`.
+- **The attributes of an `Immutable` are bound once, for good** - `object.__setattr__` and
+  `object.__delattr__` refuse to rebind them too, as they do for a `State`. What is bound is held as
+  given: an `Immutable` validates and copies nothing, so a mutable value - a `list`, say - stays
+  mutable. `HTTPResponse`, `HTTPXClient` and
+  `PostgresConnectionPool`, which change after they are made, are plain classes with `__slots__`
+  instead, with the same constructors and methods.
+
+  Migration: a subclass of `Immutable` rebinding its own attributes becomes a plain class with
+  `__slots__`, or keeps what changes in a mutable holder it is given.
+- **A `State` has a single base** - the `State` it refines, which declares no attributes (or the
+  origin of a generic specialization), and `Generic` when it declares type parameters. Mixins and
+  multiple inheritance are refused, and an `Immutable` inherits from `Immutable` alone.
+
+  Migration: share behavior through an attribute-less `State` base, and compose by holding instances
+  as attributes.
+- **`Missing` is a builtin PEP 661 sentinel, and `MISSING` is gone.** `Missing` is both the value
+  and the type, the way `None` is: `value: int | Missing = Missing`. It stays the one instance when
+  copied or pickled - the old `MISSING` did not, which lost it in a deep copy of a `State`.
+
+  Migration: replace `MISSING` with `Missing` and `Missing()` with `Missing`; compare with
+  `value is Missing`. The helpers `is_missing`, `not_missing` and `unwrap_missing` are gone -
+  `value is Missing` and `value is not Missing` narrow the type on their own, and
+  `default if value is Missing else value` takes the place of `unwrap_missing`. `Missing` is truthy, so `if value:` no longer tells it apart - nothing in
+  Haiway relied on that. Within `match`, use a dotted name (`case haiway.Missing:`), as a bare
+  `case Missing:` captures the value.
+- The `validate` and `check` methods of the attribute annotations are gone - the compiled spec of
+  an `Attribute` validates (`haiway.attributes.native.compile` and `validate`).
+
+#### Added
+
+- **Native `State`.** Instances hold their attributes inline, with no `__dict__` or `__weakref__`,
+  and take the memory a `__slots__` object would. Creating, updating, validating a mapping and
+  comparing an instance is 4 to 10 times faster than the Python implementation was, converting to a
+  mapping, a basic object or JSON up to 100 times for large states, reading JSON 5 to 14 times.
+  An instance holding nothing the garbage collector tracks is left out of its collections.
+- **Native validation of every built-in annotation**, with the messages the annotations have always
+  raised with. The code of the user - a `Validator`, a `Verifier`, a class validating itself, a
+  default factory - is what still runs in Python.
+- **JSON in both directions.** `to_json`, `from_json` and `from_json_array` write and read the JSON
+  without the intermediate Python objects, for the default `JSONEncoder` and `JSONDecoder` and no
+  `indent`. A union of `State` classes is read without a second pass, and reading validates as it
+  goes, running the code of the user only once the document is known to be right.
+- `make native` rebuilds the extension.
+
+#### Changed
+
+- **The build backend is `setuptools`**, as no backend of `uv` compiles C. `uv` stays the tool for
+  everything else.
+
 ## 0.60.0
 
 ### OpenTelemetry integration

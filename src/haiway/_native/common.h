@@ -1,72 +1,109 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <datetime.h>
 
 /*
  * Native storage for haiway.State.
  *
- * Instances are var-sized objects holding their field values inline, right after
- * the object header. There is no __dict__, no __weakref__ and no setter anywhere,
- * so the only way to bind a field is through the constructors below - which makes
- * the immutability real, rather than a __setattr__ convention.
+ * Instances are fixed-size objects holding their field values inline, right after
+ * the object header - how many is a property of their class, set when the class is
+ * given its plan. There is no __dict__, no __weakref__ and no setter anywhere, so
+ * the only way to bind a field is through the constructors below - which makes the
+ * immutability real, rather than a __setattr__ convention.
  *
  * Everything that is decided once per class (annotation resolution, generics,
  * schemas) stays in Python. The metaclass hands the native code a "plan" of the class
- * once, which `compile_plan` turns into the data every instance is built and read from
- * - see plan.h. The file is one translation unit made of the headers below, in order.
+ * once, which `compile_plan` turns into the data every instance is built and read from,
+ * kept on the class itself: the classes are instances of `StructMeta`, a metaclass with
+ * one field of its own, the pointer to that plan - see plan.h.
+ *
+ * The module still requires the GIL, but it is written to run without it, so that
+ * supporting the free-threaded interpreter is a declaration away (`Py_mod_gil`): it keeps
+ * its state per module, never holds a borrowed reference into a container another thread
+ * could change, validates snapshots of what it is given, and reads the plan and the values
+ * of an instance freely, since both are written once before anything else can see them.
+ * New code has to keep to that. The file is one translation unit made of the headers
+ * below, in order.
  */
 
-/*
- * What of an input an annotation accepts as it is, so no call of Python is needed to
- * validate it. The numbers are exported by the module (`K_*`), where Python reads
- * them - nothing else spells them.
- */
-enum {
-    K_ANY = 0,
-    K_INT,
-    K_STR,
-    K_FLOAT,
-    K_BOOL,
-    K_CALL,  /* nothing - the annotation of Python code validates */
-    K_INSTANCE,
-    K_OPTIONAL,
-    K_SEQUENCE,
-    K_ISINSTANCE,
-    K_MAPPING,
-    K_TUPLE,
-    K_LITERAL,
-    K_SET,
-    K_UNION,
-    K_FLOAT_EXACT,
-};
-
-/* what of an input an instance of a type is read from, besides being one */
-enum {
-    S_NONE = 0,
-    S_STR,
-    S_INT,
-};
-
+/* what Python hands the native code to call back, and the types the module makes */
 typedef struct {
-    PyObject_VAR_HEAD
-    /* PyObject *items[]; follows */
-} StructObject;
+    PyTypeObject *meta_type;     /* StructMeta */
+    PyTypeObject *struct_type;   /* Struct - the storage of a record */
+    PyTypeObject *validated_type;  /* Validated - a Struct which validates what it is built from */
+    PyTypeObject *spec_type;     /* Spec - a compiled description of an annotation */
+    /* validation */
+    PyObject *missing;           /* MISSING */
+    PyObject *check;             /* (cls, mapping) -> None, raises on unexpected / duplicate keys */
+    PyObject *report;            /* (segment, exc) -> NoReturn, the failure at a position */
+    PyObject *unexpected;        /* (cls, key) -> NoReturn, a key of a mapping which is not an attribute */
+    PyObject *describe;          /* (annotation) -> the description of a spec */
+    PyObject *enum_values;       /* (enum, names) -> the values (or the names) of its members, spelled */
+    PyObject *literal_values;    /* (values) -> the values of a literal, spelled */
+    PyObject *b64decode;         /* (str) -> bytes, strictly */
+    PyObject *parse_duration;    /* (str) -> timedelta */
+    PyObject *exception_group;   /* builtins.ExceptionGroup */
+    /* conversion */
+    PyObject *map;               /* the Map type */
+    PyObject *basic_value;       /* (value, strict, path) -> basic value, what is not handled here */
+    PyObject *basic_key;         /* (key, strict, path) -> str key */
+    PyObject *recursive;         /* (value) -> mapping, what is not handled here */
+    /* types */
+    PyObject *mapping;           /* collections.abc.Mapping */
+    PyObject *sequence;          /* collections.abc.Sequence */
+    PyObject *set;               /* collections.abc.Set */
+    PyObject *iterable;          /* collections.abc.Iterable */
+    PyObject *uuid;              /* uuid.UUID */
+    PyObject *safe_uuid;         /* uuid.SafeUUID - what a UUID holds besides its number */
+    PyObject *datetime;
+    PyObject *date;
+    PyObject *time;
+    PyObject *timedelta;
+    PyObject *temporal;          /* (datetime, date, time) */
+    PyObject *path;              /* pathlib.Path */
+    PyObject *pathlike;          /* os.PathLike */
+    PyObject *meta;              /* the Meta type */
+    /* the rest */
+    PyObject *str_isoformat;
+    PyObject *str_as_posix;
+    PyObject *str_type_name;
+    PyObject *str_lower;
+    PyObject *str_fromisoformat;
+    PyObject *str_validate;
+    PyObject *str_int;
+    PyObject *deepcopy;          /* copy.deepcopy */
+} ModuleState;
 
-#define ITEMS(o) ((PyObject **)(((char *)(o)) + sizeof(StructObject)))
+struct CompiledPlan;
+struct Spec;
 
-static PyTypeObject StructType;
-static PyObject *nocache;
-static PyObject *hook_missing;  /* MISSING */
-static PyObject *hook_check;    /* (cls, mapping) -> None, raises on unexpected / duplicate keys */
-static PyObject *hook_report;   /* (path, exc) -> NoReturn */
-static PyObject *hook_mapping;        /* collections.abc.Mapping */
-static PyObject *hook_uuid;            /* uuid.UUID */
-static PyObject *hook_temporal;        /* (datetime, date, time) */
-static PyObject *hook_path;            /* pathlib.Path */
-static PyObject *str_isoformat;
-static PyObject *str_as_posix;
-static PyObject *hook_unexpected;     /* (cls, key) -> NoReturn, a key of a mapping which is not an attribute */
-static PyObject *hook_map;      /* dict -> Map */
-static PyObject *hook_map_types;      /* the mapping types walked as plain dictionaries */
-static PyObject *hook_basic_value;    /* (value, strict, path) -> basic value, what is not handled here */
-static PyObject *hook_basic_key;      /* (key, strict, path) -> str key */
-static PyObject *hook_recursive;      /* (value) -> mapping, what is not handled here */
+/* a compiled description of an annotation - see spec.h */
+typedef struct {
+    PyObject_HEAD
+    struct Spec *spec;
+} SpecObject;
+
+/* a class of the module - a type object with the plan of its instances */
+typedef struct {
+    PyHeapTypeObject base;
+    struct CompiledPlan *plan;  /* NULL until the class is given one */
+} StructMetaObject;
+
+#define PLAN_OF(type) (((StructMetaObject *)(type))->plan)
+
+/* the values of an instance follow the object header, as many as its class holds */
+#define ITEMS(o) ((PyObject **)(((char *)(o)) + sizeof(PyObject)))
+#define ITEM_COUNT(o) \
+    ((Py_TYPE(o)->tp_basicsize - (Py_ssize_t)sizeof(PyObject)) / (Py_ssize_t)sizeof(PyObject *))
+
+static inline ModuleState *
+module_state(PyObject *module)
+{
+    return (ModuleState *)PyModule_GetState(module);
+}
+
+static inline int
+is_struct(ModuleState *state, PyObject *value)
+{
+    return PyType_IsSubtype(Py_TYPE(value), state->struct_type);
+}

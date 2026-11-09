@@ -1,0 +1,11 @@
+{
+  "response/construct": 0.3925091397276493,
+  "facade/get, stub backend": 2.986032626316614,
+  "facade/get and read the body, stub backend": 3.0892051104097407,
+  "get/bare": 56.27041838969876,
+  "get/haiway": 61.985343171432945,
+  "post/bare": 41.83761838821974,
+  "post/haiway": 47.49464462186769,
+  "stream/bare, per chunk": 1.0564430344238331,
+  "stream/haiway, per chunk": 1.4428901013688764
+}

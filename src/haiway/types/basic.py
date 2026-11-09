@@ -33,7 +33,7 @@ type FlatObject = Mapping[str, RawValue]
 #   Path                        value.as_posix()
 #   bytes-like                  base64 encoded str
 #
-# Anything else - a plain `Enum`, a `Decimal`, `MISSING` - has no spelling the
+# Anything else - a plain `Enum`, a `Decimal`, `Missing` - has no spelling the
 # validation would read back. Encoding it would trade a loud failure here for a
 # silent one on the way in, so `strict` rejects it instead.
 #
@@ -160,7 +160,7 @@ def basic_value(  # noqa: C901, PLR0911
 
     if strict:
         raise TypeError(
-            f"Can't convert '{type(value).__name__}' to a basic value{_reported_path(path)}"
+            f"Can't convert '{_reported_type(value)}' to a basic value{_reported_path(path)}"
         )
 
     # left to the caller - i.e. a custom json encoder handling the remainder
@@ -210,7 +210,7 @@ def basic_key(
         case other:
             if strict:
                 raise TypeError(
-                    f"Can't convert '{type(key).__name__}' to a basic object"
+                    f"Can't convert '{_reported_type(key)}' to a basic object"
                     f" key{_reported_path(path)}"
                 )
 
@@ -240,6 +240,14 @@ def _basic_items(
                 path=(*path, f'["{key_basic}"]'),
             ),
         )
+
+
+def _reported_type(value: Any) -> str:
+    # a sentinel is its own type - `Missing` above all - while every sentinel's type is the same
+    if isinstance(value, sentinel):
+        return repr(value)
+
+    return type(value).__name__
 
 
 def _reported_path(

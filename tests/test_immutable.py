@@ -1,8 +1,9 @@
 import copy
 from collections.abc import Mapping
+from types import new_class
 from typing import Any, ClassVar
 
-from pytest import raises
+from pytest import mark, raises
 
 from haiway import Default, Immutable
 from haiway.types.immutable import attribute_names, namespace_annotations
@@ -35,6 +36,24 @@ def test_immutable_subclasses_cannot_be_inherited() -> None:
 
         class ChildImmutable(ParentImmutable):
             b: int
+
+
+class _SlottedMixin:
+    __slots__ = ("extra",)
+
+
+class _PlainMixin:
+    pass
+
+
+@mark.parametrize(
+    "other",
+    [_SlottedMixin, _PlainMixin, int],
+    ids=["slotted", "plain", "builtin"],
+)
+def test_immutable_can_not_be_combined_with_another_base(other: type) -> None:
+    with raises(TypeError, match="inherits from Immutable alone"):
+        new_class("Combined", (Immutable, other))
 
 
 class SlottedImmutable(Immutable):
@@ -160,3 +179,14 @@ def test_attribute_names_skips_dunders_and_class_variables() -> None:
 def test_attribute_names_without_annotations_is_empty() -> None:
     assert attribute_names(None) == ()
     assert attribute_names({}) == ()
+
+
+def test_immutable_equality_and_inequality_both_compare_identity() -> None:
+    first = Probed(required=1)
+    same = first
+    second = Probed(required=1)
+
+    assert first == same
+    assert (first != same) is False
+    assert first != second
+    assert (first == second) is False

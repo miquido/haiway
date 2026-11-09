@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 
-from haiway import MISSING, Alias, Default, Description, Sensitive, Specification
+from haiway import Alias, Default, Description, Missing, Sensitive, Specification
 from haiway.types.default import DefaultValue
 
 
@@ -13,7 +13,7 @@ def _objects() -> list[Any]:
         Sensitive(),
         DefaultValue(default=1),
         Specification({"type": "string"}),
-        MISSING,
+        Missing,
     ]
 
 
@@ -51,8 +51,8 @@ def test_sensitive_rejects_empty_redaction() -> None:
 
 
 def test_missing_renders_by_name() -> None:
-    assert str(MISSING) == "MISSING"
-    assert repr(MISSING) == "MISSING"
+    assert str(Missing) == "Missing"
+    assert repr(Missing) == "Missing"
 
 
 def test_default_value_resolves_lazily_and_reports_availability() -> None:
@@ -65,7 +65,7 @@ def test_default_value_resolves_lazily_and_reports_availability() -> None:
     assert factory() == []
     assert factory() is not factory()
     assert unset.available is False
-    assert unset() is MISSING
+    assert unset() is Missing
 
 
 def test_default_helper_with_factory_builds_default_value() -> None:

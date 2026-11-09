@@ -3,6 +3,7 @@ from typing import Annotated, NotRequired, TypedDict
 
 import pytest
 
+from haiway.attributes import native
 from haiway.attributes.annotations import (
     AliasAttribute,
     CustomAttribute,
@@ -101,7 +102,7 @@ def test_recursive_aliases_are_resolved() -> None:
     assert isinstance(parameters_attribute, SequenceAttribute)
 
     # Exercising validation triggers alias usage deep within the annotation graph.
-    parameters_attribute.validate([{"oneOf": [{"items": "value"}]}])
+    native.validate(native.compile(parameters_attribute), [{"oneOf": [{"items": "value"}]}])
 
     aliases = _collect_parameter_aliases(parameters_attribute, set())
     unresolved = [
@@ -131,7 +132,7 @@ def test_recursive_alias_annotated_with_alias_is_resolved() -> None:
         recursion_guard={},
     )
 
-    assert attribute.validate([[1], 2]) == ((1,), 2)
+    assert native.validate(native.compile(attribute), [[1], 2]) == ((1,), 2)
 
 
 def test_recursive_alias_annotated_with_alias_exposes_alias() -> None:

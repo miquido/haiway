@@ -96,8 +96,17 @@ class Invoice(State):
   `.from_json()`, `.json_schema()`. Generics are supported and enforced (`class Box[T](State)`):
   each specialization is a distinct class, `Box[Dog]` is a subclass of `Box[Animal]`, and type
   parameter bounds are checked. States can't be pickled - use `to_json`/`to_basic_object`.
-- `Immutable` is the lighter, non-validating frozen base for infrastructure objects (clients,
-  responses) that must not propagate as scope state. `Map` is an immutable `dict`.
+- A `State` has a single base: `State`, or an attribute-less `State` sharing behavior - plus
+  `Generic` for type parameters. A class declaring attributes is final; mixins and multiple
+  inheritance are refused. Compose by holding instances as attributes.
+- `Missing` is the "not provided" sentinel (PEP 661), both value and type like `None`:
+  `note: str | Missing | None = Missing`. Compare with `value is Missing` - it is truthy, and a
+  bare `case Missing:` captures instead of matching (use `case haiway.Missing:`).
+- `Immutable` is the lighter, non-validating frozen record for values that must not propagate as
+  scope state. Its attributes are bound once - not even `object.__setattr__` rebinds them - but
+  values are held as given, so a mutable value stays mutable. An object with changing internals (a
+  client, a response caching its body) is a plain `__slots__` class. `Map` is an immutable mapping
+  (a `frozendict`, not a `dict`).
 
 ## Context & Scopes
 
@@ -183,7 +192,7 @@ the iteration is left early.
   `await file.read()` / `await file.write(content)`. Created files are owner-only unless `mode`
   says otherwise, symbolic links are refused. Errors raise `FileException`.
 - Env: `getenv`, `getenv_str/int/float/bool/base64`, `load_env()` — never `os.getenv`.
-- Misc: `as_tuple/as_list/as_set/as_dict/as_map`, `without_missing`, `MISSING`/`is_missing`,
+- Misc: `as_tuple/as_list/as_set/as_dict/as_map`, `without_missing` (drops `Missing` values),
   `setup_logging()`.
 
 ## Observability
@@ -211,8 +220,10 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
     email = None if row is None else row.get_str("email")
 ```
 
-- **HTTP** (`haiway.httpx`): `HTTPXClient` disposable provides `HTTPClient`. `HTTPResponse` is
-  immutable; a `stream=True` body must be consumed inside the issuing scope, reads once, and
+- **HTTP** (`haiway.httpx`): `HTTPXClient` disposable provides `HTTPClient`. The status and
+  headers of an `HTTPResponse` are bound once (the headers mapping as given), its body is read and
+  cached on demand; a
+  `stream=True` body must be consumed inside the issuing scope, reads once, and
   bodies are `bytes` (encode text yourself). A streamed request body stays owned by the caller and
   is never closed for you - close it at the call site. `trace_propagation` attaches the current
   `traceparent`/`tracestate` to a request - asked for per request and `False` by default, so ask
@@ -293,7 +304,8 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
 
 - Fully type every parameter, return, and attribute. Avoid `Any` outside third-party boundaries.
 - Public APIs accept `Mapping`/`Sequence`/`Set`/`Iterable`, never concrete mutables.
-- Never mutate `State`; build new instances. Prefer composition and `final` over inheritance.
+- Never mutate `State` or `Immutable`; build new instances. Prefer composition over inheritance -
+  a `State` has a single base, and mixins are refused.
 - Async all the way down; never block the event loop.
 - Name contracts with gerunds (`UserFetching`, `ElementCreating`); add `@runtime_checkable` only
   when `isinstance` is actually needed.

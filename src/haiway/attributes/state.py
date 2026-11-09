@@ -1,5 +1,8 @@
+import base64
 import inspect
 import json
+import os
+import threading
 import types
 import typing
 from collections.abc import (
@@ -15,13 +18,14 @@ from contextlib import suppress
 from copy import deepcopy
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from types import GenericAlias, MemberDescriptorType
 from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
+    Final,
     Generic,
     Literal,
     NoReturn,
@@ -36,7 +40,7 @@ from typing import (
     get_origin,
     overload,
 )
-from uuid import UUID
+from uuid import UUID, SafeUUID
 
 from haiway._native import nstruct
 from haiway.attributes import native
@@ -57,17 +61,15 @@ from haiway.attributes.path import AttributePath
 from haiway.attributes.specification import object_specification
 from haiway.attributes.validation import ValidationError
 from haiway.types import (
-    MISSING,
     BasicObject,
     DefaultValue,
     Map,
+    Meta,
     Missing,
     TypeSpecification,
-    not_missing,
 )
-from haiway.types.basic import basic_key, basic_value
+from haiway.types.basic import basic_key, basic_value, parse_duration
 from haiway.types.immutable import attribute_names, namespace_annotations
-from haiway.types.mapping_base import MapBase
 
 __all__ = ("State",)
 
@@ -81,7 +83,7 @@ __all__ = ("State",)
     kw_only_default=True,
     frozen_default=True,
 )
-class StateMeta(type):
+class StateMeta(nstruct.StructMeta):  # the classes of the native storage - their plan is kept there
     """
     Metaclass for State classes that manages attribute definitions and validation.
 
@@ -174,7 +176,7 @@ class StateMeta(type):
         )
         # natively stored fields live inline in the instance, behind descriptors
         # installed below - there are no slots to declare, and no `__dict__` either
-        namespace["__slots__"] = () if nstruct is not None else owned_names
+        namespace["__slots__"] = ()
 
         cls = type.__new__(
             mcs,
@@ -238,8 +240,7 @@ class StateMeta(type):
                 "additionalProperties": False,
             }
             cls.__FIELDS__ = ()  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
-            if nstruct is not None:
-                native.install(cls, (), (), is_state=_is_plain_state)
+            native.install(cls, (), ())
 
             cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
             cls.__ALIASES__ = {}  # pyright: ignore[reportConstantRedefinition]
@@ -252,8 +253,9 @@ class StateMeta(type):
             Attribute(
                 name=key,
                 annotation=attribute,
-                default=_resolve_default(defaults.get(key, MISSING)),
+                default=_resolve_default(defaults.get(key, Missing)),
                 redaction=attribute_redaction(attribute),
+                spec=native.compile(attribute),
             )
             for key, attribute in self_attribute.attributes.items()
         )
@@ -288,8 +290,7 @@ class StateMeta(type):
             cls.__SPECIFICATION__ = _no_specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
 
         cls.__FIELDS__ = fields  # pyright: ignore[reportConstantRedefinition]
-        if nstruct is not None:
-            native.install(cls, fields, owned_names, is_state=_is_plain_state)
+        native.install(cls, fields, owned_names)
 
         cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
         # resolved here so that updates can be normalized to canonical names
@@ -341,7 +342,7 @@ class StateMeta(type):
             return False
 
         return all(
-            field.annotation.check(getattr(instance, field.name)) for field in self.__FIELDS__
+            nstruct.check(field.spec, getattr(instance, field.name)) for field in self.__FIELDS__
         )
 
     def __subclasscheck__(
@@ -409,25 +410,6 @@ class StateMeta(type):
         return True
 
 
-if TYPE_CHECKING:
-
-    class _StateBase:
-        pass
-
-else:
-    _StateBase = nstruct.Struct if nstruct is not None else object
-
-
-def _is_plain_state(cls: Any, /) -> bool:
-    # a State which validates the usual way - one with a validation of its own is called,
-    # not skipped over, so the native code must not decide for it
-    return (
-        nstruct is not None
-        and isinstance(cls, StateMeta)
-        and inspect.getattr_static(cls, "validate", None) is nstruct.Struct.__dict__["validate"]
-    )
-
-
 def _check_keys(
     cls: Any,
     kwargs: Mapping[str, Any],
@@ -443,7 +425,21 @@ def _check_keys(
             raise _duplicate_attribute(cls, name, alias)
 
 
+# a variant is made once - two threads asking for the same one at the same time would
+# otherwise each make their own, and the plan of a class is given once
+_SPECIALIZING: Final[threading.RLock] = threading.RLock()
+
+
 def _specialize(
+    cls: Any,
+    type_arguments: tuple[Any, ...],
+    /,
+) -> Any:
+    with _SPECIALIZING:
+        return _specialize_locked(cls, type_arguments)
+
+
+def _specialize_locked(
     cls: Any,
     type_arguments: tuple[Any, ...],
     /,
@@ -538,7 +534,21 @@ def _refuse_inheriting(
     bases: tuple[type, ...],
     /,
 ) -> None:
-    for base in bases:
+    states: tuple[type, ...] = tuple(base for base in bases if isinstance(base, StateMeta))
+    if not states:
+        return  # the root State itself
+
+    # a State carries state - it is not a building block of objects. it has a single
+    # base, the State it refines, and `Generic` when it declares type parameters
+    if len(states) > 1 or any(base is not Generic for base in bases if base not in states):
+        raise TypeError(
+            f"{name} can't inherit from {', '.join(base.__name__ for base in bases)} - a"
+            " State inherits from a single State, and Generic alone when it declares type"
+            " parameters. Hold instances as attributes to compose them, or share behavior"
+            " through an attribute-less State base"
+        )
+
+    for base in states:
         if getattr(base, "__FIELDS__", ()):
             raise TypeError(
                 f"{name} can't inherit from {base.__name__} - a State declaring"
@@ -557,13 +567,13 @@ def _declared_slots(
 ) -> tuple[str, ...]:
     slots: MutableSequence[str] = []
     for key in names:
-        inherited: Any = MISSING
+        inherited: Any = Missing
         for base in bases:
-            inherited = getattr(base, key, MISSING)
-            if inherited is not MISSING:
+            inherited = getattr(base, key, Missing)
+            if inherited is not Missing:
                 break
 
-        if inherited is MISSING:
+        if inherited is Missing:
             slots.append(key)  # nothing above declares it, this class owns the slot
             continue
 
@@ -828,7 +838,7 @@ class _NoSpecification:
 _no_specification: _NoSpecification = _NoSpecification()
 
 
-class State(_StateBase, metaclass=StateMeta):
+class State(nstruct.Validated, metaclass=StateMeta):
     """
     Base class for immutable data structures.
 
@@ -899,6 +909,11 @@ class State(_StateBase, metaclass=StateMeta):
 
     _: ClassVar[Self]
 
+    if TYPE_CHECKING:
+        # what a type checker reads the constructor as - the native base binds the
+        # attributes, and a subclass with a constructor of its own delegates to it
+        def __init__(self, **kwargs: Any) -> None: ...
+
     @classmethod
     def __class_getitem__(
         cls,
@@ -952,42 +967,6 @@ class State(_StateBase, metaclass=StateMeta):
             return cast(type[Self], GenericAlias(cls, type_arguments))
 
         return cast(type[Self], _specialize(cls, type_arguments))
-
-    @classmethod
-    def validate(
-        cls,
-        value: Any,
-    ) -> Self:
-        """
-        Validate and convert a value to an instance of this class.
-
-        Parameters
-        ----------
-        value : Any
-            The value to validate and convert
-
-        Returns
-        -------
-        Self
-            An instance of this class
-
-        Raises
-        ------
-        TypeError
-            If the value cannot be converted to an instance of this class
-        """
-        if isinstance(value, cls):
-            return value
-
-        elif isinstance(value, Mapping):
-            for key in cast(Mapping[Any, Any], value.keys()):
-                if key not in cls.__ALLOWED_FIELDS__:
-                    raise TypeError(f"Unexpected attribute '{key}' for {cls.__name__}")
-
-            return cls(**value)
-
-        else:
-            raise TypeError(f"'{type(value).__name__}' is not matching expected type of '{cls}'")
 
     @classmethod
     def from_mapping(
@@ -1095,7 +1074,7 @@ class State(_StateBase, metaclass=StateMeta):
             If the payload cannot be decoded or fails State validation.
         """
         try:
-            if nstruct is not None and decoder is json.JSONDecoder:
+            if decoder is json.JSONDecoder:
                 # read natively when it is the usual document - anything else is read
                 # below, which is also what says what is wrong with it
                 decoded: Any = nstruct.from_json(cls, value, False)
@@ -1141,7 +1120,7 @@ class State(_StateBase, metaclass=StateMeta):
         """
         payload: Any
         try:
-            if nstruct is not None and decoder is json.JSONDecoder:
+            if decoder is json.JSONDecoder:
                 decoded: Any = nstruct.from_json(cls, value, True)
                 if decoded is not None:
                     return decoded
@@ -1195,7 +1174,7 @@ class State(_StateBase, metaclass=StateMeta):
             a redacted attribute into a log through the error path.
         """
         try:
-            if nstruct is not None and indent is None and encoder_class is json.JSONEncoder:
+            if indent is None and encoder_class is json.JSONEncoder:
                 # written natively when every value has a spelling it knows - anything
                 # else is written below, where the encoder of the caller is
                 written: str | None = nstruct.to_json(self)
@@ -1215,82 +1194,6 @@ class State(_StateBase, metaclass=StateMeta):
             # mapping must not reach the message - the encoder already names the
             # type it could not serialize
             raise ValueError(f"Failed to encode {self.__class__.__name__} to json") from exc
-
-    def __init__(
-        self,
-        **kwargs: Any,
-    ) -> None:
-        """
-        Initialize a new State instance.
-
-        Creates a new instance with the provided attribute values.
-        Attributes not specified will use their default values.
-        All attributes are validated according to their type annotations.
-
-        Parameters
-        ----------
-        **kwargs : Any
-            Attribute values for the new instance. Both canonical field names
-            and aliases are accepted.
-
-        Raises
-        ------
-        TypeError
-            If any key does not match a field name or alias, or an attribute is
-            given under both its name and its alias
-        Exception
-            If validation fails for any attribute
-        """
-        # an unmatched key is a mistake rather than an extra - accepting it would
-        # construct a plausible instance out of a misspelled attribute, which the
-        # defaults then hide. `validate` refuses the same input for a mapping
-        # the same attribute given under its name and its alias is ambiguous -
-        # accepting it would silently let one of them win
-        _check_keys(self.__class__, kwargs)
-
-        for field in self.__FIELDS__:
-            validated: Any
-            try:
-                validated = field.validate_from(kwargs)
-
-            # the position of the failure is spelled out here rather than
-            # established before validating - a validation which succeeds, by far
-            # the common case, is left with nothing to pay for it
-            except Exception as exc:
-                ValidationError.report(f".{field.name}", exc)
-
-            object.__setattr__(
-                self,  # pyright: ignore[reportUnknownArgumentType]
-                field.name,
-                validated,
-            )
-
-    def updating(
-        self,
-        **kwargs: Any,
-    ) -> Self:
-        """
-        Create a new instance with updated attribute values.
-
-        This method creates a new instance with the same attribute values as this
-        instance, but with any provided values updated.
-
-        Parameters
-        ----------
-        **kwargs : Any
-            New values for attributes to update
-
-        Returns
-        -------
-        Self
-            A new instance with updated values
-
-        Raises
-        ------
-        TypeError
-            If any key does not match a field name or alias
-        """
-        return self.__replace__(**kwargs)
 
     def to_str(self) -> str:
         """
@@ -1320,18 +1223,9 @@ class State(_StateBase, metaclass=StateMeta):
         -------
         Mapping[str, Any]
             A mapping keyed by attribute aliases when present, otherwise by
-            canonical field names. Values equal to ``MISSING`` are omitted.
+            canonical field names. Values equal to ``Missing`` are omitted.
         """
-        if nstruct is not None:
-            return nstruct.to_mapping(self, recursive)
-
-        dict_result: MutableMapping[str, Any] = {}
-        for field in self.__FIELDS__:
-            value: Any | Missing = getattr(self, field.name, MISSING)
-            if not_missing(value):
-                dict_result[field.key] = _recursive_mapping(value) if recursive else value
-
-        return dict_result
+        return nstruct.to_mapping(self, recursive)
 
     def to_basic_object(self) -> BasicObject:
         """
@@ -1418,110 +1312,6 @@ class State(_StateBase, metaclass=StateMeta):
         )
         return f"{self.__class__.__name__}({attributes})"
 
-    def __eq__(
-        self,
-        other: Any,
-    ) -> bool:
-        """
-        Check if this instance is equal to another object.
-
-        Two State instances are considered equal only when they have the same
-        concrete class and equal values for all declared attributes.
-
-        Parameters
-        ----------
-        other : Any
-            The object to compare with
-
-        Returns
-        -------
-        bool
-            True if the objects are equal, False otherwise
-        """
-        if other is self:
-            return True  # not decided by the values - a `NaN` is not equal to itself
-
-        if other.__class__ is not self.__class__:
-            return False
-
-        return all(
-            getattr(self, field.name, MISSING) == getattr(other, field.name, MISSING)
-            for field in self.__FIELDS__
-        )
-
-    def __hash__(self) -> int:
-        """
-        Compute a hash value for this immutable instance.
-
-        Returns
-        -------
-        int
-            Hash derived from non-missing attribute values.
-        """
-        hash_values: MutableSequence[int] = []
-        for field in self.__FIELDS__:
-            value: Any = getattr(self, field.name, MISSING)
-
-            # Skip MISSING values to ensure consistent hashing
-            if value is MISSING:
-                continue
-
-            # Convert to hashable representation
-            try:
-                hash_values.append(hash(value))
-
-            except TypeError:
-                continue  # skip unhashable
-
-        return hash((self.__class__, tuple(hash_values)))
-
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> NoReturn:
-        """
-        Disallow attribute assignment to preserve immutability.
-
-        Parameters
-        ----------
-        name : str
-            Attribute name being set.
-        value : Any
-            Incoming value (unused).
-
-        Raises
-        ------
-        AttributeError
-            Always raised to signal immutability.
-        """
-        raise AttributeError(
-            f"Can't modify immutable state {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> NoReturn:
-        """
-        Disallow attribute deletion to preserve immutability.
-
-        Parameters
-        ----------
-        name : str
-            Attribute name being deleted.
-
-        Raises
-        ------
-        AttributeError
-            Always raised to signal immutability.
-        """
-        raise AttributeError(
-            f"Can't modify immutable state {self.__class__.__qualname__},"
-            f" attribute - '{name}' cannot be deleted"
-        )
-
     def __reduce_ex__(
         self,
         protocol: Any,
@@ -1554,115 +1344,6 @@ class State(_StateBase, metaclass=StateMeta):
         """
         return self  # State is immutable, no need to provide an actual copy
 
-    def __deepcopy__(
-        self,
-        memo: dict[int, Any] | None,
-    ) -> Self:
-        """
-        Create a deep copy of this instance.
-
-        Unlike ``__copy__``, this creates a new instance so nested mutable
-        values are deep-copied consistently.
-
-        Parameters
-        ----------
-        memo : dict[int, Any] | None
-            Memoization dictionary for already copied objects
-
-        Returns
-        -------
-        Self
-            Copy of this instance
-        """
-        if memo is None:
-            memo = {}
-
-        deep_copy: Self = object.__new__(self.__class__)
-        memo[id(self)] = deep_copy
-        for field in self.__FIELDS__:
-            object.__setattr__(
-                deep_copy,
-                field.name,
-                deepcopy(
-                    getattr(self, field.name),
-                    memo=memo,
-                ),
-            )
-
-        return deep_copy
-
-    def __replace__(
-        self,
-        **kwargs: Any,
-    ) -> Self:
-        """
-        Create a new instance with replaced attribute values.
-
-        This internal method is used by updating() to create a new instance
-        with updated values.
-
-        Parameters
-        ----------
-        **kwargs : Any
-            New values for attributes to replace. Both canonical field names and
-            aliases are accepted; aliases are normalized to canonical names
-            before validation.
-
-        Returns
-        -------
-        Self
-            A new instance with replaced values
-
-        Raises
-        ------
-        TypeError
-            If any key does not match a field name or alias
-        """
-        if not kwargs:
-            return self  # do not make a copy when nothing will be updated
-
-        _check_keys(self.__class__, kwargs)
-
-        aliases: Mapping[str, str] = self.__ALIASES__
-
-        # both names and aliases are accepted, the aliases are the only keys
-        # which have to be normalized - and only when the class declares any
-        canonical_updates: Mapping[str, Any] = (
-            {aliases.get(key, key): value for key, value in kwargs.items()} if aliases else kwargs
-        )
-
-        updated: Self = object.__new__(self.__class__)
-        for field in self.__FIELDS__:
-            # an absent key is what carries an attribute over, rather than a
-            # `MISSING` value standing for one - `MISSING` is the value of an
-            # attribute typed `| Missing`, and passing it has to clear that
-            # attribute the same way constructing the instance with it does
-            if field.name not in canonical_updates:
-                object.__setattr__(
-                    updated,
-                    field.name,
-                    getattr(self, field.name),
-                )
-                continue
-
-            validated: Any
-            try:
-                # validated through the annotation rather than the field, the
-                # way a supplied attribute is on construction - the default of
-                # the field answers for an attribute which was not supplied
-                validated = field.annotation.validate(canonical_updates[field.name])
-
-            except Exception as exc:
-                ValidationError.report(f".{field.name}", exc)
-
-            object.__setattr__(
-                updated,
-                field.name,
-                validated,
-            )
-
-        return updated
-
 
 def _basic_object(
     instance: State,
@@ -1670,10 +1351,7 @@ def _basic_object(
     strict: bool,
     path: tuple[str, ...] = (),
 ) -> BasicObject:
-    if nstruct is not None:
-        return nstruct.basic_object(instance, strict, path)
-
-    return Map(_basic_attributes(instance, strict=strict, path=path))
+    return nstruct.basic_object(instance, strict, path)
 
 
 # The basic conversion of a value graph, next to `_recursive_mapping` and
@@ -1728,25 +1406,6 @@ def _basic_mapping(  # noqa: PLR0911
         # the leaf table - raising under `strict` on a value it has no spelling
         # for, where `_recursive_mapping` would have made a copy of it
         return basic_value(value, strict=strict, path=path)
-
-
-def _basic_attributes(
-    instance: State,
-    /,
-    strict: bool,
-    path: tuple[str, ...],
-) -> Generator[Any]:
-    for field in instance.__FIELDS__:
-        value: Any | Missing = getattr(instance, field.name, MISSING)
-        if not_missing(value):
-            yield (
-                field.key,
-                _basic_mapping(
-                    value,
-                    strict=strict,
-                    path=(*path, f'["{field.key}"]'),
-                ),
-            )
 
 
 def _basic_fields(
@@ -1844,42 +1503,43 @@ def _basic_key_fallback(key: Any, strict: bool, path: tuple[str, ...]) -> Any:
     return basic_key(key, strict=strict, path=path)
 
 
-if nstruct is not None:
-    # construction, replacement, equality, hashing and the refusal to be modified
-    # are implemented by the native base - the declarations above are what the same
-    # contract reads as in Python, and the ones used when it is not available
-    for _name in (
-        "__init__",
-        "__eq__",
-        "__hash__",
-        "__setattr__",
-        "__delattr__",
-        "__replace__",
-        "__deepcopy__",
-        "updating",
-        "validate",
-    ):
-        delattr(State, _name)
+def _b64decode_strict(value: str, /) -> bytes:
+    return base64.b64decode(value, validate=True)
 
-    del _name
-    native.configure(
-        native.ValidationHooks(
-            missing=MISSING,
-            check=_check_keys,
-            report=ValidationError.report,
-            unexpected=_unexpected_key,
-            mapping=Mapping,
-        ),
-        native.ConversionHooks(
-            map=Map,
-            map_types=(dict, MapBase, Map),
-            basic_value=_basic_fallback,
-            basic_key=_basic_key_fallback,
-            recursive=_recursive_mapping,
-        ),
-        native.SpellingHooks(
-            uuid_type=UUID,
-            temporal_types=(datetime, date, time),
-            path_type=Path,
-        ),
-    )
+
+# what the extension calls back - handed over once, when the module is loaded
+native.configure(
+    native.ValidationHooks(
+        missing=Missing,
+        check=_check_keys,
+        report=ValidationError.report,
+        unexpected=_unexpected_key,
+        describe=native.describe,
+        enum_values=native.enum_values,
+        literal_values=native.literal_values,
+        b64decode=_b64decode_strict,
+        parse_duration=parse_duration,
+        exception_group=ExceptionGroup,
+    ),
+    native.ConversionHooks(
+        map=Map,
+        basic_value=_basic_fallback,
+        basic_key=_basic_key_fallback,
+        recursive=_recursive_mapping,
+    ),
+    native.TypeHooks(
+        mapping=Mapping,
+        sequence=Sequence,
+        set=Set,
+        iterable=Iterable,
+        uuid=UUID,
+        safe_uuid=SafeUUID,
+        datetime=datetime,
+        date=date,
+        time=time,
+        timedelta=timedelta,
+        path=Path,
+        pathlike=os.PathLike,
+        meta=Meta,
+    ),
+)

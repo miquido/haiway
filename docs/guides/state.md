@@ -273,6 +273,22 @@ class Admin(User):  # TypeError - User declares attributes
     privileges: Sequence[str]
 ```
 
+Nor can a `State` have more than one base. `State` is for passing state around, not for building
+objects out of mixins, so a class inherits from a single `State` - plus `Generic`, which a class
+declaring type parameters gets - and anything else is refused:
+
+```python
+class Named:
+    def label(self) -> str: ...
+
+class Item(State, Named):  # TypeError - a State inherits from a single State
+    name: str
+```
+
+The values of a `State` live inline in the instance, right after its header, so a base which brings
+slots, a `__dict__` or a layout of its own (as `int` does) could never be combined with it safely
+anyway. `Immutable` follows the same rule - its records inherit from `Immutable` alone.
+
 Slots, defaults, annotations, and type arguments are all resolved once, when the class is created,
 and the nominal identity that equality, instance checks, and schema generation rely on assumes they
 describe the whole class. There are three ways to get what inheritance would have given you:
@@ -305,10 +321,12 @@ A specialization such as `Container[int]` declares the attributes of its origin,
 ### Copying, Pickling and Representation
 
 `copy.copy` returns the same instance, `copy.deepcopy` creates an equal one, and `copy.replace` (or
-`updating`) produces a validated variant. `pickle` is deliberately not supported and raises a
-`TypeError` pointing at `to_json` / `to_basic_object` - rebuilding a State would have to skip
-validation, and a specialized variant such as `Box[int]` has no importable name. This also applies
-to values crossing a process pool.
+`updating`) produces a validated variant. A deep copy is built once its values are copied, so the
+code copying them never sees an instance with some of its attributes missing, while a value
+referring back to the instance - through a list held in an `Any` attribute, say - refers to the copy
+in turn. `pickle` is deliberately not supported and raises a `TypeError` pointing at `to_json` /
+`to_basic_object` - rebuilding a State would have to skip validation, and a specialized variant such
+as `Box[int]` has no importable name. This also applies to values crossing a process pool.
 
 `str(state)` renders values as they read (`User(name: Alice)`), while `repr(state)` spells each
 value with its own `repr` (`User(name: 'Alice')`) so a string and a number can be told apart.
@@ -547,31 +565,37 @@ user4 = user.updating(address=new_address)
 
 ### Native Storage
 
-Haiway ships a compiled extension which stores the attributes of a State inline in the instance,
-validates the common types without calling back into Python, and converts to mappings and JSON
-natively. It makes the immutability real - an attribute can't be rebound through
-`object.__setattr__` either, and an instance has no `__dict__` or `__weakref__`. That holds for the
-native storage only: the pure Python implementation refuses `setattr` and `delattr`, but
-`object.__setattr__` can still rebind an attribute there.
+A compiled extension stores the attributes of a State inline in the instance, validates every
+built-in annotation without calling back into Python, and converts to mappings and JSON natively.
+The immutability is real - an attribute can't be rebound through `object.__setattr__` either, and an
+instance has no `__dict__` or `__weakref__`. Calling `__init__` a second time on an instance raises.
+An instance takes the memory a `__slots__` object of the same attributes would. One holding nothing
+which can be part of a reference cycle - which is what validated values are, being made of tuples,
+frozensets, `Map`s and other instances - is left out of the collections of the garbage collector,
+together with those containers, and is reclaimed by reference counting alone. Keeping many instances
+alive therefore adds nothing for the collector to walk. One holding a mutable value, such as a
+`list` in an `Any` attribute, stays tracked, so a cycle through it is still collected.
 
-The pure Python implementation is the default. The extension is opt-in: `HAIWAY_NATIVE=1` uses it
-and fails, rather than falling back, when it is not built. It behaves the same for everything but a
-few details: calling `__init__` a second time on an instance raises natively and re-initializes it
-in Python, and a key which is not an attribute is reported after the values before it were validated
-rather than ahead of them, so a validator or a default factory may have run by then.
-`HAIWAY_NATIVE=1` fails instead of falling back when the extension is missing - that is what the
-build uses. After changing the C source run `make native`, as `uv sync` does not recompile it.
+What runs Python is the code of the user alone: a `Validator`, a `Verifier`, a class validating
+itself, a default factory. `ValidationError` reports a failure at its position the same way for
+every kind. When reading JSON, such code runs once the whole document is known to be right, so a
+document refused for something else never runs it.
 
-`to_json`, `from_json` and `from_json_array` read and write the JSON natively as well, without the
+`to_json`, `from_json` and `from_json_array` read and write the JSON natively, without the
 intermediate Python objects - for the default `json.JSONEncoder` and `json.JSONDecoder`, and with no
-`indent`. A document which is not the usual case, or a value with no native spelling, is handed to
-the Python implementation, which is also what reports every error, so the result is the same either
-way. Passing an `encoder_class`, a `decoder` or an `indent` uses the Python implementation directly.
+`indent`. A document which is not the usual case, or a value with no native spelling, is read or
+written through the standard library instead, which is also what reports an error of the document
+itself. Passing an `encoder_class`, a `decoder` or an `indent` uses the standard library directly.
 
 Calling a class with keyword arguments, `Point(x=1, y=2)`, and updating, `point.updating(x=3)`, are
-the fastest ways to build and change an instance natively. Unpacking a mapping into the call,
-`Point(**values)`, costs a little more than it did - to build an instance from a mapping use
-`Point.validate(values)` instead, which is faster than either.
+the fastest ways to build and change an instance. To build an instance from a mapping use
+`Point.validate(values)` rather than unpacking it into the call, `Point(**values)`.
+
+`Immutable` is stored the same way. It validates nothing, and its attributes are bound once:
+`setattr`, `delattr` and `object.__setattr__` all refuse to rebind one - while a mutable value it
+was given stays mutable. A class whose instances have to change after they are made - a client
+opening a connection, a response caching its body - is a plain class with `__slots__` instead. After
+changing the C source run `make native`, as `uv sync` does not recompile it.
 
 ### Performance Considerations
 

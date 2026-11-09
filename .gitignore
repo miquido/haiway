@@ -55,6 +55,7 @@ coverage.xml
 .ipynb_checkpoints
 .env
 .venv
+.venv-ft
 .dev_venv
 env/
 venv/

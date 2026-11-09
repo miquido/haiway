@@ -1,7 +1,7 @@
 # Haiway
 
 [![PyPI](https://img.shields.io/pypi/v/haiway)](https://pypi.org/project/haiway/)
-![Python Version](https://img.shields.io/badge/Python-3.14+-blue)
+![Python Version](https://img.shields.io/badge/Python-3.15+-blue)
 [![License](https://img.shields.io/github/license/miquido/haiway)](https://github.com/miquido/haiway/blob/main/LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/miquido/haiway?style=social)](https://github.com/miquido/haiway)
 
@@ -77,7 +77,7 @@ Deep dive into core concepts with practical examples
 
 - **[State Management](guides/state.md)** - Immutable data structures with validation and type
   safety
-- **[Types](guides/types.md)** - `MISSING`, `Default`, `Immutable`, `Map`, `Meta`, and annotation
+- **[Types](guides/types.md)** - `Missing`, `Default`, `Immutable`, `Map`, `Meta`, and annotation
   metadata primitives
 - **[Functionalities](guides/functionalities.md)** - Organizing business logic with protocols and
   implementations

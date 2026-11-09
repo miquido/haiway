@@ -71,16 +71,35 @@ It runs with `python -O`, as production does - without it observability keeps de
 which roughly doubles the overhead. `server_baseline.json` was recorded the same way as
 `baseline.json`, in microseconds per request.
 
-## Native storage
+## HTTP client
 
-`native_baseline.json` is the same set of cases taken with the compiled extension, to measure
-changes of it against. `baseline.json` stays what the pure Python implementation measured, so the
-two files together are the speedup. The pure Python implementation is what runs by default, and
-`HAIWAY_NATIVE=1` selects the native one:
+`http_benchmark.py` measures the HTTP client: building a response, the `HTTPClient` facade over a
+stub backend, and requests and streamed responses through `HTTPXClient`. Requests go through
+`httpx2.MockTransport` in process, so the numbers are the cost of the client stack alone - what a
+real round trip adds to. Each `haiway` case has a `bare` counterpart doing the same with `httpx2`
+alone, and the difference between them is the overhead of the client. Stream cases are per chunk,
+of 64 bytes - the worst case, as a real body arrives in chunks of kilobytes. It takes the same
+`--json`, `--compare`, `--filter` and `--budget` options.
 
 ```bash
+make benchmark-http                                              # run with -O
+make benchmark-http ARGS="--compare benchmarks/http_baseline.json"
+```
+
+`http_baseline.json` was recorded before the facade read the URL of a request once and the
+streamed body dropped its pass-through frames, in microseconds per call. Most of the cost of a
+request is `httpx2` itself - parsing its URL above all; the facade adds the recording of the request
+and the response.
+
+## Native storage
+
+`native_baseline.json` is the same set of cases taken with the compiled extension, which is what
+runs - the file to measure a change against. `baseline.json` is what the pure Python implementation
+measured before it was dropped, so the two files together are the speedup:
+
+```bash
+make benchmark ARGS="--compare benchmarks/native_baseline.json"
 make benchmark ARGS="--compare benchmarks/baseline.json"
-HAIWAY_NATIVE=1 make benchmark ARGS="--compare benchmarks/native_baseline.json"
 ```
 
 A class called with keyword arguments is built without a dictionary of them, which is why
@@ -89,8 +108,8 @@ A class called with keyword arguments is built without a dictionary of them, whi
 back into keywords for the call. Validating a mapping (`Simple.validate(values)`) does not pay for
 it.
 
-## What is measured by the pure Python implementation
+## Improvements outside the native code
 
-Some of the improvements do not depend on the native code: `read/path` (the paths of `State._`
+Some of the improvements are made in Python: `read/path` (the paths of `State._`
 are kept once they are made), and the identifiers of scopes and traces (a random version 4 UUID
 without a system call) which the `haiway` cases of `server_benchmark.py` pay for twice a request.
