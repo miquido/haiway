@@ -114,6 +114,23 @@ def _no_trace_context(
 
 
 @runtime_checkable
+class ObservabilityLevelChecking(Protocol):
+    """Tell whether anything recorded at the given level within a scope would be kept.
+
+    Answering ``False`` lets a log, event, metric or attributes recorded at that
+    level be skipped before its arguments are passed on. Answering ``True`` only
+    lets the recording through - the recording functions still decide on their own.
+    """
+
+    def __call__(
+        self,
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+    ) -> bool: ...
+
+
+@runtime_checkable
 class ObservabilityLogRecording(Protocol):
     def __call__(
         self,
@@ -201,6 +218,7 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
     __slots__ = (
         "attributes_recording",
         "event_recording",
+        "level_checking",
         "log_recording",
         "metric_recording",
         "scope_entering",
@@ -220,6 +238,8 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
         scope_exiting: ObservabilityScopeExiting,
         # optional - a backend with no trace position to hand out propagates nothing
         trace_context_encoding: ObservabilityTraceContextEncoding | None = None,
+        # optional - a backend which can't tell what it keeps gets every recording
+        level_checking: ObservabilityLevelChecking | None = None,
     ) -> None:
         self.trace_identifying: ObservabilityTraceIdentifying
         assert isinstance(trace_identifying, ObservabilityTraceIdentifying)  # nosec: B101
@@ -278,6 +298,15 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
             self,
             "trace_context_encoding",
             trace_context_encoding if trace_context_encoding is not None else _no_trace_context,
+        )
+        self.level_checking: ObservabilityLevelChecking | None
+        assert level_checking is None or isinstance(  # nosec: B101
+            level_checking, ObservabilityLevelChecking
+        )
+        object.__setattr__(
+            self,
+            "level_checking",
+            level_checking,
         )
 
     def __setattr__(
@@ -446,6 +475,14 @@ def LoggerObservability(  # noqa: C901, PLR0915
             return _NO_TRACE_ID
 
         return store.trace_id
+
+    def level_checking(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+    ) -> bool:
+        store: ScopeStore | None = scopes.get(scope.scope_id.int)
+        return store is not None and store.logger.isEnabledFor(level)
 
     def log_recording(
         scope: ContextIdentifier,
@@ -674,6 +711,8 @@ def LoggerObservability(  # noqa: C901, PLR0915
         attributes_recording=attributes_recording,
         scope_entering=scope_entering,
         scope_exiting=scope_exiting,
+        # a retained context keeps every recording for the summary, whatever its level
+        level_checking=None if debug_context else level_checking,
     )
 
 
@@ -799,8 +838,10 @@ class ContextObservability:
         cls,
         level: ObservabilityLevel,
         message: str,
+        # a tuple rather than unpacked - handed over as received, without repacking
+        args: tuple[Any, ...] = (),
         /,
-        *args: Any,
+        *,
         exception: BaseException | None,
     ) -> None:
         context: Self
@@ -809,13 +850,21 @@ class ContextObservability:
             context = cls._context.get()
 
         except LookupError:  # fallback for access out of context
-            return getLogger().log(
-                level,
-                format_log_message(message, args),
-                exc_info=exception,
-            )
+            root: Logger = getLogger()
+            if root.isEnabledFor(level):  # skip formatting what would be discarded
+                root.log(
+                    level,
+                    format_log_message(message, args),
+                    exc_info=exception,
+                )
+
+            return
 
         try:
+            checking: ObservabilityLevelChecking | None = context.observability.level_checking
+            if checking is not None and not checking(context._scope, level):
+                return  # skip passing on what would be discarded
+
             context.observability.log_recording(
                 context._scope,
                 level,
@@ -856,6 +905,10 @@ class ContextObservability:
             return  # no observability out of context - nothing to record within
 
         try:  # catch exceptions - we don't want to blow up on observability
+            checking: ObservabilityLevelChecking | None = context.observability.level_checking
+            if checking is not None and not checking(context._scope, level):
+                return  # skip passing on what would be discarded
+
             context.observability.event_recording(
                 context._scope,
                 level=level,
@@ -891,6 +944,10 @@ class ContextObservability:
             return  # no observability out of context - nothing to record within
 
         try:  # catch exceptions - we don't want to blow up on observability
+            checking: ObservabilityLevelChecking | None = context.observability.level_checking
+            if checking is not None and not checking(context._scope, level):
+                return  # skip passing on what would be discarded
+
             context.observability.metric_recording(
                 context._scope,
                 level=level,
@@ -925,6 +982,10 @@ class ContextObservability:
             return  # no observability out of context - nothing to record within
 
         try:  # catch exceptions - we don't want to blow up on observability
+            checking: ObservabilityLevelChecking | None = context.observability.level_checking
+            if checking is not None and not checking(context._scope, level):
+                return  # skip passing on what would be discarded
+
             context.observability.attributes_recording(
                 context._scope,
                 level=level,

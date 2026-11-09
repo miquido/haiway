@@ -1,11 +1,13 @@
 import asyncio
-from collections.abc import Generator
-from logging import DEBUG, Handler, Logger, LogRecord, getLogger
+from collections.abc import Generator, Mapping
+from logging import DEBUG, INFO, Handler, Logger, LogRecord, getLogger
+from typing import Any
 from uuid import UUID, uuid4
 
-from pytest import fixture, mark, raises
+from pytest import LogCaptureFixture, fixture, mark, raises
 
-from haiway import LoggerObservability, ScopeKind, ctx
+from haiway import LoggerObservability, Observability, ObservabilityLevel, ScopeKind, ctx
+from haiway.context import ObservabilityAttribute, ObservabilityMetricKind
 from haiway.context.identifier import ContextIdentifier
 
 
@@ -288,3 +290,189 @@ async def test_scope_kind_is_accepted_by_the_logger_backend(
     messages: list[str] = _messages(records)
     assert any("Entering scope: kinded" in message for message in messages)
     assert any("inside" in message for message in messages)
+
+
+class _Unformattable:
+    # formatting it fails the test - what is never kept must never be formatted
+    def __str__(self) -> str:
+        raise AssertionError("formatted a discarded record")
+
+    __repr__ = __str__
+
+
+def _recording_observability(
+    calls: list[str],
+    /,
+    *,
+    kept: bool | None,
+) -> Observability:
+    def trace_identifying(scope: ContextIdentifier, /) -> UUID:
+        return UUID(int=0)
+
+    def log_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        message: str,
+        *args: Any,
+        exception: BaseException | None,
+    ) -> None:
+        calls.append("log")
+
+    def event_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        *,
+        event: str,
+        attributes: Mapping[str, ObservabilityAttribute],
+    ) -> None:
+        calls.append("event")
+
+    def metric_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        *,
+        metric: str,
+        value: float | int,
+        unit: str | None,
+        kind: ObservabilityMetricKind,
+        attributes: Mapping[str, ObservabilityAttribute],
+    ) -> None:
+        calls.append("metric")
+
+    def attributes_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        attributes: Mapping[str, ObservabilityAttribute],
+    ) -> None:
+        calls.append("attributes")
+
+    def scope_entering(scope: ContextIdentifier, /) -> str:
+        return UUID(int=0).hex
+
+    def scope_exiting(scope: ContextIdentifier, /, *, exception: BaseException | None) -> None:
+        pass
+
+    def level_checking(scope: ContextIdentifier, /, level: ObservabilityLevel) -> bool:
+        calls.append(f"check {level.name}")
+        return bool(kept)
+
+    return Observability(
+        trace_identifying=trace_identifying,
+        log_recording=log_recording,
+        event_recording=event_recording,
+        metric_recording=metric_recording,
+        attributes_recording=attributes_recording,
+        scope_entering=scope_entering,
+        scope_exiting=scope_exiting,
+        level_checking=None if kept is None else level_checking,
+    )
+
+
+def _record_everything() -> None:
+    ctx.log_debug("message %s", 1)
+    ctx.record_debug(event="event")
+    ctx.record_debug(metric="metric", value=1, kind="counter")
+    ctx.record_debug(attributes={"key": "value"})
+
+
+@mark.asyncio
+async def test_recordings_of_a_discarded_level_are_skipped() -> None:
+    calls: list[str] = []
+    async with ctx.scope("root", observability=_recording_observability(calls, kept=False)):
+        _record_everything()
+
+    assert calls == ["check DEBUG"] * 4
+
+
+@mark.asyncio
+async def test_recordings_of_a_kept_level_are_passed_on() -> None:
+    calls: list[str] = []
+    async with ctx.scope("root", observability=_recording_observability(calls, kept=True)):
+        _record_everything()
+
+    assert calls == [
+        "check DEBUG",
+        "log",
+        "check DEBUG",
+        "event",
+        "check DEBUG",
+        "metric",
+        "check DEBUG",
+        "attributes",
+    ]
+
+
+@mark.asyncio
+async def test_recordings_are_passed_on_without_a_level_check() -> None:
+    calls: list[str] = []
+    async with ctx.scope("root", observability=_recording_observability(calls, kept=None)):
+        _record_everything()
+
+    assert calls == ["log", "event", "metric", "attributes"]
+
+
+@mark.asyncio
+async def test_failing_level_check_falls_back_to_the_root_logger(
+    caplog: LogCaptureFixture,
+) -> None:
+    observability: Observability = _recording_observability([], kept=True)
+
+    def failing(scope: ContextIdentifier, /, level: ObservabilityLevel) -> bool:
+        raise RuntimeError("check failed")
+
+    broken = Observability(
+        trace_identifying=observability.trace_identifying,
+        log_recording=observability.log_recording,
+        event_recording=observability.event_recording,
+        metric_recording=observability.metric_recording,
+        attributes_recording=observability.attributes_recording,
+        scope_entering=observability.scope_entering,
+        scope_exiting=observability.scope_exiting,
+        level_checking=failing,
+    )
+    with caplog.at_level(DEBUG):
+        async with ctx.scope("root", observability=broken):
+            ctx.log_warning("still reported")
+
+    messages: list[str] = [record.getMessage() for record in caplog.records]
+    assert "Failed to log a message within observability system" in messages
+    assert "still reported" in messages
+
+
+@mark.asyncio
+async def test_discarded_logs_are_not_formatted(
+    logger: tuple[Logger, list[LogRecord]],
+) -> None:
+    instance, records = logger
+    instance.setLevel(INFO)
+    observability = LoggerObservability(instance, debug_context=False)
+    async with ctx.scope("root", observability=observability):
+        ctx.log_debug("skipped %s", _Unformattable())
+        ctx.log_info("kept %s", 1)
+
+    assert any("kept 1" in message for message in _messages(records))
+    assert not any("skipped" in message for message in _messages(records))
+
+
+def test_retained_context_is_not_checked_by_level(
+    logger: tuple[Logger, list[LogRecord]],
+) -> None:
+    # the summary of a retained context holds recordings whatever the logger level,
+    # so nothing may be skipped before reaching it
+    instance, _ = logger
+    assert LoggerObservability(instance, debug_context=True).level_checking is None
+    assert LoggerObservability(instance, debug_context=False).level_checking is not None
+
+
+def test_discarded_logs_out_of_context_are_not_formatted(caplog: LogCaptureFixture) -> None:
+    with caplog.at_level(INFO):
+        ctx.log_debug("skipped %s", _Unformattable())
+        ctx.log_info("kept %s", 1)
+
+    messages: list[str] = [record.getMessage() for record in caplog.records]
+    assert "kept 1" in messages
+    assert not any("skipped" in message for message in messages)

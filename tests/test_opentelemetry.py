@@ -20,7 +20,8 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 from opentelemetry.trace import ProxyTracerProvider, SpanContext, SpanKind, StatusCode, Tracer
 from pytest import LogCaptureFixture, MonkeyPatch, fixture, mark, raises
 
-from haiway import ScopeKind, ctx
+from haiway import Observability, ObservabilityLevel, ScopeKind, ctx
+from haiway.context.identifier import ContextIdentifier
 from haiway.opentelemetry import OpenTelemetry, OpenTelemetryException, observability
 
 _CONFIGURATION_ATTRIBUTES: Sequence[str] = (
@@ -1340,3 +1341,14 @@ async def test_exception_which_fails_to_render_does_not_fail_the_scope(
     ]
     assert record.attributes is not None
     assert record.attributes["exception.message"] == "<unprintable>"
+
+
+@mark.asyncio
+async def test_level_check_follows_the_configured_level(spans: InMemorySpanExporter) -> None:
+    adapter: Observability = OpenTelemetry.observability(ObservabilityLevel.WARNING)
+    async with ctx.scope("root", observability=adapter):
+        scope: ContextIdentifier = ContextIdentifier.current()
+        assert adapter.level_checking is not None
+        assert not adapter.level_checking(scope, ObservabilityLevel.INFO)
+        assert adapter.level_checking(scope, ObservabilityLevel.WARNING)
+        assert adapter.level_checking(scope, ObservabilityLevel.ERROR)

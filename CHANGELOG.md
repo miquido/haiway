@@ -93,6 +93,10 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   about 23%, reading the context no longer raises on a miss, and `ctx.spawn` skips the type checks
   of a plain coroutine function, so a request handled through Starlette or FastAPI costs about 10%
   less. `make benchmark-scope` measures the context (`benchmarks/scope_benchmark.py`).
+- **A log nobody keeps costs half as much.** `Observability` takes an optional `level_checking`,
+  asked before a log, event, metric or attributes are passed on; the logger and OpenTelemetry
+  backends provide it, so a `ctx.log_debug` with `DEBUG` turned off returns in about 210 ns instead
+  of 460 ns, without formatting its arguments - also when logging out of any scope.
 
 #### Fixed
 

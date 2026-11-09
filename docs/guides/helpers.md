@@ -129,6 +129,20 @@ when its root completes. Turning it off - which is what the implicit fallback us
 scopes which are still live tracked, so a long lived root scope does not accumulate the ones which
 already finished.
 
+A recording at a level nobody keeps costs next to nothing: without a retained context the backend
+tells `ctx` which levels its logger discards, so a `ctx.log_debug(...)` with `DEBUG` turned off
+returns before its arguments are formatted or even passed on. A backend of your own gets the same by
+giving `Observability` a `level_checking` function - `(scope, level) -> bool` - answering whether
+anything recorded at that level would be kept. Leaving it out passes every recording on, for the
+recording functions to decide.
+
+```python
+from haiway import LoggerObservability, ctx
+
+async with ctx.scope("work", observability=LoggerObservability(debug_context=False)):
+    ctx.log_debug("Skipped without formatting when DEBUG is off: %s", expensive)
+```
+
 One instance may back several independent scope trees, including concurrent ones, as long as they
 run on a single event loop. Each tree is summarized and released on its own. A scope completes only
 once every scope nested below it completed, so every scope keeps its place in the tree regardless of

@@ -827,7 +827,7 @@ class ctx:
         ContextObservability.record_log(
             ObservabilityLevel.ERROR,
             message,
-            *args,
+            args,
             exception=exception,
         )
 
@@ -862,7 +862,7 @@ class ctx:
         ContextObservability.record_log(
             ObservabilityLevel.WARNING,
             message,
-            *args,
+            args,
             exception=exception,
         )
 
@@ -893,7 +893,7 @@ class ctx:
         ContextObservability.record_log(
             ObservabilityLevel.INFO,
             message,
-            *args,
+            args,
             exception=None,
         )
 
@@ -928,7 +928,7 @@ class ctx:
         ContextObservability.record_log(
             ObservabilityLevel.DEBUG,
             message,
-            *args,
+            args,
             exception=exception,
         )
 

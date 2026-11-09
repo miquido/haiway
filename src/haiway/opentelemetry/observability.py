@@ -714,6 +714,14 @@ class _ObservabilityAdapter:
         _W3C_PROPAGATOR.inject(carrier, context=store.context)
         return carrier
 
+    def level_checking(
+        self,
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+    ) -> bool:
+        return level >= self._level
+
     def log_recording(
         self,
         scope: ContextIdentifier,
@@ -1378,4 +1386,5 @@ class OpenTelemetry:
             scope_entering=adapter.scope_entering,
             scope_exiting=adapter.scope_exiting,
             trace_context_encoding=adapter.trace_context_encoding,
+            level_checking=adapter.level_checking,
         )
