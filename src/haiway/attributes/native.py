@@ -2,7 +2,10 @@ import inspect
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from enum import IntEnum
+from threading import Lock
+from types import BuiltinFunctionType, ModuleType
 from typing import TYPE_CHECKING, Any, Final
+from weakref import WeakKeyDictionary
 
 from haiway._native import nstruct
 from haiway.attributes.annotations import (
@@ -128,7 +131,6 @@ _LEAVES: Final[Mapping[type[Any], Kind]] = {
     TimedeltaAttribute: Kind.TIMEDELTA,
     PathAttribute: Kind.PATH,
     MetaAttribute: Kind.META,
-    FunctionAttribute: Kind.FUNCTION,
 }
 
 
@@ -209,6 +211,20 @@ def _describe_compound(  # noqa: C901, PLR0911, PLR0912
         return _describe(inner, active=active)
 
     match annotation:
+        case FunctionAttribute():
+            positional: int = annotation.positional
+            extensible: bool = annotation.extensible
+            return (
+                Kind.FUNCTION,
+                annotation,
+                None,
+                None,
+                _verifying(annotation),
+                # the arguments a value has to take - none to check when anything goes
+                None if extensible and not positional else (positional, extensible),
+                (),
+            )
+
         case LiteralAttribute():
             return (
                 Kind.LITERAL,
@@ -398,6 +414,89 @@ def validate(
     return nstruct.validate(spec, value)
 
 
+def accepts(
+    value: Any,
+    positional: int,
+    extensible: bool,
+    /,
+) -> bool:
+    """
+    Tell whether a callable which is not a plain function takes the arguments it is given.
+
+    Parameters
+    ----------
+    value : Any
+        A callable - a class, a partial, a builtin or an object with ``__call__``.
+    positional : int
+        The number of arguments it is given positionally.
+    extensible : bool
+        Whether arguments the annotation does not tell may follow.
+
+    Returns
+    -------
+    bool
+        ``False`` only when its signature proves it can't take them - a callable without
+        a signature to read is accepted.
+    """
+    answers: dict[tuple[int, bool], bool] | None = _answers(value)
+    if answers is None:
+        return _accepts(value, positional, extensible)
+
+    with _ANSWERS_LOCK:
+        accepted: bool | None = answers.get((positional, extensible))
+
+    if accepted is None:
+        accepted = _accepts(value, positional, extensible)
+        with _ANSWERS_LOCK:
+            answers[(positional, extensible)] = accepted
+
+    return accepted
+
+
+# what classes and builtins of modules were told to take - those are called the same way as
+# long as they live, and reading a signature takes microseconds. A class is not kept alive
+# by having been asked about, and a builtin of a module lives as long as the module does
+_CLASS_ANSWERS: Final[WeakKeyDictionary[type[Any], dict[tuple[int, bool], bool]]] = (
+    WeakKeyDictionary()
+)
+_BUILTIN_ANSWERS: Final[dict[BuiltinFunctionType, dict[tuple[int, bool], bool]]] = {}
+_ANSWERS_LOCK: Final[Lock] = Lock()
+
+
+def _answers(value: Any, /) -> dict[tuple[int, bool], bool] | None:
+    if isinstance(value, type):
+        with _ANSWERS_LOCK:
+            return _CLASS_ANSWERS.setdefault(value, {})
+
+    if isinstance(value, BuiltinFunctionType) and isinstance(value.__self__, ModuleType | None):
+        with _ANSWERS_LOCK:
+            return _BUILTIN_ANSWERS.setdefault(value, {})
+
+    return None  # bound to what it is given with, which may be gone the next time
+
+
+def _accepts(value: Any, positional: int, extensible: bool, /) -> bool:
+    signature: inspect.Signature
+    try:
+        signature = inspect.signature(value)
+
+    except TypeError, ValueError:
+        return True  # what can't be told is not refused
+
+    arguments: tuple[None, ...] = (None,) * positional
+    try:
+        if extensible:  # the arguments which follow are not known - only these have to fit
+            signature.bind_partial(*arguments)
+
+        else:
+            signature.bind(*arguments)
+
+    except TypeError:
+        return False
+
+    return True
+
+
 def enum_values(
     base: Any,
     names: bool,
@@ -467,6 +566,7 @@ class ValidationHooks(Immutable):
     report: Callable[[str, Exception], Any]  # raises a failure with its position
     unexpected: Callable[[type[Any], Any], Any]  # refuses a key of a mapping
     describe: Callable[[Any], Description]  # the description of an annotation resolved late
+    accepts: Callable[[Any, int, bool], bool]  # whether a callable takes the arguments given
     enum_values: Callable[[Any, bool], str]
     literal_values: Callable[[Sequence[Any]], str]
     b64decode: Callable[[str], bytes]
@@ -499,6 +599,7 @@ class TypeHooks(Immutable):
     path: type[Any]
     pathlike: type[Any]
     meta: type[Any]
+    partial: type[Any]  # functools.partial - what is unwrapped to the function it calls
 
 
 def configure(

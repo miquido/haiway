@@ -420,8 +420,13 @@ A few validation details matter in practice:
 
 - Plain `Enum` fields accept enum members and do not coerce from raw values.
 - `StrEnum` and `IntEnum` fields accept both enum members and matching raw string or integer forms.
-- Callable and protocol fields validate correctly at runtime but do not produce JSON Schema
-  specifications.
+- A `Callable[[A, B], R]` field takes a callable which can be called with the two arguments the
+  annotation gives it - a function taking one, or requiring a third, is refused when the state is
+  created rather than when it is called. Arguments the annotation leaves open - `...`, a
+  `ParamSpec`, or what follows `Concatenate[A, P]` - are not checked, and neither are the types of
+  arguments nor the result. Functions, bound methods, partials and objects with `__call__` are read
+  natively; a callable without a signature to read, such as some builtins, is accepted.
+- Callable and protocol fields do not produce JSON Schema specifications.
 - Validation failures are wrapped in `ValidationError`, which includes a precise nested path.
 
 ### JSON Schema Generation

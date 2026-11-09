@@ -56,6 +56,8 @@ typedef struct Spec {
     PyObject *data;
     Py_ssize_t count;
     struct Spec **children;
+    Py_ssize_t positional;  /* a function: the arguments it is given positionally, -1 for any */
+    int extensible;         /* a function: whether arguments not told may follow those */
 } Spec;
 
 static void
@@ -124,6 +126,23 @@ spec_compile(PyObject *description)
     spec->validating = D_VALIDATING(description) == Py_None ? NULL : Py_NewRef(D_VALIDATING(description));
     spec->verifying = D_VERIFYING(description) == Py_None ? NULL : Py_NewRef(D_VERIFYING(description));
     spec->data = D_DATA(description) == Py_None ? NULL : Py_NewRef(D_DATA(description));
+    spec->positional = -1;
+    if (spec->kind == SPEC_FUNCTION && spec->data != NULL) {
+        /* (positional, extensible) - the arguments a value has to take */
+        if (!PyTuple_Check(spec->data) || PyTuple_GET_SIZE(spec->data) != 2
+            || !PyLong_Check(PyTuple_GET_ITEM(spec->data, 0)) || !PyBool_Check(PyTuple_GET_ITEM(spec->data, 1))) {
+            PyErr_SetString(PyExc_TypeError, "a function is described by (positional, extensible)");
+            spec_free(spec);
+            return NULL;
+        }
+        spec->positional = PyLong_AsSsize_t(PyTuple_GET_ITEM(spec->data, 0));
+        if (spec->positional < 0) {
+            if (!PyErr_Occurred()) PyErr_SetString(PyExc_ValueError, "a function is given no fewer than 0 arguments");
+            spec_free(spec);
+            return NULL;
+        }
+        spec->extensible = PyTuple_GET_ITEM(spec->data, 1) == Py_True;
+    }
     PyObject *children = D_CHILDREN(description);
     Py_ssize_t n = PyTuple_GET_SIZE(children);
     /* an alias keeps room for its target, which is compiled when it is first used */
@@ -389,6 +408,210 @@ check_elements(ModuleState *state, Spec *element, PyObject *items)
     return 1;
 }
 
+/* the length of what a function attribute holds, 0 for None - -1 on an error */
+static Py_ssize_t
+function_values(PyObject *function, PyObject *name)
+{
+    PyObject *values = PyObject_GetAttr(function, name);
+    if (values == NULL) return -1;
+    Py_ssize_t count = values == Py_None ? 0 : PyObject_Length(values);
+    Py_DECREF(values);
+    return count;
+}
+
+/* whether a function takes the arguments given to it, read from its code - 1, 0 or -1. The
+ * names a partial binds - a dict or NULL - take the arguments of those names, and leave the
+ * positions from the first of them to be given by name only */
+static int
+code_accepts(ModuleState *state, PyObject *function, Py_ssize_t given, int extensible, PyObject *keywords)
+{
+    /* read through the attributes - each may be replaced while it is read */
+    PyObject *code = PyObject_GetAttr(function, state->str_code);
+    if (code == NULL) return -1;
+    if (!PyCode_Check(code)) {
+        Py_DECREF(code);
+        return 1;
+    }
+    PyCodeObject *co = (PyCodeObject *)code;
+    Py_ssize_t positional = co->co_argcount;
+    Py_ssize_t posonly = co->co_posonlyargcount;
+    Py_ssize_t keyword = co->co_kwonlyargcount;
+    Py_ssize_t taken = (co->co_flags & CO_VARARGS) ? PY_SSIZE_T_MAX : positional; /* given positionally */
+    int named = keywords != NULL && PyDict_GET_SIZE(keywords) > 0;
+    PyObject *names = NULL;
+    if (named) {
+        names = PyCode_GetVarnames(co);
+        if (names == NULL) {
+            Py_DECREF(code);
+            return -1;
+        }
+    }
+    int any_keywords = (co->co_flags & CO_VARKEYWORDS) != 0;
+    Py_DECREF(code);
+
+    /* which of the arguments the names bind - a positional one leaves its position and every
+     * one after it to the names, as passing it both ways fails */
+    uint64_t bound_bits = 0;
+    uint64_t *bound = &bound_bits;
+    Py_ssize_t arguments = positional + keyword;
+    int r = 1;
+    if (named) {
+        if (arguments > 64) {
+            bound = PyMem_Calloc((size_t)((arguments + 63) / 64), sizeof(uint64_t));
+            if (bound == NULL) {
+                Py_DECREF(names);
+                PyErr_NoMemory();
+                return -1;
+            }
+        }
+        Py_ssize_t matched = 0;
+        for (Py_ssize_t i = posonly; i < arguments && i < PyTuple_GET_SIZE(names); i++) {
+            int contained = PyDict_Contains(keywords, PyTuple_GET_ITEM(names, i));
+            if (contained < 0) {
+                r = -1;
+                goto done;
+            }
+            if (!contained) continue;
+            matched += 1;
+            bound[i / 64] |= (uint64_t)1 << (i % 64);
+            if (i < positional && i < taken) taken = i;
+        }
+        /* a name binding none of the arguments is taken only by a function taking any */
+        if (matched < PyDict_GET_SIZE(keywords) && !any_keywords) {
+            r = 0;
+            goto done;
+        }
+    }
+    if (given > taken) {
+        r = 0;
+        goto done;
+    }
+    if (extensible) goto done; /* what follows is not known - those given only have to fit */
+
+    Py_ssize_t defaults = function_values(function, state->str_defaults);
+    if (defaults < 0) {
+        r = -1;
+        goto done;
+    }
+    if (!named) {
+        if (positional - defaults > given) {
+            r = 0; /* a positional argument nothing gives */
+            goto done;
+        }
+    } else {
+        for (Py_ssize_t i = given; i < positional - defaults; i++) {
+            if (!(bound[i / 64] & ((uint64_t)1 << (i % 64)))) {
+                r = 0; /* a positional argument nothing gives */
+                goto done;
+            }
+        }
+    }
+    if (keyword == 0) goto done;
+    PyObject *keyword_defaults = PyObject_GetAttr(function, state->str_kwdefaults);
+    if (keyword_defaults == NULL) {
+        r = -1;
+        goto done;
+    }
+    if (!named) {
+        /* the defaults are of keyword only arguments - every one of them needs one */
+        Py_ssize_t count = keyword_defaults == Py_None ? 0 : PyObject_Length(keyword_defaults);
+        r = count < 0 ? -1 : count >= keyword;
+    } else {
+        for (Py_ssize_t i = positional; r > 0 && i < arguments && i < PyTuple_GET_SIZE(names); i++) {
+            if (bound[i / 64] & ((uint64_t)1 << (i % 64))) continue;
+            int defaulted = PyDict_Check(keyword_defaults)
+                ? PyDict_Contains(keyword_defaults, PyTuple_GET_ITEM(names, i)) : 0;
+            r = defaulted < 0 ? -1 : defaulted;
+        }
+    }
+    Py_DECREF(keyword_defaults);
+
+done:
+    if (bound != &bound_bits) PyMem_Free(bound);
+    Py_XDECREF(names);
+    return r;
+}
+
+/* a partial is the function it calls, given its arguments first and its keywords by name - a
+ * new reference to what is called in the end and to the keywords, NULL for no keywords. NULL
+ * on an error, and on a partial of a partial giving keywords both, left to Python */
+static PyObject *
+unwrap_partial(ModuleState *state, PyObject *value, Py_ssize_t *given, PyObject **keywords)
+{
+    PyObject *callee = Py_NewRef(value);
+    *keywords = NULL;
+    while (Py_IS_TYPE(callee, (PyTypeObject *)state->partial)) {
+        PyObject *named = PyObject_GetAttr(callee, state->str_keywords);
+        if (named == NULL) goto failed;
+        if (!PyDict_Check(named) || PyDict_GET_SIZE(named) == 0) {
+            Py_DECREF(named);
+        } else if (*keywords == NULL) {
+            *keywords = named;
+        } else {
+            Py_DECREF(named);
+            goto failed; /* merged by functools as it creates them - rare enough for Python */
+        }
+        Py_ssize_t arguments = function_values(callee, state->str_args);
+        if (arguments < 0) goto failed;
+        PyObject *function = PyObject_GetAttr(callee, state->str_func);
+        Py_SETREF(callee, function);
+        if (callee == NULL) goto failed;
+        *given += arguments;
+    }
+    return callee;
+
+failed:
+    Py_XDECREF(callee);
+    Py_CLEAR(*keywords);
+    return NULL;
+}
+
+/* whether a callable takes the arguments a function annotation gives it - 1, 0, or -1 on an
+ * error. A function is read from its code, and so is a method bound to one, a partial of one
+ * and an object called through one - every other callable is asked of Python, which accepts
+ * what it can't read the signature of. The types of the arguments are not told by, only
+ * whether they fit */
+static int
+function_accepts(ModuleState *state, Spec *spec, PyObject *value)
+{
+    if (spec->positional < 0) return 1;
+    Py_ssize_t given = spec->positional;
+    PyObject *keywords = NULL;
+    PyObject *callee = unwrap_partial(state, value, &given, &keywords);
+    PyObject *function = NULL;
+    if (callee == NULL) {
+        if (PyErr_Occurred()) return -1;
+    } else if (PyFunction_Check(callee)) {
+        function = Py_NewRef(callee);
+    } else if (Py_IS_TYPE(callee, &PyMethod_Type)) {
+        function = Py_NewRef(PyMethod_GET_FUNCTION(callee)); /* a method never changes what it binds */
+        given += 1;                                           /* what it is bound to comes first */
+    } else if (!PyType_Check(callee)) {
+        /* an object is called through the __call__ of its class - looked up on the class, as
+         * the call itself does, which is a function when the class is written in Python */
+        function = PyObject_GetAttr((PyObject *)Py_TYPE(callee), state->str_call);
+        if (function == NULL) {
+            Py_DECREF(callee);
+            Py_XDECREF(keywords);
+            return -1;
+        }
+        given += 1;
+    }
+    Py_XDECREF(callee);
+    int r;
+    if (function != NULL && PyFunction_Check(function)) {
+        r = code_accepts(state, function, given, spec->extensible, keywords);
+    } else { /* asked of Python as it was given - its signature reads partials on its own */
+        PyObject *accepted = PyObject_CallFunction(
+            state->accepts, "OnO", value, spec->positional, spec->extensible ? Py_True : Py_False);
+        r = accepted == NULL ? -1 : PyObject_IsTrue(accepted);
+        Py_XDECREF(accepted);
+    }
+    Py_XDECREF(function);
+    Py_XDECREF(keywords);
+    return r;
+}
+
 /* whether a value is accepted as it is - what the first pass of a union decides by */
 static int
 spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
@@ -433,7 +656,7 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
     case SPEC_META:
         return PyObject_IsInstance(value, state->meta);
     case SPEC_FUNCTION:
-        return PyCallable_Check(value);
+        return PyCallable_Check(value) ? function_accepts(state, spec, value) : 0;
     case SPEC_TUPLE: {
         if (is_text_like(value)) return 0;
         int owned;
@@ -1167,15 +1390,23 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
         Py_DECREF(validated);
         return NULL;
     }
-    case SPEC_FUNCTION:
-        if (PyCallable_Check(value)) return Py_NewRef(value);
-        {
-            PyObject *reported = reported_type(value);
-            if (reported == NULL) return NULL;
+    case SPEC_FUNCTION: {
+        int callable = PyCallable_Check(value);
+        int r = callable ? function_accepts(state, spec, value) : 0;
+        if (r > 0) return Py_NewRef(value);
+        if (r < 0) return NULL;
+        PyObject *reported = reported_type(value);
+        if (reported == NULL) return NULL;
+        if (callable) {
+            PyErr_Format(PyExc_TypeError,
+                "'%U' is not matching expected function type - it can't be called with %zd positional argument%s",
+                reported, spec->positional, spec->positional == 1 ? "" : "s");
+        } else {
             PyErr_Format(PyExc_TypeError, "'%U' is not matching expected function type", reported);
-            Py_DECREF(reported);
         }
+        Py_DECREF(reported);
         return NULL;
+    }
     case SPEC_UNION:
         return validate_union(state, spec, value);
     case SPEC_VALIDABLE:

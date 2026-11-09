@@ -1,4 +1,5 @@
 import copy
+import functools
 import gc
 import json
 import math
@@ -925,3 +926,59 @@ def test_states_are_used_from_many_threads_at_once() -> None:
 
     assert failures == []
     assert all(variant is variants[0] for variant in variants)
+
+
+def test_checking_function_arguments_does_not_leak() -> None:
+    class Holding(State):
+        function: Callable[[int, str], None]
+
+    def taking(first: int, second: str) -> None: ...
+    def defaulted(first: int, second: str, third: bytes = b"", *, fourth: int = 0) -> None: ...
+    def refused(first: int) -> None: ...
+
+    class Callee:
+        def taking(self, first: int, second: str) -> None: ...
+
+    class Called:
+        def __call__(self, first: int, second: str) -> None: ...
+
+    class Constructed:
+        def __init__(self, first: int, second: str) -> None: ...
+
+    many: Any = {}
+    exec(  # nosec: B102
+        f"def many({', '.join(f'a{index}' for index in range(70))}, *, last): pass", many
+    )
+
+    def operation() -> None:
+        Holding(function=taking)
+        Holding(function=defaulted)
+        Holding(function=Callee().taking)
+        Holding(function=Called())
+        Holding(function=Constructed)
+        Holding(function=functools.partial(defaulted, 1))
+        Holding(function=functools.partial(defaulted, fourth=1))
+        Holding(function=functools.partial(many["many"], *range(68), last=1))
+        _swallow(lambda: Holding(function=refused))
+        _swallow(lambda: Holding(function=functools.partial(refused, 1)))
+        _swallow(lambda: Holding(function=functools.partial(taking, second="")))
+        _swallow(lambda: Holding(function=functools.partial(many["many"], a69=1)))
+        _swallow(lambda: Holding(function=1))  # pyright: ignore[reportArgumentType]
+
+    _assert_no_leak(operation)
+
+
+def test_classes_held_as_functions_are_collected() -> None:
+    class Holding(State):
+        factory: Callable[[], object]
+
+    def define() -> weakref.ref[type[Any]]:
+        class Temporary:
+            pass
+
+        Holding(factory=Temporary)
+        return weakref.ref(Temporary)
+
+    references = [define() for _ in range(20)]
+    gc.collect()
+    assert all(reference() is None for reference in references)

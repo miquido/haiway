@@ -2324,7 +2324,6 @@ class TypedDictAttribute(Immutable):
 
 class FunctionAttribute(Immutable):
     base: Any
-    arguments: Sequence[AttributeAnnotation]
     alias: str | None = None
     description: str | None = None
     verifying: Verifying[Any] = _no_verify
@@ -2336,6 +2335,16 @@ class FunctionAttribute(Immutable):
     @property
     def type_name(self) -> str:
         return self.base.__name__
+
+    @property
+    def positional(self) -> int:
+        """The number of arguments the function is called with, positionally."""
+        return len(_callable_arguments(self.base)[0])
+
+    @property
+    def extensible(self) -> bool:
+        """Whether arguments the annotation does not tell may follow the positional ones."""
+        return _callable_arguments(self.base)[1]
 
     def annotated(  # noqa: C901
         self,
@@ -2382,7 +2391,6 @@ class FunctionAttribute(Immutable):
             if validating is None:
                 return self.__class__(
                     base=self.base,
-                    arguments=self.arguments,
                     alias=alias,
                     description=description,
                     verifying=verifying,
@@ -2396,7 +2404,6 @@ class FunctionAttribute(Immutable):
                 validating=validating,
                 attribute=self.__class__(
                     base=self.base,
-                    arguments=self.arguments,
                     alias=alias,
                     description=description,
                     verifying=verifying,
@@ -2408,6 +2415,26 @@ class FunctionAttribute(Immutable):
             )
 
         return self
+
+
+def _callable_arguments(
+    annotation: Any,
+    /,
+) -> tuple[Sequence[Any], bool]:
+    # the arguments a callable is given positionally, and whether others may follow -
+    # their types are left unresolved, as nothing tells a function by them
+    arguments: tuple[Any, ...] = get_args(annotation)
+    if not arguments:
+        return ((), True)  # no arguments told at all
+
+    signature: Any = arguments[0]
+    if isinstance(signature, list | tuple):
+        return (tuple(cast(Sequence[Any], signature)), False)
+
+    if get_origin(signature) in (typing.Concatenate, typing_extensions.Concatenate):
+        return (get_args(signature)[:-1], True)  # the types before the signature
+
+    return ((), True)  # `...` or a parameter specification
 
 
 class UnionAttribute(Immutable):
@@ -3270,16 +3297,6 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
             visited=visited,
         )
 
-    elif isinstance(attribute, FunctionAttribute):
-        for argument in attribute.arguments:
-            _finalize_alias_resolution(
-                argument,
-                alias_name=alias_name,
-                alias_module=alias_module,
-                alias_target=alias_target,
-                visited=visited,
-            )
-
 
 def _resolve_type_alias(
     annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
@@ -3891,10 +3908,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
             return _resolve_literal(annotation)
 
         case collections_abc.Callable | typing.Callable | typing_extensions.Callable:  # pyright: ignore[reportUnknownMemberType]
-            return FunctionAttribute(
-                base=annotation,
-                arguments=(),  # TODO: use function with arguments
-            )
+            return FunctionAttribute(base=annotation)
 
         case typing.Self | typing_extensions.Self:  # pyright: ignore[reportUnknownMemberType]
             if self_attribute := recursion_guard.get("Self"):

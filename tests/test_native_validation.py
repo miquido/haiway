@@ -1,11 +1,15 @@
+import inspect
+import random
 from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from datetime import date, datetime, time, timedelta
 from enum import IntEnum, StrEnum
+from functools import partial
 from pathlib import Path
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Concatenate, Literal, NotRequired, TypedDict
 from uuid import UUID
 
 import pytest
+from pytest import param
 
 from haiway import Map, Meta, State, ValidationError, Validator, Verifier
 from haiway._native import nstruct
@@ -359,3 +363,210 @@ def test_set_elements_are_converted_whatever_set_holds_them(
     validated = _holder(annotation)(value=given).value  # pyright: ignore[reportCallIssue, reportAttributeAccessIssue]
     assert validated == expected
     assert all(type(element) is type(next(iter(expected))) for element in validated)
+
+
+def _two(first: int, second: str) -> None: ...
+def _three(first: int, second: str, third: bytes) -> None: ...
+def _three_defaulted(first: int, second: str, third: bytes = b"") -> None: ...
+def _one(first: int) -> None: ...
+def _variadic(*arguments: Any) -> None: ...
+def _keyword_required(first: int, second: str, *, third: bytes) -> None: ...
+def _keyword_defaulted(first: int, second: str, *, third: bytes = b"") -> None: ...
+
+
+class _Callee:
+    def two(self, first: int, second: str) -> None: ...
+    def one(self, first: int) -> None: ...
+    def __call__(self, first: int, second: str) -> None: ...
+
+
+class _Constructed:
+    def __init__(self, first: int, second: str) -> None: ...
+
+
+TAKING_TWO: list[tuple[str, Any, bool]] = [
+    ("function", _two, True),
+    ("lambda", lambda first, second: None, True),  # pyright: ignore[reportUnknownLambdaType]
+    ("too many", _three, False),
+    ("defaulted", _three_defaulted, True),
+    ("too few", _one, False),
+    ("variadic", _variadic, True),
+    ("required keyword", _keyword_required, False),
+    ("defaulted keyword", _keyword_defaulted, True),
+    ("bound method", _Callee().two, True),
+    ("bound method, too few", _Callee().one, False),
+    ("object", _Callee(), True),
+    ("class", _Constructed, True),
+    ("partial", partial(_three, 1), True),
+    ("partial, too few", partial(_two, 1), False),
+    ("builtin without a signature", print, True),
+]
+
+
+@pytest.mark.parametrize(
+    ("value", "accepted"),
+    [param(value, accepted, id=name) for name, value, accepted in TAKING_TWO],
+)
+def test_function_values_have_to_take_their_arguments(value: Any, accepted: bool) -> None:
+    holder = _holder(Callable[[int, str], None])
+    if accepted:
+        assert holder(value=value).value is value  # pyright: ignore[reportCallIssue]
+        return
+
+    with pytest.raises(ValidationError) as exc:
+        holder(value=value)  # pyright: ignore[reportCallIssue]
+
+    assert str(exc.value).endswith("it can't be called with 2 positional arguments")
+
+
+@pytest.mark.parametrize(
+    ("annotation", "value", "accepted"),
+    [
+        param(Callable[..., None], _one, True, id="anything goes"),
+        param(Callable[Concatenate[int, ...], None], _three, True, id="more may follow"),
+        param(Callable[Concatenate[int, ...], None], _one, True, id="first taken"),
+        param(Callable[Concatenate[int, str, ...], None], _one, False, id="first only taken"),
+        param(Callable[[], None], _one, False, id="nothing given"),
+        param(Callable[[], None], lambda: None, True, id="nothing taken"),
+    ],
+)
+def test_function_values_take_what_the_annotation_tells(
+    annotation: Any,
+    value: Any,
+    accepted: bool,
+) -> None:
+    holder = _holder(annotation)
+    if accepted:
+        assert holder(value=value).value is value  # pyright: ignore[reportCallIssue]
+
+    else:
+        with pytest.raises(ValidationError):
+            holder(value=value)  # pyright: ignore[reportCallIssue]
+
+
+def test_union_tells_functions_apart_by_their_arguments() -> None:
+    def defaulted(value: str = "") -> str:
+        return value
+
+    holder = _holder(Callable[[int, int], int] | Callable[[str], str])
+    assert holder(value=_one).value is _one  # pyright: ignore[reportCallIssue]
+    with pytest.raises(ValidationError):
+        holder(value=_three)  # pyright: ignore[reportCallIssue]
+
+    assert holder(value=defaulted).value is defaulted  # pyright: ignore[reportCallIssue]
+
+
+def test_replaced_defaults_are_read_when_validating() -> None:
+    def function(first: int, second: str, third: bytes) -> None: ...
+
+    holder = _holder(Callable[[int, str], None])
+    with pytest.raises(ValidationError):
+        holder(value=function)  # pyright: ignore[reportCallIssue]
+
+    function.__defaults__ = (b"",)
+    assert holder(value=function).value is function  # pyright: ignore[reportCallIssue]
+
+
+def _random_function(generator: random.Random) -> Callable[..., None]:
+    # a function of a random signature - positional only, positional and keyword only
+    # arguments, some defaulted, with or without the variadic ones
+    names: Iterator[str] = (f"a{index}" for index in range(100))
+    positional_only: list[str] = [next(names) for _ in range(generator.randint(0, 2))]
+    positional: list[str] = [next(names) for _ in range(generator.randint(0, 3))]
+    keyword_only: list[str] = [next(names) for _ in range(generator.randint(0, 2))]
+    defaulted: int = generator.randint(0, len(positional_only) + len(positional))
+    parts: list[str] = []
+    for index, name in enumerate(positional_only + positional):
+        default: str = "=0" if index >= len(positional_only) + len(positional) - defaulted else ""
+        parts.append(name + default)
+        if index == len(positional_only) - 1:
+            parts.append("/")
+
+    if generator.random() < 0.3:
+        parts.append("*arguments")
+
+    elif keyword_only:
+        parts.append("*")
+
+    parts.extend(name + ("=0" if generator.random() < 0.5 else "") for name in keyword_only)
+    if generator.random() < 0.3:
+        parts.append("**keywords")
+
+    namespace: dict[str, Any] = {}
+    exec(f"def function({', '.join(parts)}): pass", namespace)  # nosec: B102
+    return namespace["function"]
+
+
+def _random_partial(generator: random.Random, function: Callable[..., None]) -> Any:
+    names: list[str] = [*inspect.signature(function).parameters, "unknown"]
+    keywords: dict[str, Any] = {
+        name: 0 for name in names if not name.startswith("*") and generator.random() < 0.25
+    }
+    arguments: tuple[int, ...] = (0,) * generator.randint(0, 2)
+    return partial(function, *arguments, **keywords)
+
+
+def _calls(value: Any, positional: int, extensible: bool) -> bool:
+    # what the call itself tells, as the functions do nothing - inspect reads partials and
+    # positional only arguments given by name its own way. Arguments which may follow are
+    # tried as more positional ones, and as every argument left by name
+    function: Any = value
+    given: int = 0
+    keywords: Mapping[str, Any] = {}
+    if isinstance(value, partial):
+        function, given, keywords = value.func, len(value.args), value.keywords
+
+    parameters: list[inspect.Parameter] = list(inspect.signature(function).parameters.values())
+    for extra in range(8) if extensible else (0,):
+        named: dict[str, Any] = {
+            parameter.name: 0
+            for index, parameter in enumerate(parameters)
+            if extensible
+            and parameter.name not in keywords
+            and (
+                parameter.kind is parameter.KEYWORD_ONLY
+                or (
+                    parameter.kind is parameter.POSITIONAL_OR_KEYWORD
+                    and index >= given + positional + extra
+                )
+            )
+        }
+        try:
+            value(*((None,) * (positional + extra)), **named)
+
+        except TypeError:
+            continue
+
+        return True
+
+    return False
+
+
+def test_functions_are_accepted_exactly_when_their_signature_binds() -> None:
+    generator = random.Random(29)
+    holders: Mapping[tuple[int, bool], type[Holder[Any]]] = {
+        (0, False): _holder(Callable[[], None]),
+        (1, False): _holder(Callable[[int], None]),
+        (2, False): _holder(Callable[[int, int], None]),
+        (3, False): _holder(Callable[[int, int, int], None]),
+        (1, True): _holder(Callable[Concatenate[int, ...], None]),
+        (2, True): _holder(Callable[Concatenate[int, int, ...], None]),
+    }
+    for _ in range(3000):
+        function: Callable[..., None] = _random_function(generator)
+        value: Any = function if generator.random() < 0.5 else _random_partial(generator, function)
+        for (positional, extensible), holder in holders.items():
+            expected: bool = _calls(value, positional, extensible)
+            try:
+                holder(value=value)  # pyright: ignore[reportCallIssue]
+                accepted = True
+
+            except ValidationError:
+                accepted = False
+
+            assert accepted == expected, (
+                inspect.signature(function),
+                value,
+                positional,
+                extensible,
+            )
