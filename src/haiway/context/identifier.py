@@ -1,4 +1,5 @@
 import os
+import sys
 from collections.abc import Sequence
 from contextvars import ContextVar, Token
 from random import Random
@@ -25,24 +26,24 @@ _UUID4_FIXED: int = (0x4000 << 64) | (0x8000 << 48)
 class _Identifiers:
     # a generator of its own - the one of the `random` module can be reseeded by the
     # application, and a repeated seed would repeat the identifiers. it is seeded by the
-    # operating system, and again in a process which is not the one it was made in - a
-    # forked one would otherwise continue the very sequence of its parent
-    __slots__ = ("_generator", "_process")
+    # operating system, and again in a forked process - which would otherwise continue
+    # the very sequence of its parent. reseeding there, rather than checking the process
+    # on every identifier, keeps a system call off the way into every scope
+    __slots__ = ("_generator",)
 
     def __init__(self) -> None:
-        self._process: int = os.getpid()
         self._generator: Random = Random()  # nosec: B311
 
-    def bits(self) -> int:
-        process: int = os.getpid()
-        if process != self._process:
-            self._process = process
-            self._generator = Random()  # nosec: B311
+    def reseed(self) -> None:
+        self._generator = Random()  # nosec: B311
 
+    def bits(self) -> int:
         return self._generator.getrandbits(128)  # nosec: B311
 
 
 _identifiers: _Identifiers = _Identifiers()
+if sys.platform != "win32":  # Windows can't fork, so there is nothing to reseed there
+    os.register_at_fork(after_in_child=_identifiers.reseed)
 
 
 def random_identifier() -> UUID:
@@ -81,19 +82,10 @@ class ContextIdentifier:
         /,
         kind: ScopeKind = "internal",
     ) -> Self:
-        try:  # check for current scope
-            current: Self = cls._context.get()
-            scope_id: UUID = random_identifier()
-            return cls(
-                name=name,
-                kind=kind,
-                scope_id=scope_id,
-                # create nested scope
-                parent_id=current.scope_id,
-                path=(*current.path, scope_id),
-            )
-
-        except LookupError:  # create root scope when missing
+        # read without raising - a root scope, entered with no scope around it, is
+        # entered for every request a server handles
+        current: Self | None = cls._context.get(None)
+        if current is None:  # create root scope when missing
             root_id: UUID = random_identifier()
             return cls(
                 name=name,
@@ -102,6 +94,16 @@ class ContextIdentifier:
                 parent_id=root_id,  # own id is parent_id for root
                 path=(root_id,),
             )
+
+        scope_id: UUID = random_identifier()
+        return cls(
+            name=name,
+            kind=kind,
+            scope_id=scope_id,
+            # create nested scope
+            parent_id=current.scope_id,
+            path=(*current.path, scope_id),
+        )
 
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextIdentifier")
 

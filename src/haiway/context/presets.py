@@ -264,11 +264,12 @@ class ContextPresetsRegistry:
         name: str,
         /,
     ) -> ContextPresets | None:
-        try:
-            return cls._context.get().preset(name)
-
-        except LookupError:
+        # read without raising - most scopes are entered with no presets registered
+        registry: ContextPresetsRegistry | None = cls._context.get(None)
+        if registry is None:
             return None  # no presets
+
+        return registry.preset(name)
 
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextPresetsRegistry")
     __slots__ = (

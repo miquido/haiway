@@ -1,0 +1,18 @@
+{
+  "floor/context variable set and reset": 0.16013593672477522,
+  "floor/empty async context manager": 1.02115316836134,
+  "floor/task group": 0.54092807996703,
+  "floor/task created and awaited": 27.219607516751104,
+  "scope/root": 11.755793686996359,
+  "scope/nested": 8.03210432097766,
+  "scope/nested, 3 states": 8.66395967079653,
+  "scope/nested, isolated": 8.893350181516917,
+  "scope/nested, 5 levels deep": 8.033238763961286,
+  "state/lookup": 0.19639024765672836,
+  "state/lookup, 5 levels deep": 0.19683101972340072,
+  "state/missing, default": 0.20366391740715972,
+  "state/contains": 0.15144344879507465,
+  "updating/one state": 0.6663323711136901,
+  "spawn/task created and awaited": 29.470335568157118,
+  "event/sent, no subscriber": 0.2995345644111553
+}

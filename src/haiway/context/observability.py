@@ -320,6 +320,7 @@ class ScopeStore:
         identifier: ContextIdentifier,
         /,
         trace_id: UUID,
+        trace_hex: str,
         logger: Logger,
     ) -> None:
         self.identifier: ContextIdentifier = identifier
@@ -328,8 +329,9 @@ class ScopeStore:
         # under a tracing backend
         self.trace_id: UUID = trace_id
         # unpadded hex is the form trace backends expect, and it is what every
-        # record within the scope is prefixed with - render it once
-        self.trace_hex: str = trace_id.hex
+        # record within the scope is prefixed with - rendered once for the tree,
+        # by its root, and inherited with the trace
+        self.trace_hex: str = trace_hex
         self._prefix: str | None = None
         # resolved per tree, so concurrent roots keep their own logger
         self.logger: Logger = logger
@@ -561,12 +563,24 @@ def LoggerObservability(  # noqa: C901, PLR0915
         # tree of its own. it also misses for a nested scope entered after the
         # scope it belongs to already completed
         parent: ScopeStore | None = scopes.get(scope.parent_id.int)
-        store: ScopeStore = ScopeStore(
-            scope,
-            # one trace per tree - a root starts it, everything below inherits it
-            trace_id=parent.trace_id if parent is not None else random_identifier(),
-            logger=parent.logger if parent is not None else logger or getLogger(scope.name),
-        )
+        store: ScopeStore
+        if parent is not None:  # one trace per tree - everything below a root inherits it
+            store = ScopeStore(
+                scope,
+                trace_id=parent.trace_id,
+                trace_hex=parent.trace_hex,
+                logger=parent.logger,
+            )
+
+        else:  # a root starts it
+            trace_id: UUID = random_identifier()
+            store = ScopeStore(
+                scope,
+                trace_id=trace_id,
+                trace_hex=trace_id.hex,
+                logger=logger or getLogger(scope.name),
+            )
+
         if parent is not None:
             if debug_context:  # retain the tree only to summarize it
                 parent.nested.append(store)
@@ -691,13 +705,15 @@ class ContextObservability:
         observability: Observability | Logger | None,
     ) -> Self:
         if observability is None:
-            try:  # check for current scope
+            # read without raising - a root scope has no observability around it
+            current: Self | None = cls._context.get(None)
+            if current is not None:  # inherit the one of the current scope
                 return cls(
                     scope=scope,
-                    observability=cls._context.get().observability,
+                    observability=current.observability,
                 )
 
-            except LookupError:  # create default logger observability on missing
+            else:  # create default logger observability on missing
                 return cls(
                     scope=scope,
                     observability=LoggerObservability(

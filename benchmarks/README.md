@@ -91,6 +91,24 @@ streamed body dropped its pass-through frames, in microseconds per call. Most of
 request is `httpx2` itself - parsing its URL above all; the facade adds the recording of the request
 and the response.
 
+## Context
+
+`scope_benchmark.py` measures the context: entering and exiting scopes (root, nested, with states,
+isolated, deep), looking state up, updating it, spawning tasks and sending events. The `floor`
+cases are the primitives a scope is made of - a context variable, an async context manager, a task
+group and a task - so the difference between them and a scope is the cost of the context itself.
+It takes the same `--json`, `--compare`, `--filter` and `--budget` options.
+
+```bash
+make benchmark-scope                                              # run with -O
+make benchmark-scope ARGS="--compare benchmarks/scope_baseline.json"
+```
+
+`scope_baseline.json` was recorded before scopes were made cheaper to enter and exit, in
+microseconds per call. Looking state up, updating it and spawning cost what the primitives beneath
+them do; a scope costs a few times its floor, spread over its parts - the identifier, observability,
+state, the task group and the closing of the scope - none of which dominates.
+
 ## Native storage
 
 `native_baseline.json` is the same set of cases taken with the compiled extension, which is what

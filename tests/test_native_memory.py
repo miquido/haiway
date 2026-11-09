@@ -715,12 +715,10 @@ def _can_lead_back(value: Any) -> bool:
             continue
 
         seen.add(id(current))
-        if isinstance(current, (list, dict, set)) or (
-            isinstance(current, type) and current is not type(current)
-        ):
-            if isinstance(current, (list, dict, set)):
-                return True
+        if isinstance(current, (list, dict, set)):
+            return True
 
+        if isinstance(current, type):
             continue  # a class is not followed - every instance refers to its own
 
         if isinstance(current, SafeUUID):
@@ -735,13 +733,17 @@ def _can_lead_back(value: Any) -> bool:
 
 def test_untracked_instances_never_reach_what_could_lead_back_to_them() -> None:
     generator = random.Random(23)
+    checked: int = 0
     for _ in range(3000):
         value: Any = _random_value(generator, 0)
         instance = _Loose(value=value)
         if gc.is_tracked(instance):
             continue
 
+        checked += 1
         assert not _can_lead_back(instance), value
+
+    assert checked > 0
 
 
 def test_classes_are_collected() -> None:
