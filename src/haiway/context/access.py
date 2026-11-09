@@ -246,7 +246,7 @@ class ctx:
             name=name,
             presets=presets,
             disposables=context_disposables,
-            state=tuple(element for element in state if element is not None),
+            state=tuple(element for element in state if element is not None) if state else (),
             observability=observability,
             kind=kind,
             isolated=isolated,

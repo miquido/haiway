@@ -1,7 +1,7 @@
 from asyncio import CancelledError, Future, gather, shield, sleep
 from collections.abc import Collection, Iterable, Iterator, MutableSequence, Sequence
 from types import TracebackType
-from typing import Protocol, Self, final, runtime_checkable
+from typing import Final, Protocol, Self, cast, final, runtime_checkable
 
 from haiway.attributes import State
 from haiway.context.observability import ContextObservability, ObservabilityLevel
@@ -85,6 +85,10 @@ class Disposables:
         cls,
         *disposables: Disposable | None,
     ) -> Self:
+        if not disposables:
+            # holding nothing it can't change - every scope without disposables shares it
+            return cast(Self, _NO_DISPOSABLES)
+
         return cls(disposables)
 
     __slots__ = ("_disposables",)
@@ -317,3 +321,6 @@ class ContextDisposables:
                 exc_tb,
             )
             self._context_state = None
+
+
+_NO_DISPOSABLES: Final[Disposables] = Disposables(())

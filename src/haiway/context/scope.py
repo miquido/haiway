@@ -1,5 +1,5 @@
 import sys
-from asyncio import AbstractEventLoop, CancelledError, get_running_loop, iscoroutine
+from asyncio import AbstractEventLoop, CancelledError, get_running_loop
 from collections.abc import Callable, Coroutine, MutableSequence, Sequence
 from logging import Logger
 from types import TracebackType
@@ -88,8 +88,15 @@ class ContextScope:
             else:
                 presets = ContextPresetsRegistry.select(self._name)
 
-            # resolve combined state and ensure it is used
-            state: ContextState = await self._resolve_state(presets, unwinds)
+            # resolve combined state and ensure it is used - without anything to
+            # prepare, which is what most scopes are, without a coroutine either
+            state: ContextState
+            if presets is None and not self._disposables:
+                state = ContextState.updating(self._state)
+
+            else:
+                state = await self._resolve_state(presets, unwinds)
+
             state.__enter__()
             unwinds.append(state.__exit__)
 
@@ -98,7 +105,7 @@ class ContextScope:
             # are released, so a task spawned within the scope can't keep running
             # against a connection pool or a client which was already closed
             task_group: ScopeTaskGroup = ScopeTaskGroup(isolated=self._isolated)
-            await task_group.__aenter__()
+            task_group.enter()
             unwinds.append(task_group.__aexit__)
 
             # provide events after the task group so they exit before it - closing
@@ -250,6 +257,23 @@ _Unwind = Callable[
 ]
 
 
+def _fix_exception_context(
+    new_exception: BaseException,
+    old_exception: BaseException | None,
+    frame_exception: BaseException | None,
+    /,
+) -> None:
+    # the context of the newly raised error may point anywhere - walk to the end of its
+    # chain and link it to the error it is replacing, the same way nested `with`
+    # statements would have chained them
+    while (context := new_exception.__context__) is not None and context is not old_exception:
+        if context is frame_exception:
+            new_exception.__context__ = old_exception
+            return
+
+        new_exception = context
+
+
 async def _unwind(
     unwinds: MutableSequence[_Unwind],
     exc_type: type[BaseException] | None,
@@ -258,34 +282,22 @@ async def _unwind(
     /,
 ) -> None:
     frame_exception: BaseException | None = sys.exception()
-
-    def fix_exception_context(
-        new_exception: BaseException,
-        old_exception: BaseException | None,
-    ) -> None:
-        # the context of the newly raised error may point anywhere - walk to the
-        # end of its chain and link it to the error it is replacing, the same way
-        # nested `with` statements would have chained them
-        while (context := new_exception.__context__) is not None and context is not old_exception:
-            if context is frame_exception:
-                new_exception.__context__ = old_exception
-                return
-
-            new_exception = context
-
     collected: MutableSequence[BaseException] = []
     while unwinds:
         element = unwinds.pop()
         try:
-            result: Any = element(exc_type, exc_val, exc_tb)
-            if iscoroutine(result):
+            # an element exits synchronously, returning nothing, or hands over the
+            # coroutine of its asynchronous exit - nothing else, so nothing else is
+            # checked for on the way out of every scope
+            result: Coroutine[None, None, None] | None = element(exc_type, exc_val, exc_tb)
+            if result is not None:
                 await result
 
         except BaseException as exc:
             if exc is exc_val:
                 continue  # reraised what it was given - nothing of its own failed
 
-            fix_exception_context(exc, exc_val)
+            _fix_exception_context(exc, exc_val, frame_exception)
             collected.append(exc)
             # the remaining elements are exited against the newest error, exactly
             # as the enclosing `with` statements of a nesting would have been

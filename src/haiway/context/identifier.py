@@ -25,24 +25,24 @@ _UUID4_FIXED: int = (0x4000 << 64) | (0x8000 << 48)
 class _Identifiers:
     # a generator of its own - the one of the `random` module can be reseeded by the
     # application, and a repeated seed would repeat the identifiers. it is seeded by the
-    # operating system, and again in a process which is not the one it was made in - a
-    # forked one would otherwise continue the very sequence of its parent
-    __slots__ = ("_generator", "_process")
+    # operating system, and again in a forked process - which would otherwise continue
+    # the very sequence of its parent. reseeding there, rather than checking the process
+    # on every identifier, keeps a system call off the way into every scope
+    __slots__ = ("_generator",)
 
     def __init__(self) -> None:
-        self._process: int = os.getpid()
         self._generator: Random = Random()  # nosec: B311
 
-    def bits(self) -> int:
-        process: int = os.getpid()
-        if process != self._process:
-            self._process = process
-            self._generator = Random()  # nosec: B311
+    def reseed(self) -> None:
+        self._generator = Random()  # nosec: B311
 
+    def bits(self) -> int:
         return self._generator.getrandbits(128)  # nosec: B311
 
 
 _identifiers: _Identifiers = _Identifiers()
+if hasattr(os, "register_at_fork"):  # a platform which can't fork has nothing to reseed
+    os.register_at_fork(after_in_child=_identifiers.reseed)
 
 
 def random_identifier() -> UUID:

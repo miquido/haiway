@@ -310,11 +310,15 @@ class ScopeTaskGroup:
         self._tasks: _ScopeTasks | None = None
         self._token: Token[_ScopeTasks | None] | None = None
 
-    async def __aenter__(self) -> Self:
+    def enter(self) -> None:
+        # entering awaits nothing - a scope enters it without the coroutine of `__aenter__`
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         assert self._tasks is None  # nosec: B101
         self._tasks = _ScopeTasks()
         self._token = ScopeTaskGroup._context.set(self._tasks)
+
+    async def __aenter__(self) -> Self:
+        self.enter()
         return self
 
     async def __aexit__(

@@ -25,16 +25,25 @@ class ContextClosing:
         /,
     ) -> Future[UUID]:
         try:
-            return cls._context.get()._future
+            closing: ContextClosing = cls._context.get()
 
         except LookupError:
             raise ContextMissing("Context scope closing requested out of context scope!") from None
+
+        # made when it is first waited for - most scopes end with nothing waiting
+        future: Future[UUID] | None = closing._future
+        if future is None:
+            future = closing._loop.create_future()
+            closing._future = future
+
+        return future
 
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextClosing")
 
     __slots__ = (
         "_future",
         "_identifier",
+        "_loop",
         "_token",
     )
 
@@ -43,7 +52,8 @@ class ContextClosing:
         loop: AbstractEventLoop,
         identifier: UUID,
     ) -> None:
-        self._future: Future[UUID] = loop.create_future()
+        self._loop: AbstractEventLoop = loop
+        self._future: Future[UUID] | None = None
         self._token: Token[ContextClosing] | None = None
         self._identifier: UUID = identifier
 
@@ -63,8 +73,10 @@ class ContextClosing:
             # unblocked while the scope is still unwinding, before its tasks are joined
             # always with the identifier - the way a scope ends is not a result of
             # waiting for it, a waiter must not receive the error of the scope body
-            self._future.set_result(self._identifier)
-            self._future.result()  # silence warning
+            future: Future[UUID] | None = self._future
+            if future is not None:
+                future.set_result(self._identifier)
+                future.result()  # silence warning
 
         finally:  # released even when completing fails - the scope is spent either way
             ContextClosing._context.reset(self._token)
