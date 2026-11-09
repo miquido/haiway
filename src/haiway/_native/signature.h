@@ -19,10 +19,15 @@ typedef struct {
     int defaulted;
 } Parameter;
 
+/* the parameters of a function read without allocating them - a leaf of validation, which
+ * never nests in itself, so the frame of a deep validation does not grow with it */
+#define SIGNATURE_LOCAL 12
+
 typedef struct {
     Parameter *parameters;
     Py_ssize_t count;
     int extensible;        /* whether parameters not told may follow the ones told */
+    int named;             /* whether any told parameter may be given by name */
     PyObject *description; /* borrowed - how the function is called, wording the errors */
 } Signature;
 
@@ -84,6 +89,10 @@ signature_compile(PyObject *described)
         return NULL;
     }
     signature->extensible = PyTuple_GET_ITEM(described, 1) == Py_True;
+    for (Py_ssize_t i = 0; i < signature->count; i++) {
+        int kind = signature->parameters[i].kind;
+        if (kind == PARAMETER_POSITIONAL_OR_KEYWORD || kind == PARAMETER_KEYWORD_ONLY) signature->named = 1;
+    }
     signature->description = PyTuple_GET_ITEM(described, 2);
     return signature;
 }
@@ -273,14 +282,18 @@ function_values(PyObject *function, PyObject *name)
 
 /* the parameters a function takes, read from its code once it was given its first `bound`
  * arguments and the `keywords` of a partial (a dict or NULL) - a parameter given by name has
- * a default, and every positional one after it can be given by name only. The parameters,
- * which borrow from `*names` (a new reference), their count in `*count` - NULL with no error
- * for a function which can't be called that way at all */
+ * a default, and every positional one after it can be given by name only. Their names are
+ * read only when `naming` or given keywords need them - without them a keyword only parameter
+ * has a default only when every one has, which tells the same when nothing is given by name.
+ * The parameters, in `local` when its `room` is enough, borrow from `*names` (a new reference
+ * or NULL), their count in `*count` - NULL with no error for a function which can't be called
+ * that way at all */
 static Parameter *
-function_parameters(ModuleState *state, PyObject *function, Py_ssize_t bound, PyObject *keywords,
-    Py_ssize_t *count, PyObject **names)
+function_parameters(ModuleState *state, PyObject *function, Py_ssize_t bound, PyObject *keywords, int naming,
+    Parameter *local, Py_ssize_t room, Py_ssize_t *count, PyObject **names)
 {
     *names = NULL;
+    int keyworded = keywords != NULL && PyDict_GET_SIZE(keywords) > 0;
     /* read through the attributes - each may be replaced while it is read */
     PyObject *code = PyObject_GetAttr(function, state->str_code);
     if (code == NULL) return NULL;
@@ -295,10 +308,15 @@ function_parameters(ModuleState *state, PyObject *function, Py_ssize_t bound, Py
     Py_ssize_t keyword = co->co_kwonlyargcount;
     int variadic = (co->co_flags & CO_VARARGS) != 0;
     int any_keywords = (co->co_flags & CO_VARKEYWORDS) != 0;
-    *names = PyCode_GetVarnames(co);
+    if (naming || keyworded) {
+        *names = PyCode_GetVarnames(co);
+        if (*names == NULL) {
+            Py_DECREF(code);
+            return NULL;
+        }
+    }
     Py_DECREF(code);
-    if (*names == NULL) return NULL;
-    if (PyTuple_GET_SIZE(*names) < positional + keyword) {
+    if (*names != NULL && PyTuple_GET_SIZE(*names) < positional + keyword) {
         PyErr_SetString(PyExc_TypeError, "the code of a function names fewer arguments than it takes");
         goto failed;
     }
@@ -311,27 +329,48 @@ function_parameters(ModuleState *state, PyObject *function, Py_ssize_t bound, Py
         keyword_defaults = PyObject_GetAttr(function, state->str_kwdefaults);
         if (keyword_defaults == NULL) goto failed;
     }
-    Parameter *parameters = PyMem_Calloc((size_t)(positional + keyword + 2), sizeof(Parameter));
-    if (parameters == NULL) {
-        Py_XDECREF(keyword_defaults);
-        PyErr_NoMemory();
-        goto failed;
+    Py_ssize_t size = positional + keyword + 2;
+    Parameter *parameters = local;
+    if (size > room) {
+        parameters = PyMem_Calloc((size_t)size, sizeof(Parameter));
+        if (parameters == NULL) {
+            Py_XDECREF(keyword_defaults);
+            PyErr_NoMemory();
+            goto failed;
+        }
+    } else {
+        memset(local, 0, (size_t)size * sizeof(Parameter));
     }
+#define RELEASE() do { if (parameters != local) PyMem_Free(parameters); } while (0)
     Py_ssize_t n = 0;
     for (Py_ssize_t i = bound; i < positional; i++, n++) {
-        parameters[n].name = PyTuple_GET_ITEM(*names, i);
+        parameters[n].name = *names != NULL ? PyTuple_GET_ITEM(*names, i) : NULL;
         parameters[n].kind = i < posonly ? PARAMETER_POSITIONAL_ONLY : PARAMETER_POSITIONAL_OR_KEYWORD;
         parameters[n].defaulted = i >= positional - defaults;
     }
     if (variadic) parameters[n++].kind = PARAMETER_VAR_POSITIONAL;
+    int every_keyword_defaulted = 0;
+    if (keyword > 0 && *names == NULL) {
+        Py_ssize_t defaulted = keyword_defaults == Py_None ? 0 : PyObject_Length(keyword_defaults);
+        if (defaulted < 0) {
+            Py_DECREF(keyword_defaults);
+            RELEASE();
+            goto failed;
+        }
+        every_keyword_defaulted = defaulted >= keyword;
+    }
     for (Py_ssize_t i = positional; i < positional + keyword; i++, n++) {
-        parameters[n].name = PyTuple_GET_ITEM(*names, i);
         parameters[n].kind = PARAMETER_KEYWORD_ONLY;
+        if (*names == NULL) {
+            parameters[n].defaulted = every_keyword_defaulted;
+            continue;
+        }
+        parameters[n].name = PyTuple_GET_ITEM(*names, i);
         int defaulted = keyword_defaults != NULL && PyDict_Check(keyword_defaults)
             ? PyDict_Contains(keyword_defaults, parameters[n].name) : 0;
         if (defaulted < 0) {
             Py_XDECREF(keyword_defaults);
-            PyMem_Free(parameters);
+            RELEASE();
             goto failed;
         }
         parameters[n].defaulted = defaulted;
@@ -339,33 +378,33 @@ function_parameters(ModuleState *state, PyObject *function, Py_ssize_t bound, Py
     Py_XDECREF(keyword_defaults);
     if (any_keywords) parameters[n++].kind = PARAMETER_VAR_KEYWORD;
     *count = n;
-    if (keywords == NULL || PyDict_GET_SIZE(keywords) == 0) return parameters;
+    if (!keyworded) return parameters;
 
     /* what a partial gives by name */
     Py_ssize_t matched = 0;
     for (Py_ssize_t i = 0; i < positional + keyword; i++) {
         int given = PyDict_Contains(keywords, PyTuple_GET_ITEM(*names, i));
         if (given < 0) {
-            PyMem_Free(parameters);
+            RELEASE();
             goto failed;
         }
         if (!given) continue;
         if (i < posonly) {
             if (!any_keywords) { /* a positional only parameter is never given by name */
-                PyMem_Free(parameters);
+                RELEASE();
                 goto uncallable;
             }
             matched += 1; /* taken by the keywords of any name, leaving the parameter be */
             continue;
         }
         if (i < bound && i < positional) { /* given by position already */
-            PyMem_Free(parameters);
+            RELEASE();
             goto uncallable;
         }
         matched += 1;
     }
     if (matched < PyDict_GET_SIZE(keywords) && !any_keywords) {
-        PyMem_Free(parameters);
+        RELEASE();
         goto uncallable;
     }
     int named = 0; /* whether a positional parameter was given by name - the ones after it too */
@@ -378,7 +417,7 @@ function_parameters(ModuleState *state, PyObject *function, Py_ssize_t bound, Py
         if (parameter->name == NULL || parameter->kind == PARAMETER_POSITIONAL_ONLY) continue;
         int given = PyDict_Contains(keywords, parameter->name);
         if (given < 0) {
-            PyMem_Free(parameters);
+            RELEASE();
             goto failed;
         }
         if (given) {
@@ -389,6 +428,7 @@ function_parameters(ModuleState *state, PyObject *function, Py_ssize_t bound, Py
             parameter->kind = PARAMETER_KEYWORD_ONLY;
         }
     }
+#undef RELEASE
     return parameters;
 
 uncallable: /* no error set - it can't be called the way it is given at all */
@@ -480,8 +520,9 @@ class_call(ModuleState *state, PyTypeObject *type, PyObject **function, Py_ssize
     return 0;
 }
 
-/* whether a callable can be called the way a signature tells - 1, 0, or -1 on an error */
-static int
+/* whether a callable can be called the way a signature tells - 1, 0, or -1 on an error. Kept
+ * out of line - inlined into validation, its parameters would deepen every frame of it */
+static Py_NO_INLINE int
 signature_accepts(ModuleState *state, Signature *signature, PyObject *described, PyObject *value)
 {
     Py_ssize_t bound = 0;
@@ -509,12 +550,14 @@ signature_accepts(ModuleState *state, Signature *signature, PyObject *described,
     if (function != NULL && PyFunction_Check(function)) {
         Py_ssize_t count = 0;
         PyObject *names = NULL;
-        Parameter *parameters = function_parameters(state, function, bound, keywords, &count, &names);
+        Parameter local[SIGNATURE_LOCAL];
+        Parameter *parameters = function_parameters(
+            state, function, bound, keywords, signature->named, local, SIGNATURE_LOCAL, &count, &names);
         if (parameters == NULL) {
             r = PyErr_Occurred() ? -1 : 0;
         } else {
             r = signature_fits(parameters, count, signature->parameters, signature->count, signature->extensible);
-            PyMem_Free(parameters);
+            if (parameters != local) PyMem_Free(parameters);
         }
         Py_XDECREF(names);
     } else { /* asked of Python as it was given - its signature reads partials on its own */
