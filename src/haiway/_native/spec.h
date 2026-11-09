@@ -818,8 +818,10 @@ fail:
     return NULL;
 }
 
-/* the alternatives of a union a first pass attempted, at most this many kept on the stack */
-#define UNION_STACK 64
+/* the alternatives of a union a first pass attempted - as the bits of a word for as many as
+ * it holds, which keeps the frame small: a union nested in itself recurses through it once
+ * for every level, so its size is how deep a document can go on a small stack */
+#define UNION_BITS 64
 
 static PyObject *
 validate_union(ModuleState *state, Spec *spec, PyObject *value)
@@ -828,12 +830,21 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
     if (errors == NULL) return NULL;
     /* each alternative is attempted once - the second pass leaves out what the first one
      * attempted, so the code of the user runs once, and fails into one error, for each */
-    unsigned char stack[UNION_STACK] = {0};
-    unsigned char *attempted = spec->count <= UNION_STACK ? stack : PyMem_Calloc((size_t)spec->count, 1);
-    if (attempted == NULL) {
-        Py_DECREF(errors);
-        return PyErr_NoMemory();
+    uint64_t bits = 0;
+    unsigned char *attempted = NULL;  /* only past the bits of a word */
+    if (spec->count > UNION_BITS) {
+        attempted = PyMem_Calloc((size_t)spec->count, 1);
+        if (attempted == NULL) {
+            Py_DECREF(errors);
+            return PyErr_NoMemory();
+        }
     }
+#define ATTEMPTED(i) (attempted != NULL ? attempted[i] : (int)((bits >> (i)) & 1))
+#define ATTEMPT(i) \
+    do { \
+        if (attempted != NULL) attempted[i] = 1; \
+        else bits |= (uint64_t)1 << (i); \
+    } while (0)
     /* an alternative the value already matches wins over one which would only convert
      * it - resolving in the declaration order alone would let the `float` of
      * `str | float | int` turn every int into a float */
@@ -844,7 +855,7 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
                 int r = spec_check(state, alternative, value);
                 if (r < 0) {
                     if (!PyErr_ExceptionMatches(PyExc_Exception)) goto fail;
-                    attempted[i] = 1;  /* refused already - its validation would refuse it too */
+                    ATTEMPT(i);  /* refused already - its validation would refuse it too */
                     PyObject *exc = PyErr_GetRaisedException();
                     int failed = PyList_Append(errors, exc) < 0;
                     Py_DECREF(exc);
@@ -852,13 +863,13 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
                     continue;
                 }
                 if (!r) continue;
-                attempted[i] = 1;
-            } else if (attempted[i]) {
+                ATTEMPT(i);
+            } else if (ATTEMPTED(i)) {
                 continue;
             }
             PyObject *validated = validate_spec(state, alternative, value);
             if (validated != NULL) {
-                if (attempted != stack) PyMem_Free(attempted);
+                PyMem_Free(attempted);
                 Py_DECREF(errors);
                 return validated;
             }
@@ -897,12 +908,14 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
         PyErr_SetRaisedException(group);
     }
 fail:
-    if (attempted != stack) PyMem_Free(attempted);
+    PyMem_Free(attempted);
     Py_DECREF(errors);
     return NULL;
 }
 
-#undef UNION_STACK
+#undef ATTEMPTED
+#undef ATTEMPT
+#undef UNION_BITS
 
 static PyObject *
 validate_kind(ModuleState *state, Spec *spec, PyObject *value)
