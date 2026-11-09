@@ -52,3 +52,25 @@ jobs:
 
       - name: Build
         run: uv build
+
+  # the native extension built with AddressSanitizer and UBSan, the whole suite against it
+  # and a longer fuzz of the JSON it reads - what catches memory errors tests would miss
+  sanitize:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.7"
+          python-version: "3.15"
+
+      - name: Install
+        run: uv sync --all-groups --all-extras --frozen
+
+      - name: Test under the sanitizers
+        run: make sanitize
+        env:
+          HAIWAY_FUZZ_ROUNDS: "40000"

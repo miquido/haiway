@@ -19,7 +19,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.13.7
 endif
 
-.PHONY: native uv_check venv sync update format lint test benchmark benchmark-server benchmark-otel docs docs-server docs-format docs-lint release
+.PHONY: native uv_check venv sync update format lint test sanitize benchmark benchmark-server benchmark-otel docs docs-server docs-format docs-lint release
 
 
 # Check installed UV version and install the pinned one if needed
@@ -105,6 +105,30 @@ docs-lint:
 # Run tests suite.
 test:
 	@uv run --frozen python -B -m pytest -v --cov=$(SOURCES_PATH)
+
+# Run the tests against the native extension built with AddressSanitizer and UBSan, then
+# rebuild it the usual way. Pass ARGS for pytest i.e. make sanitize ARGS="tests/test_state.py".
+# Python objects go through `malloc` (PYTHONMALLOC) so the sanitizer sees them - which `-I`
+# would ignore. Leaks are left to the refleak tests, CPython leaks at exit on purpose. The
+# tests run with the python of the environment itself - `uv run` aborts with the sanitizer
+# runtime preloaded into it.
+SANITIZE_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g -O1
+sanitize: uv_check
+	@echo '# Testing the native extension under AddressSanitizer and UBSan...'
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		runtime="DYLD_INSERT_LIBRARIES=$$(clang -print-resource-dir)/lib/darwin/libclang_rt.asan_osx_dynamic.dylib"; \
+	else \
+		export CC=gcc LDSHARED="gcc -shared"; \
+		runtime="LD_PRELOAD=$$(gcc -print-file-name=libasan.so)"; \
+	fi; \
+	CFLAGS="$(SANITIZE_FLAGS)" LDFLAGS="-fsanitize=address,undefined" uv run --frozen --with setuptools python setup.py -q build_ext --inplace --force; \
+	unset CC LDSHARED; \
+	export "$$runtime"; \
+	export ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:abort_on_error=1" UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1" PYTHONMALLOC=malloc HAIWAY_FUZZ_ROUNDS="$${HAIWAY_FUZZ_ROUNDS:-20000}"; \
+	status=0; "$${UV_PROJECT_ENVIRONMENT:-.venv}/bin/python" -B -m pytest -q -p no:cacheprovider $(ARGS) || status=$$?; \
+	unset DYLD_INSERT_LIBRARIES LD_PRELOAD; \
+	uv run --frozen --with setuptools python setup.py -q build_ext --inplace --force; \
+	exit $$status
 
 # Measure the performance of State operations, pass ARGS for the options of the script i.e.
 # make benchmark ARGS="--json before.json" or make benchmark ARGS="--compare before.json".

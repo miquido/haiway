@@ -51,13 +51,24 @@ add_pending(Decoder *d, PyObject *owner, Py_ssize_t index, Spec *spec, PyObject 
     return 1;
 }
 
+/*
+ * What was kept pending since `count` dropped - the reading which added it was given up,
+ * and the instances it was kept for are gone with it. Wherever the decoder backtracks it
+ * has to do this, or applying the rest would write into a freed instance.
+ */
+static void
+rollback_pending(Decoder *d, Py_ssize_t count)
+{
+    for (Py_ssize_t i = count; i < d->pending_count; i++) Py_XDECREF(d->pending[i].value);
+    d->pending_count = count;
+}
+
 static void
 release_pending(Decoder *d)
 {
-    for (Py_ssize_t i = 0; i < d->pending_count; i++) Py_XDECREF(d->pending[i].value);
+    rollback_pending(d, 0);
     PyMem_Free(d->pending);
     d->pending = NULL;
-    d->pending_count = 0;
 }
 
 static inline void
@@ -647,8 +658,10 @@ decode_spec(Decoder *d, Spec *spec)
                     Spec *alternative = spec->children[i];
                     if (alternative->kind != SPEC_STATE || alternative->validating != NULL || alternative->verifying != NULL) continue;
                     const char *start = d->p;
+                    Py_ssize_t pending = d->pending_count;
                     PyObject *instance = decode_struct(d, (PyTypeObject *)alternative->base);
                     if (instance != NULL || PyErr_Occurred()) return instance;
+                    rollback_pending(d, pending);  /* the instance it was kept for is gone */
                     d->p = start;
                 }
             }
