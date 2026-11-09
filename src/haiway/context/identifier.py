@@ -1,4 +1,5 @@
 import os
+import sys
 from collections.abc import Sequence
 from contextvars import ContextVar, Token
 from random import Random
@@ -41,7 +42,7 @@ class _Identifiers:
 
 
 _identifiers: _Identifiers = _Identifiers()
-if hasattr(os, "register_at_fork"):  # a platform which can't fork has nothing to reseed
+if sys.platform != "win32":  # Windows can't fork, so there is nothing to reseed there
     os.register_at_fork(after_in_child=_identifiers.reseed)
 
 
