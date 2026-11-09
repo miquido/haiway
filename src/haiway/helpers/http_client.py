@@ -1,5 +1,6 @@
 from collections.abc import (
     AsyncGenerator,
+    Coroutine,
     Mapping,
     MutableSequence,
     Sequence,
@@ -122,8 +123,10 @@ class _StreamedBody(AsyncGenerator[bytes]):
     def __aiter__(self) -> Self:
         return self
 
-    async def __anext__(self) -> bytes:
-        return await self.asend(None)
+    def __anext__(self) -> Coroutine[Any, Any, bytes]:
+        # the coroutine of `asend` itself, rather than one awaiting it - a frame less on
+        # every chunk, which is what a stream of many small chunks pays the most for
+        return self.asend(None)
 
     async def asend(
         self,
@@ -540,62 +543,56 @@ _DURATION_METRIC: str = "http.client.request.duration"
 convention, so the usual dashboards and alerts apply to it unchanged."""
 
 
-def _recorded_url(
+def _recorded_location(
     url: str,
     /,
-) -> str:
-    """Render a URL safe to record as an observability attribute or report in an error.
+) -> tuple[str, str | Missing]:
+    """Render a URL safe to record, together with the host it is addressed to.
 
     Credentials and query values both routinely carry secrets - an access token
     in a query parameter, userinfo in the authority - so the query, the fragment
-    and the userinfo are dropped rather than recorded. What is left is the part
-    which identifies the request without being able to authorize it.
+    and the userinfo are dropped from the URL rather than recorded. What is left
+    is the part which identifies the request without being able to authorize it.
+    Applying it twice is the same as applying it once.
 
-    Applying it twice is the same as applying it once, so a caller which already
-    holds a rendered URL can pass it on without checking.
+    The host goes on a metric, where only bounded attributes belong - a host is
+    one of a handful, a URL is not - so it is the bare host alone, without the
+    userinfo or the port. It is Missing for a relative or opaque URL: the base
+    URL it resolves against belongs to the backend, which the facade does not
+    see, and such a URL is left as it is, minus the same parts.
 
-    A relative URL is left as it is, minus the same parts: the base URL it
-    resolves against belongs to the backend, so the facade never sees it.
+    Both are read in one pass, as every request records both.
     """
     # cutting at the first delimiter rather than parsing keeps this from
     # failing on a URL which the backend will reject anyway
     location: str = url.partition("#")[0].partition("?")[0]
     split: tuple[str, str] | None = _split_authority(location)
     if split is None:
-        return location  # relative or opaque - no authority to redact
+        return (location, Missing)  # relative or opaque - no authority to read
 
     prefix, remainder = split
     authority, path_separator, path = remainder.partition("/")
+    # userinfo never reaches either - the host stays, it is the useful part
+    address: str = authority.rpartition("@")[2]
     if "@" in authority:
-        # only the userinfo is replaced - the host stays, it is the useful part
-        authority = f"REDACTED@{authority.rpartition('@')[2]}"
+        authority = f"REDACTED@{address}"
 
-    return f"{prefix}{authority}{path_separator}{path}"
+    host: str
+    if address.startswith("["):  # IPv6 literal - bare address, without the brackets
+        host = address.partition("]")[0].removeprefix("[")
+
+    else:  # the port belongs to `server.port`
+        host = address.partition(":")[0]
+
+    return (f"{prefix}{authority}{path_separator}{path}", host)
 
 
-def _recorded_host(
+def _recorded_url(
     url: str,
     /,
-) -> str | Missing:
-    """Host the request is addressed to, when the URL names one.
-
-    Kept apart from ``_recorded_url`` because this one goes on a metric, where
-    only bounded attributes belong - a host is one of a handful, a URL is not.
-
-    Missing for a relative URL: the base URL it resolves against belongs to the
-    backend, which the facade does not see.
-    """
-    split: tuple[str, str] | None = _split_authority(url)
-    if split is None:
-        return Missing  # relative or opaque - no authority to read
-
-    authority: str = split[1].partition("/")[0].partition("?")[0].partition("#")[0]
-    # userinfo never reaches an attribute, and the port belongs to `server.port`
-    host: str = authority.rpartition("@")[2]
-    if host.startswith("["):  # IPv6 literal - bare address, without the brackets
-        return host.partition("]")[0].removeprefix("[")
-
-    return host.partition(":")[0]
+) -> str:
+    """Render a URL safe to record as an observability attribute or report in an error."""
+    return _recorded_location(url)[0]
 
 
 def _split_authority(
@@ -1133,8 +1130,7 @@ class HTTPClient(State):
         trace propagation apply to all of them - and to every `HTTPRequesting`
         implementation - identically.
         """
-        recorded_url: str = _recorded_url(url)
-        recorded_host: str | Missing = _recorded_host(url)
+        recorded_url, recorded_host = _recorded_location(url)
         ctx.record_debug(
             event="http.request",
             attributes={

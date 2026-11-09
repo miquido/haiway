@@ -71,6 +71,26 @@ It runs with `python -O`, as production does - without it observability keeps de
 which roughly doubles the overhead. `server_baseline.json` was recorded the same way as
 `baseline.json`, in microseconds per request.
 
+## HTTP client
+
+`http_benchmark.py` measures the HTTP client: building a response, the `HTTPClient` facade over a
+stub backend, and requests and streamed responses through `HTTPXClient`. Requests go through
+`httpx2.MockTransport` in process, so the numbers are the cost of the client stack alone - what a
+real round trip adds to. Each `haiway` case has a `bare` counterpart doing the same with `httpx2`
+alone, and the difference between them is the overhead of the client. Stream cases are per chunk,
+of 64 bytes - the worst case, as a real body arrives in chunks of kilobytes. It takes the same
+`--json`, `--compare`, `--filter` and `--budget` options.
+
+```bash
+make benchmark-http                                              # run with -O
+make benchmark-http ARGS="--compare benchmarks/http_baseline.json"
+```
+
+`http_baseline.json` was recorded before the facade read the URL of a request once and the
+streamed body dropped its pass-through frames, in microseconds per call. Most of the cost of a
+request is `httpx2` itself - parsing its URL above all; the facade adds the recording of the request
+and the response.
+
 ## Native storage
 
 `native_baseline.json` is the same set of cases taken with the compiled extension, which is what

@@ -22,7 +22,7 @@ from haiway.helpers.http_client import (
     HTTPHeaders,
     HTTPResponse,
     HTTPTimeoutError,
-    _recorded_host,
+    _recorded_location,
     _recorded_url,
 )
 
@@ -886,4 +886,4 @@ def test_recorded_host_reads_only_the_authority_of_the_url_itself(
     url: str,
     expected: object,
 ) -> None:
-    assert _recorded_host(url) == expected
+    assert _recorded_location(url)[1] == expected
