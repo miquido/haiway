@@ -591,11 +591,11 @@ Calling a class with keyword arguments, `Point(x=1, y=2)`, and updating, `point.
 the fastest ways to build and change an instance. To build an instance from a mapping use
 `Point.validate(values)` rather than unpacking it into the call, `Point(**values)`.
 
-`Immutable` is stored the same way. It validates nothing, and once created it never changes:
-`setattr`, `delattr` and `object.__setattr__` all refuse to rebind an attribute. A class whose
-instances have to change after they are made - a client opening a connection, a response caching its
-body - is a plain class with `__slots__` instead. After changing the C source run `make native`, as
-`uv sync` does not recompile it.
+`Immutable` is stored the same way. It validates nothing, and its attributes are bound once:
+`setattr`, `delattr` and `object.__setattr__` all refuse to rebind one - while a mutable value it
+was given stays mutable. A class whose instances have to change after they are made - a client
+opening a connection, a response caching its body - is a plain class with `__slots__` instead. After
+changing the C source run `make native`, as `uv sync` does not recompile it.
 
 ### Performance Considerations
 

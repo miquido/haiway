@@ -77,10 +77,12 @@ Journal(events={UUID(int=1): event}).to_json()
 # '{"events": {"00000000-0000-0000-0000-000000000001": {"identifier": "000...", ...}}}'
 ```
 
-Anything else - a plain `Enum`, a `Decimal`, `Missing` - has no basic spelling the validation would
-read back. Rather than encoding it into a value which could only fail on the way in,
-`to_basic_object` raises `TypeError` naming the path and the type, never the value. `to_json` leaves
-such values unchanged instead, so a custom `encoder_class` still gets to handle them.
+Anything else - a plain `Enum`, a `Decimal`, `Missing` held within a value - has no basic spelling
+the validation would read back. Rather than encoding it into a value which could only fail on the
+way in, `to_basic_object` raises `TypeError` naming the path and the type, never the value.
+`to_json` leaves such values unchanged instead, so a custom `encoder_class` still gets to handle
+them. An attribute of a `State` set to `Missing` is different: it is left out of the result
+altogether.
 
 ## Missing Values with `Missing`
 
@@ -176,9 +178,11 @@ class RetryPolicy(Immutable):
     backoff_seconds: float
 ```
 
-Instances never change after construction - assignment, deletion and `object.__setattr__` all raise,
-and calling `__init__` again does too. `copy.copy()` and `copy.deepcopy()` return the same instance
-because the object is immutable. A record inherits from `Immutable` alone - it is final, and can't
+The attributes of an instance are bound once - assignment, deletion and `object.__setattr__` all
+raise, and calling `__init__` again does too. `copy.copy()` and `copy.deepcopy()` return the same
+instance because the record can't be rebound. What it holds is held as given: `Immutable` validates
+and copies nothing, so a mutable value such as a `list` stays mutable - use a `State` for values
+which have to be frozen through. A record inherits from `Immutable` alone - it is final, and can't
 be combined with mixins. An object whose internals change after it is made, like a client opening
 its connection or a response caching its body, is a plain class with `__slots__` rather than an
 `Immutable`.

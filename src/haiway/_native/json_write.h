@@ -8,7 +8,7 @@
  */
 
 typedef struct {
-    ModuleState *state;
+    ModuleState *state;  /* NULL for a buffer spelling keys alone - writing a value needs it */
     char *data;
     Py_ssize_t length;
     Py_ssize_t capacity;

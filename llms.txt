@@ -103,9 +103,10 @@ class Invoice(State):
   `note: str | Missing | None = Missing`. Compare with `value is Missing` - it is truthy, and a
   bare `case Missing:` captures instead of matching (use `case haiway.Missing:`).
 - `Immutable` is the lighter, non-validating frozen record for values that must not propagate as
-  scope state. Once created it never changes - not even through `object.__setattr__`; an object
-  with changing internals (a client, a response caching its body) is a plain `__slots__` class.
-  `Map` is an immutable `dict`.
+  scope state. Its attributes are bound once - not even `object.__setattr__` rebinds them - but
+  values are held as given, so a mutable value stays mutable. An object with changing internals (a
+  client, a response caching its body) is a plain `__slots__` class. `Map` is an immutable mapping
+  (a `frozendict`, not a `dict`).
 
 ## Context & Scopes
 
@@ -220,7 +221,8 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
 ```
 
 - **HTTP** (`haiway.httpx`): `HTTPXClient` disposable provides `HTTPClient`. The status and
-  headers of an `HTTPResponse` never change, its body is read and cached on demand; a
+  headers of an `HTTPResponse` are bound once (the headers mapping as given), its body is read and
+  cached on demand; a
   `stream=True` body must be consumed inside the issuing scope, reads once, and
   bodies are `bytes` (encode text yourself). A streamed request body stays owned by the caller and
   is never closed for you - close it at the call site. `trace_propagation` attaches the current

@@ -13,7 +13,7 @@ The HTTP client in Haiway follows the framework's core principles:
 - **Context Integration**: HTTP implementations are injected into the current scope through the
   context system
 - **Protocol-Based**: Uses protocols for flexibility in backend implementations
-- **Fixed Responses**: The status and headers of a response never change; its body is read and
+- **Fixed Responses**: The status and headers of a response are bound once; its body is read and
   cached on demand
 - **Type-Safe**: Full type hints for request/response data
 
@@ -259,9 +259,9 @@ else:
     )
 ```
 
-The status code and headers of an `HTTPResponse` never change, while its body is read - and cached -
-on demand. By default the payload is read before the request returns, which hands the connection
-back to the pool right away:
+The status code and headers of an `HTTPResponse` are bound once - the headers mapping is held as the
+backend hands it over - while its body is read, and cached, on demand. By default the payload is
+read before the request returns, which hands the connection back to the pool right away:
 
 ```python
 # buffered by default: the payload is already in memory

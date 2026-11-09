@@ -29,8 +29,10 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `{} | meta` are plain `dict`s, as `dict.__or__` handles a `frozendict` itself.
 - `State.__init__` refuses to initialize an instance a second time, and a `State` instance can't be
   rebound through `object.__setattr__`.
-- **An `Immutable` never changes once created** - `object.__setattr__` and `object.__delattr__`
-  refuse to rebind its attributes too, as they do for a `State`. `HTTPResponse`, `HTTPXClient` and
+- **The attributes of an `Immutable` are bound once, for good** - `object.__setattr__` and
+  `object.__delattr__` refuse to rebind them too, as they do for a `State`. What is bound is held as
+  given: an `Immutable` validates and copies nothing, so a mutable value - a `list`, say - stays
+  mutable. `HTTPResponse`, `HTTPXClient` and
   `PostgresConnectionPool`, which change after they are made, are plain classes with `__slots__`
   instead, with the same constructors and methods.
 
