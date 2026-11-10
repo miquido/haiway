@@ -312,7 +312,8 @@ def cache_externally[**Args, Result, Key: Hashable](
 
     Provide async callables that implement your cache behaviour. The decorator returns
     a wrapper that preserves the original coroutine signature, reads through the backend
-    before executing, and schedules writes via ``ctx.spawn`` to avoid blocking callers.
+    before executing, and schedules writes via ``ctx.spawn`` to avoid blocking callers -
+    except where scoped tasks can't be spawned, see Notes.
 
     Parameters
     ----------
@@ -322,7 +323,7 @@ def cache_externally[**Args, Result, Key: Hashable](
         Async callable that fetches cached values. Return ``None`` to signal a miss.
     write : CacheWrite[Key, Result]
         Async callable that persists values. Invoked in the background via ``ctx.spawn`` after the
-        coroutine body resolves.
+        coroutine body resolves, or awaited before returning where spawning is refused.
     clear : CacheClear[Key] | None
         Optional async callable invoked by ``clear_cache`` to evict entries. Omit to disable
         invalidation.
@@ -336,6 +337,8 @@ def cache_externally[**Args, Result, Key: Hashable](
     -----
     - Only coroutine functions are supported; synchronous callables raise an assertion.
     - Writes are detached tasks; ensure your context stays alive so persistence can finish.
+    - While the disposables of a scope are prepared or disposed, scoped tasks can't be
+      spawned - a write is then awaited in place, and its latency adds to the call.
     """
 
     def _wrap(
