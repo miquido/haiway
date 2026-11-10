@@ -19,6 +19,7 @@ from copy import deepcopy
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
 from datetime import date, datetime, time, timedelta
+from functools import Placeholder, partial
 from pathlib import Path
 from types import GenericAlias, MemberDescriptorType
 from typing import (
@@ -1515,6 +1516,7 @@ native.configure(
         report=ValidationError.report,
         unexpected=_unexpected_key,
         describe=native.describe,
+        parameters=native.parameters,
         enum_values=native.enum_values,
         literal_values=native.literal_values,
         b64decode=_b64decode_strict,
@@ -1541,5 +1543,7 @@ native.configure(
         path=Path,
         pathlike=os.PathLike,
         meta=Meta,
+        partial=partial,
+        placeholder=Placeholder,
     ),
 )

@@ -114,6 +114,36 @@ def _no_trace_context(
 
 
 @runtime_checkable
+class ObservabilityLevelChecking(Protocol):
+    """
+    Check whether recordings of a level within a scope would be kept.
+
+    Asked before a log, event, metric or attributes are passed to the recording
+    functions, so a discarded recording costs no formatting or argument passing.
+
+    Parameters
+    ----------
+    scope : ContextIdentifier
+        The scope of the recording.
+    level : ObservabilityLevel
+        The level of the recording.
+
+    Returns
+    -------
+    bool
+        ``False`` to skip the recording. ``True`` passes it on - the recording
+        functions may still discard it.
+    """
+
+    def __call__(
+        self,
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+    ) -> bool: ...
+
+
+@runtime_checkable
 class ObservabilityLogRecording(Protocol):
     def __call__(
         self,
@@ -201,6 +231,7 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
     __slots__ = (
         "attributes_recording",
         "event_recording",
+        "level_checking",
         "log_recording",
         "metric_recording",
         "scope_entering",
@@ -220,6 +251,8 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
         scope_exiting: ObservabilityScopeExiting,
         # optional - a backend with no trace position to hand out propagates nothing
         trace_context_encoding: ObservabilityTraceContextEncoding | None = None,
+        # optional - without it every recording is passed on
+        level_checking: ObservabilityLevelChecking | None = None,
     ) -> None:
         self.trace_identifying: ObservabilityTraceIdentifying
         assert isinstance(trace_identifying, ObservabilityTraceIdentifying)  # nosec: B101
@@ -278,6 +311,15 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
             self,
             "trace_context_encoding",
             trace_context_encoding if trace_context_encoding is not None else _no_trace_context,
+        )
+        self.level_checking: ObservabilityLevelChecking | None
+        assert level_checking is None or isinstance(  # nosec: B101
+            level_checking, ObservabilityLevelChecking
+        )
+        object.__setattr__(
+            self,
+            "level_checking",
+            level_checking,
         )
 
     def __setattr__(
@@ -446,6 +488,14 @@ def LoggerObservability(  # noqa: C901, PLR0915
             return _NO_TRACE_ID
 
         return store.trace_id
+
+    def level_checking(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+    ) -> bool:
+        store: ScopeStore | None = scopes.get(scope.scope_id.int)
+        return store is not None and store.logger.isEnabledFor(level)
 
     def log_recording(
         scope: ContextIdentifier,
@@ -674,6 +724,8 @@ def LoggerObservability(  # noqa: C901, PLR0915
         attributes_recording=attributes_recording,
         scope_entering=scope_entering,
         scope_exiting=scope_exiting,
+        # a debug context summarizes every recording, whatever its level
+        level_checking=None if debug_context else level_checking,
     )
 
 
@@ -799,8 +851,10 @@ class ContextObservability:
         cls,
         level: ObservabilityLevel,
         message: str,
+        # a tuple rather than *args - passed on as received, without repacking
+        args: tuple[Any, ...] = (),
         /,
-        *args: Any,
+        *,
         exception: BaseException | None,
     ) -> None:
         context: Self
@@ -809,13 +863,20 @@ class ContextObservability:
             context = cls._context.get()
 
         except LookupError:  # fallback for access out of context
-            return getLogger().log(
-                level,
-                format_log_message(message, args),
-                exc_info=exception,
-            )
+            root: Logger = getLogger()
+            if root.isEnabledFor(level):  # don't format what is discarded
+                root.log(
+                    level,
+                    format_log_message(message, args),
+                    exc_info=exception,
+                )
+
+            return
 
         try:
+            if context._discards(level):
+                return  # discarded by the backend
+
             context.observability.log_recording(
                 context._scope,
                 level,
@@ -856,6 +917,9 @@ class ContextObservability:
             return  # no observability out of context - nothing to record within
 
         try:  # catch exceptions - we don't want to blow up on observability
+            if context._discards(level):
+                return  # discarded by the backend
+
             context.observability.event_recording(
                 context._scope,
                 level=level,
@@ -891,6 +955,9 @@ class ContextObservability:
             return  # no observability out of context - nothing to record within
 
         try:  # catch exceptions - we don't want to blow up on observability
+            if context._discards(level):
+                return  # discarded by the backend
+
             context.observability.metric_recording(
                 context._scope,
                 level=level,
@@ -925,6 +992,9 @@ class ContextObservability:
             return  # no observability out of context - nothing to record within
 
         try:  # catch exceptions - we don't want to blow up on observability
+            if context._discards(level):
+                return  # discarded by the backend
+
             context.observability.attributes_recording(
                 context._scope,
                 level=level,
@@ -937,6 +1007,14 @@ class ContextObservability:
                 "Failed to record attributes",
                 exception=exc,
             )
+
+    def _discards(
+        self,
+        level: ObservabilityLevel,
+        /,
+    ) -> bool:
+        checking: ObservabilityLevelChecking | None = self.observability.level_checking
+        return checking is not None and not checking(self._scope, level)
 
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextObservability")
     __slots__ = (

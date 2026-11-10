@@ -131,8 +131,9 @@ if __name__ == "__main__":
   throughout the execution
 - **Transparent Access**: `UsersService.fetch_users()` internally retrieves the service from context
   and calls the implementation
-- **Type Safety**: `@runtime_checkable` enables runtime validation that implementations match the
-  protocol
+- **Type Safety**: a protocol describing a function by `__call__` is checked against the signature
+  of the implementation when the state is created - its parameters have to take every call the
+  protocol allows, so a mismatch fails early rather than once it is called
 
 This pattern allows you to easily **swap implementations** (in-memory, database, API) without
 changing the calling code.

@@ -38,6 +38,7 @@ typedef struct {
     PyObject *report;            /* (segment, exc) -> NoReturn, the failure at a position */
     PyObject *unexpected;        /* (cls, key) -> NoReturn, a key of a mapping which is not an attribute */
     PyObject *describe;          /* (annotation) -> the description of a spec */
+    PyObject *parameters;        /* (callable) -> ((name, kind, defaulted), ...), None without a signature */
     PyObject *enum_values;       /* (enum, names) -> the values (or the names) of its members, spelled */
     PyObject *literal_values;    /* (values) -> the values of a literal, spelled */
     PyObject *b64decode;         /* (str) -> bytes, strictly */
@@ -63,6 +64,8 @@ typedef struct {
     PyObject *path;              /* pathlib.Path */
     PyObject *pathlike;          /* os.PathLike */
     PyObject *meta;              /* the Meta type */
+    PyObject *partial;           /* functools.partial */
+    PyObject *placeholder;       /* functools.Placeholder */
     /* the rest */
     PyObject *str_isoformat;
     PyObject *str_as_posix;
@@ -71,6 +74,13 @@ typedef struct {
     PyObject *str_fromisoformat;
     PyObject *str_validate;
     PyObject *str_int;
+    PyObject *str_code;
+    PyObject *str_defaults;
+    PyObject *str_kwdefaults;
+    PyObject *str_call;
+    PyObject *str_func;
+    PyObject *str_args;
+    PyObject *str_keywords;
     PyObject *deepcopy;          /* copy.deepcopy */
 } ModuleState;
 

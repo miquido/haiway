@@ -56,6 +56,7 @@ typedef struct Spec {
     PyObject *data;
     Py_ssize_t count;
     struct Spec **children;
+    Signature *signature;   /* a function: the calls it has to accept, NULL for any */
 } Spec;
 
 static void
@@ -66,6 +67,7 @@ spec_free(Spec *spec)
     Py_XDECREF(spec->base);
     Py_XDECREF(spec->validating);
     Py_XDECREF(spec->verifying);
+    signature_free(spec->signature);
     Py_XDECREF(spec->data);
     if (spec->children != NULL) {
         for (Py_ssize_t i = 0; i < spec->count; i++) spec_free(spec->children[i]);
@@ -124,6 +126,13 @@ spec_compile(PyObject *description)
     spec->validating = D_VALIDATING(description) == Py_None ? NULL : Py_NewRef(D_VALIDATING(description));
     spec->verifying = D_VERIFYING(description) == Py_None ? NULL : Py_NewRef(D_VERIFYING(description));
     spec->data = D_DATA(description) == Py_None ? NULL : Py_NewRef(D_DATA(description));
+    if (spec->kind == SPEC_FUNCTION && spec->data != NULL) {
+        spec->signature = signature_compile(spec->data);
+        if (spec->signature == NULL) {
+            spec_free(spec);
+            return NULL;
+        }
+    }
     PyObject *children = D_CHILDREN(description);
     Py_ssize_t n = PyTuple_GET_SIZE(children);
     /* an alias keeps room for its target, which is compiled when it is first used */
@@ -137,6 +146,8 @@ spec_compile(PyObject *description)
         }
     }
     spec->count = n;
+    /* a function stays pure - reading the signature of an unusual callable may run its code,
+     * but nothing read from JSON is callable, and a default is validated only once */
     spec->pure = spec->validating == NULL && spec->verifying == NULL && spec->kind != SPEC_CUSTOM
         && spec->kind != SPEC_CUSTOM_STATE && spec->kind != SPEC_ALIAS;
     spec->nested = n > 0 || spec->kind == SPEC_ALIAS || spec->kind == SPEC_STATE || spec->kind == SPEC_CUSTOM_STATE
@@ -389,6 +400,14 @@ check_elements(ModuleState *state, Spec *element, PyObject *items)
     return 1;
 }
 
+/* whether a callable accepts the calls the annotation of a function describes */
+static int
+function_accepts(ModuleState *state, Spec *spec, PyObject *value)
+{
+    if (spec->signature == NULL) return 1;
+    return signature_accepts(state, spec->signature, value);
+}
+
 /* whether a value is accepted as it is - what the first pass of a union decides by */
 static int
 spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
@@ -433,7 +452,7 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
     case SPEC_META:
         return PyObject_IsInstance(value, state->meta);
     case SPEC_FUNCTION:
-        return PyCallable_Check(value);
+        return PyCallable_Check(value) ? function_accepts(state, spec, value) : 0;
     case SPEC_TUPLE: {
         if (is_text_like(value)) return 0;
         int owned;
@@ -1167,15 +1186,22 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
         Py_DECREF(validated);
         return NULL;
     }
-    case SPEC_FUNCTION:
-        if (PyCallable_Check(value)) return Py_NewRef(value);
-        {
-            PyObject *reported = reported_type(value);
-            if (reported == NULL) return NULL;
+    case SPEC_FUNCTION: {
+        int callable = PyCallable_Check(value);
+        int r = callable ? function_accepts(state, spec, value) : 0;
+        if (r > 0) return Py_NewRef(value);
+        if (r < 0) return NULL;
+        PyObject *reported = reported_type(value);
+        if (reported == NULL) return NULL;
+        if (callable) {
+            PyErr_Format(PyExc_TypeError, "'%U' is not matching expected function type - it can't be called %U",
+                reported, spec->signature->description);
+        } else {
             PyErr_Format(PyExc_TypeError, "'%U' is not matching expected function type", reported);
-            Py_DECREF(reported);
         }
+        Py_DECREF(reported);
         return NULL;
+    }
     case SPEC_UNION:
         return validate_union(state, spec, value);
     case SPEC_VALIDABLE:

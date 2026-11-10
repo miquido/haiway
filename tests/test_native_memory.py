@@ -1,4 +1,5 @@
 import copy
+import functools
 import gc
 import json
 import math
@@ -12,8 +13,10 @@ import weakref
 from collections.abc import Callable, Mapping, Sequence, Set
 from datetime import date, datetime, time, timedelta
 from enum import IntEnum, StrEnum
+from functools import Placeholder
 from pathlib import Path
-from typing import Annotated, Any, Literal, NotRequired, TypedDict
+from types import MethodType
+from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict
 from uuid import UUID, SafeUUID
 
 import pytest
@@ -925,3 +928,231 @@ def test_states_are_used_from_many_threads_at_once() -> None:
 
     assert failures == []
     assert all(variant is variants[0] for variant in variants)
+
+
+def test_checking_function_arguments_does_not_leak() -> None:
+    class Holding(State):
+        function: Callable[[int, str], None]
+
+    def taking(first: int, second: str) -> None: ...
+    def defaulted(first: int, second: str, third: bytes = b"", *, fourth: int = 0) -> None: ...
+    def refused(first: int) -> None: ...
+
+    class Callee:
+        def taking(self, first: int, second: str) -> None: ...
+
+    class Called:
+        def __call__(self, first: int, second: str) -> None: ...
+
+    class Constructed:
+        def __init__(self, first: int, second: str) -> None: ...
+
+    many: Any = {}
+    exec(  # nosec: B102
+        f"def many({', '.join(f'a{index}' for index in range(70))}, *, last): pass", many
+    )
+
+    def operation() -> None:
+        Holding(function=taking)
+        Holding(function=defaulted)
+        Holding(function=Callee().taking)
+        Holding(function=Called())
+        Holding(function=Constructed)
+        Holding(function=functools.partial(defaulted, 1))
+        Holding(function=functools.partial(defaulted, fourth=1))
+        Holding(function=functools.partial(many["many"], *range(68), last=1))
+        _swallow(lambda: Holding(function=refused))
+        _swallow(lambda: Holding(function=functools.partial(refused, 1)))
+        _swallow(lambda: Holding(function=functools.partial(taking, second="")))
+        _swallow(lambda: Holding(function=functools.partial(many["many"], a69=1)))
+        _swallow(lambda: Holding(function=1))  # pyright: ignore[reportArgumentType]
+
+    _assert_no_leak(operation)
+
+
+def test_owners_of_builtins_held_as_functions_are_collected() -> None:
+    class Holding(State):
+        function: Callable[[str], object]
+
+    def define() -> weakref.ref[type[Any]]:
+        class Temporary(dict[str, Any]):
+            pass
+
+        Holding(function=Temporary().get)
+        return weakref.ref(Temporary)
+
+    references = [define() for _ in range(20)]
+    gc.collect()
+    assert all(reference() is None for reference in references)
+
+
+def test_classes_held_as_functions_are_collected() -> None:
+    class Holding(State):
+        factory: Callable[[], object]
+
+    def define() -> weakref.ref[type[Any]]:
+        class Temporary:
+            def method(self) -> None: ...
+
+        Holding(factory=Temporary)
+        Holding(factory=Temporary().method)
+        return weakref.ref(Temporary)
+
+    references = [define() for _ in range(20)]
+    gc.collect()
+    assert all(reference() is None for reference in references)
+
+
+class _CalledBack(Protocol):
+    def __call__(self, request: str, /, retries: int, *, timeout: float = 1.0) -> str: ...
+
+
+def test_checking_protocol_functions_does_not_leak() -> None:
+    class Holding(State):
+        handler: _CalledBack
+
+    def exact(request: str, /, retries: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def renamed(request: str, /, attempts: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def based(client: object, request: str, /, retries: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def named(request: str, /, retries: int, *, timeout: float = 1.0, client: object) -> str:
+        return request
+
+    class Service:
+        def __call__(self, request: str, /, retries: int, *, timeout: float = 1.0) -> str:
+            return request
+
+    class Constructed:
+        def __init__(self, request: str, /, retries: int, *, timeout: float = 1.0) -> None:
+            pass
+
+    told = (("a", 1, False), (None, 0, True), ("b", 3, False), ("keywords", 4, False))
+
+    def operation() -> None:
+        Holding(handler=exact)
+        Holding(handler=Service())
+        Holding(handler=functools.partial(based, object()))
+        Holding(handler=functools.partial(named, client=object()))
+        Holding(handler=Constructed)  # pyright: ignore[reportArgumentType]
+        _swallow(lambda: Holding(handler=renamed))  # pyright: ignore[reportArgumentType]
+        _swallow(lambda: Holding(handler=functools.partial(exact, "request")))  # pyright: ignore[reportArgumentType]
+        _swallow(lambda: Holding(handler=functools.partial(exact, unknown=1)))  # pyright: ignore[reportArgumentType]
+        _swallow(lambda: Holding(handler=1))  # pyright: ignore[reportArgumentType]
+        nstruct.signature_fits(told, told, False)
+        _swallow(lambda: nstruct.signature_fits(((1, 1, False),), told, False))
+        _swallow(lambda: nstruct.signature_fits(told, "not a tuple", False))  # pyright: ignore[reportArgumentType]
+
+    _assert_no_leak(operation)
+
+
+def test_checking_partials_with_placeholders_does_not_leak() -> None:
+    class Holding(State):
+        function: Callable[[int, str], None]
+
+    def three(first: int, second: str, third: bytes, /) -> None: ...
+    def variadic(first: int, *rest: Any) -> None: ...
+    def named(first: int, second: str, *, third: bytes) -> None: ...
+
+    class Constructed:
+        def __init__(self, first: int, second: str, third: bytes, /) -> None: ...
+
+    class Unreadable:
+        @property
+        def __signature__(self) -> Any:
+            raise RuntimeError("unreadable")
+
+        def __call__(self, *arguments: Any) -> None: ...
+
+    many: Any = {}
+    exec(f"def many({', '.join(f'a{index}' for index in range(40))}, /): pass", many)  # nosec: B102
+    two_holes: list[Any] = [Placeholder] * 2 + [0] * 38
+    many_holes: list[Any] = [Placeholder] * 20 + [0] * 20
+    # an attribute of their own keeps functools from merging them with the outer partials
+    inner_named = functools.partial(named, third=b"")
+    inner_named.kept = True
+    inner_holed = functools.partial(three, Placeholder, Placeholder, b"")
+    inner_holed.kept = True
+
+    refusing = functools.partial(named)
+    refusing.keywords[1] = 0  # pyright: ignore[reportArgumentType]
+    looping = functools.partial(three, 0)
+    looping.__setstate__((looping, (), {}, None))
+
+    def operation() -> None:
+        Holding(function=functools.partial(three, Placeholder, Placeholder, b""))
+        Holding(function=functools.partial(variadic, Placeholder, Placeholder, 0))
+        Holding(function=functools.partial(Constructed, Placeholder, Placeholder, b""))
+        Holding(function=functools.partial(many["many"], *two_holes))
+        _swallow(lambda: Holding(function=functools.partial(many["many"], *many_holes)))
+        Holding(function=functools.partial(inner_named, third=b"joined"))
+        Holding(function=functools.partial(inner_holed))
+        _swallow(lambda: Holding(function=functools.partial(inner_holed, Placeholder, "")))
+        _swallow(lambda: Holding(function=functools.partial(three, Placeholder, "", b"")))
+        _swallow(lambda: Holding(function=functools.partial(named, Placeholder, "", first=1)))
+        _swallow(lambda: Holding(function=functools.partial(Constructed, 1, Placeholder, b"")))
+        _swallow(lambda: Holding(function=functools.partial(Unreadable(), Placeholder, 0)))  # pyright: ignore[reportArgumentType]
+        Holding(function=MethodType(functools.partial(variadic, Placeholder, 0), 1))
+        Holding(function=MethodType(Constructed, 1))
+        _swallow(lambda: Holding(function=MethodType(functools.partial(three, 1), 1)))
+        _swallow(lambda: Holding(function=refusing))
+        _swallow(lambda: Holding(function=looping))
+
+    _assert_no_leak(operation)
+
+
+def test_functions_are_checked_from_many_threads_at_once() -> None:
+    # every kind of callable at once - the cached signatures are shared between threads
+    class Holding(State):
+        handler: _CalledBack
+
+    class Factory(State):
+        factory: Callable[[], object]
+
+    def exact(request: str, /, retries: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def renamed(request: str, /, attempts: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def based(request: str, client: object, /, retries: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    class Constructed:
+        def __init__(self, request: str, /, retries: int, *, timeout: float = 1.0) -> None:
+            pass
+
+    failures: list[BaseException] = []
+    barrier = threading.Barrier(8)
+
+    def work(index: int) -> None:
+        try:
+            barrier.wait()
+            for _ in range(200):
+                assert Holding(handler=exact).handler is exact
+                assert Holding(handler=functools.partial(exact, timeout=index)) is not None
+                Holding(handler=Constructed)  # pyright: ignore[reportArgumentType]
+                Holding(handler=functools.partial(Constructed, timeout=index))  # pyright: ignore[reportArgumentType]
+                Holding(handler=functools.partial(based, Placeholder, index))
+                Factory(factory=dict)
+                Factory(factory=datetime.now)
+                Factory(factory=date.today)
+                Factory(factory=object)
+                with pytest.raises(ValidationError):
+                    Holding(handler=renamed)  # pyright: ignore[reportArgumentType]
+
+        except BaseException as exc:
+            failures.append(exc)
+
+    threads = [threading.Thread(target=work, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    assert failures == []

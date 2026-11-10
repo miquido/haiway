@@ -1,6 +1,7 @@
 /* The native storage and conversions of haiway.State - see common.h. */
 
 #include "common.h"
+#include "signature.h"
 #include "spec.h"
 #include "plan.h"
 #include "construct.h"
@@ -112,6 +113,7 @@ configure(PyObject *mod, PyObject *args)
     if (!bind_hook(validation, "check", &state->check) || !bind_hook(validation, "report", &state->report)
         || !bind_hook(validation, "unexpected", &state->unexpected)
         || !bind_hook(validation, "describe", &state->describe)
+        || !bind_hook(validation, "parameters", &state->parameters)
         || !bind_hook(validation, "enum_values", &state->enum_values)
         || !bind_hook(validation, "literal_values", &state->literal_values)
         || !bind_hook(validation, "b64decode", &state->b64decode)
@@ -127,7 +129,9 @@ configure(PyObject *mod, PyObject *args)
         || !bind_hook(types, "datetime", &state->datetime)
         || !bind_hook(types, "date", &state->date) || !bind_hook(types, "time", &state->time)
         || !bind_hook(types, "timedelta", &state->timedelta) || !bind_hook(types, "path", &state->path)
-        || !bind_hook(types, "pathlike", &state->pathlike) || !bind_hook(types, "meta", &state->meta)) {
+        || !bind_hook(types, "pathlike", &state->pathlike) || !bind_hook(types, "meta", &state->meta)
+        || !bind_hook(types, "partial", &state->partial)
+        || !bind_hook(types, "placeholder", &state->placeholder)) {
         return NULL;
     }
     PyObject *temporal = PyTuple_Pack(3, state->datetime, state->date, state->time);
@@ -180,6 +184,7 @@ add_kinds(PyObject *module)
 
 static PyMethodDef module_methods[] = {
     {"compile_spec", compile_spec, METH_O, NULL},
+    {"signature_fits", (PyCFunction)(void (*)(void))signature_fits_native, METH_FASTCALL, NULL},
     {"validate", (PyCFunction)(void (*)(void))validate_native, METH_FASTCALL, NULL},
     {"check", (PyCFunction)(void (*)(void))check_native, METH_FASTCALL, NULL},
     {"compile_plan", compile_plan, METH_VARARGS, NULL},
@@ -215,7 +220,11 @@ module_exec(PyObject *module)
     if (intern(&state->str_isoformat, "isoformat") < 0 || intern(&state->str_as_posix, "as_posix") < 0
         || intern(&state->str_type_name, "type_name") < 0
         || intern(&state->str_lower, "lower") < 0 || intern(&state->str_fromisoformat, "fromisoformat") < 0
-        || intern(&state->str_validate, "validate") < 0 || intern(&state->str_int, "int") < 0) {
+        || intern(&state->str_validate, "validate") < 0 || intern(&state->str_int, "int") < 0
+        || intern(&state->str_code, "__code__") < 0 || intern(&state->str_defaults, "__defaults__") < 0
+        || intern(&state->str_kwdefaults, "__kwdefaults__") < 0 || intern(&state->str_call, "__call__") < 0
+        || intern(&state->str_func, "func") < 0 || intern(&state->str_args, "args") < 0
+        || intern(&state->str_keywords, "keywords") < 0) {
         return -1;
     }
     /* the C API of datetime - what values are spelled from natively, see convert.h */
@@ -239,13 +248,15 @@ module_exec(PyObject *module)
 
 #define FOR_EACH_STATE_OBJECT(V) \
     V(meta_type) V(struct_type) V(validated_type) V(spec_type) \
-    V(missing) V(check) V(report) V(unexpected) V(describe) V(enum_values) V(literal_values) \
+    V(missing) V(check) V(report) V(unexpected) V(describe) V(parameters) V(enum_values) V(literal_values) \
     V(b64decode) V(parse_duration) V(exception_group) \
     V(map) V(basic_value) V(basic_key) V(recursive) \
     V(mapping) V(sequence) V(set) V(iterable) V(uuid) V(safe_uuid) V(datetime) V(date) V(time) V(timedelta) \
-    V(temporal) V(path) V(pathlike) V(meta) \
+    V(temporal) V(path) V(pathlike) V(meta) V(partial) V(placeholder) \
     V(str_isoformat) V(str_as_posix) V(str_type_name) V(str_lower) \
-    V(str_fromisoformat) V(str_validate) V(str_int) V(deepcopy)
+    V(str_fromisoformat) V(str_validate) V(str_int) V(str_code) V(str_defaults) V(str_kwdefaults) \
+    V(str_call) V(str_func) V(str_args) V(str_keywords) \
+    V(deepcopy)
 
 static int
 module_traverse(PyObject *module, visitproc visit, void *arg)

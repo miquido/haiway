@@ -419,9 +419,67 @@ them as read-only once they cross a State boundary.
 A few validation details matter in practice:
 
 - Plain `Enum` fields accept enum members and do not coerce from raw values.
+
 - `StrEnum` and `IntEnum` fields accept both enum members and matching raw string or integer forms.
-- Callable and protocol fields validate correctly at runtime but do not produce JSON Schema
-  specifications.
+
+- A function field takes a callable only when it can be called the way its annotation says. A
+  `Callable[[A, B], R]` is called with two arguments by position, so a function taking one, or
+  requiring a third, is refused when the state is created rather than when it is called. A protocol
+  whose only member is `__call__` describes a function by that signature: every call it allows -
+  each argument by position or by name where it may be, each default given or left out - has to be
+  one the value takes, so the names of what may be given by name have to match, and a parameter the
+  protocol lets be left out needs a default.
+
+  ```python
+  from typing import Protocol
+
+  from haiway import State
+
+
+  class Handler(Protocol):
+      def __call__(self, request: str, /, retries: int, *, timeout: float = 1.0) -> str: ...
+
+
+  class Service(State):
+      handler: Handler
+
+
+  def handle(request: str, /, retries: int, *, timeout: float = 1.0) -> str:
+      return request
+
+
+  Service(handler=handle)  # accepted
+  Service(handler=lambda request, attempts: request)  # refused - `retries` may be given by name
+  ```
+
+  Arguments left open - `...`, a `ParamSpec`, what follows `Concatenate[A, P]` or `*Ts` - are not
+  checked, and neither are the types of arguments nor the result. Functions, bound methods, partials
+  and objects with `__call__` are read natively; a callable without a signature to read, such as
+  some builtins, is accepted. A partial is checked as the call it makes in the end: what it gives by
+  position and by name is left out, and each `functools.Placeholder` is an argument the caller gives
+  first, by position only.
+
+  ```python
+  from collections.abc import Callable
+  from functools import Placeholder, partial
+
+  from haiway import State
+
+
+  class Scaling(State):
+      scale: Callable[[float], float]
+
+
+  def multiply(value: float, factor: float, /) -> float:
+      return value * factor
+
+
+  Scaling(scale=partial(multiply, Placeholder, 2.0))  # accepted - called with the value
+  Scaling(scale=partial(multiply, 2.0, 3.0))  # refused - takes no more arguments
+  ```
+
+- Callable and protocol fields do not produce JSON Schema specifications.
+
 - Validation failures are wrapped in `ValidationError`, which includes a precise nested path.
 
 ### JSON Schema Generation

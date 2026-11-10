@@ -56,6 +56,27 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `case Missing:` captures the value.
 - The `validate` and `check` methods of the attribute annotations are gone - the compiled spec of
   an `Attribute` validates (`haiway.attributes.native.compile` and `validate`).
+- **Function fields check that a value can be called the way the annotation says.** A
+  `Callable[[int, str], None]` refuses a function of one argument, or one requiring a third, when
+  the state is created instead of failing once it is called. A protocol whose only member is
+  `__call__` is checked by that signature - every call it allows has to be one the value takes,
+  so a parameter which may be given by name has to have the same name, and one which may be left
+  out a default - where it accepted anything callable before, and a protocol of `__call__` alone
+  no longer needs `@runtime_checkable`. Arguments left open - `...`, a `ParamSpec`, what follows
+  `Concatenate`, `*Ts` - and the types of arguments are not checked. A partial is read as what it
+  calls, given its arguments - `functools.Placeholder` ones are given by the call first, by
+  position only - and its keywords, joined with those of partials around it. A bound method is
+  read the same way, as what it calls given the object first - a partial held by a class
+  included. A parameter given by position already, by a partial or as the object a method is
+  bound to, refuses its name given again, even to `**kwargs`. `FunctionAttribute.arguments`, which was always empty, is replaced by
+  `signature` - a `CallableSignature` or a `ProtocolSignature` read from the annotation, `None`
+  when it accepts any call.
+  Migration: fix the functions the check refuses - they could not have been called the way the
+  annotation says.
+- **`ContextObservability.record_log` takes the format arguments as one tuple** -
+  `record_log(level, message, (first, second), exception=None)` - handing them on without
+  unpacking and packing them again. Migration: wrap the arguments in a tuple; `ctx.log_*` are
+  unchanged.
 
 #### Added
 
@@ -93,6 +114,10 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   about 23%, reading the context no longer raises on a miss, and `ctx.spawn` skips the type checks
   of a plain coroutine function, so a request handled through Starlette or FastAPI costs about 10%
   less. `make benchmark-scope` measures the context (`benchmarks/scope_benchmark.py`).
+- **A log nobody keeps costs half as much.** `Observability` takes an optional `level_checking`,
+  asked before a log, event, metric or attributes are passed on; the logger and OpenTelemetry
+  backends provide it, so a `ctx.log_debug` with `DEBUG` turned off returns in about 210 ns instead
+  of 460 ns, without formatting its arguments - also when logging out of any scope.
 
 #### Fixed
 

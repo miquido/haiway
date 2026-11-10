@@ -714,6 +714,14 @@ class _ObservabilityAdapter:
         _W3C_PROPAGATOR.inject(carrier, context=store.context)
         return carrier
 
+    def level_checking(
+        self,
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+    ) -> bool:
+        return level >= self._level
+
     def log_recording(
         self,
         scope: ContextIdentifier,
@@ -723,7 +731,7 @@ class _ObservabilityAdapter:
         *args: Any,
         exception: BaseException | None,
     ) -> None:
-        if level < self._level:
+        if not self.level_checking(scope, level):
             return  # skip low level
 
         store: ScopeStore | None = self._scopes.get(scope.scope_id)
@@ -753,7 +761,7 @@ class _ObservabilityAdapter:
         event: str,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        if level < self._level:
+        if not self.level_checking(scope, level):
             return  # skip low level
 
         store: ScopeStore | None = self._scopes.get(scope.scope_id)
@@ -778,7 +786,7 @@ class _ObservabilityAdapter:
         kind: ObservabilityMetricKind,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        if level < self._level:
+        if not self.level_checking(scope, level):
             return  # skip low level
 
         store: ScopeStore | None = self._scopes.get(scope.scope_id)
@@ -834,7 +842,7 @@ class _ObservabilityAdapter:
         level: ObservabilityLevel,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        if level < self._level:
+        if not self.level_checking(scope, level):
             return  # skip low level
 
         if not attributes:
@@ -1378,4 +1386,5 @@ class OpenTelemetry:
             scope_entering=adapter.scope_entering,
             scope_exiting=adapter.scope_exiting,
             trace_context_encoding=adapter.trace_context_encoding,
+            level_checking=adapter.level_checking,
         )
