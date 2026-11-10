@@ -113,7 +113,7 @@ configure(PyObject *mod, PyObject *args)
     if (!bind_hook(validation, "check", &state->check) || !bind_hook(validation, "report", &state->report)
         || !bind_hook(validation, "unexpected", &state->unexpected)
         || !bind_hook(validation, "describe", &state->describe)
-        || !bind_hook(validation, "accepts", &state->accepts)
+        || !bind_hook(validation, "parameters", &state->parameters)
         || !bind_hook(validation, "enum_values", &state->enum_values)
         || !bind_hook(validation, "literal_values", &state->literal_values)
         || !bind_hook(validation, "b64decode", &state->b64decode)
@@ -130,7 +130,8 @@ configure(PyObject *mod, PyObject *args)
         || !bind_hook(types, "date", &state->date) || !bind_hook(types, "time", &state->time)
         || !bind_hook(types, "timedelta", &state->timedelta) || !bind_hook(types, "path", &state->path)
         || !bind_hook(types, "pathlike", &state->pathlike) || !bind_hook(types, "meta", &state->meta)
-        || !bind_hook(types, "partial", &state->partial)) {
+        || !bind_hook(types, "partial", &state->partial)
+        || !bind_hook(types, "placeholder", &state->placeholder)) {
         return NULL;
     }
     PyObject *temporal = PyTuple_Pack(3, state->datetime, state->date, state->time);
@@ -247,11 +248,11 @@ module_exec(PyObject *module)
 
 #define FOR_EACH_STATE_OBJECT(V) \
     V(meta_type) V(struct_type) V(validated_type) V(spec_type) \
-    V(missing) V(check) V(report) V(unexpected) V(describe) V(accepts) V(enum_values) V(literal_values) \
+    V(missing) V(check) V(report) V(unexpected) V(describe) V(parameters) V(enum_values) V(literal_values) \
     V(b64decode) V(parse_duration) V(exception_group) \
     V(map) V(basic_value) V(basic_key) V(recursive) \
     V(mapping) V(sequence) V(set) V(iterable) V(uuid) V(safe_uuid) V(datetime) V(date) V(time) V(timedelta) \
-    V(temporal) V(path) V(pathlike) V(meta) V(partial) \
+    V(temporal) V(path) V(pathlike) V(meta) V(partial) V(placeholder) \
     V(str_isoformat) V(str_as_posix) V(str_type_name) V(str_lower) \
     V(str_fromisoformat) V(str_validate) V(str_int) V(str_code) V(str_defaults) V(str_kwdefaults) \
     V(str_call) V(str_func) V(str_args) V(str_keywords) \

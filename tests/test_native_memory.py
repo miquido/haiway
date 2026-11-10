@@ -13,6 +13,7 @@ import weakref
 from collections.abc import Callable, Mapping, Sequence, Set
 from datetime import date, datetime, time, timedelta
 from enum import IntEnum, StrEnum
+from functools import Placeholder
 from pathlib import Path
 from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict
 from uuid import UUID, SafeUUID
@@ -1048,6 +1049,51 @@ def test_checking_protocol_functions_does_not_leak() -> None:
     _assert_no_leak(operation)
 
 
+def test_checking_partials_with_placeholders_does_not_leak() -> None:
+    class Holding(State):
+        function: Callable[[int, str], None]
+
+    def three(first: int, second: str, third: bytes, /) -> None: ...
+    def variadic(first: int, *rest: Any) -> None: ...
+    def named(first: int, second: str, *, third: bytes) -> None: ...
+
+    class Constructed:
+        def __init__(self, first: int, second: str, third: bytes, /) -> None: ...
+
+    class Unreadable:
+        @property
+        def __signature__(self) -> Any:
+            raise RuntimeError("unreadable")
+
+        def __call__(self, *arguments: Any) -> None: ...
+
+    many: Any = {}
+    exec(f"def many({', '.join(f'a{index}' for index in range(40))}, /): pass", many)  # nosec: B102
+    two_holes: list[Any] = [Placeholder] * 2 + [0] * 38
+    many_holes: list[Any] = [Placeholder] * 20 + [0] * 20
+    # kept apart from the partials around them by attributes of their own
+    inner_named = functools.partial(named, third=b"")
+    inner_named.kept = True
+    inner_holed = functools.partial(three, Placeholder, Placeholder, b"")
+    inner_holed.kept = True
+
+    def operation() -> None:
+        Holding(function=functools.partial(three, Placeholder, Placeholder, b""))
+        Holding(function=functools.partial(variadic, Placeholder, Placeholder, 0))
+        Holding(function=functools.partial(Constructed, Placeholder, Placeholder, b""))
+        Holding(function=functools.partial(many["many"], *two_holes))
+        _swallow(lambda: Holding(function=functools.partial(many["many"], *many_holes)))
+        Holding(function=functools.partial(inner_named, third=b"joined"))
+        Holding(function=functools.partial(inner_holed))
+        _swallow(lambda: Holding(function=functools.partial(inner_holed, Placeholder, "")))
+        _swallow(lambda: Holding(function=functools.partial(three, Placeholder, "", b"")))
+        _swallow(lambda: Holding(function=functools.partial(named, Placeholder, "", first=1)))
+        _swallow(lambda: Holding(function=functools.partial(Constructed, 1, Placeholder, b"")))
+        _swallow(lambda: Holding(function=functools.partial(Unreadable(), Placeholder, 0)))  # pyright: ignore[reportArgumentType]
+
+    _assert_no_leak(operation)
+
+
 def test_functions_are_checked_from_many_threads_at_once() -> None:
     # every kind of callable at once - the answers Python caches are shared by the threads
     class Holding(State):
@@ -1060,6 +1106,9 @@ def test_functions_are_checked_from_many_threads_at_once() -> None:
         return request
 
     def renamed(request: str, /, attempts: int, *, timeout: float = 1.0) -> str:
+        return request
+
+    def based(request: str, client: object, /, retries: int, *, timeout: float = 1.0) -> str:
         return request
 
     class Constructed:
@@ -1076,7 +1125,11 @@ def test_functions_are_checked_from_many_threads_at_once() -> None:
                 assert Holding(handler=exact).handler is exact
                 assert Holding(handler=functools.partial(exact, timeout=index)) is not None
                 Holding(handler=Constructed)  # pyright: ignore[reportArgumentType]
+                Holding(handler=functools.partial(Constructed, timeout=index))  # pyright: ignore[reportArgumentType]
+                Holding(handler=functools.partial(based, Placeholder, index))
                 Factory(factory=dict)
+                Factory(factory=datetime.now)
+                Factory(factory=date.today)
                 Factory(factory=object)
                 with pytest.raises(ValidationError):
                     Holding(handler=renamed)  # pyright: ignore[reportArgumentType]

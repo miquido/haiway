@@ -1352,3 +1352,124 @@ async def test_level_check_follows_the_configured_level(spans: InMemorySpanExpor
         assert not adapter.level_checking(scope, ObservabilityLevel.INFO)
         assert adapter.level_checking(scope, ObservabilityLevel.WARNING)
         assert adapter.level_checking(scope, ObservabilityLevel.ERROR)
+
+
+def _record_each_kind_of_info(name: str, /) -> None:
+    ctx.log_info(f"{name} %s", 1)
+    ctx.record_info(event=name)
+    ctx.record_info(metric=name, value=1, kind="counter")
+    ctx.record_info(attributes={name: 1})
+
+
+def _record_each_kind_of_error(name: str, /) -> None:
+    ctx.log_error(f"{name} %s", 1)
+    ctx.record_error(event=name)
+    ctx.record_error(metric=name, value=1, kind="counter")
+    ctx.record_error(attributes={name: 1})
+
+
+@mark.asyncio
+async def test_recordings_below_the_level_leave_nothing_exported(
+    spans: InMemorySpanExporter,
+    logs: InMemoryLogRecordExporter,
+    metrics_reader: InMemoryMetricReader,
+) -> None:
+    adapter: Observability = OpenTelemetry.observability(ObservabilityLevel.WARNING)
+    async with ctx.scope("leveled", observability=adapter):
+        _record_each_kind_of_info("quiet")
+        _record_each_kind_of_error("loud")
+
+    bodies: Sequence[Any] = _bodies(logs)
+    events: Sequence[str | None] = [
+        record.log_record.event_name for record in logs.get_finished_logs()
+    ]
+    span = _named(spans, "leveled")
+    assert span.attributes is not None
+    assert "loud 1" in bodies
+    assert "loud" in events
+    assert _points(metrics_reader, "loud") == [1]
+    assert span.attributes.get("loud") == 1
+    assert not any("quiet" in str(body) for body in bodies)
+    assert "quiet" not in events
+    assert not _points(metrics_reader, "quiet")
+    assert "quiet" not in span.attributes
+
+
+@mark.asyncio
+async def test_recordings_below_the_level_never_reach_the_adapter(
+    spans: InMemorySpanExporter,
+) -> None:
+    # the adapter skips them on its own as well - what is told here is that the context
+    # asks it first, and passes nothing on once told it would be discarded
+    adapter: Observability = OpenTelemetry.observability(ObservabilityLevel.WARNING)
+    reached: list[str] = []
+
+    def log_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        message: str,
+        *args: Any,
+        exception: BaseException | None,
+    ) -> None:
+        reached.append(f"log {level.name}")
+        adapter.log_recording(scope, level, message, *args, exception=exception)
+
+    def event_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        *,
+        event: str,
+        attributes: Mapping[str, Any],
+    ) -> None:
+        reached.append(f"event {level.name}")
+        adapter.event_recording(scope, level, event=event, attributes=attributes)
+
+    def metric_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        *,
+        metric: str,
+        value: float | int,
+        unit: str | None,
+        kind: Any,
+        attributes: Mapping[str, Any],
+    ) -> None:
+        reached.append(f"metric {level.name}")
+        adapter.metric_recording(
+            scope,
+            level,
+            metric=metric,
+            value=value,
+            unit=unit,
+            kind=kind,
+            attributes=attributes,
+        )
+
+    def attributes_recording(
+        scope: ContextIdentifier,
+        /,
+        level: ObservabilityLevel,
+        attributes: Mapping[str, Any],
+    ) -> None:
+        reached.append(f"attributes {level.name}")
+        adapter.attributes_recording(scope, level, attributes)
+
+    observed = Observability(
+        trace_identifying=adapter.trace_identifying,
+        log_recording=log_recording,
+        event_recording=event_recording,
+        metric_recording=metric_recording,
+        attributes_recording=attributes_recording,
+        scope_entering=adapter.scope_entering,
+        scope_exiting=adapter.scope_exiting,
+        trace_context_encoding=adapter.trace_context_encoding,
+        level_checking=adapter.level_checking,
+    )
+    async with ctx.scope("leveled", observability=observed):
+        _record_each_kind_of_info("quiet")
+        _record_each_kind_of_error("loud")
+
+    assert reached == ["log ERROR", "event ERROR", "metric ERROR", "attributes ERROR"]

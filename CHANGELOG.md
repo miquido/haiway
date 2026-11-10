@@ -63,8 +63,12 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   so a parameter which may be given by name has to have the same name, and one which may be left
   out a default - where it accepted anything callable before, and a protocol of `__call__` alone
   no longer needs `@runtime_checkable`. Arguments left open - `...`, a `ParamSpec`, what follows
-  `Concatenate`, `*Ts` - and the types of arguments are not checked. `FunctionAttribute.arguments`,
-  which was always empty, is replaced by `parameters` and `extensible`, read from the annotation.
+  `Concatenate`, `*Ts` - and the types of arguments are not checked. A partial is read as what it
+  calls, given its arguments - `functools.Placeholder` ones are given by the call first, by
+  position only - and its keywords, joined with those of partials around it. A parameter given by
+  position already, by a partial or as the object a method is bound to, refuses its name given
+  again, even to `**kwargs`. `FunctionAttribute.arguments`, which was always empty, is replaced by
+  `parameters` and `extensible`, read from the annotation.
   Migration: fix the functions the check refuses - they could not have been called the way the
   annotation says.
 - **`ContextObservability.record_log` takes the format arguments as one tuple** -

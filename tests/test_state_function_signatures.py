@@ -1,9 +1,17 @@
+import builtins
+import collections
+import datetime
+import decimal
 import functools
 import inspect
 import itertools
+import math
+import operator
 import random
+import weakref
 from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
-from functools import partial
+from functools import Placeholder, partial
+from types import BuiltinFunctionType
 from typing import Any, Concatenate, Protocol, runtime_checkable
 from unittest.mock import AsyncMock, MagicMock, Mock
 
@@ -418,6 +426,20 @@ def _variants(
         keywords: dict[str, Any] = dict.fromkeys(generator.sample(named, 1), 0)
         yield ("partial by name", partial(_function(parameters), **keywords))
 
+    # a placeholder left for the first parameter, by position only and given each time - the
+    # same parameters taken, a stored one following it
+    if (
+        parameters
+        and parameters[0].kind is inspect.Parameter.POSITIONAL_ONLY
+        and parameters[0].default is inspect.Parameter.empty
+    ):
+        holed: list[inspect.Parameter] = [
+            parameters[0],
+            inspect.Parameter("stored", inspect.Parameter.POSITIONAL_ONLY),
+            *parameters[1:],
+        ]
+        yield ("partial around a placeholder", partial(_function(holed), Placeholder, 0))
+
 
 def _calls(told: Sequence[inspect.Parameter]) -> Iterator[tuple[tuple[Any, ...], dict[str, Any]]]:
     # every way of calling a function of these parameters - by position or by name, each
@@ -630,9 +652,15 @@ def test_partials_giving_names_twice_are_told_each_on_its_own() -> None:
     def two(first: int, *, third: int, fourth: int) -> int:
         return first
 
-    # a partial of a partial, both giving names - read by Python, never by the kind
-    taking = partial(partial(three, third=1), fourth=1)
-    refused = partial(partial(two, third=1), fourth=1)
+    # a partial of a partial, both giving names - kept apart by what each one holds
+    inner_taking = partial(three, third=1)
+    inner_taking.kept = True  # an attribute of its own keeps functools from joining them
+    inner_refused = partial(two, third=1)
+    inner_refused.kept = True
+    taking = partial(inner_taking, fourth=1)
+    refused = partial(inner_refused, fourth=1)
+    assert taking.func is inner_taking
+    assert refused.func is inner_refused
     assert _TakingTwo(function=taking).function is taking
     with pytest.raises(ValidationError):
         _TakingTwo(function=refused)
@@ -794,3 +822,347 @@ def test_functions_are_accepted_exactly_when_they_complete_every_call_of_an_open
 
     assert checked[True] > 500
     assert checked[False] > 100
+
+
+# --- partials of every kind, with placeholders, keywords and partials around them -----------
+
+
+def _random_arguments(generator: random.Random, count: int) -> list[Any]:
+    # stored arguments, some of them placeholders - never the last one, as functools refuses it
+    arguments: list[Any] = [Placeholder if generator.random() < 0.4 else 0 for _ in range(count)]
+    if arguments:
+        arguments[-1] = 0
+
+    return arguments
+
+
+def _random_keywords(
+    generator: random.Random,
+    parameters: Sequence[inspect.Parameter],
+) -> dict[str, Any]:
+    names: list[str] = [parameter.name for parameter in parameters]
+    chosen: list[str] = generator.sample(names, generator.randint(0, min(2, len(names))))
+    if generator.random() < 0.1:
+        chosen.append("unknown")
+
+    return dict.fromkeys(chosen, 0)
+
+
+def _random_callee(generator: random.Random, parameters: list[inspect.Parameter]) -> Any:
+    # what a partial calls in the end - read of its code, or of its signature by Python
+    variants: list[tuple[str, Any]] = [
+        (kind, value)
+        for kind, value in _variants(generator, parameters)
+        if not isinstance(value, partial)
+    ]
+    return generator.choice(variants)[1]
+
+
+def _random_partial(generator: random.Random, parameters: list[inspect.Parameter]) -> Any:
+    positional: int = sum(
+        parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD)
+        for parameter in parameters
+    )
+    value: Any = partial(
+        _random_callee(generator, parameters),
+        *_random_arguments(generator, generator.randint(0, positional + 2)),
+        **_random_keywords(generator, parameters),
+    )
+    if generator.random() < 0.4:  # another one around it, kept apart from it
+        value.kept = True
+        value = partial(
+            value,
+            *_random_arguments(generator, generator.randint(0, 3)),
+            **_random_keywords(generator, parameters),
+        )
+        assert isinstance(value.func, partial)
+
+    return value
+
+
+def test_partials_are_accepted_exactly_when_they_take_every_call_of_the_protocol() -> None:
+    generator = random.Random(43)
+    checked: dict[bool, int] = {True: 0, False: 0}
+    placeholders: int = 0
+    for _ in range(300):
+        told: list[inspect.Parameter] = _random_parameters(generator)
+        holder: type[State] = _protocol(told)
+        for _ in range(20):
+            taking: list[inspect.Parameter] = _random_parameters(generator)
+            try:
+                value: Any = _random_partial(generator, taking)
+
+            except TypeError:
+                continue  # a partial functools refuses to make
+
+            placeholders += Placeholder in value.args or (
+                isinstance(value.func, partial) and Placeholder in value.func.args
+            )
+            expected: bool = _takes_every_call(value, told)
+            try:
+                holder(value=value)  # pyright: ignore[reportCallIssue]
+                accepted = True
+
+            except ValidationError:
+                accepted = False
+
+            checked[expected] += 1
+            assert accepted == expected, (
+                inspect.Signature(told),
+                inspect.Signature(taking),
+                value,
+            )
+
+    # fitting partials are the rarer ones - still plenty of both, most with placeholders
+    assert checked[True] > 250
+    assert checked[False] > 2000
+    assert placeholders > 1000
+
+
+def _positional_only(prefix: str, count: int, /) -> list[inspect.Parameter]:
+    return [
+        inspect.Parameter(f"{prefix}{index}", inspect.Parameter.POSITIONAL_ONLY)
+        for index in range(count)
+    ]
+
+
+def _holed_function(count: int, /) -> Callable[..., None]:
+    return _function(_positional_only("a", count))
+
+
+def _taking_positional(count: int, /) -> type[State]:
+    return _protocol(_positional_only("t", count))
+
+
+def test_placeholders_are_given_by_the_call_first() -> None:
+    def pair(first: int, second: int) -> None: ...
+
+    class TakingOne(State):
+        function: Callable[[int], None]
+
+    class TakingNone(State):
+        function: Callable[[], None]
+
+    holed = partial(pair, Placeholder, 1)
+    assert TakingOne(function=holed).function is holed
+    with pytest.raises(ValidationError):
+        TakingNone(function=holed)
+
+    # given by the call, by position only - never by name
+    class Named(Protocol):
+        def __call__(self, first: int) -> None: ...
+
+    class TakingNamed(State):
+        function: Named
+
+    with pytest.raises(ValidationError):
+        TakingNamed(function=holed)
+
+
+def test_placeholders_within_variadic_arguments_are_given_by_the_call() -> None:
+    def variadic(first: int, *rest: int) -> None: ...
+
+    class Constructed:
+        def __init__(self, first: int, *rest: int) -> None: ...
+
+    class TakingOne(State):
+        function: Callable[[int], Any]
+
+    class TakingNone(State):
+        function: Callable[[], Any]
+
+    for value in (partial(variadic, 1, Placeholder, 3), partial(Constructed, 1, Placeholder, 3)):
+        assert TakingOne(function=value).function is value
+        with pytest.raises(ValidationError):
+            TakingNone(function=value)
+
+
+def test_many_placeholders_are_read() -> None:
+    # more holes than parameters are read without allocating them
+    arguments: list[Any] = [Placeholder] * 30 + [0]
+    value = partial(_holed_function(31), *arguments)
+    assert _taking_positional(30)(value=value) is not None  # pyright: ignore[reportCallIssue]
+    with pytest.raises(ValidationError):
+        _taking_positional(29)(value=value)  # pyright: ignore[reportCallIssue]
+
+    with pytest.raises(ValidationError):
+        _taking_positional(31)(value=value)  # pyright: ignore[reportCallIssue]
+
+    rest: inspect.Parameter = inspect.Parameter("rest", inspect.Parameter.VAR_POSITIONAL)
+    variadic = partial(_function([rest]), *arguments)
+    assert _taking_positional(30)(value=variadic) is not None  # pyright: ignore[reportCallIssue]
+    with pytest.raises(ValidationError):
+        _taking_positional(29)(value=variadic)  # pyright: ignore[reportCallIssue]
+
+
+def test_partials_around_partials_fill_their_placeholders_first() -> None:
+    def three(first: int, second: int, third: int, /) -> None: ...
+
+    inner = partial(three, Placeholder, Placeholder, 3)
+    inner.kept = True
+    filled = partial(inner, 1)  # fills the first hole - the second is left to the call
+    assert filled.func is inner
+    assert _taking_positional(1)(value=filled) is not None  # pyright: ignore[reportCallIssue]
+    with pytest.raises(ValidationError):
+        _taking_positional(0)(value=filled)  # pyright: ignore[reportCallIssue]
+
+    full = partial(inner, 1, 2)
+    assert _taking_positional(0)(value=full) is not None  # pyright: ignore[reportCallIssue]
+    with pytest.raises(ValidationError):
+        _taking_positional(1)(value=full)  # pyright: ignore[reportCallIssue]
+
+    holed = partial(inner, Placeholder, 2)  # a hole of its own, filling the inner one
+    assert _taking_positional(1)(value=holed) is not None  # pyright: ignore[reportCallIssue]
+
+
+def test_partials_of_their_own_kind_are_read_by_python() -> None:
+    class Partial(partial):  # pyright: ignore[reportMissingTypeArgument, reportUntypedBaseClass]
+        pass
+
+    def pair(first: int, second: int, /) -> None: ...
+
+    value: Any = Partial(pair, 1)
+    assert _taking_positional(1)(value=value) is not None  # pyright: ignore[reportCallIssue]
+    with pytest.raises(ValidationError):
+        _taking_positional(2)(value=value)  # pyright: ignore[reportCallIssue]
+
+
+# --- what is read of callables is kept by what tells it, never by what looks alike -----------
+
+
+class _Compiled(weakref.ref):  # pyright: ignore[reportMissingTypeArgument]
+    # a callable of C telling its own code, as a function compiled by Cython does - every one of
+    # its kind called through the same __call__ of C, each one taking its own parameters
+    __slots__ = ("__annotations__", "__code__", "__defaults__", "__kwdefaults__", "__name__")
+
+
+class _Referred:
+    pass
+
+
+_REFERRED = _Referred()
+
+
+def _compiled(function: Callable[..., Any], /) -> Any:
+    compiled: Any = _Compiled(_REFERRED)
+    compiled.__code__ = function.__code__
+    compiled.__defaults__ = None
+    compiled.__kwdefaults__ = None
+    compiled.__name__ = function.__name__
+    compiled.__annotations__ = {}
+    return compiled
+
+
+def _one(first: int, /) -> None: ...
+
+
+def _two(first: int, second: int, /) -> None: ...
+
+
+@pytest.mark.parametrize("first", ["one", "two"])
+def test_compiled_functions_are_told_each_on_its_own(first: str) -> None:
+    one, two = _compiled(_one), _compiled(_two)
+    assert inspect.signature(one) != inspect.signature(two)
+    for value in (one, two) if first == "one" else (two, one):
+        if value is two:
+            assert _TakingTwo(function=value).function is value
+
+        else:
+            with pytest.raises(ValidationError):
+                _TakingTwo(function=value)
+
+
+@pytest.mark.parametrize("first", ["datetime", "date"])
+def test_builtins_bound_to_classes_are_told_by_their_class(first: str) -> None:
+    class Converting(State):
+        function: Callable[[float, datetime.tzinfo], datetime.date]
+
+    one: Any = datetime.date.fromtimestamp
+    two: Any = datetime.datetime.fromtimestamp
+    for value in (two, one) if first == "datetime" else (one, two):
+        if value is two:
+            assert Converting(function=value).function is value
+
+        else:
+            with pytest.raises(ValidationError):
+                Converting(function=value)
+
+
+def _corpus() -> list[Any]:
+    # callables Python reads the signatures of - of modules, of classes, of objects and of
+    # what wraps them - many sharing a name or a kind with another one
+    modules: list[Any] = [builtins, math, operator, itertools, functools, datetime, decimal]
+    classes: list[type[Any]] = [
+        value for module in modules for value in vars(module).values() if isinstance(value, type)
+    ]
+    instances: list[Any] = [
+        1,
+        True,
+        1.0,
+        "text",
+        b"bytes",
+        bytearray(b"bytes"),
+        [],
+        {},
+        set(),
+        frozenset(),
+        (),
+        datetime.datetime(2026, 1, 1),
+        datetime.date(2026, 1, 1),
+        datetime.timedelta(1),
+        decimal.Decimal(1),
+        collections.OrderedDict(),
+        collections.defaultdict(int),
+        collections.Counter(),
+        collections.deque(),
+    ]
+    corpus: list[Any] = [
+        value
+        for module in modules
+        for value in vars(module).values()
+        if isinstance(value, BuiltinFunctionType)
+    ]
+    corpus.extend(classes)
+    for holder in [*classes, *instances]:
+        for name in dir(holder):
+            try:
+                value: Any = getattr(holder, name)
+
+            except Exception:
+                continue
+
+            if callable(value) and not isinstance(value, type):
+                corpus.append(value)
+
+    corpus.extend(
+        [
+            operator.itemgetter(0),
+            operator.itemgetter(0, 1),
+            operator.methodcaller("strip"),
+            operator.attrgetter("real"),
+            functools.cache(_one),
+            functools.cache(_two),
+            functools.lru_cache(_one),
+            staticmethod(_one),
+            staticmethod(_two),
+            _compiled(_one),
+            _compiled(_two),
+            Mock(),
+            _Signed(inspect.Signature()),
+        ]
+    )
+    return corpus
+
+
+def test_what_is_read_once_is_what_is_read_each_time() -> None:
+    corpus: list[Any] = _corpus()
+    assert len(corpus) > 3000
+    for seed in range(3):
+        native._READ.clear()  # pyright: ignore[reportPrivateUsage]
+        shuffled: list[Any] = list(corpus)
+        random.Random(seed).shuffle(shuffled)
+        for value in shuffled:
+            native.parameters(value)
+
+        for value in shuffled:
+            assert native.parameters(value) == native._read(value), value  # pyright: ignore[reportPrivateUsage]

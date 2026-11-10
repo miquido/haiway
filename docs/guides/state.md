@@ -455,7 +455,28 @@ A few validation details matter in practice:
   Arguments left open - `...`, a `ParamSpec`, what follows `Concatenate[A, P]` or `*Ts` - are not
   checked, and neither are the types of arguments nor the result. Functions, bound methods, partials
   and objects with `__call__` are read natively; a callable without a signature to read, such as
-  some builtins, is accepted.
+  some builtins, is accepted. A partial is checked as the call it makes in the end: what it gives by
+  position and by name is left out, and each `functools.Placeholder` is an argument the caller gives
+  first, by position only.
+
+  ```python
+  from collections.abc import Callable
+  from functools import Placeholder, partial
+
+  from haiway import State
+
+
+  class Scaling(State):
+      scale: Callable[[float], float]
+
+
+  def multiply(value: float, factor: float, /) -> float:
+      return value * factor
+
+
+  Scaling(scale=partial(multiply, Placeholder, 2.0))  # accepted - called with the value
+  Scaling(scale=partial(multiply, 2.0, 3.0))  # refused - takes no more arguments
+  ```
 
 - Callable and protocol fields do not produce JSON Schema specifications.
 

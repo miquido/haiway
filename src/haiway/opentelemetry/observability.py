@@ -731,7 +731,7 @@ class _ObservabilityAdapter:
         *args: Any,
         exception: BaseException | None,
     ) -> None:
-        if level < self._level:
+        if not self.level_checking(scope, level):
             return  # skip low level
 
         store: ScopeStore | None = self._scopes.get(scope.scope_id)
@@ -761,7 +761,7 @@ class _ObservabilityAdapter:
         event: str,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        if level < self._level:
+        if not self.level_checking(scope, level):
             return  # skip low level
 
         store: ScopeStore | None = self._scopes.get(scope.scope_id)
@@ -786,7 +786,7 @@ class _ObservabilityAdapter:
         kind: ObservabilityMetricKind,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        if level < self._level:
+        if not self.level_checking(scope, level):
             return  # skip low level
 
         store: ScopeStore | None = self._scopes.get(scope.scope_id)
@@ -842,7 +842,7 @@ class _ObservabilityAdapter:
         level: ObservabilityLevel,
         attributes: Mapping[str, ObservabilityAttribute],
     ) -> None:
-        if level < self._level:
+        if not self.level_checking(scope, level):
             return  # skip low level
 
         if not attributes:

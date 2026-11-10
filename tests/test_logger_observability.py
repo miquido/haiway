@@ -7,7 +7,11 @@ from uuid import UUID, uuid4
 from pytest import LogCaptureFixture, fixture, mark, raises
 
 from haiway import LoggerObservability, Observability, ObservabilityLevel, ScopeKind, ctx
-from haiway.context import ObservabilityAttribute, ObservabilityMetricKind
+from haiway.context import (
+    ObservabilityAttribute,
+    ObservabilityLevelChecking,
+    ObservabilityMetricKind,
+)
 from haiway.context.identifier import ContextIdentifier
 
 
@@ -305,6 +309,7 @@ def _recording_observability(
     /,
     *,
     kept: bool | None,
+    checking: ObservabilityLevelChecking | None = None,
 ) -> Observability:
     def trace_identifying(scope: ContextIdentifier, /) -> UUID:
         return UUID(int=0)
@@ -368,7 +373,7 @@ def _recording_observability(
         attributes_recording=attributes_recording,
         scope_entering=scope_entering,
         scope_exiting=scope_exiting,
-        level_checking=None if kept is None else level_checking,
+        level_checking=checking or (None if kept is None else level_checking),
     )
 
 
@@ -419,21 +424,10 @@ async def test_recordings_are_passed_on_without_a_level_check() -> None:
 async def test_failing_level_check_falls_back_to_the_root_logger(
     caplog: LogCaptureFixture,
 ) -> None:
-    observability: Observability = _recording_observability([], kept=True)
-
     def failing(scope: ContextIdentifier, /, level: ObservabilityLevel) -> bool:
         raise RuntimeError("check failed")
 
-    broken = Observability(
-        trace_identifying=observability.trace_identifying,
-        log_recording=observability.log_recording,
-        event_recording=observability.event_recording,
-        metric_recording=observability.metric_recording,
-        attributes_recording=observability.attributes_recording,
-        scope_entering=observability.scope_entering,
-        scope_exiting=observability.scope_exiting,
-        level_checking=failing,
-    )
+    broken: Observability = _recording_observability([], kept=True, checking=failing)
     with caplog.at_level(DEBUG):
         async with ctx.scope("root", observability=broken):
             ctx.log_warning("still reported")

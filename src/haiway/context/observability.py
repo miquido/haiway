@@ -861,8 +861,7 @@ class ContextObservability:
             return
 
         try:
-            checking: ObservabilityLevelChecking | None = context.observability.level_checking
-            if checking is not None and not checking(context._scope, level):
+            if context._discards(level):
                 return  # skip passing on what would be discarded
 
             context.observability.log_recording(
@@ -905,8 +904,7 @@ class ContextObservability:
             return  # no observability out of context - nothing to record within
 
         try:  # catch exceptions - we don't want to blow up on observability
-            checking: ObservabilityLevelChecking | None = context.observability.level_checking
-            if checking is not None and not checking(context._scope, level):
+            if context._discards(level):
                 return  # skip passing on what would be discarded
 
             context.observability.event_recording(
@@ -944,8 +942,7 @@ class ContextObservability:
             return  # no observability out of context - nothing to record within
 
         try:  # catch exceptions - we don't want to blow up on observability
-            checking: ObservabilityLevelChecking | None = context.observability.level_checking
-            if checking is not None and not checking(context._scope, level):
+            if context._discards(level):
                 return  # skip passing on what would be discarded
 
             context.observability.metric_recording(
@@ -982,8 +979,7 @@ class ContextObservability:
             return  # no observability out of context - nothing to record within
 
         try:  # catch exceptions - we don't want to blow up on observability
-            checking: ObservabilityLevelChecking | None = context.observability.level_checking
-            if checking is not None and not checking(context._scope, level):
+            if context._discards(level):
                 return  # skip passing on what would be discarded
 
             context.observability.attributes_recording(
@@ -998,6 +994,15 @@ class ContextObservability:
                 "Failed to record attributes",
                 exception=exc,
             )
+
+    def _discards(
+        self,
+        level: ObservabilityLevel,
+        /,
+    ) -> bool:
+        # whether the observability tells it would discard what is recorded at the level
+        checking: ObservabilityLevelChecking | None = self.observability.level_checking
+        return checking is not None and not checking(self._scope, level)
 
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextObservability")
     __slots__ = (

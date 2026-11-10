@@ -9,6 +9,7 @@ from types import (
     BuiltinFunctionType,
     ClassMethodDescriptorType,
     MethodDescriptorType,
+    MethodType,
     MethodWrapperType,
     ModuleType,
     WrapperDescriptorType,
@@ -423,13 +424,16 @@ def validate(
 
 # how a function is called - the parameters it is told, whether others may follow, and how
 # the errors word it - the data of the spec of a function
-type SignatureDescription = tuple[tuple[tuple[str | None, int, bool], ...], bool, str]
+type SignatureDescription = tuple[SignatureParameters, bool, str]
+# the parameters of a callable, each (name, kind, defaulted) - the name of a positional only
+# one left out, as it is never given by name
+type SignatureParameters = tuple[tuple[str | None, int, bool], ...]
 
 
 def _parameters(
     parameters: Sequence[inspect.Parameter],
     /,
-) -> tuple[tuple[str | None, int, bool], ...]:
+) -> SignatureParameters:
     return tuple(
         (
             None if parameter.kind is parameter.POSITIONAL_ONLY else parameter.name,
@@ -459,52 +463,53 @@ def _signature_description(annotation: FunctionAttribute, /) -> SignatureDescrip
     return (_parameters(parameters), extensible, description)
 
 
-def accepts(
+def parameters(
     value: Any,
-    described: SignatureDescription,
     /,
-) -> bool:
+) -> SignatureParameters | None:
     """
-    Tell whether a callable which is not a plain function can be called the way described.
+    Read the parameters of a callable which is not a plain function.
+
+    The extension reads functions from their code, and leaves the rest - classes, builtins,
+    descriptors, objects called through a ``__call__`` which is not a function - to the
+    signature Python reads. What a partial gives is left by the extension in either case,
+    so ``value`` is what such a partial calls in the end.
 
     Parameters
     ----------
     value : Any
-        A callable - a class, a builtin, a descriptor or an object called through a ``__call__``
-        which is not a function.
-    described : SignatureDescription
-        The parameters the callable is called with, whether others may follow, and how the
-        errors word it.
+        A callable which is not a function written in Python.
 
     Returns
     -------
-    bool
-        ``False`` only when its signature proves it can't be called that way - a callable
-        without a signature to read is accepted.
+    SignatureParameters | None
+        Its parameters as ``(name, kind, defaulted)``, the name of a positional only one
+        left out - or ``None`` when it has no signature to read, which is never refused.
     """
-    found: tuple[_Answers, Any] | None = _answers(value)
+    found: tuple[_Read, Any] | None = _read_of(value)
     if found is None:
-        return _accepts(value, described)
+        return _read(value)
 
-    answers, name = found
-    with _ANSWERS_LOCK:
-        accepted: bool | None = answers.get((name, described))
+    read, name = found
+    with _READ_LOCK:
+        if name in read:
+            return read[name]
 
-    if accepted is None:
-        accepted = _accepts(value, described)
-        with _ANSWERS_LOCK:
-            answers[(name, described)] = accepted
+    known: SignatureParameters | None = _read(value)
+    with _READ_LOCK:
+        read[name] = known
 
-    return accepted
+    return known
 
 
-# what callables were told to take, by what owns their signature - a class, the type of
-# what a builtin is bound to, the type a descriptor is of, or the class of an object - as
-# reading a signature takes microseconds. Held weakly by that owner, so nothing is kept alive
-# by having been asked about
-type _Answers = dict[tuple[Any, SignatureDescription], bool]
-_ANSWERS: Final[WeakKeyDictionary[Any, _Answers]] = WeakKeyDictionary()
-_ANSWERS_LOCK: Final[Lock] = Lock()
+# what was read of callables, by what owns their signature - a class, a module, a class or an
+# object a builtin is bound to, the class a descriptor is of, what a wrapper wraps, the class of
+# an object called through a __call__ of C - as reading a signature takes microseconds. Held
+# weakly by that owner, so nothing is kept alive by having been read. A callable is held by an
+# owner only when the owner tells its signature - when it gives that very callable
+type _Read = dict[Any, SignatureParameters | None]
+_READ: Final[WeakKeyDictionary[Any, _Read]] = WeakKeyDictionary()
+_READ_LOCK: Final[Lock] = Lock()
 _DESCRIPTORS: Final[tuple[type[Any], ...]] = (
     MethodDescriptorType,
     WrapperDescriptorType,
@@ -521,56 +526,126 @@ def _owner(value: Any, /) -> tuple[Any, Any] | None:
         return _bound_owner(value)
 
     if isinstance(value, _DESCRIPTORS):
-        objclass: Any = value.__objclass__
-        return (objclass, ("descriptor", value.__name__))
+        return _descriptor_owner(value)
 
     return _object_owner(value)
 
 
 def _bound_owner(value: BuiltinFunctionType | MethodWrapperType, /) -> tuple[Any, Any] | None:
+    # a builtin is told by the attribute it was got of - a function of a module, a method
+    # of a class, or of the class of an object - only when that attribute gives it again
     bound: Any = value.__self__
-    if bound is None:
-        return None  # nothing to hold it by
+    name: str = value.__name__
+    owner: Any
+    found: Any
+    try:
+        match bound:
+            case None:
+                return None  # nothing to hold it by
 
-    owner: Any = bound if isinstance(bound, ModuleType) else bound.__class__
-    return (owner, ("bound", value.__name__))
+            case ModuleType():
+                owner = bound
+                found = bound.__dict__.get(name)
+
+            case type():
+                owner = bound
+                found = _got(_held(bound, name), None, bound)
+
+            case _:
+                owner = bound.__class__
+                found = _got(_held(owner, name), bound, owner)
+
+        if type(found) is not type(value) or found != value:
+            return None  # not what the owner gives - one of its own
+
+    except Exception:
+        return None  # an attribute which can't be got - nothing to tell it by
+
+    return (owner, ("bound", name))
+
+
+def _held(cls: type[Any], name: str, /) -> Any:
+    # what a class holds by the name, along the classes it is made of - without running what
+    # getting it would run
+    for base in cls.__mro__:
+        attribute: Any = base.__dict__.get(name, _ABSENT)
+        if attribute is not _ABSENT:
+            return attribute
+
+    return None
+
+
+_ABSENT: Final[object] = object()
+
+
+def _got(attribute: Any, instance: Any, owner: Any, /) -> Any:
+    # an attribute as getting it of an instance, or of the owner itself, gives it
+    kind: Any = attribute.__class__
+    getter: Any = getattr(kind, "__get__", None)
+    return attribute if getter is None else getter(attribute, instance, owner)
+
+
+def _descriptor_owner(
+    value: MethodDescriptorType | WrapperDescriptorType | ClassMethodDescriptorType,
+    /,
+) -> tuple[Any, Any] | None:
+    objclass: Any = value.__objclass__
+    if _held(objclass, value.__name__) is not value:
+        return None  # not what its class holds - one of its own
+
+    return (objclass, ("descriptor", value.__name__))
 
 
 def _object_owner(value: Any, /) -> tuple[Any, Any] | None:
     # read of the object itself rather than of its kind - told apart by what it is
-    kind: Any = value.__class__
-    namespace: Any = getattr(value, "__dict__", None)
-    if isinstance(value, partial) or (isinstance(namespace, dict) and "__signature__" in namespace):
+    if isinstance(value, partial) or getattr(value, "__signature__", None) is not None:
         return None  # a signature of its own, which may differ for every one of its kind
 
+    kind: Any = value.__class__
     if getattr(value, "__wrapped__", None) is not None:
-        try:  # a wrapper - a cached function, a static method - is called as what it wraps
-            return (inspect.unwrap(value), ("wrapped", kind))
+        try:  # a wrapper - a cached function, a static method - is read as what it wraps
+            wrapped: Any = inspect.unwrap(value, stop=_unwrapped)
 
         except ValueError:
             return None  # wrapping itself, without an end
 
-    if isinstance(kind.__call__, _DESCRIPTORS):
+        if wrapped is value:
+            return None  # read of itself after all
+
+        return (wrapped, ("wrapped", kind))
+
+    if (
+        isinstance(kind.__call__, _DESCRIPTORS)
+        and getattr(value, "__code__", None) is None
+        and getattr(value, "__text_signature__", None) is None
+    ):
         return (kind, ("called", None))  # called through a __call__ of C, the same for its kind
 
-    return None  # its own signature, which may differ for every one of its kind
+    # its own signature - a compiled function telling its own code, or a __call__ which may
+    # differ for every one of its kind
+    return None
 
 
-def _answers(value: Any, /) -> tuple[_Answers, Any] | None:
+def _unwrapped(value: Any, /) -> bool:
+    # where inspect stops unwrapping - its signature is read from there
+    return hasattr(value, "__signature__") or isinstance(value, MethodType)
+
+
+def _read_of(value: Any, /) -> tuple[_Read, Any] | None:
     owned: tuple[Any, Any] | None = _owner(value)
     if owned is None:
         return None
 
     owner, name = owned
     try:
-        with _ANSWERS_LOCK:
-            return (_ANSWERS.setdefault(owner, {}), name)
+        with _READ_LOCK:
+            return (_READ.setdefault(owner, {}), name)
 
     except TypeError:  # an owner which can't be referred to weakly
         return None
 
 
-def _accepts(value: Any, described: SignatureDescription, /) -> bool:
+def _read(value: Any, /) -> SignatureParameters | None:
     signature: inspect.Signature
     try:
         signature = inspect.signature(
@@ -579,14 +654,9 @@ def _accepts(value: Any, described: SignatureDescription, /) -> bool:
         )
 
     except TypeError, ValueError:
-        return True  # what can't be told is not refused
+        return None  # what can't be told is not refused
 
-    # compared the way the parameters of a function are - one rule for both
-    return nstruct.signature_fits(
-        _parameters(tuple(signature.parameters.values())),
-        described[0],
-        described[1],
-    )
+    return _parameters(tuple(signature.parameters.values()))
 
 
 def enum_values(
@@ -658,7 +728,7 @@ class ValidationHooks(Immutable):
     report: Callable[[str, Exception], Any]  # raises a failure with its position
     unexpected: Callable[[type[Any], Any], Any]  # refuses a key of a mapping
     describe: Callable[[Any], Description]  # the description of an annotation resolved late
-    accepts: Callable[[Any, Any], bool]  # whether a callable can be called the way described
+    parameters: Callable[[Any], SignatureParameters | None]  # read of what is not a function
     enum_values: Callable[[Any, bool], str]
     literal_values: Callable[[Sequence[Any]], str]
     b64decode: Callable[[str], bytes]
@@ -692,6 +762,7 @@ class TypeHooks(Immutable):
     pathlike: type[Any]
     meta: type[Any]
     partial: type[Any]  # functools.partial - what is unwrapped to the function it calls
+    placeholder: Any  # functools.Placeholder - a position of a partial given by the call
 
 
 def configure(
