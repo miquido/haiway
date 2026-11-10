@@ -170,10 +170,11 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         if self.finished:
             return  # already finished, ignore
 
+        reason: BaseException = exception if exception is not None else StopAsyncIteration()
         object.__setattr__(
             self,
             "_finish_reason",
-            exception if exception is not None else StopAsyncIteration(),
+            reason,
         )
 
         while self._pending:
@@ -193,13 +194,13 @@ class AsyncStream[Element](AsyncGenerator[Element]):
 
         if self._waiting is not None and not self._waiting.done():
             if get_running_loop() is not self._loop:
-                self._loop.call_soon_threadsafe(  # pyright: ignore[reportArgumentType]
+                self._loop.call_soon_threadsafe(
                     self._waiting.set_exception,
-                    self._finish_reason,
+                    reason,
                 )
 
             else:
-                self._waiting.set_exception(self._finish_reason)  # pyright: ignore[reportArgumentType]
+                self._waiting.set_exception(reason)
 
     def cancel(self) -> None:
         """
@@ -245,13 +246,14 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             return pending
 
         try:
+            waiting: Future[Element] = self._loop.create_future()
             object.__setattr__(
                 self,
                 "_waiting",
-                self._loop.create_future(),
+                waiting,
             )
             # and wait for the result
-            return await self._waiting  # pyright: ignore[reportUnknownVariableType, reportGeneralTypeIssues]
+            return await waiting
 
         except CancelledError:
             self.cancel()  # when consumer is cancelled, signal producers to stop waiting

@@ -6,12 +6,34 @@ from collections import abc as collections_abc
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from copy import copy
-from typing import Any, Final, NoReturn, TypeAliasType, final, get_args, get_origin, overload
+from typing import (
+    Any,
+    Final,
+    NoReturn,
+    Protocol,
+    Self,
+    TypeAliasType,
+    TypeIs,
+    final,
+    get_args,
+    get_origin,
+    overload,
+)
 
 from haiway.attributes.annotations import ObjectAttribute
 from haiway.types import Missing
 
 __all__ = ("AttributePath",)
+
+
+class _Replaceable(Protocol):
+    # `copy.replace` support - what State and Immutable implement
+    def __replace__(self, **changes: Any) -> Self: ...
+
+
+def _replaceable(value: object, /) -> TypeIs[_Replaceable]:
+    # what a runtime checkable protocol tells, without its far costlier check
+    return hasattr(value, "__replace__")
 
 
 class AttributePathComponent(ABC):
@@ -158,16 +180,12 @@ class PropertyAttributePathComponent(AttributePathComponent):
                 f"'{type(value).__name__}' instead of '{attribute.__name__}' for '{name}'"
             )
 
-            updated: Root
-            # python 3.13 introduces __replace__, we are already implementing it for our types
-            if hasattr(subject, "__replace__"):  # can't check full type here
-                updated = subject.__replace__(**{name: value})  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportAttributeAccessIssue]
+            if _replaceable(subject):
+                return subject.__replace__(**{name: value})
 
-            else:
-                updated = copy(subject)
-                setattr(updated, name, value)
-
-            return updated  # pyright: ignore[reportUnknownVariableType]
+            updated: Root = copy(subject)
+            setattr(updated, name, value)
+            return updated
 
         self._access: Callable[[Any], Any]
         object.__setattr__(
@@ -314,7 +332,7 @@ class SequenceItemAttributePathComponent(AttributePathComponent):
                 f"'{type(root).__name__}' instead of '{root.__name__}' for '{index}'"
             )
 
-            resolved: Any = subject.__getitem__(index)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+            resolved: Any = subject.__getitem__(index)
 
             assert isinstance(resolved, attribute_origin), (  # nosec: B101
                 f"AttributePath pointing to unexpected value of "
@@ -336,9 +354,9 @@ class SequenceItemAttributePathComponent(AttributePathComponent):
                 f"'{type(value).__name__}' instead of '{attribute.__name__}' for '{index}'"
             )
 
-            temp_list: list[Any] = list(subject)  # pyright: ignore[reportUnknownArgumentType]
+            temp_list: list[Any] = list(subject)
             temp_list[index] = value
-            return subject.__class__(temp_list)  # pyright: ignore[reportCallIssue, reportUnknownVariableType, reportUnknownMemberType]
+            return subject.__class__(temp_list)  # pyright: ignore[reportCallIssue]
 
         self._access: Callable[[Any], Any]
         object.__setattr__(
@@ -479,7 +497,7 @@ class MappingItemAttributePathComponent(AttributePathComponent):
                 f"'{type(root).__name__}' instead of '{root.__name__}' for '{key}'"
             )
 
-            resolved: Any = subject.__getitem__(key)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+            resolved: Any = subject.__getitem__(key)
 
             assert isinstance(resolved, attribute_origin), (  # nosec: B101
                 f"AttributePath pointing to unexpected value of "
@@ -501,9 +519,9 @@ class MappingItemAttributePathComponent(AttributePathComponent):
                 f"'{type(value).__name__}' instead of '{attribute.__name__}' for '{key}'"
             )
 
-            temp_dict: dict[Any, Any] = dict(subject)  # pyright: ignore[reportUnknownArgumentType]
+            temp_dict: dict[Any, Any] = dict(subject)
             temp_dict[key] = value
-            return subject.__class__(temp_dict)  # pyright: ignore[reportCallIssue, reportUnknownVariableType, reportUnknownMemberType]
+            return subject.__class__(temp_dict)  # pyright: ignore[reportCallIssue]
 
         self._access: Callable[[Any], Any]
         object.__setattr__(
@@ -1020,7 +1038,7 @@ def _extended_by_item(
                         *(
                             *path.__components__,
                             MappingItemAttributePathComponent(
-                                root=path.__attribute__,  # pyright: ignore[reportArgumentType]
+                                root=path.__attribute__,
                                 attribute=element_annotation,
                                 key=key,
                             ),
@@ -1048,7 +1066,7 @@ def _extended_by_item(
                         *(
                             *path.__components__,
                             SequenceItemAttributePathComponent(
-                                root=path.__attribute__,  # pyright: ignore[reportArgumentType]
+                                root=path.__attribute__,
                                 attribute=element_annotation,
                                 index=key,
                             ),
@@ -1062,7 +1080,7 @@ def _extended_by_item(
                         *(
                             *path.__components__,
                             SequenceItemAttributePathComponent(
-                                root=path.__attribute__,  # pyright: ignore[reportArgumentType]
+                                root=path.__attribute__,
                                 attribute=other[key],
                                 index=key,
                             ),
@@ -1084,7 +1102,7 @@ def _extended_by_item(
                         *(
                             *path.__components__,
                             SequenceItemAttributePathComponent(
-                                root=path.__attribute__,  # pyright: ignore[reportArgumentType]
+                                root=path.__attribute__,
                                 attribute=element_annotation,
                                 index=key,
                             ),

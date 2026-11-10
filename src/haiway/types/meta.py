@@ -5,6 +5,7 @@ from typing import Any, ClassVar, NoReturn, Self, TypeGuard, cast, final, overlo
 from uuid import UUID
 
 from haiway.types.basic import BasicValue, basic_value
+from haiway.types.guards import is_mapping
 from haiway.types.mapping_base import MapBase, plain_repr
 
 __all__ = (
@@ -754,7 +755,7 @@ class Meta(MapBase[str, BasicValue]):
         self,
         other: Any,
     ) -> Any:
-        if not isinstance(other, Mapping):
+        if not is_mapping(other):
             return NotImplemented
 
         return self.__class__(
@@ -762,7 +763,7 @@ class Meta(MapBase[str, BasicValue]):
                 **self,  # already validated
                 **{
                     _validated_meta_key(key): basic_value(value, strict=True)
-                    for key, value in other.items()  # pyright: ignore[reportUnknownVariableType]
+                    for key, value in other.items()
                 },
             }
         )
@@ -771,14 +772,14 @@ class Meta(MapBase[str, BasicValue]):
         self,
         other: Any,
     ) -> Any:
-        if not isinstance(other, Mapping):
+        if not is_mapping(other):
             return NotImplemented
 
         return self.__class__(
             {
                 **{
                     _validated_meta_key(key): basic_value(value, strict=True)
-                    for key, value in other.items()  # pyright: ignore[reportUnknownVariableType]
+                    for key, value in other.items()
                 },
                 **self,  # already validated
             }

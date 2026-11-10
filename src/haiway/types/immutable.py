@@ -88,10 +88,10 @@ class ImmutableMeta(nstruct.StructMeta):  # a class of the native storage - its 
             annotations=annotations,
             defaults=defaults,
         )
-        state_type.__match_args__ = tuple(state_type.__ATTRIBUTES__.keys())  # pyright: ignore[reportAttributeAccessIssue]
+        state_type.__match_args__ = tuple(state_type.__ATTRIBUTES__.keys())
         # the names this class stores - kept for what reads them, the values
         # themselves live inline in the instance, not in slots
-        state_type.__slots__ = slots  # pyright: ignore[reportConstantRedefinition]
+        state_type.__slots__ = slots
         _install(state_type, attributes=state_type.__ATTRIBUTES__, owned=slots)
 
         return state_type

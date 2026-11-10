@@ -293,6 +293,12 @@ class ScopeTaskGroup:
             context=copy_context(),
         )
 
+    @classmethod
+    def spawning(cls) -> bool:
+        # `False` only within a region refusing scoped tasks, outside of any scope
+        # tasks fall back to running in the background
+        return cls._context.get(True) is not None
+
     # `None` marks a region where spawning scoped tasks is not allowed
     _context: ClassVar[ContextVar[_ScopeTasks | None]] = ContextVar[_ScopeTasks | None](
         "ContextTaskGroup"

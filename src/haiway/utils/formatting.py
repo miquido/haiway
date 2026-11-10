@@ -4,6 +4,7 @@ from typing import Any, Final
 from uuid import UUID
 
 from haiway.types import Missing
+from haiway.types.guards import is_bytes_like, is_mapping, is_sequence, is_set
 
 __all__ = (
     "escape_controls",
@@ -170,24 +171,24 @@ def format_str(  # noqa: PLR0911 PLR0912 C901
     elif isinstance(value, int | float | complex):
         return str(value)
 
-    elif isinstance(value, bytes | bytearray | memoryview):
-        return f"<<<{len(value)} bytes>>>"  # pyright: ignore[reportUnknownArgumentType]
+    elif is_bytes_like(value):
+        return f"<<<{len(value)} bytes>>>"
 
-    elif isinstance(value, set | frozenset | Set):
+    elif is_set(value):
         return _set_str(
-            value,  # pyright: ignore[reportUnknownArgumentType]
+            value,
             indent=indent,
         )
 
-    elif isinstance(value, Mapping):
+    elif is_mapping(value):
         return _mapping_str(
-            value,  # pyright: ignore[reportUnknownArgumentType]
+            value,
             indent=indent,
         )
 
-    elif isinstance(value, Sequence):
+    elif is_sequence(value):
         return _sequence_str(
-            value,  # pyright: ignore[reportUnknownArgumentType]
+            value,
             indent=indent,
         )
 

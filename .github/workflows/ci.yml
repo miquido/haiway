@@ -41,8 +41,8 @@ jobs:
         run: uv run python -c "from haiway._native import nstruct; assert nstruct.Struct, 'not built'"
 
       - name: Lint
-        run: uv run ruff check --output-format=github ./src ./tests && uv run pyright
-          --project ./
+        run: uv run bandit -q -r ./src && uv run ruff check --output-format=github ./src ./tests
+          && uv run pyright --project ./
 
       - name: Docs Lint (non-Windows)
         if: runner.os != 'Windows'
@@ -82,3 +82,35 @@ jobs:
         run: make sanitize
         env:
           HAIWAY_FUZZ_ROUNDS: "40000"
+
+  # the extension still requires the GIL, but is written to run without it - the whole suite
+  # on the free-threaded build with the GIL kept off keeps it that way
+  free-threading:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.7"
+          python-version: "3.15t"
+
+      # grpcio, which the OpenTelemetry exporter needs, has no free-threaded wheel to
+      # install and does not build from source here - the bridge is pure Python, left out
+      # with its tests, and nothing syncs it back in afterwards
+      - name: Install
+        run: uv sync --all-groups --all-extras --frozen --no-install-package grpcio
+
+      - name: Native extension
+        run: uv run --frozen --no-sync --with setuptools python setup.py -q build_ext --inplace
+          --force
+
+      - name: Test without the GIL
+        run: uv run --frozen --no-sync python -B -m pytest -q -p no:cacheprovider
+          --ignore-glob='*opentelemetry*' ./tests
+        env:
+          PYTHON_GIL: "0"

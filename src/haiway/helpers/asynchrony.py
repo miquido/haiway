@@ -161,7 +161,6 @@ def _mimic_async[**Args, Result](
         "__type_params__",
         "__defaults__",
         "__kwdefaults__",
-        "__globals__",
     ):
         try:
             object.__setattr__(

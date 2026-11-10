@@ -187,6 +187,19 @@ async def test_updating_replaces_the_state_within_its_block_only() -> None:
 
 
 @pytest.mark.asyncio
+async def test_updating_merges_into_the_state_current_when_entered() -> None:
+    async with ctx.scope("test", Settings(name="outer")):
+        updating = ctx.updating(Counter(count=2))  # made here, entered below
+        async with ctx.scope("inner", Settings(name="inner")):
+            with updating:
+                assert ctx.state(Counter).count == 2
+                assert ctx.state(Settings).name == "inner"  # not the state it was made in
+
+            with updating:  # entered again once left
+                assert ctx.state(Settings).name == "inner"
+
+
+@pytest.mark.asyncio
 async def test_a_nested_scope_overrides_without_leaking_out() -> None:
     async with ctx.scope("outer", Settings(name="outer"), Counter(count=1)):
         async with ctx.scope("inner", Settings(name="inner")):

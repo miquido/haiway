@@ -312,7 +312,7 @@ def _worked_out_variances(
     # a class which is not declared yet has no annotations to read the use of a
     # parameter from - what is worked out then is not kept
     if hasattr(cls, "__ANNOTATED__"):
-        cls.__VARIANCES__ = variances  # pyright: ignore[reportAttributeAccessIssue]
+        cls.__VARIANCES__ = variances
 
     return variances
 

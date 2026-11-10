@@ -130,6 +130,23 @@ sanitize: uv_check
 	uv run --frozen --with setuptools python setup.py -q build_ext --inplace --force; \
 	exit $$status
 
+# Measure the line coverage of the native extension by the tests, then rebuild it the usual way.
+# The annotated sources (`#####` marks a line never run) are left in build/coverage. Pass ARGS for
+# pytest i.e. make coverage-native ARGS="tests/test_state.py".
+coverage-native: uv_check
+	@echo '# Measuring the coverage of the native extension...'
+	@rm -rf build/coverage && mkdir -p build/coverage; \
+	find build -name '_nstruct.gc*' -delete 2>/dev/null; \
+	CFLAGS="--coverage -O0" LDFLAGS="--coverage" uv run --frozen --with setuptools python setup.py -q build_ext --inplace --force; \
+	status=0; uv run --frozen python -B -m pytest -q -p no:cacheprovider $(ARGS) || status=$$?; \
+	objects="$$(dirname "$$(find build -name '_nstruct.gcno' | head -n 1)")"; \
+	gcov -o "$$objects" src/haiway/_native/_nstruct.c \
+		| grep -A1 "File 'src/haiway/_native/" | grep -v '^--' | paste - - \
+		| sed -E "s/File 'src\/haiway\/_native\/([^']+)'.*executed:([0-9.]+%) of ([0-9]+)/\2 of \3 \1/"; \
+	mv ./*.gcov build/coverage/; \
+	uv run --frozen --with setuptools python setup.py -q build_ext --inplace --force; \
+	exit $$status
+
 # Measure the performance of State operations, pass ARGS for the options of the script i.e.
 # make benchmark ARGS="--json before.json" or make benchmark ARGS="--compare before.json".
 benchmark:

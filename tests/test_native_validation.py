@@ -629,3 +629,22 @@ def test_objects_are_called_the_way_their_class_tells(value: Any, accepted: bool
         else:
             with pytest.raises(ValidationError):
                 holder(value=value)  # pyright: ignore[reportCallIssue]
+
+
+def test_validation_from_a_mapping_reads_a_snapshot_of_it() -> None:
+    given: dict[str, Any] = {}
+
+    def mutating(value: Any) -> Any:
+        given["second"] = 2  # a validator changing the mapping being validated
+        given["extra"] = True
+        return value
+
+    class Snapshotted(State):
+        first: Annotated[int, Validator(mutating)]
+        second: int = 0
+
+    given.update(first=1)
+    snapshotted: Snapshotted = Snapshotted.from_mapping(given)
+    # the later field is read from the mapping as it was given, the extra key is unseen
+    assert snapshotted.first == 1
+    assert snapshotted.second == 0

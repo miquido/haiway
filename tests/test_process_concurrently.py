@@ -1,6 +1,9 @@
-from asyncio import CancelledError, Event, current_task, sleep, timeout
+from asyncio import CancelledError, Event, Task, current_task, sleep, timeout
 from collections import deque
 from collections.abc import AsyncGenerator, Iterable
+from gc import collect
+from typing import Any
+from weakref import ref
 
 from pytest import mark, raises
 
@@ -326,3 +329,26 @@ async def test_raises_handler_error_while_awaiting_a_slow_source():
     # handler error has to surface instead of that cancellation or an exception group
     with raises(FakeException, match="handler failed"):
         await process_concurrently(slow_source(), handler, concurrent_tasks=4)
+
+
+@mark.asyncio
+async def test_releases_completed_tasks_while_processing():
+    finished: list[ref[Task[Any]]] = []
+    remaining_alive: list[int] = []
+
+    async def handler(element: int) -> None:
+        task: Task[Any] | None = current_task()
+        assert task is not None
+        finished.append(ref(task))
+
+    async def source() -> AsyncGenerator[int]:
+        for element in range(20):
+            yield element
+
+        await sleep(0)  # let the done callbacks of the last tasks run
+        collect()
+        remaining_alive.append(sum(1 for task in finished[:-2] if task() is not None))
+
+    await process_concurrently(source(), handler, concurrent_tasks=2)
+    # completed tasks are not kept until the whole source is processed
+    assert remaining_alive == [0]

@@ -105,6 +105,7 @@ reportMissingImports = true
 reportMissingTypeStubs = false
 useLibraryCodeForTypes = true
 typeCheckingMode = "strict"
+reportUnnecessaryTypeIgnoreComment = "error"
 
 [tool.pyrefly]
 project_includes = ["./src"]

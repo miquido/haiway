@@ -9,6 +9,7 @@ import pytest
 
 from haiway import Missing, State, Validator
 from haiway.attributes.validation import ValidationError
+from haiway.types.basic import basic_key
 
 
 class Mode(enum.StrEnum):
@@ -202,3 +203,87 @@ def test_optional_sequence_with_a_cached_none_default_still_coerces_input() -> N
 
     assert Shared().items is None
     assert Shared(items=[1, 2]).items == (1, 2)  # coerced to an immutable tuple, as in Python
+
+
+INT_KEYS: tuple[int, ...] = (0, 1, -1, 2**63 - 1, -(2**63), 2**64, -(2**100))
+
+
+class _IntKeyed(State):
+    values: dict[int, int]
+
+
+@pytest.mark.parametrize("key", INT_KEYS)
+def test_int_keys_are_spelled_as_basic_key_spells_them(key: int) -> None:
+    # the native spelling of an int key is the one basic_key gives
+    assert _IntKeyed(values={key: 1}).to_basic_object() == {"values": {basic_key(key): 1}}
+
+
+class _Color(enum.StrEnum):
+    RED = "red"
+    GREEN = "green"
+
+
+class _Level(enum.IntEnum):
+    LOW = 1
+    HIGH = 2
+
+
+class _Lenient(enum.StrEnum):
+    KNOWN = "known"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        return cls.KNOWN if isinstance(value, str) and value.upper() == "KNOWN" else None
+
+
+class _Enums(State):
+    color: _Color
+    level: _Level
+    lenient: _Lenient
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ({"color": "red", "level": 2, "lenient": "known"}, (_Color.RED, _Level.HIGH)),
+        ({"color": "GREEN", "level": "LOW", "lenient": "KNOWN"}, (_Color.GREEN, _Level.LOW)),
+        ({"color": _Color.RED, "level": "2", "lenient": "known"}, (_Color.RED, _Level.HIGH)),
+    ],
+)
+def test_enum_members_by_value_name_and_missing(
+    given: dict[str, Any],
+    expected: tuple[_Color, _Level],
+) -> None:
+    enums: _Enums = _Enums.from_mapping(given)
+    assert (enums.color, enums.level) == expected
+    assert enums.color is expected[0]
+    assert enums.lenient is _Lenient.KNOWN  # _missing_ still decides a value not found
+
+
+@pytest.mark.parametrize(
+    "given",
+    [
+        {"color": "blue", "level": 1, "lenient": "known"},
+        {"color": "red", "level": 3, "lenient": "known"},
+        {"color": "red", "level": 1, "lenient": "other"},
+    ],
+)
+def test_enum_rejects_unknown_values(given: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        _Enums.from_mapping(given)
+
+
+class _Inner(State):
+    value: int
+
+
+class _Outer(State):
+    inner: _Inner | None
+    items: tuple[_Inner, ...] = ()
+
+
+def test_states_from_dicts_through_unions_and_sequences() -> None:
+    outer: _Outer = _Outer.from_mapping({"inner": {"value": 1}, "items": [{"value": 2}]})
+    assert outer.inner == _Inner(value=1)
+    assert outer.items == (_Inner(value=2),)
+    assert _Outer.from_mapping({"inner": None}).inner is None

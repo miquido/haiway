@@ -3307,22 +3307,21 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
         # `Alias(...)` annotation, which would leave an annotated recursive use
         # unmatched here and unresolved by the time it is validated against
         if attribute.type_alias == alias_name and attribute.module == alias_module:
-            if attribute._resolved is None:  # pyright: ignore[reportPrivateUsage]
+            if not attribute.is_resolved:
                 attribute.resolve(alias_target)
 
-            resolved: AttributeAnnotation | None = attribute._resolved  # pyright: ignore[reportPrivateUsage]
-            if resolved is not None:
+            if attribute.is_resolved:
                 _finalize_alias_resolution(
-                    resolved,
+                    attribute.resolved,
                     alias_name=alias_name,
                     alias_module=alias_module,
                     alias_target=alias_target,
                     visited=visited,
                 )
 
-        elif attribute._resolved is not None:  # pyright: ignore[reportPrivateUsage]
+        elif attribute.is_resolved:
             _finalize_alias_resolution(
-                attribute._resolved,  # pyright: ignore[reportPrivateUsage]
+                attribute.resolved,
                 alias_name=alias_name,
                 alias_module=alias_module,
                 alias_target=alias_target,
@@ -3556,9 +3555,7 @@ def _resolve_generic_alias(  # noqa: PLR0911
             recursion_guard=recursion_guard,
         )
 
-    resolved_origin: Any = origin_type.__class_getitem__(  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-        tuple(resolved_arguments_of_alias)
-    )
+    resolved_origin: Any = origin_type.__class_getitem__(tuple(resolved_arguments_of_alias))
 
     # if we have resolved it use what we got
     if not isinstance(resolved_origin, types.GenericAlias | typing._GenericAlias):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]

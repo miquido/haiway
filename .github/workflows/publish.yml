@@ -30,8 +30,8 @@ jobs:
         run: uv sync --all-groups --all-extras --frozen
 
       - name: Lint
-        run: uv run ruff check --output-format=github ./src ./tests && uv run pyright
-          --project ./
+        run: uv run bandit -q -r ./src && uv run ruff check --output-format=github ./src ./tests
+          && uv run pyright --project ./
 
       - name: Test
         run: uv run pytest --rootdir= ./tests --doctest-modules

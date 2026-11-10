@@ -348,3 +348,107 @@ async def test_spawned_tasks_are_joined_before_disposables_are_released() -> Non
 
     assert task_completed is True
     assert completed_before_release is True
+
+
+@mark.asyncio
+async def test_cancelled_again_during_cleanup_waits_for_disposal() -> None:
+    entered: Event = Event()
+    disposing: Event = Event()
+    released: Event = Event()
+    disposed: Event = Event()
+
+    class FastDisposable:
+        async def __aenter__(self) -> Any:
+            entered.set()
+            return ExampleState(value="prepared")
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            disposing.set()
+            await released.wait()  # cleanup still running when cancelled again
+            disposed.set()
+
+    class SlowDisposable:
+        async def __aenter__(self) -> Any:
+            await sleep(0.01)
+            return ExampleState(value="slow")
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            pass
+
+    async def entering() -> None:
+        async with ctx.scope("test", disposables=(FastDisposable(), SlowDisposable())):
+            pass  # pragma: no cover
+
+    task = ensure_future(entering())
+    await entered.wait()
+    task.cancel()
+    await disposing.wait()
+    task.cancel()  # delivered again while the abandoned preparation is disposed
+    await sleep(0)
+    await sleep(0)
+    # the scope is left only once its disposal completed
+    assert not task.done()
+    released.set()
+    with raises(CancelledError):
+        await task
+
+    assert disposed.is_set()
+
+
+@mark.asyncio
+async def test_cancelled_again_during_failed_preparation_cleanup_waits() -> None:
+    disposing: Event = Event()
+    released: Event = Event()
+    disposed: Event = Event()
+
+    class PreparedDisposable:
+        async def __aenter__(self) -> Any:
+            return ExampleState(value="prepared")
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            disposing.set()
+            await released.wait()
+            disposed.set()
+
+    class FailingDisposable:
+        async def __aenter__(self) -> Any:
+            raise RuntimeError("preparation failed")
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            pass  # pragma: no cover
+
+    async def entering() -> None:
+        async with ctx.scope("test", disposables=(PreparedDisposable(), FailingDisposable())):
+            pass  # pragma: no cover
+
+    task = ensure_future(entering())
+    await disposing.wait()
+    task.cancel()  # delivered while the prepared part is disposed
+    await sleep(0)
+    await sleep(0)
+    assert not task.done()  # still waiting for the disposal
+    released.set()
+    with raises(CancelledError):
+        await task
+
+    assert disposed.is_set()

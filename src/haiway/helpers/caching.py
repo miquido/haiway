@@ -9,6 +9,7 @@ from time import monotonic
 from typing import NamedTuple, Protocol, overload
 
 from haiway.context.access import ctx
+from haiway.context.tasks import ScopeTaskGroup
 
 __all__ = (
     "CacheClear",
@@ -170,6 +171,8 @@ def cache[**Args, Result](
     -----
     - Only coroutine functions are supported; synchronous functions will trigger an assertion.
     - The default cache keeps state per decorated function and is not thread-safe.
+    - Concurrent calls missing the same entry are not merged - each runs the function and
+      the last one to complete is kept.
     - For custom cache backends (e.g., Redis), use :func:`cache_externally`.
 
     Examples
@@ -309,7 +312,8 @@ def cache_externally[**Args, Result, Key: Hashable](
 
     Provide async callables that implement your cache behaviour. The decorator returns
     a wrapper that preserves the original coroutine signature, reads through the backend
-    before executing, and schedules writes via ``ctx.spawn`` to avoid blocking callers.
+    before executing, and schedules writes via ``ctx.spawn`` to avoid blocking callers -
+    except where scoped tasks can't be spawned, see Notes.
 
     Parameters
     ----------
@@ -319,7 +323,7 @@ def cache_externally[**Args, Result, Key: Hashable](
         Async callable that fetches cached values. Return ``None`` to signal a miss.
     write : CacheWrite[Key, Result]
         Async callable that persists values. Invoked in the background via ``ctx.spawn`` after the
-        coroutine body resolves.
+        coroutine body resolves, or awaited before returning where spawning is refused.
     clear : CacheClear[Key] | None
         Optional async callable invoked by ``clear_cache`` to evict entries. Omit to disable
         invalidation.
@@ -333,6 +337,8 @@ def cache_externally[**Args, Result, Key: Hashable](
     -----
     - Only coroutine functions are supported; synchronous callables raise an assertion.
     - Writes are detached tasks; ensure your context stays alive so persistence can finish.
+    - While the disposables of a scope are prepared or disposed, scoped tasks can't be
+      spawned - a write is then awaited in place, and its latency adds to the call.
     """
 
     def _wrap(
@@ -405,11 +411,18 @@ class _ExternalCache[**Args, Result, Key: Hashable]:
         entry: Result | None = await self._read(key)
         if entry is None:
             result: Result = await self._function(*args, **kwargs)
-            ctx.spawn(  # write the value asynchronously
-                self._writing,
-                key=key,
-                value=result,
-            )
+            if ScopeTaskGroup.spawning():
+                ctx.spawn(  # write the value asynchronously
+                    self._writing,
+                    key=key,
+                    value=result,
+                )
+
+            else:  # scoped tasks are refused here, write in place instead
+                await self._writing(
+                    key=key,
+                    value=result,
+                )
 
             return result
 

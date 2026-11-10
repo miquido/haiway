@@ -185,6 +185,35 @@ write_struct_json(Buffer *buffer, PyObject *self)
     return buffer_putc(buffer, '}') ? JSON_OK : JSON_ERROR;
 }
 
+/* the digits of an int - what `int.__repr__` spells */
+static int
+write_int(Buffer *buffer, PyObject *value)
+{
+    int overflow = 0;
+    long long number = PyLong_AsLongLongAndOverflow(value, &overflow);
+    if (!overflow && !(number == -1 && PyErr_Occurred())) {
+        char digits[24];
+        char *end = digits + sizeof(digits);
+        char *at = end;
+        unsigned long long magnitude = number < 0 ? 0ULL - (unsigned long long)number : (unsigned long long)number;
+        do {
+            *--at = (char)('0' + magnitude % 10);
+            magnitude /= 10;
+        } while (magnitude != 0);
+        if (number < 0) *--at = '-';
+        return buffer_put(buffer, at, end - at) ? JSON_OK : JSON_ERROR;
+    }
+    PyErr_Clear();
+    return write_text_of(buffer, PyLong_Type.tp_repr(value));
+}
+
+/* an int key - quoted, as the standard library spells it */
+static int
+write_quoted_int(Buffer *buffer, PyObject *key)
+{
+    return buffer_putc(buffer, '"') && write_int(buffer, key) == JSON_OK && buffer_putc(buffer, '"');
+}
+
 static int
 write_json_unbounded(Buffer *buffer, PyObject *value)
 {
@@ -192,25 +221,7 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
     if (value == Py_None) return buffer_put(buffer, "null", 4) ? JSON_OK : JSON_ERROR;
     if (value == Py_True) return buffer_put(buffer, "true", 4) ? JSON_OK : JSON_ERROR;
     if (value == Py_False) return buffer_put(buffer, "false", 5) ? JSON_OK : JSON_ERROR;
-    if (PyLong_Check(value)) {
-        /* an enum of ints is written as the int it is */
-        int overflow = 0;
-        long long number = PyLong_AsLongLongAndOverflow(value, &overflow);
-        if (!overflow && !(number == -1 && PyErr_Occurred())) {
-            char digits[24];
-            char *end = digits + sizeof(digits);
-            char *at = end;
-            unsigned long long magnitude = number < 0 ? 0ULL - (unsigned long long)number : (unsigned long long)number;
-            do {
-                *--at = (char)('0' + magnitude % 10);
-                magnitude /= 10;
-            } while (magnitude != 0);
-            if (number < 0) *--at = '-';
-            return buffer_put(buffer, at, end - at) ? JSON_OK : JSON_ERROR;
-        }
-        PyErr_Clear();
-        return write_text_of(buffer, PyLong_Type.tp_repr(value));
-    }
+    if (PyLong_Check(value)) return write_int(buffer, value);  /* an enum of ints as the int it is */
     if (PyFloat_Check(value)) {
         double number = PyFloat_AS_DOUBLE(value);
         if (isnan(number)) return buffer_put(buffer, "NaN", 3) ? JSON_OK : JSON_ERROR;
@@ -251,12 +262,14 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
         Py_ssize_t position = 0;
         int first = 1;
         while (status == JSON_OK && PyDict_Next(source, &position, &key, &item)) {
-            if (!PyUnicode_Check(key)) {
+            int text = PyUnicode_Check(key);
+            if (!text && !PyLong_CheckExact(key)) {
                 status = JSON_BAIL;  /* spelled as a key by the standard library */
                 break;
             }
             if (!first && !buffer_put(buffer, ", ", 2)) status = JSON_ERROR;
-            else if (!write_string(buffer, key) || !buffer_put(buffer, ": ", 2)) status = JSON_ERROR;
+            else if (text ? !write_string(buffer, key) : !write_quoted_int(buffer, key)) status = JSON_ERROR;
+            else if (!buffer_put(buffer, ": ", 2)) status = JSON_ERROR;
             else status = write_json(buffer, item);
             first = 0;
         }
