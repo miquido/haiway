@@ -1,9 +1,9 @@
 """Utilities for working with immutable mapping-like objects."""
 
 import json
-from collections.abc import Mapping
 from typing import Any, NoReturn, Self, final
 
+from haiway.types.guards import is_mapping
 from haiway.types.mapping_base import MapBase, plain_repr
 
 __all__ = ("Map",)
@@ -174,19 +174,19 @@ class Map[Key, Element](MapBase[Key, Element]):
         self,
         other: Any,
     ) -> Any:
-        if not isinstance(other, Mapping):
+        if not is_mapping(other):
             return NotImplemented
 
-        return self.__class__({**self, **other})  # pyright: ignore[reportUnknownArgumentType]
+        return self.__class__({**self, **other})
 
     def __ror__(
         self,
         other: Any,
     ) -> Any:
-        if not isinstance(other, Mapping):
+        if not is_mapping(other):
             return NotImplemented
 
-        return self.__class__({**other, **self})  # pyright: ignore[reportUnknownArgumentType]
+        return self.__class__({**other, **self})
 
     def __ior__(
         self,

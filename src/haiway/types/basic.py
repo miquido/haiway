@@ -1,11 +1,12 @@
 import base64
 import re
-from collections.abc import Generator, Iterable, Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from haiway.types.guards import is_bytes_like, is_iterable, is_mapping
 from haiway.types.map import Map
 
 __all__ = (
@@ -124,9 +125,9 @@ def basic_value(  # noqa: C901, PLR0911
         return value
 
     # before the iterable branch - `bytes` is a sequence of ints
-    if isinstance(value, bytes | bytearray | memoryview):
+    if is_bytes_like(value):
         # base64, the spelling `BytesAttribute` validation reads back
-        return base64.b64encode(value).decode("utf-8")  # pyright: ignore[reportUnknownArgumentType]
+        return base64.b64encode(value).decode("utf-8")
 
     if isinstance(value, UUID):
         return str(value)
@@ -141,21 +142,21 @@ def basic_value(  # noqa: C901, PLR0911
     if isinstance(value, Path):
         return value.as_posix()
 
-    if isinstance(value, Mapping):
+    if is_mapping(value):
         return basic_object(
-            value,  # pyright: ignore[reportUnknownArgumentType]
+            value,
             strict=strict,
             path=path,
         )
 
-    if isinstance(value, Iterable):
+    if is_iterable(value):
         return tuple(
             basic_value(
-                element,  # pyright: ignore[reportUnknownArgumentType]
+                element,
                 strict=strict,
                 path=(*path, f"[{index}]"),
             )
-            for index, element in enumerate(value)  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+            for index, element in enumerate(value)
         )
 
     if strict:

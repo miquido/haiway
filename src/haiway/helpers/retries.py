@@ -197,9 +197,9 @@ def _wrap_sync[**Args, Result](
                 if attempt < limit and catching(exc):
                     attempt += 1
                     ctx.log_error(
-                        "Attempting to retry %s which failed due to an error: %s",
+                        "Attempting to retry %s which failed due to an error",
                         function.__name__,
-                        exc,
+                        exception=exc,
                     )
 
                     match delay:
@@ -210,7 +210,7 @@ def _wrap_sync[**Args, Result](
                             sleep_sync(float(strict))
 
                         case make_delay:
-                            sleep_sync(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
+                            sleep_sync(make_delay(attempt, exc))
 
                 else:
                     raise
@@ -256,7 +256,7 @@ def _wrap_async[**Args, Result](
                             await sleep(float(strict))
 
                         case make_delay:
-                            await sleep(make_delay(attempt, exc))  # pyright: ignore[reportCallIssue, reportUnknownArgumentType]
+                            await sleep(make_delay(attempt, exc))
 
                 else:
                     raise

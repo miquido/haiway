@@ -289,10 +289,13 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
     PyTypeObject *type = (PyTypeObject *)cls;
     CompiledPlan *plan = PLAN_OF(type);
 
+    /* a snapshot - validators run user code, which could change the caller's dictionary
+     * between the fields read from it. a frozendict too, the calls below read a dictionary */
     PyObject *kwargs;
     if (PyDict_CheckExact(mapping)) {
-        kwargs = Py_NewRef(mapping);
-    } else {  /* a frozendict too - the dictionary calls below read a dictionary alone */
+        kwargs = PyDict_Copy(mapping);
+        if (kwargs == NULL) return NULL;
+    } else {
         kwargs = PyDict_New();
         if (kwargs == NULL || PyDict_Update(kwargs, mapping) < 0) {
             Py_XDECREF(kwargs);
@@ -354,11 +357,16 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
 static PyObject *
 struct_validate_value(ModuleState *state, PyObject *cls, PyObject *value)
 {
+    if (Py_IS_TYPE(value, (PyTypeObject *)cls)) return Py_NewRef(value);  /* what isinstance tells first */
+    /* a dictionary is never an instance - the layout check refuses a dictionary base - and
+     * it is the usual input, so the check of the class, a call into Python, is skipped */
+    if (PyAnyDict_Check(value)) return instance_from_mapping(state, cls, value);
+
     int matching = PyObject_IsInstance(value, cls);
     if (matching < 0) return NULL;
     if (matching) return Py_NewRef(value);
 
-    int mapping = PyAnyDict_Check(value) ? 1 : PyObject_IsInstance(value, state->mapping);
+    int mapping = PyObject_IsInstance(value, state->mapping);
     if (mapping < 0) return NULL;
     if (mapping) return instance_from_mapping(state, cls, value);
 

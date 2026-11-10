@@ -70,6 +70,7 @@ from haiway.types import (
     TypeSpecification,
 )
 from haiway.types.basic import basic_key, basic_value, parse_duration
+from haiway.types.guards import is_iterable, is_mapping
 from haiway.types.immutable import attribute_names, namespace_annotations
 
 __all__ = ("State",)
@@ -229,7 +230,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         # `__origin__` and `__args__` reach a subclass of one through inheritance,
         # which would otherwise make it interchangeable with each of its siblings
         cls.__SPECIALIZED__ = bool(type_parameters)  # pyright: ignore[reportConstantRedefinition]
-        cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportAttributeAccessIssue]
+        cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportAttributeAccessIssue]
 
         if not any(isinstance(base, StateMeta) for base in bases):
             # the base class - no fields specified
@@ -240,13 +241,13 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
                 "required": [],
                 "additionalProperties": False,
             }
-            cls.__FIELDS__ = ()  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
+            cls.__FIELDS__ = ()  # pyright: ignore[reportConstantRedefinition]
             native.install(cls, (), ())
 
             cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
             cls.__ALIASES__ = {}  # pyright: ignore[reportConstantRedefinition]
             cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
-            cls.__match_args__ = ()  # pyright: ignore[reportAttributeAccessIssue]
+            cls.__match_args__ = ()
 
             return cls  # early exit - base class
 
@@ -280,7 +281,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         )
 
         if specification is not None:  # it is technically not serializable otherwise
-            cls.__SPECIFICATION__ = specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
+            cls.__SPECIFICATION__ = specification  # pyright: ignore[reportConstantRedefinition]
             cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
 
         elif serializable:
@@ -301,14 +302,12 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         }
         # every field, unlike `__slots__` which holds the names declared here - a
         # specialized generic declares none of them and matches all of them
-        cls.__match_args__ = tuple(  # pyright: ignore[reportAttributeAccessIssue]
-            field.name for field in fields
-        )
+        cls.__match_args__ = tuple(field.name for field in fields)
 
         return cls
 
     @property
-    def __signature__(cls) -> inspect.Signature:  # pyright: ignore[reportIncompatibleVariableOverride]
+    def __signature__(cls) -> inspect.Signature:
         # what `inspect.signature` reads - the constructor itself takes `**kwargs`,
         # which tells a tool nothing about the attributes it accepts
         return inspect.Signature(
@@ -339,7 +338,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         if type(instance) is cast(Any, self):
             return True
 
-        if not self.__subclasscheck__(type(instance)):  # pyright: ignore[reportUnknownArgumentType]
+        if not self.__subclasscheck__(cast(type[Any], type(instance))):  # a type, always
             return False
 
         return all(
@@ -364,7 +363,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         if getattr(subclass, "__SPECIALIZED__", False):
             # both are specializations - only the arguments of the same generic
             # can be compared, they are positional
-            if subclass.__origin__ is not self_origin:  # pyright: ignore[reportAttributeAccessIssue]
+            if subclass.__origin__ is not self_origin:
                 return False
 
         # otherwise it matches whatever the origin matches, narrowed down by the
@@ -1378,11 +1377,11 @@ def _basic_mapping(  # noqa: PLR0911
     elif is_dataclass(value) and not isinstance(value, type):
         return Map(_basic_fields(value, strict=strict, path=path))
 
-    elif isinstance(value, Mapping):
-        return Map(_basic_items(value, strict=strict, path=path))  # pyright: ignore[reportUnknownArgumentType]
+    elif is_mapping(value):
+        return Map(_basic_items(value, strict=strict, path=path))
 
-    elif isinstance(value, Iterable):
-        return tuple(_basic_elements(value, strict=strict, path=path))  # pyright: ignore[reportUnknownArgumentType]
+    elif is_iterable(value):
+        return tuple(_basic_elements(value, strict=strict, path=path))
 
     else:
         # the duck-typed `to_mapping` `_recursive_mapping` honors - only in the
@@ -1395,10 +1394,10 @@ def _basic_mapping(  # noqa: PLR0911
             to_mapping: Any = getattr(value, "to_mapping", None)
             if callable(to_mapping):
                 converted: Any = to_mapping()
-                if isinstance(converted, Mapping):
+                if is_mapping(converted):
                     return Map(
                         _basic_items(
-                            converted,  # pyright: ignore[reportUnknownArgumentType]
+                            converted,
                             strict=strict,
                             path=path,
                         )
@@ -1479,11 +1478,11 @@ def _recursive_mapping(  # noqa: PLR0911
             for field in dataclass_fields(value)
         }
 
-    elif isinstance(value, Mapping):
-        return {key: _recursive_mapping(element) for key, element in value.items()}  # pyright: ignore[reportUnknownVariableType]
+    elif is_mapping(value):
+        return {key: _recursive_mapping(element) for key, element in value.items()}
 
-    elif isinstance(value, Iterable):
-        return [_recursive_mapping(element) for element in value]  # pyright: ignore[reportUnknownVariableType]
+    elif is_iterable(value):
+        return [_recursive_mapping(element) for element in value]
 
     elif hasattr(value, "to_mapping") and callable(value.to_mapping):
         return value.to_mapping()

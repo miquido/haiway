@@ -59,10 +59,13 @@ async def test_logs_issue_with_errors():
     with test_case.assertLogs() as logs:
         compute("expected")
         assert executions == 2
-        assert logs.output == [
-            f"ERROR:root:Attempting to retry {compute.__name__}"
-            f" which failed due to an error: {FakeException('fake')}"
-        ]
+        assert logs.output[0].startswith(
+            f"ERROR:root:Attempting to retry {compute.__name__} which failed due to an error"
+        )
+        # the failure is reported with its traceback, as the async retry does
+        assert logs.records[0].exc_info is not None
+        assert logs.records[0].exc_info[1] is not None
+        assert str(logs.records[0].exc_info[1]) == "fake"
 
 
 @mark.asyncio

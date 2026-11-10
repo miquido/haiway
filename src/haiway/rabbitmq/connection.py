@@ -464,10 +464,10 @@ class RabbitMQConnection:
 
             # a resource alarm on the broker is not an error and never completes
             # a pending publish, so it is tracked separately from the failures
-            connection.add_on_connection_blocked_callback(  # pyright: ignore[reportUnknownMemberType]
+            connection.add_on_connection_blocked_callback(
                 self._connection_blocked,
             )
-            connection.add_on_connection_unblocked_callback(  # pyright: ignore[reportUnknownMemberType]
+            connection.add_on_connection_unblocked_callback(
                 self._connection_unblocked,
             )
 

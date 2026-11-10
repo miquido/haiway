@@ -118,8 +118,29 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   asked before a log, event, metric or attributes are passed on; the logger and OpenTelemetry
   backends provide it, so a `ctx.log_debug` with `DEBUG` turned off returns in about 210 ns instead
   of 460 ns, without formatting its arguments - also when logging out of any scope.
+- **Validating a mapping costs less.** A dictionary given for a `State` attribute skips the Python
+  `isinstance` hook of the class, a str or int of an enum is looked up by value instead of calling
+  the enum, and an int key is spelled natively by `to_basic_object` and `to_json` - validating a
+  mapping is 12 to 42% faster, and converting a `dict[int, ...]` about 4 times (`to_basic_object`)
+  and 12 times (`to_json`) faster.
+- **`ctx.updating` merges into the state current when it is entered**, as `ctx.scope` does, instead
+  of the state current when it was called. Entering it where it was made behaves the same.
+- `ctx.log_warning` and `ctx.log_debug` accept any `BaseException`, as `ctx.log_error` does.
+- `make coverage-native` measures the line coverage of the native extension by the tests. CI runs
+  Bandit, and the whole suite on the free-threaded build with the GIL off.
 
 #### Fixed
+
+- A scope cancelled again while it disposes what it prepared before failing or being cancelled
+  waits for that disposal to complete - it went on while the disposal ran detached.
+- `process_concurrently` keeps only the tasks still running - it held every task it spawned until
+  the source was exhausted.
+- A cached function called while disposables are prepared or disposed writes its result to the
+  cache in place - spawning the write failed, and the result was lost to the error.
+- A synchronous `@retry` logs the failure it retries with its traceback, as the asynchronous one
+  does.
+- Validating a `State` from a dictionary reads a snapshot of it, so a validator changing the
+  dictionary does not change what the later attributes are read from.
 
 - A validator or verifier of a union alternative runs once for a value - it ran a second time when
   the value matched the alternative but failed its validation, and its error was reported twice.

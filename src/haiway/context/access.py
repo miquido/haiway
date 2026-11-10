@@ -259,8 +259,9 @@ class ctx:
         """
         Update scope context with given state.
 
-        When called within an existing context, it becomes nested with current
-        context as its parent.
+        The state is merged into the state current when the returned context
+        manager is entered - not when this is called - the same way a scope
+        merges its state, so it can be prepared ahead and entered elsewhere.
 
         Parameters
         ----------
@@ -276,7 +277,7 @@ class ctx:
         if not state:
             return NoopContext.instance
 
-        return ContextState.updating(state)
+        return ContextState.Updating(state)
 
     @staticmethod
     def disposables(
@@ -836,7 +837,7 @@ class ctx:
         message: str,
         /,
         *args: Any,
-        exception: Exception | None = None,
+        exception: BaseException | None = None,
     ) -> None:
         """
         Log using WARNING level within current scope context.
@@ -851,7 +852,7 @@ class ctx:
         *args: Any
             message format arguments
 
-        exception: Exception | None = None
+        exception: BaseException | None = None
             exception associated with log, when provided full stack trace will be recorded
 
         Returns
@@ -902,7 +903,7 @@ class ctx:
         message: str,
         /,
         *args: Any,
-        exception: Exception | None = None,
+        exception: BaseException | None = None,
     ) -> None:
         """
         Log using DEBUG level within current scope context.
@@ -917,7 +918,7 @@ class ctx:
         *args: Any
             message format arguments
 
-        exception: Exception | None = None
+        exception: BaseException | None = None
             exception associated with log, when provided full stack trace will be recorded
 
         Returns
@@ -968,32 +969,15 @@ class ctx:
         kind: ObservabilityMetricKind | None = None,
         attributes: Mapping[str, ObservabilityAttribute] | None = None,
     ) -> None:
-        if event is not None:
-            assert metric is None  # nosec: B101
-            ContextObservability.record_event(
-                ObservabilityLevel.ERROR,
-                event,
-                attributes=attributes or {},
-            )
-
-        elif metric is not None:
-            assert event is None  # nosec: B101
-            assert value is not None  # nosec: B101
-            assert kind is not None  # nosec: B101
-            ContextObservability.record_metric(
-                ObservabilityLevel.ERROR,
-                metric,
-                value=value,
-                unit=unit,
-                kind=kind,
-                attributes=attributes or {},
-            )
-
-        else:
-            ContextObservability.record_attributes(
-                ObservabilityLevel.ERROR,
-                attributes=attributes or {},
-            )
+        _record(
+            ObservabilityLevel.ERROR,
+            event=event,
+            metric=metric,
+            value=value,
+            unit=unit,
+            kind=kind,
+            attributes=attributes,
+        )
 
     @overload
     @staticmethod
@@ -1031,32 +1015,15 @@ class ctx:
         kind: ObservabilityMetricKind | None = None,
         attributes: Mapping[str, ObservabilityAttribute] | None = None,
     ) -> None:
-        if event is not None:
-            assert metric is None  # nosec: B101
-            ContextObservability.record_event(
-                ObservabilityLevel.WARNING,
-                event,
-                attributes=attributes or {},
-            )
-
-        elif metric is not None:
-            assert event is None  # nosec: B101
-            assert value is not None  # nosec: B101
-            assert kind is not None  # nosec: B101
-            ContextObservability.record_metric(
-                ObservabilityLevel.WARNING,
-                metric,
-                value=value,
-                unit=unit,
-                kind=kind,
-                attributes=attributes or {},
-            )
-
-        else:
-            ContextObservability.record_attributes(
-                ObservabilityLevel.WARNING,
-                attributes=attributes or {},
-            )
+        _record(
+            ObservabilityLevel.WARNING,
+            event=event,
+            metric=metric,
+            value=value,
+            unit=unit,
+            kind=kind,
+            attributes=attributes,
+        )
 
     @overload
     @staticmethod
@@ -1094,32 +1061,15 @@ class ctx:
         kind: ObservabilityMetricKind | None = None,
         attributes: Mapping[str, ObservabilityAttribute] | None = None,
     ) -> None:
-        if event is not None:
-            assert metric is None  # nosec: B101
-            ContextObservability.record_event(
-                ObservabilityLevel.INFO,
-                event,
-                attributes=attributes or {},
-            )
-
-        elif metric is not None:
-            assert event is None  # nosec: B101
-            assert value is not None  # nosec: B101
-            assert kind is not None  # nosec: B101
-            ContextObservability.record_metric(
-                ObservabilityLevel.INFO,
-                metric,
-                value=value,
-                unit=unit,
-                kind=kind,
-                attributes=attributes or {},
-            )
-
-        else:
-            ContextObservability.record_attributes(
-                ObservabilityLevel.INFO,
-                attributes=attributes or {},
-            )
+        _record(
+            ObservabilityLevel.INFO,
+            event=event,
+            metric=metric,
+            value=value,
+            unit=unit,
+            kind=kind,
+            attributes=attributes,
+        )
 
     @overload
     @staticmethod
@@ -1157,34 +1107,54 @@ class ctx:
         kind: ObservabilityMetricKind | None = None,
         attributes: Mapping[str, ObservabilityAttribute] | None = None,
     ) -> None:
-        if event is not None:
-            assert metric is None  # nosec: B101
-            ContextObservability.record_event(
-                ObservabilityLevel.DEBUG,
-                event,
-                attributes=attributes or {},
-            )
-
-        elif metric is not None:
-            assert event is None  # nosec: B101
-            assert value is not None  # nosec: B101
-            assert kind is not None  # nosec: B101
-            ContextObservability.record_metric(
-                ObservabilityLevel.DEBUG,
-                metric,
-                value=value,
-                unit=unit,
-                kind=kind,
-                attributes=attributes or {},
-            )
-
-        else:
-            ContextObservability.record_attributes(
-                ObservabilityLevel.DEBUG,
-                attributes=attributes or {},
-            )
-
-    __slots__ = ()
+        _record(
+            ObservabilityLevel.DEBUG,
+            event=event,
+            metric=metric,
+            value=value,
+            unit=unit,
+            kind=kind,
+            attributes=attributes,
+        )
 
     def __init__(self) -> NoReturn:
         raise RuntimeError("ctx instantiation is forbidden")
+
+
+def _record(
+    level: ObservabilityLevel,
+    /,
+    *,
+    event: str | None,
+    metric: str | None,
+    value: float | int | None,
+    unit: str | None,
+    kind: ObservabilityMetricKind | None,
+    attributes: Mapping[str, ObservabilityAttribute] | None,
+) -> None:
+    # what the level specific helpers of ctx record - the overloads keep the combinations valid
+    if event is not None:
+        assert metric is None  # nosec: B101
+        ContextObservability.record_event(
+            level,
+            event,
+            attributes=attributes or {},
+        )
+
+    elif metric is not None:
+        assert value is not None  # nosec: B101
+        assert kind is not None  # nosec: B101
+        ContextObservability.record_metric(
+            level,
+            metric,
+            value=value,
+            unit=unit,
+            kind=kind,
+            attributes=attributes or {},
+        )
+
+    else:
+        ContextObservability.record_attributes(
+            level,
+            attributes=attributes or {},
+        )

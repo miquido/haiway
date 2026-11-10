@@ -99,7 +99,6 @@ async def process_concurrently[Element](  # noqa: C901
         # one happens right after a spawn instead of ahead of it - which keeps the
         # source from being consumed any further than the running tasks allow
         slots: Semaphore = Semaphore(concurrent_tasks - 1)
-        running: MutableSet[Task[None]] = set()
 
         def complete(
             task: Task[None],
@@ -114,7 +113,6 @@ async def process_concurrently[Element](  # noqa: C901
             **kwargs: Arguments.kwargs,
         ) -> Task[None]:
             task: Task[None] = group.run(coro, *args, **kwargs)
-            running.add(task)
             task.add_done_callback(complete)
             await slots.acquire()
             return task

@@ -551,3 +551,14 @@ def test_state_to_json_uses_the_encoder_options() -> None:
     }
     assert "\n" in holder.to_json(encoder_class=_Encoder, indent=2)
     assert Holder.from_json(json.dumps({"values": {"a": 1}, "amount": "x"})).values == {"a": 1}
+
+
+class _IntKeyedJSON(State):
+    values: dict[int, int]
+
+
+@pytest.mark.parametrize("key", (0, 1, -1, 2**63 - 1, -(2**63), 2**64, -(2**100)))
+def test_int_keys_are_written_as_json_writes_them(key: int) -> None:
+    keyed = _IntKeyedJSON(values={key: 1, key + 1: 2})
+    assert json.loads(keyed.to_json()) == json.loads(json.dumps({"values": {key: 1, key + 1: 2}}))
+    assert _IntKeyedJSON.from_json(keyed.to_json()) == keyed

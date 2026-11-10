@@ -1,7 +1,6 @@
 from collections.abc import Callable, Mapping, MutableSet, Sequence
 from functools import update_wrapper
 from inspect import Parameter as InspectParameter
-from inspect import _empty as INSPECT_EMPTY  # pyright: ignore[reportPrivateUsage]
 from inspect import signature
 from typing import Any, get_type_hints
 
@@ -253,7 +252,7 @@ def _resolve_parameter(
     module: str,
     type_hint: Any,
 ) -> Attribute:
-    if parameter.annotation is INSPECT_EMPTY or type_hint is None:
+    if parameter.annotation is InspectParameter.empty or type_hint is None:
         raise TypeError(f"Untyped argument {parameter.name}")
 
     attribute: AttributeAnnotation = resolve_attribute(
@@ -276,7 +275,9 @@ def _resolve_parameter(
             name=parameter.name,
             annotation=attribute,
             default=DefaultValue(
-                default=Missing if parameter.default is INSPECT_EMPTY else parameter.default,
+                default=(
+                    Missing if parameter.default is InspectParameter.empty else parameter.default
+                ),
             ),
             spec=native.compile(attribute),
         )

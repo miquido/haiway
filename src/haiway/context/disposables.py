@@ -1,5 +1,5 @@
-from asyncio import CancelledError, Future, gather, shield, sleep
-from collections.abc import Collection, Iterable, Iterator, MutableSequence, Sequence
+from asyncio import CancelledError, Future, ensure_future, gather, shield, sleep
+from collections.abc import Collection, Coroutine, Iterable, Iterator, MutableSequence, Sequence
 from types import TracebackType
 from typing import Final, Protocol, Self, cast, final, runtime_checkable
 
@@ -125,13 +125,13 @@ class Disposables:
         except BaseException as exc:
             # cancelled midway - the preparation still completes and nothing else
             # holds what it prepares, so it is awaited and disposed here rather
-            # than left to the garbage collector. under a single shield, so a
-            # cancellation delivered again does not split the cleanup in half
-            await shield(
+            # than left to the garbage collector
+            await _cleaned_up(
                 self._dispose_abandoned(
                     preparing,
                     cause=exc,
-                )
+                ),
+                cause=exc,
             )
             raise  # reraise exception
 
@@ -156,11 +156,12 @@ class Disposables:
             return iter(state)
 
         except BaseException as exc:
-            await shield(
+            await _cleaned_up(
                 self._dispose_prepared(
                     results,
                     cause=exc,
-                )
+                ),
+                cause=exc,
             )
             raise  # reraise exception
 
@@ -215,21 +216,10 @@ class Disposables:
             return_exceptions=True,
         )
 
-        cancellation: CancelledError | None = None
-        while True:
-            try:
-                results: Iterable[BaseException | None] = await shield(disposing)
-                break
-
-            except CancelledError as exc:
-                if disposing.done():
-                    # the disposal itself got cancelled, nothing is left running
-                    cancellation = cancellation or exc
-                    # finished together with the cancellation - keep its results
-                    results = () if disposing.cancelled() else disposing.result()
-                    break
-
-                cancellation = cancellation or exc  # keep waiting, deliver it afterwards
+        cancellation: CancelledError | None = await _completed(disposing)
+        results: Iterable[BaseException | None] = (
+            () if disposing.cancelled() else disposing.result()
+        )
 
         errors: Sequence[BaseException] = tuple(
             result for result in results if isinstance(result, BaseException)
@@ -262,6 +252,39 @@ class Disposables:
 
     def __bool__(self) -> bool:
         return len(self._disposables) > 0
+
+
+async def _completed[Value](
+    work: Future[Value],
+    /,
+) -> CancelledError | None:
+    # waits for the work to complete even when cancelled, again and again - a single
+    # shield detaches the caller only, the work would keep running unawaited.
+    # returns the cancellation to deliver once the work completed
+    cancellation: CancelledError | None = None
+    while True:
+        try:
+            await shield(work)
+            return cancellation
+
+        except CancelledError as exc:
+            if work.done():  # the work itself got cancelled, nothing is left running
+                return cancellation or exc
+
+            cancellation = cancellation or exc  # keep waiting, deliver it afterwards
+
+
+async def _cleaned_up(
+    cleanup: Coroutine[None, None, None],
+    /,
+    *,
+    cause: BaseException,
+) -> None:
+    # completes the cleanup, a cancellation delivered meanwhile is raised only after
+    # it - in place of the cause unless the cause is a cancellation already
+    cancellation: CancelledError | None = await _completed(ensure_future(cleanup))
+    if cancellation is not None and not isinstance(cause, CancelledError):
+        raise cancellation from cause
 
 
 @final

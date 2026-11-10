@@ -1,5 +1,6 @@
 from asyncio import CancelledError, sleep
-from collections.abc import Callable, Generator
+from collections.abc import AsyncIterator, Callable, Generator
+from contextlib import asynccontextmanager
 
 from pytest import fixture, mark, raises
 
@@ -248,3 +249,37 @@ def test_local_cache_rejects_method_binding() -> None:
 
     with raises(AssertionError, match="does not work for classes"):
         Holder().method  # noqa: B018
+
+
+@mark.asyncio
+async def test_external_cache_writes_while_disposables_are_prepared() -> None:
+    backend: dict[str, int] = {}
+
+    async def read_from_store(key: str) -> int | None:
+        return backend.get(key)
+
+    async def write_to_store(key: str, value: int) -> None:
+        backend[key] = value
+
+    @cache_externally(
+        make_key=lambda value: f"cache:{value}",
+        read=read_from_store,
+        write=write_to_store,
+    )
+    async def compute(value: str) -> int:
+        return len(value)
+
+    computed: list[int] = []
+
+    @asynccontextmanager
+    async def preparing() -> AsyncIterator[tuple[()]]:
+        # spawning scoped tasks is refused while disposables are prepared
+        computed.append(await compute("alpha"))
+        yield ()
+
+    async with ctx.scope("external-cache", disposables=(preparing(),)):
+        pass
+
+    # the computed value is returned and cached instead of lost to a failed spawn
+    assert computed == [5]
+    assert backend == {"cache:alpha": 5}

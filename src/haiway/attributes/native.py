@@ -241,7 +241,7 @@ def _describe_compound(  # noqa: C901, PLR0911, PLR0912
                 None,
                 None,
                 _verifying(annotation),
-                tuple(annotation.values),  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
+                tuple(annotation.values),
                 (),
             )
 
@@ -275,7 +275,7 @@ def _describe_compound(  # noqa: C901, PLR0911, PLR0912
                 None,
                 _verifying(annotation),
                 None,
-                tuple(describe(element) for element in annotation.values),  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+                tuple(describe(element) for element in annotation.values),
             )
 
         case SequenceAttribute():

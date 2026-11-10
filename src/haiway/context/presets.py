@@ -12,6 +12,7 @@ from typing import (
     NoReturn,
     Protocol,
     Self,
+    TypeIs,
     final,
     runtime_checkable,
 )
@@ -33,6 +34,13 @@ class ContextPresetsStatePreparing(Protocol):
 @runtime_checkable
 class ContextPresetsDisposablePreparing(Protocol):
     def __call__(self) -> Disposable: ...
+
+
+def _only_state(
+    elements: tuple[ContextPresetsStatePreparing | State, ...],
+    /,
+) -> TypeIs[tuple[State, ...]]:
+    return all(isinstance(element, State) for element in elements)
 
 
 @final
@@ -101,10 +109,10 @@ class ContextPresets:
             # a preset built only out of plain state has nothing to prepare - keep
             # it aside so entering a scope with it stays synchronous instead of
             # going through the disposables machinery for a no-op
-            if not disposables and all(isinstance(element, State) for element in state):
+            if not disposables and _only_state(state):
                 return cls(
                     name=name,
-                    static_state=tuple(element for element in state),  # pyright: ignore
+                    static_state=state,
                 )
 
             disposable_state: DisposableState = DisposableState.of(*state)
@@ -175,10 +183,10 @@ class ContextPresets:
         if not state:
             return self
 
-        if not self._disposables and all(isinstance(element, State) for element in state):
+        if not self._disposables and _only_state(state):
             return self.__class__(
                 name=self.name,
-                static_state=(*self._static_state, *state),  # pyright: ignore
+                static_state=(*self._static_state, *state),
             )
 
         disposable_state: DisposableState = DisposableState.of(*state)

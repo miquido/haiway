@@ -271,6 +271,9 @@ basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNod
             PyObject *key_basic;
             if (PyUnicode_CheckExact(key)) {
                 key_basic = Py_NewRef(key);
+            } else if (PyLong_CheckExact(key)) {  /* spelled the way `basic_key` does, natively */
+                key_basic = PyObject_Str(key);
+                if (key_basic == NULL) goto items_fail;
             } else {
                 PyObject *path = path_tuple(node, prefix);
                 if (path == NULL) goto items_fail;

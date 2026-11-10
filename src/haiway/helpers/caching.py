@@ -9,6 +9,7 @@ from time import monotonic
 from typing import NamedTuple, Protocol, overload
 
 from haiway.context.access import ctx
+from haiway.context.tasks import ScopeTaskGroup
 
 __all__ = (
     "CacheClear",
@@ -170,6 +171,8 @@ def cache[**Args, Result](
     -----
     - Only coroutine functions are supported; synchronous functions will trigger an assertion.
     - The default cache keeps state per decorated function and is not thread-safe.
+    - Concurrent calls missing the same entry are not merged - each runs the function and
+      the last one to complete is kept.
     - For custom cache backends (e.g., Redis), use :func:`cache_externally`.
 
     Examples
@@ -405,11 +408,18 @@ class _ExternalCache[**Args, Result, Key: Hashable]:
         entry: Result | None = await self._read(key)
         if entry is None:
             result: Result = await self._function(*args, **kwargs)
-            ctx.spawn(  # write the value asynchronously
-                self._writing,
-                key=key,
-                value=result,
-            )
+            if ScopeTaskGroup.spawning():
+                ctx.spawn(  # write the value asynchronously
+                    self._writing,
+                    key=key,
+                    value=result,
+                )
+
+            else:  # scoped tasks are refused here, write in place instead
+                await self._writing(
+                    key=key,
+                    value=result,
+                )
 
             return result
 

@@ -1,4 +1,4 @@
-from haiway._native import _nstruct as nstruct  # pyright: ignore[reportAttributeAccessIssue]
+from haiway._native import _nstruct as nstruct
 
 __all__ = ("nstruct",)
 

@@ -353,9 +353,7 @@ class PostgresConnectionPool:
             if isinstance(exc, Exception):
                 raise PostgresException(
                     "Failed to create Postgres connection pool",
-                    sqlstate=exc.sqlstate  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-                    if isinstance(exc, PostgresError)
-                    else None,
+                    sqlstate=_sqlstate(exc),
                 ) from exc
 
             raise
@@ -455,9 +453,7 @@ class _TransactionContext:
         except Exception as exc:
             raise PostgresException(
                 "Failed to begin Postgres transaction",
-                sqlstate=exc.sqlstate  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-                if isinstance(exc, PostgresError)
-                else None,
+                sqlstate=_sqlstate(exc),
             ) from exc
 
     def _record_completed(
@@ -521,9 +517,7 @@ class _TransactionContext:
             outcome = "commit_failed"
             raise PostgresException(
                 "Failed to commit Postgres transaction",
-                sqlstate=exc.sqlstate  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-                if isinstance(exc, PostgresError)
-                else None,
+                sqlstate=_sqlstate(exc),
             ) from exc
 
         finally:
@@ -637,9 +631,7 @@ class _ConnectionContext:
             )
             raise PostgresException(
                 "Failed to acquire Postgres connection",
-                sqlstate=exc.sqlstate  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-                if isinstance(exc, PostgresError)
-                else None,
+                sqlstate=_sqlstate(exc),
             ) from exc
 
         object.__setattr__(self, "_pool_context", pool_context)
@@ -656,8 +648,8 @@ class _ConnectionContext:
         ) -> Sequence[PostgresRow]:
             try:
                 return tuple(
-                    PostgresRow(record)  # pyright: ignore[reportUnknownArgumentType]
-                    for record in await acquired_connection.fetch(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                    PostgresRow(record)
+                    for record in await acquired_connection.fetch(
                         statement,
                         *args,
                     )
@@ -666,9 +658,7 @@ class _ConnectionContext:
             except Exception as exc:
                 raise PostgresException(
                     "Failed to fetch SQL statement rows",
-                    sqlstate=exc.sqlstate  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-                    if isinstance(exc, PostgresError)
-                    else None,
+                    sqlstate=_sqlstate(exc),
                 ) from exc
 
         async def execute(
@@ -681,7 +671,7 @@ class _ConnectionContext:
             # for the extended one otherwise - either way it returns the command
             # tag rather than decoding a result set
             try:
-                return await acquired_connection.execute(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                return await acquired_connection.execute(
                     statement,
                     *args,
                 )
@@ -689,9 +679,7 @@ class _ConnectionContext:
             except Exception as exc:
                 raise PostgresException(
                     "Failed to execute SQL statement",
-                    sqlstate=exc.sqlstate  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-                    if isinstance(exc, PostgresError)
-                    else None,
+                    sqlstate=_sqlstate(exc),
                 ) from exc
 
         def transaction(
@@ -701,7 +689,7 @@ class _ConnectionContext:
             deferrable: bool = False,
         ) -> PostgresTransactionContext:
             return _TransactionContext(
-                _transaction_context=acquired_connection.transaction(  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
+                _transaction_context=acquired_connection.transaction(
                     isolation=isolation,
                     readonly=readonly,
                     deferrable=deferrable,
@@ -745,7 +733,17 @@ class _ConnectionContext:
 
             raise PostgresException(
                 "Failed to release Postgres connection",
-                sqlstate=exc.sqlstate  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-                if isinstance(exc, PostgresError)
-                else None,
+                sqlstate=_sqlstate(exc),
             ) from exc
+
+
+def _sqlstate(
+    exc: BaseException,
+    /,
+) -> str | None:
+    # the code of a server error - asyncpg declares it on each of its error classes, untyped
+    if not isinstance(exc, PostgresError):
+        return None
+
+    sqlstate: object = getattr(exc, "sqlstate", None)
+    return sqlstate if isinstance(sqlstate, str) else None

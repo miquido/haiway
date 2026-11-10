@@ -126,6 +126,17 @@ spec_compile(PyObject *description)
     spec->validating = D_VALIDATING(description) == Py_None ? NULL : Py_NewRef(D_VALIDATING(description));
     spec->verifying = D_VERIFYING(description) == Py_None ? NULL : Py_NewRef(D_VERIFYING(description));
     spec->data = D_DATA(description) == Py_None ? NULL : Py_NewRef(D_DATA(description));
+    if ((spec->kind == SPEC_STR_ENUM || spec->kind == SPEC_INT_ENUM) && spec->data == NULL) {
+        /* the members by value, what `EnumType.__call__` looks up first - held as it is, so
+         * members added later are seen too */
+        PyObject *members;
+        if (PyObject_GetOptionalAttrString(spec->base, "_value2member_map_", &members) < 0) {
+            spec_free(spec);
+            return NULL;
+        }
+        if (members != NULL && PyDict_CheckExact(members)) spec->data = members;
+        else Py_XDECREF(members);
+    }
     if (spec->kind == SPEC_FUNCTION && spec->data != NULL) {
         spec->signature = signature_compile(spec->data);
         if (spec->signature == NULL) {
@@ -145,7 +156,7 @@ spec_compile(PyObject *description)
             return NULL;
         }
     }
-    spec->count = n;
+    spec->count = room;  /* the target of an alias counts from the start, NULL until published */
     /* a function stays pure - reading the signature of an unusual callable may run its code,
      * but nothing read from JSON is callable, and a default is validated only once */
     spec->pure = spec->validating == NULL && spec->verifying == NULL && spec->kind != SPEC_CUSTOM
@@ -321,22 +332,19 @@ is_text_like(PyObject *value)
 static Spec *
 alias_target(ModuleState *state, Spec *spec)
 {
-    Spec *target = spec->children[0];
+    /* published once and never replaced - the acquire pairs with the exchange below, so
+     * a target seen here is seen whole */
+    Spec *target = _Py_atomic_load_ptr_acquire(&spec->children[0]);
     if (target != NULL) return target;
     PyObject *description = PyObject_CallOneArg(state->describe, spec->annotation);
     if (description == NULL) return NULL;
     Spec *compiled = spec_compile(description);
     Py_DECREF(description);
     if (compiled == NULL) return NULL;
-    Py_BEGIN_CRITICAL_SECTION(spec->annotation);
-    if (spec->children[0] == NULL) {
-        spec->children[0] = compiled;
-        spec->count = 1;
-        compiled = NULL;
-    }
-    Py_END_CRITICAL_SECTION();
-    spec_free(compiled);  /* another thread was first */
-    return spec->children[0];
+    Spec *published = NULL;
+    if (_Py_atomic_compare_exchange_ptr(&spec->children[0], &published, compiled)) return compiled;
+    spec_free(compiled);  /* another thread was first, `published` holds its target */
+    return published;
 }
 
 /* the elements of a value as a tuple, for what is accepted as a sequence: the tuple itself,
@@ -443,10 +451,14 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
         return PyObject_IsInstance(value, state->timedelta);
     case SPEC_PATH:
         return PyObject_IsInstance(value, state->path);
-    case SPEC_STR_ENUM:
-    case SPEC_INT_ENUM:
     case SPEC_STATE:
     case SPEC_CUSTOM_STATE:
+        /* a dictionary is never an instance, see struct_validate_value */
+        if (Py_IS_TYPE(value, (PyTypeObject *)spec->base)) return 1;
+        if (PyAnyDict_Check(value)) return 0;
+        return PyObject_IsInstance(value, spec->base);
+    case SPEC_STR_ENUM:
+    case SPEC_INT_ENUM:
     case SPEC_CUSTOM:
         return PyObject_IsInstance(value, spec->base);
     case SPEC_META:
@@ -604,9 +616,27 @@ converted_str(PyObject *converter, PyObject *value, const char *failure)
     return value_error_from(failure);
 }
 
+/* the member of an enum by its value, without calling the enum - 0 when there is none */
+static int
+enum_member(Spec *spec, PyObject *value, PyObject **member)
+{
+    *member = NULL;
+    if (spec->data == NULL) return 0;
+    int found = PyDict_GetItemRef(spec->data, value, member);
+    if (found < 0 && PyErr_ExceptionMatches(PyExc_TypeError)) {  /* unhashable, the call decides */
+        PyErr_Clear();
+        return 0;
+    }
+    return found;
+}
+
 static PyObject *
 validate_enum_str(ModuleState *state, Spec *spec, PyObject *value)
 {
+    PyObject *member;
+    int found = enum_member(spec, value, &member);
+    if (found < 0) return NULL;
+    if (found) return member;
     PyObject *converted = PyObject_CallOneArg(spec->base, value);
     if (converted != NULL) return converted;
     if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
@@ -638,6 +668,10 @@ static PyObject *
 validate_enum_int(ModuleState *state, Spec *spec, PyObject *value)
 {
     if (PyLong_Check(value)) {
+        PyObject *member;
+        int found = enum_member(spec, value, &member);
+        if (found < 0) return NULL;
+        if (found) return member;
         PyObject *converted = PyObject_CallOneArg(spec->base, value);
         if (converted != NULL) return converted;
         if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;

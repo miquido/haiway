@@ -112,6 +112,35 @@ class ContextState:
         updated._token = None
         return updated
 
+    @final
+    class Updating:
+        # merges into the state current when entered, not when created - as a scope does
+        __slots__ = (
+            "_state",
+            "_token",
+        )
+
+        def __init__(
+            self,
+            state: Iterable[State | None],
+        ) -> None:
+            self._state: Iterable[State | None] = state
+            self._token: Token[ContextState] | None = None
+
+        def __enter__(self) -> None:
+            assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
+            self._token = ContextState._context.set(ContextState.updating(self._state))
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
+            ContextState._context.reset(self._token)
+            self._token = None
+
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextState")
     __slots__ = (
         "_state",

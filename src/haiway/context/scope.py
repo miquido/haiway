@@ -1,9 +1,9 @@
 import sys
 from asyncio import AbstractEventLoop, CancelledError, get_running_loop
-from collections.abc import Callable, Coroutine, MutableSequence, Sequence
+from collections.abc import Callable, Coroutine, Iterator, MutableSequence, Sequence
 from logging import Logger
 from types import TracebackType
-from typing import Any, final
+from typing import final
 
 from haiway.attributes import State
 from haiway.context.closing import ContextClosing
@@ -184,12 +184,12 @@ class ContextScope:
         disposables: Disposables,
         unwinds: MutableSequence[_Unwind],
         /,
-    ) -> Any:
+    ) -> Iterator[State]:
         # scoped tasks can't be spawned while disposables are prepared or disposed -
         # the task group of the scope is not available yet and is already joined, so
         # they would end up attached to an enclosing scope or detached entirely
         with ScopeTaskGroup.forbidding():
-            prepared: Any = await disposables.__aenter__()
+            prepared: Iterator[State] = await disposables.__aenter__()
 
         async def dispose(
             exc_type: type[BaseException] | None,
