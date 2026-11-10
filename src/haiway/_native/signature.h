@@ -23,6 +23,8 @@ typedef struct {
 /* the parameters of a function read without allocating them - a leaf of validation, which
  * never nests in itself, so the frame of a deep validation does not grow with it */
 #define SIGNATURE_LOCAL 12
+/* the most partials and methods read around one another - only one made to call itself has more */
+#define SIGNATURE_DEPTH 1024
 
 typedef struct {
     Parameter *parameters;
@@ -297,6 +299,7 @@ typedef struct {
     Py_ssize_t stored;
     Py_ssize_t holes;
     PyObject *keywords; /* a dict of its own, what is given by name - NULL for nothing */
+    int refused;        /* given a name which is not a string - no call takes it */
 } Given;
 
 /* the parameters a function takes, read from its code - after `reserve` slots left free in
@@ -435,11 +438,16 @@ given_parameters(Parameter *base, Py_ssize_t count, const Given *given, Paramete
     Py_ssize_t blocked = 0;
     for (Py_ssize_t i = 0; i < skipped; i++) {
         if (parameters[i].kind != PARAMETER_POSITIONAL_OR_KEYWORD || parameters[i].name == NULL) continue;
-        parameters[count + blocked++] = (Parameter){.name = parameters[i].name, .kind = PARAMETER_GIVEN, .defaulted = 1};
+        Parameter *given_name = &parameters[count + blocked++];
+        given_name->name = parameters[i].name;
+        given_name->kind = PARAMETER_GIVEN;
+        given_name->defaulted = 1;
     }
     Parameter *left = parameters + skipped - given->holes;
     for (Py_ssize_t i = 0; i < given->holes; i++) {
-        left[i] = (Parameter){.name = NULL, .kind = PARAMETER_POSITIONAL_ONLY, .defaulted = 0};
+        left[i].name = NULL;
+        left[i].kind = PARAMETER_POSITIONAL_ONLY;
+        left[i].defaulted = 0;
     }
     Py_ssize_t n = count - skipped + given->holes;
     *taking = left;
@@ -471,7 +479,8 @@ given_parameters(Parameter *base, Py_ssize_t count, const Given *given, Paramete
 }
 
 /* the keywords of a partial joined with what partials around it give - those given later win,
- * as functools merges them. 1, 0 when they are not what a partial holds, -1 on an error */
+ * as functools merges them. 1, 0 when they are not what a partial holds, -1 on an error - a name
+ * which is not a string is refused by every call, which `given->refused` tells */
 static int
 given_keywords(Given *given, PyObject *keywords)
 {
@@ -487,22 +496,33 @@ given_keywords(Given *given, PyObject *keywords)
     PyObject *name;
     while (PyDict_Next(joined, &position, &name, NULL)) {
         if (!PyUnicode_Check(name)) { /* a call refuses it whatever is called */
-            Py_DECREF(joined);
-            return 0;
+            given->refused = 1;
+            break;
         }
     }
     Py_XSETREF(given->keywords, joined);
     return 1;
 }
 
-/* a partial is the function it calls, given its arguments first and its keywords by name - a
- * new reference to what is called in the end, with what it is given in `given`. NULL on an
- * error, and with no error for a partial which is not what functools makes - left to Python */
+/* a partial is what it calls, given its arguments first and its keywords by name, and a method
+ * is what it calls given the object it is bound to first - a new reference to what is called
+ * in the end, with what it is given in `given`. NULL on an error, and with no error for a
+ * partial which is not what functools makes - left to Python */
 static PyObject *
 unwrap_partial(ModuleState *state, PyObject *value, Given *given)
 {
     PyObject *callee = Py_NewRef(value);
-    while (Py_IS_TYPE(callee, (PyTypeObject *)state->partial)) {
+    for (Py_ssize_t depth = 0;; depth++) {
+        if (depth > SIGNATURE_DEPTH) { /* made to call itself - no call ever ends */
+            given->refused = 1;
+            return callee;
+        }
+        if (Py_IS_TYPE(callee, &PyMethod_Type)) {
+            given->stored += 1; /* what it is bound to comes first - a method never changes it */
+            Py_SETREF(callee, Py_NewRef(PyMethod_GET_FUNCTION(callee)));
+            continue;
+        }
+        if (!Py_IS_TYPE(callee, (PyTypeObject *)state->partial)) break;
         PyObject *keywords = PyObject_GetAttr(callee, state->str_keywords);
         if (keywords == NULL) goto failed;
         int r = given_keywords(given, keywords);
@@ -591,12 +611,6 @@ static PyObject *
 called_function(ModuleState *state, PyObject *callee, Given *given)
 {
     if (PyFunction_Check(callee)) return Py_NewRef(callee);
-    if (Py_IS_TYPE(callee, &PyMethod_Type)) {
-        PyObject *function = PyMethod_GET_FUNCTION(callee); /* a method never changes what it binds */
-        if (!PyFunction_Check(function)) return NULL;
-        given->stored += 1; /* what it is bound to comes first */
-        return Py_NewRef(function);
-    }
     if (PyType_Check(callee)) return NULL;
     PyObject *function = NULL;
     Py_ssize_t first = 0;
@@ -634,11 +648,16 @@ read_parameters(ModuleState *state, PyObject *callee, Py_ssize_t reserve, Py_ssi
 static Py_NO_INLINE int
 signature_accepts(ModuleState *state, Signature *signature, PyObject *described, PyObject *value)
 {
-    Given given = {0, 0, NULL};
+    Given given = {0, 0, NULL, 0};
     PyObject *callee = unwrap_partial(state, value, &given);
     if (callee == NULL) {
         if (PyErr_Occurred()) return -1;
         callee = Py_NewRef(value); /* a partial of its own kind - all of it read by Python */
+    }
+    if (given.refused) {
+        Py_DECREF(callee);
+        Py_XDECREF(given.keywords);
+        return 0;
     }
     PyObject *function = called_function(state, callee, &given);
     if (function == NULL && PyErr_Occurred()) {

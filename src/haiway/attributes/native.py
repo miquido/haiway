@@ -598,7 +598,7 @@ def _descriptor_owner(
 
 def _object_owner(value: Any, /) -> tuple[Any, Any] | None:
     # read of the object itself rather than of its kind - told apart by what it is
-    if isinstance(value, partial) or getattr(value, "__signature__", None) is not None:
+    if isinstance(value, partial | MethodType) or getattr(value, "__signature__", None) is not None:
         return None  # a signature of its own, which may differ for every one of its kind
 
     kind: Any = value.__class__

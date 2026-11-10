@@ -15,6 +15,7 @@ from datetime import date, datetime, time, timedelta
 from enum import IntEnum, StrEnum
 from functools import Placeholder
 from pathlib import Path
+from types import MethodType
 from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict
 from uuid import UUID, SafeUUID
 
@@ -1077,6 +1078,11 @@ def test_checking_partials_with_placeholders_does_not_leak() -> None:
     inner_holed = functools.partial(three, Placeholder, Placeholder, b"")
     inner_holed.kept = True
 
+    refusing = functools.partial(named)
+    refusing.keywords[1] = 0  # pyright: ignore[reportArgumentType]
+    looping = functools.partial(three, 0)
+    looping.__setstate__((looping, (), {}, None))
+
     def operation() -> None:
         Holding(function=functools.partial(three, Placeholder, Placeholder, b""))
         Holding(function=functools.partial(variadic, Placeholder, Placeholder, 0))
@@ -1090,6 +1096,11 @@ def test_checking_partials_with_placeholders_does_not_leak() -> None:
         _swallow(lambda: Holding(function=functools.partial(named, Placeholder, "", first=1)))
         _swallow(lambda: Holding(function=functools.partial(Constructed, 1, Placeholder, b"")))
         _swallow(lambda: Holding(function=functools.partial(Unreadable(), Placeholder, 0)))  # pyright: ignore[reportArgumentType]
+        Holding(function=MethodType(functools.partial(variadic, Placeholder, 0), 1))
+        Holding(function=MethodType(Constructed, 1))
+        _swallow(lambda: Holding(function=MethodType(functools.partial(three, 1), 1)))
+        _swallow(lambda: Holding(function=refusing))
+        _swallow(lambda: Holding(function=looping))
 
     _assert_no_leak(operation)
 

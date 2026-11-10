@@ -11,7 +11,7 @@ import random
 import weakref
 from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from functools import Placeholder, partial
-from types import BuiltinFunctionType
+from types import BuiltinFunctionType, MethodType
 from typing import Any, Concatenate, Protocol, runtime_checkable
 from unittest.mock import AsyncMock, MagicMock, Mock
 
@@ -877,6 +877,9 @@ def _random_partial(generator: random.Random, parameters: list[inspect.Parameter
         )
         assert isinstance(value.func, partial)
 
+    if generator.random() < 0.2:  # bound as a method - given the object first
+        value = MethodType(value, _REFERRED)
+
     return value
 
 
@@ -895,8 +898,9 @@ def test_partials_are_accepted_exactly_when_they_take_every_call_of_the_protocol
             except TypeError:
                 continue  # a partial functools refuses to make
 
-            placeholders += Placeholder in value.args or (
-                isinstance(value.func, partial) and Placeholder in value.func.args
+            held: Any = value.__func__ if isinstance(value, MethodType) else value
+            placeholders += Placeholder in held.args or (
+                isinstance(held.func, partial) and Placeholder in held.func.args
             )
             expected: bool = _takes_every_call(value, told)
             try:
@@ -1059,6 +1063,29 @@ def _one(first: int, /) -> None: ...
 def _two(first: int, second: int, /) -> None: ...
 
 
+def _three(first: int, second: int, third: int, /) -> None: ...
+
+
+class _Called:
+    def __call__(self, first: int, second: int, /) -> None: ...
+
+
+class _Constructed:
+    def __init__(self, first: int, /) -> None: ...
+
+
+class _ProxiedOne:
+    def __call__(self, first: int, /) -> None: ...
+
+
+class _ProxiedTwo:
+    def __call__(self, first: int, second: int, /) -> None: ...
+
+
+_PROXIED_ONE = _ProxiedOne()
+_PROXIED_TWO = _ProxiedTwo()
+
+
 @pytest.mark.parametrize("first", ["one", "two"])
 def test_compiled_functions_are_told_each_on_its_own(first: str) -> None:
     one, two = _compiled(_one), _compiled(_two)
@@ -1149,6 +1176,13 @@ def _corpus() -> list[Any]:
             _compiled(_two),
             Mock(),
             _Signed(inspect.Signature()),
+            MethodType(partial(_three, 0), _REFERRED),
+            MethodType(partial(_two, 0), _REFERRED),
+            MethodType(_Called(), _REFERRED),
+            MethodType(_Constructed, _REFERRED),
+            MethodType(len, _REFERRED),
+            weakref.proxy(_PROXIED_ONE),
+            weakref.proxy(_PROXIED_TWO),
         ]
     )
     return corpus
@@ -1166,3 +1200,80 @@ def test_what_is_read_once_is_what_is_read_each_time() -> None:
 
         for value in shuffled:
             assert native.parameters(value) == native._read(value), value  # pyright: ignore[reportPrivateUsage]
+
+
+class _TakingOne(State):
+    function: Callable[[int], None]
+
+
+@pytest.mark.parametrize("first", ["one", "none"])
+def test_methods_around_partials_are_told_each_on_its_own(first: str) -> None:
+    takes_one: Any = MethodType(partial(_three, 0), _REFERRED)  # called as _three(0, object, x)
+    takes_none: Any = MethodType(partial(_two, 0), _REFERRED)  # called as _two(0, object)
+    for value in (takes_one, takes_none) if first == "one" else (takes_none, takes_one):
+        if value is takes_one:
+            assert _TakingOne(function=value).function is value
+
+        else:
+            with pytest.raises(ValidationError):
+                _TakingOne(function=value)
+
+
+def test_partials_held_by_classes_are_bound_as_methods() -> None:
+    class Holder:
+        handle = partial(_three, 0)
+
+    bound: Any = Holder().handle
+    assert isinstance(bound, MethodType)
+    assert _TakingOne(function=bound).function is bound
+    with pytest.raises(ValidationError):
+        _TakingTwo(function=bound)
+
+
+def test_methods_around_objects_and_classes_are_given_what_they_are_bound_to() -> None:
+    called: Any = MethodType(_Called(), _REFERRED)  # called as _Called()(object, x)
+    constructed: Any = MethodType(_Constructed, _REFERRED)  # called as _Constructed(object)
+    assert _TakingOne(function=called).function is called
+    with pytest.raises(ValidationError):
+        _TakingOne(function=constructed)
+
+    class TakingNone(State):
+        function: Callable[[], object]
+
+    assert TakingNone(function=constructed).function is constructed
+
+
+def test_names_given_by_position_already_are_refused_by_open_protocols() -> None:
+    class Told[**P](Protocol):
+        def __call__(self, a: int, *args: P.args, **kwargs: P.kwargs) -> None: ...
+
+    class Holder(State):
+        value: Told[...]
+
+    def taking(a: int, **keywords: Any) -> None: ...
+
+    # given `a` by position, the partial can't be given `a` by name - `**keywords` included
+    with pytest.raises(ValidationError):
+        Holder(value=partial(taking, 0))  # pyright: ignore[reportArgumentType]
+
+    assert Holder(value=taking).value is taking
+
+
+def test_partials_given_names_which_are_not_strings_are_refused() -> None:
+    def taking(first: int, **keywords: Any) -> None: ...
+
+    value = partial(taking)
+    value.keywords[1] = 0  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError):
+        value(0)
+
+    with pytest.raises(ValidationError):
+        _TakingOne(function=value)  # pyright: ignore[reportArgumentType]
+
+
+def test_partials_made_to_call_themselves_are_refused() -> None:
+    value = partial(_two, 0)
+    value.__setstate__((value, (), {}, None))
+    assert value.func is value
+    with pytest.raises(ValidationError):
+        _TakingOne(function=value)
