@@ -38,7 +38,7 @@ typedef struct {
     PyObject *report;            /* (segment, exc) -> NoReturn, the failure at a position */
     PyObject *unexpected;        /* (cls, key) -> NoReturn, a key of a mapping which is not an attribute */
     PyObject *describe;          /* (annotation) -> the description of a spec */
-    PyObject *parameters;        /* (callable) -> ((name, kind, defaulted), ...) or None, for what is not a function */
+    PyObject *parameters;        /* (callable) -> ((name, kind, defaulted), ...), None without a signature */
     PyObject *enum_values;       /* (enum, names) -> the values (or the names) of its members, spelled */
     PyObject *literal_values;    /* (values) -> the values of a literal, spelled */
     PyObject *b64decode;         /* (str) -> bytes, strictly */

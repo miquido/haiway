@@ -28,6 +28,7 @@ from typing import (
     Protocol,
     TypeVar,
     cast,
+    final,
     get_args,
     get_origin,
     get_type_hints,
@@ -63,11 +64,13 @@ __all__ = (
     "AttributeAnnotation",
     "BoolAttribute",
     "BytesAttribute",
+    "CallableSignature",
     "CustomAttribute",
     "DateAttribute",
     "DatetimeAttribute",
     "FloatAttribute",
     "FunctionAttribute",
+    "FunctionSignature",
     "IntEnumAttribute",
     "IntegerAttribute",
     "LiteralAttribute",
@@ -78,6 +81,7 @@ __all__ = (
     "NotRequired",
     "ObjectAttribute",
     "PathAttribute",
+    "ProtocolSignature",
     "SequenceAttribute",
     "SetAttribute",
     "StrEnumAttribute",
@@ -2338,15 +2342,17 @@ class FunctionAttribute(Immutable):
         return self.base.__name__
 
     @property
-    def parameters(self) -> Sequence[inspect.Parameter]:
-        """The parameters the function is called with - of a callback protocol, the ones of
-        its ``__call__``, of a ``Callable``, its arguments as positional only ones."""
-        return _function_signature(self.base)[0]
+    def signature(self) -> FunctionSignature | None:
+        """
+        The calls a value of this annotation has to accept.
 
-    @property
-    def extensible(self) -> bool:
-        """Whether arguments the annotation does not tell may follow the parameters."""
-        return _function_signature(self.base)[1]
+        Returns
+        -------
+        FunctionSignature | None
+            The arguments of a ``Callable`` or the ``__call__`` of a callback protocol,
+            ``None`` when the annotation accepts any call.
+        """
+        return _function_signature(self.base)
 
     def annotated(  # noqa: C901
         self,
@@ -2419,47 +2425,90 @@ class FunctionAttribute(Immutable):
         return self
 
 
+@final
+class CallableSignature(Immutable):
+    """
+    The arguments of a ``Callable`` annotation, all passed by position.
+
+    Attributes
+    ----------
+    arguments : int
+        How many arguments are passed.
+    extensible : bool
+        Whether more arguments may follow - after ``Concatenate`` or an unpacked
+        ``TypeVarTuple``.
+    """
+
+    arguments: int
+    extensible: bool
+
+
+@final
+class ProtocolSignature(Immutable):
+    """
+    The parameters of the ``__call__`` of a callback protocol.
+
+    Attributes
+    ----------
+    protocol : type[Any]
+        The protocol declaring ``__call__``.
+    parameters : Sequence[inspect.Parameter]
+        The parameters of ``__call__`` without the instance it is called on.
+    extensible : bool
+        Whether more arguments may follow - those of a ``ParamSpec``.
+    """
+
+    protocol: type[Any]
+    parameters: Sequence[inspect.Parameter]
+    extensible: bool
+
+
+type FunctionSignature = CallableSignature | ProtocolSignature
+
+
 def _unpacked(argument: Any, /) -> bool:
     return get_origin(argument) in (typing.Unpack, typing_extensions.Unpack) or getattr(
         argument, "__unpacked__", False
     )
 
 
-def _positional(
-    arguments: Sequence[Any],
-    /,
-) -> tuple[inspect.Parameter, ...]:
-    return tuple(
-        inspect.Parameter(f"_{index}", inspect.Parameter.POSITIONAL_ONLY)
-        for index in range(len(arguments))
-    )
-
-
 def _function_signature(
     annotation: Any,
     /,
-) -> tuple[tuple[inspect.Parameter, ...], bool]:
-    # the parameters a function is called with, and whether others may follow - their
-    # types are left unresolved, as nothing tells a function by them
+) -> FunctionSignature | None:
+    # only the shape of the signature is checked, argument types stay unresolved
     origin: Any = get_origin(annotation) or annotation
     if is_callback_protocol(origin):
         return _protocol_signature(origin)
 
     arguments: tuple[Any, ...] = get_args(annotation)
     if not arguments:
-        return ((), True)  # no arguments told at all
+        return None  # a bare Callable
 
     signature: Any = arguments[0]
     if isinstance(signature, list | tuple):
-        given: Sequence[Any] = cast(Sequence[Any], signature)
-        # an unpacked TypeVarTuple stands for any number of arguments, none included
-        told: tuple[Any, ...] = tuple(argument for argument in given if not _unpacked(argument))
-        return (_positional(told), len(told) < len(given))
+        listed: Sequence[Any] = cast(Sequence[Any], signature)
+        # an unpacked TypeVarTuple stands for any number of further arguments
+        fixed: int = sum(1 for argument in listed if not _unpacked(argument))
+        return _callable_signature(fixed, extensible=fixed < len(listed))
 
     if get_origin(signature) in (typing.Concatenate, typing_extensions.Concatenate):
-        return (_positional(get_args(signature)[:-1]), True)  # the types before the signature
+        # the last argument of Concatenate is the ParamSpec
+        return _callable_signature(len(get_args(signature)) - 1, extensible=True)
 
-    return ((), True)  # `...` or a parameter specification
+    return None  # `...` or a ParamSpec
+
+
+def _callable_signature(
+    arguments: int,
+    /,
+    *,
+    extensible: bool,
+) -> CallableSignature | None:
+    if extensible and not arguments:
+        return None  # accepts any call
+
+    return CallableSignature(arguments=arguments, extensible=extensible)
 
 
 def is_callback_protocol(
@@ -2467,7 +2516,7 @@ def is_callback_protocol(
     /,
 ) -> bool:
     """
-    Tell whether an annotation is a protocol describing a function - one of ``__call__`` only.
+    Tell whether an annotation is a protocol describing a function.
 
     Parameters
     ----------
@@ -2489,9 +2538,8 @@ def is_callback_protocol(
 def _protocol_signature(
     protocol: type[Any],
     /,
-) -> tuple[tuple[inspect.Parameter, ...], bool]:
-    # read as it is declared, without what it is called on - the annotations are left as
-    # they are written, as they may refer to what is declared later
+) -> ProtocolSignature | None:
+    # read statically, keeping annotations as written - they may refer to names declared later
     call: Any = inspect.getattr_static(protocol, "__call__")
     function: Any = call
     if isinstance(call, staticmethod | classmethod):
@@ -2503,23 +2551,24 @@ def _protocol_signature(
         ).parameters.values()
     )
     if not isinstance(call, staticmethod):
-        parameters = parameters[1:]  # the instance, or the class, it is called on
+        parameters = parameters[1:]  # drop self or cls
 
-    # a parameter specification stands for any arguments - only those before it are told
+    # a ParamSpec accepts any further arguments - only the parameters before it are checked
     if any(
         isinstance(parameter.annotation, typing.ParamSpecArgs | typing.ParamSpecKwargs)
         for parameter in parameters
     ):
-        return (
-            tuple(
-                parameter
-                for parameter in parameters
-                if parameter.kind not in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD)
-            ),
-            True,
+        fixed: tuple[inspect.Parameter, ...] = tuple(
+            parameter
+            for parameter in parameters
+            if parameter.kind not in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD)
         )
+        if not fixed:
+            return None  # accepts any call
 
-    return (parameters, False)
+        return ProtocolSignature(protocol=protocol, parameters=fixed, extensible=True)
+
+    return ProtocolSignature(protocol=protocol, parameters=parameters, extensible=False)
 
 
 class UnionAttribute(Immutable):
@@ -3479,7 +3528,7 @@ def _resolve_generic_alias(  # noqa: PLR0911
 ) -> AttributeAnnotation:
     origin_type: Any = annotation.__origin__
     if is_callback_protocol(origin_type):
-        # a function is told by the shape of its signature, whatever types it is given
+        # checked by the shape of its signature, whatever its type arguments
         return FunctionAttribute(base=annotation)
 
     if not hasattr(origin_type, "__class_getitem__"):

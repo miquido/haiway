@@ -69,7 +69,8 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   read the same way, as what it calls given the object first - a partial held by a class
   included. A parameter given by position already, by a partial or as the object a method is
   bound to, refuses its name given again, even to `**kwargs`. `FunctionAttribute.arguments`, which was always empty, is replaced by
-  `parameters` and `extensible`, read from the annotation.
+  `signature` - a `CallableSignature` or a `ProtocolSignature` read from the annotation, `None`
+  when it accepts any call.
   Migration: fix the functions the check refuses - they could not have been called the way the
   annotation says.
 - **`ContextObservability.record_log` takes the format arguments as one tuple** -

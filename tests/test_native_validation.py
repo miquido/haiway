@@ -469,8 +469,8 @@ def test_replaced_defaults_are_read_when_validating() -> None:
 
 
 def _random_function(generator: random.Random) -> Callable[..., None]:
-    # a function of a random signature - positional only, positional and keyword only
-    # arguments, some defaulted, with or without the variadic ones
+    # a random signature - positional only, positional and keyword only parameters, some
+    # defaulted, with or without *args and **kwargs
     names: Iterator[str] = (f"a{index}" for index in range(100))
     positional_only: list[str] = [next(names) for _ in range(generator.randint(0, 2))]
     positional: list[str] = [next(names) for _ in range(generator.randint(0, 3))]
@@ -508,9 +508,9 @@ def _random_partial(generator: random.Random, function: Callable[..., None]) -> 
 
 
 def _calls(value: Any, positional: int, extensible: bool) -> bool:
-    # what the call itself tells, as the functions do nothing - inspect reads partials and
-    # positional only arguments given by name its own way. Arguments which may follow are
-    # tried as more positional ones, and as every argument left by name
+    # the functions do nothing, so actually calling them is the reference - inspect handles
+    # partials and positional only parameters passed by name differently. Arguments which may
+    # follow are tried as more positional ones, and as every remaining parameter by name
     function: Any = value
     given: int = 0
     keywords: Mapping[str, Any] = {}
@@ -622,7 +622,7 @@ class _InheritedCallee(_Callee):
 )
 def test_objects_are_called_the_way_their_class_tells(value: Any, accepted: bool) -> None:
     holder = _holder(Callable[[int, str], None])
-    for _ in range(2):  # told once, then answered from what was told
+    for _ in range(2):  # read once, then answered from the cache
         if accepted:
             assert holder(value=value).value is value  # pyright: ignore[reportCallIssue]
 

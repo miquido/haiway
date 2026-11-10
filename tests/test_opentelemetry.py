@@ -1399,8 +1399,8 @@ async def test_recordings_below_the_level_leave_nothing_exported(
 async def test_recordings_below_the_level_never_reach_the_adapter(
     spans: InMemorySpanExporter,
 ) -> None:
-    # the adapter skips them on its own as well - what is told here is that the context
-    # asks it first, and passes nothing on once told it would be discarded
+    # the adapter skips them on its own as well - this checks that the context asks it
+    # first and passes nothing on once told the level is discarded
     adapter: Observability = OpenTelemetry.observability(ObservabilityLevel.WARNING)
     reached: list[str] = []
 

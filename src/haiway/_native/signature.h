@@ -1,41 +1,50 @@
-/* Whether a callable can be called the way an annotation says - a Callable, or a protocol
- * describing a function by its __call__. What is compared is the shape of the two signatures,
- * as the type checker compares it: the order, the names and the defaults of the parameters,
- * never their types. A function is read from its code, and so is a method bound to one, a
- * partial of one and an object called through one - every other callable has its signature
- * read by Python, and compared here the same way. */
+/* Whether a callable accepts the calls an annotation describes - a Callable, or a protocol
+ * declaring only __call__. Only the shape of the signatures is compared, as a type checker
+ * compares it: the order, kinds, names and defaults of the parameters, never their types.
+ * Python functions are read from their code - also when called through a bound method, a
+ * partial or the __call__ of an object. Any other callable has its signature read by inspect
+ * (the `parameters` hook) and is compared the same way. */
 
-/* the kinds of parameters, numbered as inspect.Parameter numbers them */
-#define PARAMETER_POSITIONAL_ONLY 0
-#define PARAMETER_POSITIONAL_OR_KEYWORD 1
-#define PARAMETER_VAR_POSITIONAL 2
-#define PARAMETER_KEYWORD_ONLY 3
-#define PARAMETER_VAR_KEYWORD 4
-#define PARAMETER_NONE -1 /* a parameter which takes nothing any more */
-#define PARAMETER_GIVEN -2 /* a parameter given by position already - given its name again, a call fails */
+/* the kinds of parameters, numbered as inspect.Parameter numbers them, and two more used
+ * while applying what a partial or a bound method already passes */
+typedef enum {
+    PARAMETER_GIVEN = -2, /* already passed by position - passing its name again fails the call */
+    PARAMETER_NONE = -1,  /* accepts no arguments any more */
+    PARAMETER_POSITIONAL_ONLY = 0,
+    PARAMETER_POSITIONAL_OR_KEYWORD = 1,
+    PARAMETER_VAR_POSITIONAL = 2,
+    PARAMETER_KEYWORD_ONLY = 3,
+    PARAMETER_VAR_KEYWORD = 4,
+} ParameterKind;
 
 typedef struct {
-    PyObject *name; /* borrowed - NULL for a positional only parameter of a Callable */
-    int kind;
+    PyObject *name; /* borrowed - NULL for a positional only parameter */
+    ParameterKind kind;
     int defaulted;
 } Parameter;
 
-/* the parameters of a function read without allocating them - a leaf of validation, which
- * never nests in itself, so the frame of a deep validation does not grow with it */
+/* parameters read into a stack buffer of this size before allocating - validation never
+ * recurses through a signature check, so the buffer does not grow deep validation frames */
 #define SIGNATURE_LOCAL 12
-/* the most partials and methods read around one another - only one made to call itself has more */
+/* the most nested partials and bound methods unwrapped - only a cycle reaches it */
 #define SIGNATURE_DEPTH 1024
 
 typedef struct {
     Parameter *parameters;
     Py_ssize_t count;
-    int extensible;        /* whether parameters not told may follow the ones told */
-    int named;             /* whether any told parameter may be given by name */
-    PyObject *description; /* borrowed - how the function is called, wording the errors */
+    int extensible;        /* whether more arguments may follow the parameters */
+    int named;             /* whether any parameter may be passed by name - cached from parameters */
+    PyObject *description; /* borrowed from the spec data - how the errors describe the call */
 } Signature;
 
-/* the parameters of a description - ((name, kind, defaulted), ...) - borrowing the names, after
- * `reserve` slots left free in front of them and with `tail` more free after them */
+static int
+is_named(ParameterKind kind)
+{
+    return kind == PARAMETER_POSITIONAL_OR_KEYWORD || kind == PARAMETER_KEYWORD_ONLY;
+}
+
+/* parameters of a description - ((name, kind, defaulted), ...) - borrowing the names. The
+ * buffer leaves `reserve` free slots before them and `tail` free slots after them */
 static Parameter *
 signature_parameters(PyObject *described, Py_ssize_t reserve, Py_ssize_t tail, Py_ssize_t *count)
 {
@@ -68,14 +77,15 @@ signature_parameters(PyObject *described, Py_ssize_t reserve, Py_ssize_t tail, P
         PyObject *name = PyTuple_GET_ITEM(item, 0);
         Parameter *parameter = &parameters[reserve + i];
         parameter->name = name == Py_None ? NULL : name;
-        parameter->kind = (int)kind;
+        parameter->kind = (ParameterKind)kind;
         parameter->defaulted = PyTuple_GET_ITEM(item, 2) == Py_True;
     }
     *count = n;
     return parameters;
 }
 
-/* a signature of a description - (parameters, extensible, description) - which outlives it */
+/* a signature of a description - (parameters, extensible, description) - borrowing from it,
+ * so the description has to outlive the signature */
 static Signature *
 signature_compile(PyObject *described)
 {
@@ -96,8 +106,7 @@ signature_compile(PyObject *described)
     }
     signature->extensible = PyTuple_GET_ITEM(described, 1) == Py_True;
     for (Py_ssize_t i = 0; i < signature->count; i++) {
-        int kind = signature->parameters[i].kind;
-        if (kind == PARAMETER_POSITIONAL_OR_KEYWORD || kind == PARAMETER_KEYWORD_ONLY) signature->named = 1;
+        if (is_named(signature->parameters[i].kind)) signature->named = 1;
     }
     signature->description = PyTuple_GET_ITEM(described, 2);
     return signature;
@@ -111,7 +120,7 @@ signature_free(Signature *signature)
     PyMem_RawFree(signature);
 }
 
-/* 1 when both are the same name, 0 when either has none or they differ, -1 on an error */
+/* 1 when both are the same name, 0 when either is NULL or they differ, -1 on an error */
 static int
 same_name(PyObject *first, PyObject *second)
 {
@@ -121,7 +130,7 @@ same_name(PyObject *first, PyObject *second)
 }
 
 static int
-has_parameter(const Parameter *parameters, Py_ssize_t count, int kind)
+has_parameter(const Parameter *parameters, Py_ssize_t count, ParameterKind kind)
 {
     for (Py_ssize_t i = 0; i < count; i++) {
         if (parameters[i].kind == kind) return 1;
@@ -129,7 +138,7 @@ has_parameter(const Parameter *parameters, Py_ssize_t count, int kind)
     return 0;
 }
 
-/* the parameters taking arguments by their position - those which come first */
+/* the number of leading parameters accepting arguments by position */
 static Py_ssize_t
 positional_count(const Parameter *parameters, Py_ssize_t count)
 {
@@ -141,19 +150,26 @@ positional_count(const Parameter *parameters, Py_ssize_t count)
     return n;
 }
 
-/* whether a name given to parameters is taken - 1, 0, or -1 on an error. A positional parameter
- * of the name takes it unless it was given by position already - by this call, or before it -
- * and the keywords of any name take what no parameter does, a name of a positional only
- * parameter included */
+/* whether the expected parameter at `index` is passed by name when the ones before
+ * `expected_positional` are passed by position */
+static int
+passed_by_name(const Parameter *expected, Py_ssize_t index, Py_ssize_t expected_positional)
+{
+    return index < expected_positional ? expected[index].kind == PARAMETER_POSITIONAL_OR_KEYWORD
+                                       : expected[index].kind == PARAMETER_KEYWORD_ONLY;
+}
+
+/* whether the parameters accept an argument passed by name, with `given` arguments passed by
+ * position - 1, 0, or -1 on an error. A parameter of that name decides: it refuses the name
+ * when it already got an argument by position, from this call or from a partial or bound
+ * method - **kwargs never takes it then. Only a name no parameter has goes to **kwargs - also
+ * the name of a positional only parameter */
 static int
 name_taken(const Parameter *taking, Py_ssize_t taking_count, int any_keywords, PyObject *name, Py_ssize_t given)
 {
     for (Py_ssize_t i = 0; i < taking_count; i++) {
         const Parameter *parameter = &taking[i];
-        if (parameter->kind != PARAMETER_POSITIONAL_OR_KEYWORD && parameter->kind != PARAMETER_KEYWORD_ONLY
-            && parameter->kind != PARAMETER_GIVEN) {
-            continue;
-        }
+        if (!is_named(parameter->kind) && parameter->kind != PARAMETER_GIVEN) continue;
         int same = same_name(parameter->name, name);
         if (same < 0) return -1;
         if (!same) continue;
@@ -163,124 +179,119 @@ name_taken(const Parameter *taking, Py_ssize_t taking_count, int any_keywords, P
     return any_keywords;
 }
 
-/* whether a told parameter given by name, past the first `positional` given by position, has
- * a name and no default - so every call gives it. 1, 0, or -1 on an error */
+/* whether every call passes the name - an expected parameter of that name, past the first
+ * `positional` passed by position, is passed by name and has no default. 1, 0, or -1 */
 static int
-always_named(const Parameter *told, Py_ssize_t told_count, Py_ssize_t told_positional, Py_ssize_t positional,
-    PyObject *name)
+always_named(const Parameter *expected, Py_ssize_t expected_count, Py_ssize_t expected_positional,
+    Py_ssize_t positional, PyObject *name)
 {
-    for (Py_ssize_t i = positional; i < told_count; i++) {
-        const Parameter *expected = &told[i];
-        int named = i < told_positional ? expected->kind == PARAMETER_POSITIONAL_OR_KEYWORD
-                                        : expected->kind == PARAMETER_KEYWORD_ONLY;
-        if (!named || expected->defaulted) continue;
-        int same = same_name(expected->name, name);
+    for (Py_ssize_t i = positional; i < expected_count; i++) {
+        if (!passed_by_name(expected, i, expected_positional) || expected[i].defaulted) continue;
+        int same = same_name(expected[i].name, name);
         if (same != 0) return same;
     }
     return 0;
 }
 
-/* whether parameters take the calls giving the first `positional` told parameters by position,
- * `given` arguments by position in all, and the rest by name or not at all - 1, 0, or -1. A
- * name only fails on its own, and a parameter only by being given nothing, so the calls which
- * differ in what they name are told by the names which may be given and those always given */
+/* whether the parameters accept the calls passing the first `positional` expected parameters
+ * by position, `given` arguments by position in total, and the rest by name or not at all -
+ * 1, 0, or -1 on an error. Each name passed has to be accepted on its own, and each required
+ * parameter has to get an argument, so checking the names which may be passed and the names
+ * always passed covers every combination of the optional ones */
 static int
-calls_taken(const Parameter *taking, Py_ssize_t taking_count, const Parameter *told, Py_ssize_t told_count,
+calls_taken(const Parameter *taking, Py_ssize_t taking_count, const Parameter *expected, Py_ssize_t expected_count,
     Py_ssize_t positional, Py_ssize_t given)
 {
     Py_ssize_t taking_positional = positional_count(taking, taking_count);
-    Py_ssize_t told_positional = positional_count(told, told_count);
+    Py_ssize_t expected_positional = positional_count(expected, expected_count);
     int any_keywords = has_parameter(taking, taking_count, PARAMETER_VAR_KEYWORD);
     if (given > taking_positional && !has_parameter(taking, taking_count, PARAMETER_VAR_POSITIONAL)) return 0;
 
-    for (Py_ssize_t i = positional; i < told_count; i++) {
-        const Parameter *expected = &told[i];
-        int named = i < told_positional ? expected->kind == PARAMETER_POSITIONAL_OR_KEYWORD
-                                        : expected->kind == PARAMETER_KEYWORD_ONLY;
-        if (!named) continue;
-        int r = name_taken(taking, taking_count, any_keywords, expected->name, given);
+    for (Py_ssize_t i = positional; i < expected_count; i++) {
+        if (!passed_by_name(expected, i, expected_positional)) continue;
+        int r = name_taken(taking, taking_count, any_keywords, expected[i].name, given);
         if (r <= 0) return r;
     }
     for (Py_ssize_t i = 0; i < taking_count; i++) {
         const Parameter *parameter = &taking[i];
         if (parameter->defaulted) continue;
         if (i < taking_positional) {
-            if (i < given) continue; /* given by position */
+            if (i < given) continue; /* passed by position */
             if (parameter->kind == PARAMETER_POSITIONAL_ONLY) return 0;
         } else if (parameter->kind != PARAMETER_KEYWORD_ONLY) {
-            continue; /* the variadic ones take what there is */
+            continue; /* *args and **kwargs require nothing */
         }
-        int r = always_named(told, told_count, told_positional, positional, parameter->name);
+        int r = always_named(expected, expected_count, expected_positional, positional, parameter->name);
         if (r <= 0) return r;
     }
     return 1;
 }
 
-/* the fewest told positional parameters given by position - every one after it can be given
- * by name, or left out for its default */
+/* the fewest expected positional parameters passed by position - each one after it can be
+ * passed by name or left out for its default */
 static Py_ssize_t
-fewest_positional(const Parameter *told, Py_ssize_t told_positional)
+fewest_positional(const Parameter *expected, Py_ssize_t expected_positional)
 {
-    Py_ssize_t fewest = told_positional;
+    Py_ssize_t fewest = expected_positional;
     while (fewest > 0
-        && (told[fewest - 1].kind == PARAMETER_POSITIONAL_OR_KEYWORD || told[fewest - 1].defaulted)) {
+        && (expected[fewest - 1].kind == PARAMETER_POSITIONAL_OR_KEYWORD || expected[fewest - 1].defaulted)) {
         fewest--;
     }
     return fewest;
 }
 
-/* whether parameters take the calls of told parameters which more may follow - those of a
- * parameter specification, of which nothing is known. The told ones have to fit, by position
- * and by name - what follows may give whatever else the parameters need, so none of them has
- * to be given. A name given past more positional arguments is the harder to take, so each is
- * tried given at its own position - 1, 0, or -1 on an error */
+/* whether the parameters accept the calls of expected parameters which more arguments may
+ * follow - those of a ParamSpec, which may be anything. The expected parameters have to fit
+ * by position and by name, while the rest may pass whatever else the parameters require, so
+ * nothing is required. A name is harder to accept after more positional arguments, so each
+ * one is checked at its own position - 1, 0, or -1 on an error */
 static int
-open_calls_taken(const Parameter *taking, Py_ssize_t taking_count, const Parameter *told, Py_ssize_t told_count)
+open_calls_taken(const Parameter *taking, Py_ssize_t taking_count, const Parameter *expected,
+    Py_ssize_t expected_count)
 {
     Py_ssize_t taking_positional = positional_count(taking, taking_count);
-    Py_ssize_t told_positional = positional_count(told, told_count);
-    if (told_positional > taking_positional && !has_parameter(taking, taking_count, PARAMETER_VAR_POSITIONAL)) {
+    Py_ssize_t expected_positional = positional_count(expected, expected_count);
+    if (expected_positional > taking_positional && !has_parameter(taking, taking_count, PARAMETER_VAR_POSITIONAL)) {
         return 0;
     }
     int any_keywords = has_parameter(taking, taking_count, PARAMETER_VAR_KEYWORD);
-    for (Py_ssize_t i = fewest_positional(told, told_positional); i < told_positional; i++) {
-        if (told[i].kind != PARAMETER_POSITIONAL_OR_KEYWORD) continue;
-        int r = name_taken(taking, taking_count, any_keywords, told[i].name, i);
+    for (Py_ssize_t i = fewest_positional(expected, expected_positional); i < expected_positional; i++) {
+        if (expected[i].kind != PARAMETER_POSITIONAL_OR_KEYWORD) continue;
+        int r = name_taken(taking, taking_count, any_keywords, expected[i].name, i);
         if (r <= 0) return r;
     }
     return 1;
 }
 
-/* whether parameters take every call the told ones are made with - 1, 0, or -1 on an error.
- * The told positional parameters are given by position up to some of them, the rest by name
- * or left out for their defaults, and the variadic ones some more - each such number of them
- * is tried. With more told to follow, the told positional ones only have to fit */
+/* whether the parameters accept every call of the expected ones - 1, 0, or -1 on an error.
+ * Every split of the expected positional parameters is tried - the first ones passed by
+ * position, the rest by name or left out - and with *args, more positional arguments than
+ * any parameter takes. When more arguments may follow, the expected ones only have to fit */
 static int
-signature_fits(const Parameter *taking, Py_ssize_t taking_count, const Parameter *told, Py_ssize_t told_count,
+signature_fits(const Parameter *taking, Py_ssize_t taking_count, const Parameter *expected, Py_ssize_t expected_count,
     int extensible)
 {
-    Py_ssize_t taking_positional = positional_count(taking, taking_count);
-    Py_ssize_t told_positional = positional_count(told, told_count);
-    if (extensible) return open_calls_taken(taking, taking_count, told, told_count);
-    if (has_parameter(told, told_count, PARAMETER_VAR_KEYWORD)
+    if (extensible) return open_calls_taken(taking, taking_count, expected, expected_count);
+    if (has_parameter(expected, expected_count, PARAMETER_VAR_KEYWORD)
         && !has_parameter(taking, taking_count, PARAMETER_VAR_KEYWORD)) {
-        return 0; /* given a name nothing else takes */
+        return 0; /* may be passed a name nothing accepts */
     }
-    Py_ssize_t fewest = fewest_positional(told, told_positional);
-    int told_variadic = has_parameter(told, told_count, PARAMETER_VAR_POSITIONAL);
-    for (Py_ssize_t positional = fewest; positional <= told_positional; positional++) {
-        int r = calls_taken(taking, taking_count, told, told_count, positional, positional);
+    Py_ssize_t taking_positional = positional_count(taking, taking_count);
+    Py_ssize_t expected_positional = positional_count(expected, expected_count);
+    for (Py_ssize_t positional = fewest_positional(expected, expected_positional); positional <= expected_positional;
+        positional++) {
+        int r = calls_taken(taking, taking_count, expected, expected_count, positional, positional);
         if (r <= 0) return r;
     }
-    if (told_variadic) { /* given more than any parameter takes by position */
-        Py_ssize_t more = (taking_positional > told_positional ? taking_positional : told_positional) + 1;
-        int r = calls_taken(taking, taking_count, told, told_count, told_positional, more);
+    if (has_parameter(expected, expected_count, PARAMETER_VAR_POSITIONAL)) {
+        Py_ssize_t more = (taking_positional > expected_positional ? taking_positional : expected_positional) + 1;
+        int r = calls_taken(taking, taking_count, expected, expected_count, expected_positional, more);
         if (r <= 0) return r;
     }
     return 1;
 }
 
-/* the length of what a function attribute holds, 0 for None - -1 on an error */
+/* the length of a function attribute, 0 for None - -1 on an error */
 static Py_ssize_t
 function_values(PyObject *function, PyObject *name)
 {
@@ -291,28 +302,28 @@ function_values(PyObject *function, PyObject *name)
     return count;
 }
 
-/* what partials - and the object a method is bound to - give a function before it is called:
- * its first `stored` positions are given, and `holes` of those - each a Placeholder - are given
- * by the call first, by position only. Which of the positions they are tells nothing more - the
- * call fills them in order, then the positions after the stored ones */
+/* the arguments partials and bound methods pass before the call does: the first `stored`
+ * positions, `holes` of them Placeholders which the call fills first, by position. Which
+ * positions are holes does not matter - the call fills them in order, then continues after
+ * the stored ones */
 typedef struct {
     Py_ssize_t stored;
     Py_ssize_t holes;
-    PyObject *keywords; /* a dict of its own, what is given by name - NULL for nothing */
-    int refused;        /* given a name which is not a string - no call takes it */
+    PyObject *keywords; /* an owned dict of the arguments passed by name, NULL for none */
 } Given;
 
-/* the parameters a function takes, read from its code - after `reserve` slots left free in
- * front of them, and with room after them for the first `stored` of them. Their names are read only when `naming` - without them a keyword only parameter
- * has a default only when every one has, which tells the same when nothing is given by name.
- * The parameters, in `local` when its `room` is enough, borrow from `*names` (a new reference or
- * NULL), their count in `*count` - NULL on an error */
+/* the parameters of a function, read from its code, in a buffer with `reserve` free slots
+ * before them and room for up to `stored` more after them. Names are read only when
+ * `naming` - without them a keyword only parameter is defaulted only when every one is,
+ * which is equivalent when nothing is passed by name. The buffer is `local` when its `room`
+ * is enough, otherwise allocated with PyMem_RawCalloc. The parameters borrow their names from
+ * `*names` (a new reference or NULL), their count goes to `*count` - NULL on an error */
 static Parameter *
 code_parameters(ModuleState *state, PyObject *function, Py_ssize_t reserve, Py_ssize_t stored, int naming,
     Parameter *local, Py_ssize_t room, Py_ssize_t *count, PyObject **names)
 {
     *names = NULL;
-    /* read through the attributes - each may be replaced while it is read */
+    /* the attributes are read through Python - any of them may be replaced concurrently */
     PyObject *code = PyObject_GetAttr(function, state->str_code);
     if (code == NULL) return NULL;
     if (!PyCode_Check(code)) {
@@ -345,10 +356,11 @@ code_parameters(ModuleState *state, PyObject *function, Py_ssize_t reserve, Py_s
         keyword_defaults = PyObject_GetAttr(function, state->str_kwdefaults);
         if (keyword_defaults == NULL) goto failed;
     }
+    /* the parameters, *args and **kwargs, and a slot for each positional one passed already */
     Py_ssize_t size = reserve + positional + keyword + 2 + (stored < positional ? stored : positional);
     Parameter *base = local;
     if (size > room) {
-        base = PyMem_Calloc((size_t)size, sizeof(Parameter));
+        base = PyMem_RawCalloc((size_t)size, sizeof(Parameter));
         if (base == NULL) {
             Py_XDECREF(keyword_defaults);
             PyErr_NoMemory();
@@ -395,18 +407,19 @@ code_parameters(ModuleState *state, PyObject *function, Py_ssize_t reserve, Py_s
     return base;
 
 released:
-    if (base != local) PyMem_Free(base);
+    if (base != local) PyMem_RawFree(base);
 failed:
     Py_CLEAR(*names);
     return NULL;
 }
 
-/* the parameters left to a call once what is given was given - in place of the `count` ones of
- * `base`, which has `given->holes` slots free in front of them and room for the given ones
- * after them. Each hole is a positional only parameter first, a parameter given by name has a
- * default, and every positional one after it can be given by name only. The ones given by
- * position follow the rest, their names failing a call giving them again. 1 with them in
- * `*taking`, 0 when it can't be called that way at all, -1 on an error */
+/* the parameters left for the call after applying what partials and bound methods pass, in
+ * place of the `count` parameters of `base`, which has `given->holes` free slots before them
+ * and room after them for the ones passed by position. Each hole becomes a leading positional
+ * only parameter, and a parameter passed by name becomes defaulted, turning each positional
+ * parameter after it keyword only. The parameters passed by position are appended as
+ * PARAMETER_GIVEN, so passing their names again fails. 1 with the result in `*taking`, 0 when
+ * the arguments passed already fail every call, -1 on an error */
 static int
 given_parameters(Parameter *base, Py_ssize_t count, const Given *given, Parameter **taking, Py_ssize_t *taking_count)
 {
@@ -414,34 +427,32 @@ given_parameters(Parameter *base, Py_ssize_t count, const Given *given, Paramete
     Py_ssize_t positional = positional_count(parameters, count);
     int any_keywords = has_parameter(parameters, count, PARAMETER_VAR_KEYWORD);
     if (given->stored > positional && !has_parameter(parameters, count, PARAMETER_VAR_POSITIONAL)) {
-        return 0; /* given more than it takes */
+        return 0; /* too many positional arguments */
     }
     PyObject *keywords = given->keywords;
-    if (keywords != NULL) { /* what is given by name - read before the given positions are left */
+    if (keywords != NULL) { /* checked before the positions passed are dropped */
         Py_ssize_t matched = 0;
         for (Py_ssize_t i = 0; i < count; i++) {
             const Parameter *parameter = &parameters[i];
-            /* a positional only parameter is never given by name - its name goes to the keywords
-             * of any name, or nowhere */
-            if (parameter->kind != PARAMETER_POSITIONAL_OR_KEYWORD && parameter->kind != PARAMETER_KEYWORD_ONLY) continue;
-            if (parameter->name == NULL) continue;
+            /* a positional only parameter is never passed by name - its name goes to **kwargs, if any */
+            if (!is_named(parameter->kind) || parameter->name == NULL) continue;
             int r = PyDict_Contains(keywords, parameter->name);
             if (r < 0) return -1;
             if (!r) continue;
-            if (i < given->stored && i < positional) return 0; /* given by position already */
+            if (i < given->stored && i < positional) return 0; /* passed by position as well */
             matched += 1;
         }
         if (matched < PyDict_GET_SIZE(keywords) && !any_keywords) return 0;
     }
-    /* the given positions are left, and the holes come first in their place */
+    /* drop the positions passed, putting the holes in their place */
     Py_ssize_t skipped = given->stored < positional ? given->stored : positional;
     Py_ssize_t blocked = 0;
     for (Py_ssize_t i = 0; i < skipped; i++) {
         if (parameters[i].kind != PARAMETER_POSITIONAL_OR_KEYWORD || parameters[i].name == NULL) continue;
-        Parameter *given_name = &parameters[count + blocked++];
-        given_name->name = parameters[i].name;
-        given_name->kind = PARAMETER_GIVEN;
-        given_name->defaulted = 1;
+        Parameter *passed = &parameters[count + blocked++];
+        passed->name = parameters[i].name;
+        passed->kind = PARAMETER_GIVEN;
+        passed->defaulted = 1;
     }
     Parameter *left = parameters + skipped - given->holes;
     for (Py_ssize_t i = 0; i < given->holes; i++) {
@@ -454,17 +465,15 @@ given_parameters(Parameter *base, Py_ssize_t count, const Given *given, Paramete
     *taking_count = n + blocked;
     if (keywords == NULL) return 1;
 
-    int named = 0; /* whether a positional parameter was given by name - the ones after it too */
+    int named = 0; /* whether a positional parameter was passed by name - so are the ones after it */
     for (Py_ssize_t i = given->holes; i < n; i++) {
         Parameter *parameter = &left[i];
         if (parameter->kind == PARAMETER_VAR_POSITIONAL && named) {
-            parameter->kind = PARAMETER_NONE; /* given anything, it gives the named one twice */
+            parameter->kind = PARAMETER_NONE; /* any argument would pass the named one twice */
             continue;
         }
-        if (parameter->name == NULL
-            || (parameter->kind != PARAMETER_POSITIONAL_OR_KEYWORD && parameter->kind != PARAMETER_KEYWORD_ONLY)) {
-            continue; /* never given by name - the variadic ones are named by Python, never taking it */
-        }
+        /* *args and **kwargs have names in the code, but are never passed by them */
+        if (parameter->name == NULL || !is_named(parameter->kind)) continue;
         int r = PyDict_Contains(keywords, parameter->name);
         if (r < 0) return -1;
         if (r) {
@@ -478,88 +487,101 @@ given_parameters(Parameter *base, Py_ssize_t count, const Given *given, Paramete
     return 1;
 }
 
-/* the keywords of a partial joined with what partials around it give - those given later win,
- * as functools merges them. 1, 0 when they are not what a partial holds, -1 on an error - a name
- * which is not a string is refused by every call, which `given->refused` tells */
-static int
+/* what unwrapping partials and bound methods ends with */
+typedef enum {
+    UNWRAP_FAILED = -1, /* an error is set */
+    UNWRAP_FOREIGN,     /* a partial not made by functools - read whole by inspect */
+    UNWRAP_REFUSED,     /* no call succeeds - a keyword which is not a string, or a cycle */
+    UNWRAP_CALLEE,      /* the callable called in the end */
+} Unwrapped;
+
+/* joins the keywords of a partial with those of the partials around it - the outer ones win,
+ * as functools merges them */
+static Unwrapped
 given_keywords(Given *given, PyObject *keywords)
 {
-    if (!PyDict_Check(keywords)) return 0;
-    if (PyDict_GET_SIZE(keywords) == 0) return 1;
-    PyObject *joined = PyDict_Copy(keywords); /* its own - nothing changes it while it is read */
-    if (joined == NULL) return -1;
+    if (!PyDict_Check(keywords)) return UNWRAP_FOREIGN;
+    if (PyDict_GET_SIZE(keywords) == 0) return UNWRAP_CALLEE;
+    PyObject *joined = PyDict_Copy(keywords); /* a copy nothing else changes while it is read */
+    if (joined == NULL) return UNWRAP_FAILED;
     if (given->keywords != NULL && PyDict_Update(joined, given->keywords) < 0) {
         Py_DECREF(joined);
-        return -1;
+        return UNWRAP_FAILED;
     }
+    Py_XSETREF(given->keywords, joined);
     Py_ssize_t position = 0;
     PyObject *name;
     while (PyDict_Next(joined, &position, &name, NULL)) {
-        if (!PyUnicode_Check(name)) { /* a call refuses it whatever is called */
-            given->refused = 1;
-            break;
-        }
+        if (!PyUnicode_Check(name)) return UNWRAP_REFUSED;
     }
-    Py_XSETREF(given->keywords, joined);
-    return 1;
+    return UNWRAP_CALLEE;
 }
 
-/* a partial is what it calls, given its arguments first and its keywords by name, and a method
- * is what it calls given the object it is bound to first - a new reference to what is called
- * in the end, with what it is given in `given`. NULL on an error, and with no error for a
- * partial which is not what functools makes - left to Python */
-static PyObject *
-unwrap_partial(ModuleState *state, PyObject *value, Given *given)
+/* unwraps partials and bound methods to the callable they call, with a new reference in
+ * `*callee` and what they pass in `given`. A partial passes its arguments first and its
+ * keywords by name, a bound method passes its object first. Unless UNWRAP_CALLEE is returned,
+ * `*callee` is NULL and `given` is empty */
+static Unwrapped
+unwrap_partial(ModuleState *state, PyObject *value, Given *given, PyObject **callee)
 {
-    PyObject *callee = Py_NewRef(value);
+    Unwrapped result = UNWRAP_CALLEE;
+    *callee = Py_NewRef(value);
     for (Py_ssize_t depth = 0;; depth++) {
-        if (depth > SIGNATURE_DEPTH) { /* made to call itself - no call ever ends */
-            given->refused = 1;
-            return callee;
+        if (depth > SIGNATURE_DEPTH) {
+            result = UNWRAP_REFUSED;
+            goto unwrapped;
         }
-        if (Py_IS_TYPE(callee, &PyMethod_Type)) {
-            given->stored += 1; /* what it is bound to comes first - a method never changes it */
-            Py_SETREF(callee, Py_NewRef(PyMethod_GET_FUNCTION(callee)));
+        if (Py_IS_TYPE(*callee, &PyMethod_Type)) {
+            given->stored += 1; /* the bound object comes first */
+            Py_SETREF(*callee, Py_NewRef(PyMethod_GET_FUNCTION(*callee)));
             continue;
         }
-        if (!Py_IS_TYPE(callee, (PyTypeObject *)state->partial)) break;
-        PyObject *keywords = PyObject_GetAttr(callee, state->str_keywords);
-        if (keywords == NULL) goto failed;
-        int r = given_keywords(given, keywords);
+        if (!Py_IS_TYPE(*callee, (PyTypeObject *)state->partial)) return UNWRAP_CALLEE;
+        PyObject *keywords = PyObject_GetAttr(*callee, state->str_keywords);
+        if (keywords == NULL) {
+            result = UNWRAP_FAILED;
+            goto unwrapped;
+        }
+        result = given_keywords(given, keywords);
         Py_DECREF(keywords);
-        if (r <= 0) goto failed;
-        PyObject *arguments = PyObject_GetAttr(callee, state->str_args);
-        if (arguments == NULL) goto failed;
+        if (result != UNWRAP_CALLEE) goto unwrapped;
+        PyObject *arguments = PyObject_GetAttr(*callee, state->str_args);
+        if (arguments == NULL) {
+            result = UNWRAP_FAILED;
+            goto unwrapped;
+        }
         if (!PyTuple_Check(arguments)) {
             Py_DECREF(arguments);
-            goto failed;
+            result = UNWRAP_FOREIGN;
+            goto unwrapped;
         }
         Py_ssize_t stored = PyTuple_GET_SIZE(arguments), holes = 0;
         for (Py_ssize_t i = 0; i < stored; i++) {
             if (PyTuple_GET_ITEM(arguments, i) == state->placeholder) holes++;
         }
         Py_DECREF(arguments);
-        /* what was given around it fills its holes first, and follows what it gives */
+        /* the outer arguments fill the holes of this partial first, then follow its arguments */
         Py_ssize_t outer_stored = given->stored;
         given->holes += holes > outer_stored ? holes - outer_stored : 0;
         given->stored = stored + (outer_stored > holes ? outer_stored - holes : 0);
-        PyObject *function = PyObject_GetAttr(callee, state->str_func);
-        Py_SETREF(callee, function);
-        if (callee == NULL) goto failed;
+        Py_SETREF(*callee, PyObject_GetAttr(*callee, state->str_func));
+        if (*callee == NULL) {
+            result = UNWRAP_FAILED;
+            goto unwrapped;
+        }
     }
-    return callee;
 
-failed:
-    Py_XDECREF(callee);
+unwrapped:
+    Py_CLEAR(*callee);
     Py_CLEAR(given->keywords);
     given->stored = given->holes = 0;
-    return NULL;
+    return result;
 }
 
-/* the function an object is called through - the __call__ its class defines, found as the call
- * itself finds it, along the classes it is made of rather than on the object. A new reference
- * to that function, given what it binds first, or NULL when it is not a function written in
- * Python - 0, or -1 on an error */
+/* the Python function an object is called through - the __call__ of its class, looked up
+ * along the MRO as the call itself does, skipping the object. A new reference in `*function`
+ * with the arguments it binds first in `*bound`, or NULL when it is not a Python function -
+ * 0, or -1 on an error */
 static int
 class_call(ModuleState *state, PyTypeObject *type, PyObject **function, Py_ssize_t *bound)
 {
@@ -590,23 +612,23 @@ class_call(ModuleState *state, PyTypeObject *type, PyObject **function, Py_ssize
     if (found == NULL) return 0;
     if (PyFunction_Check(found)) {
         *function = found;
-        *bound = 1; /* the object itself comes first */
+        *bound = 1; /* the object itself */
         return 0;
     }
     if (Py_IS_TYPE(found, &PyStaticMethod_Type)) {
         PyObject *wrapped = PyObject_GetAttrString(found, "__func__");
         Py_DECREF(found);
         if (wrapped == NULL) return -1;
-        if (PyFunction_Check(wrapped)) *function = wrapped; /* given nothing first */
+        if (PyFunction_Check(wrapped)) *function = wrapped; /* binds nothing */
         else Py_DECREF(wrapped);
         return 0;
     }
-    Py_DECREF(found); /* a descriptor of another kind - asked of Python */
+    Py_DECREF(found); /* another kind of descriptor - left to inspect */
     return 0;
 }
 
-/* the function a callable calls in the end, written in Python - a new reference, with what is
- * given to it first added to `given` - or NULL, with no error when it is not such a function */
+/* the Python function a callable calls in the end - a new reference, adding the arguments it
+ * binds first to `given` - or NULL, with no error when it is not a Python function */
 static PyObject *
 called_function(ModuleState *state, PyObject *callee, Given *given)
 {
@@ -619,9 +641,9 @@ called_function(ModuleState *state, PyObject *callee, Given *given)
     return function;
 }
 
-/* the parameters Python reads of a callable which is not a function - its signature, of which
- * what is given is left here, as it is for a function. NULL with no error when it has none to
- * read, the description it borrows from in `*described` */
+/* the parameters inspect reads of a callable which is not a Python function, laid out as
+ * code_parameters lays them out. NULL with no error when it has no signature to read. The
+ * parameters borrow their names from `*described` */
 static Parameter *
 read_parameters(ModuleState *state, PyObject *callee, Py_ssize_t reserve, Py_ssize_t stored, Py_ssize_t *count,
     PyObject **described)
@@ -643,21 +665,23 @@ read_parameters(ModuleState *state, PyObject *callee, Py_ssize_t reserve, Py_ssi
     return parameters;
 }
 
-/* whether a callable can be called the way a signature tells - 1, 0, or -1 on an error. Kept
- * out of line - inlined into validation, its parameters would deepen every frame of it */
+/* whether a callable accepts the calls of a signature - 1, 0, or -1 on an error. Not inlined,
+ * as its locals would deepen every validation frame it was inlined into */
 static Py_NO_INLINE int
-signature_accepts(ModuleState *state, Signature *signature, PyObject *described, PyObject *value)
+signature_accepts(ModuleState *state, Signature *signature, PyObject *value)
 {
-    Given given = {0, 0, NULL, 0};
-    PyObject *callee = unwrap_partial(state, value, &given);
-    if (callee == NULL) {
-        if (PyErr_Occurred()) return -1;
-        callee = Py_NewRef(value); /* a partial of its own kind - all of it read by Python */
-    }
-    if (given.refused) {
-        Py_DECREF(callee);
-        Py_XDECREF(given.keywords);
+    Given given = {0, 0, NULL};
+    PyObject *callee;
+    switch (unwrap_partial(state, value, &given, &callee)) {
+    case UNWRAP_FAILED:
+        return -1;
+    case UNWRAP_REFUSED:
         return 0;
+    case UNWRAP_FOREIGN:
+        callee = Py_NewRef(value);
+        break;
+    case UNWRAP_CALLEE:
+        break;
     }
     PyObject *function = called_function(state, callee, &given);
     if (function == NULL && PyErr_Occurred()) {
@@ -677,7 +701,7 @@ signature_accepts(ModuleState *state, Signature *signature, PyObject *described,
         base = read_parameters(state, callee, given.holes, given.stored, &count, &names);
     }
     if (base == NULL) {
-        r = PyErr_Occurred() ? -1 : 1; /* a callable without a signature to read is not refused */
+        r = PyErr_Occurred() ? -1 : 1; /* no signature to read - accepted without a check */
     } else {
         Parameter *taking = NULL;
         Py_ssize_t taking_count = 0;
@@ -685,8 +709,7 @@ signature_accepts(ModuleState *state, Signature *signature, PyObject *described,
         if (r > 0) {
             r = signature_fits(taking, taking_count, signature->parameters, signature->count, signature->extensible);
         }
-        if (function == NULL) PyMem_RawFree(base);
-        else if (base != local) PyMem_Free(base);
+        if (base != local) PyMem_RawFree(base);
     }
     Py_XDECREF(names);
     Py_XDECREF(function);
@@ -695,26 +718,26 @@ signature_accepts(ModuleState *state, Signature *signature, PyObject *described,
     return r;
 }
 
-/* signature_fits(parameters, told, extensible) - the parameters Python read of a callable,
- * compared the way the parameters of a function are */
+/* signature_fits(parameters, expected, extensible) - compares parameters described in Python
+ * the way the parameters of a callable are compared */
 static PyObject *
 signature_fits_native(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
 {
     if (nargs != 3) {
-        PyErr_SetString(PyExc_TypeError, "signature_fits(parameters, told, extensible)");
+        PyErr_SetString(PyExc_TypeError, "signature_fits(parameters, expected, extensible)");
         return NULL;
     }
-    Py_ssize_t taking_count = 0, told_count = 0;
+    Py_ssize_t taking_count = 0, expected_count = 0;
     Parameter *taking = signature_parameters(args[0], 0, 0, &taking_count);
     if (taking == NULL) return NULL;
-    Parameter *told = signature_parameters(args[1], 0, 0, &told_count);
-    if (told == NULL) {
+    Parameter *expected = signature_parameters(args[1], 0, 0, &expected_count);
+    if (expected == NULL) {
         PyMem_RawFree(taking);
         return NULL;
     }
-    int r = signature_fits(taking, taking_count, told, told_count, PyObject_IsTrue(args[2]) > 0);
+    int r = signature_fits(taking, taking_count, expected, expected_count, PyObject_IsTrue(args[2]) > 0);
     PyMem_RawFree(taking);
-    PyMem_RawFree(told);
+    PyMem_RawFree(expected);
     if (r < 0) return NULL;
     return PyBool_FromLong(r);
 }

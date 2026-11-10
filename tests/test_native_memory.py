@@ -1072,7 +1072,7 @@ def test_checking_partials_with_placeholders_does_not_leak() -> None:
     exec(f"def many({', '.join(f'a{index}' for index in range(40))}, /): pass", many)  # nosec: B102
     two_holes: list[Any] = [Placeholder] * 2 + [0] * 38
     many_holes: list[Any] = [Placeholder] * 20 + [0] * 20
-    # kept apart from the partials around them by attributes of their own
+    # an attribute of their own keeps functools from merging them with the outer partials
     inner_named = functools.partial(named, third=b"")
     inner_named.kept = True
     inner_holed = functools.partial(three, Placeholder, Placeholder, b"")
@@ -1106,7 +1106,7 @@ def test_checking_partials_with_placeholders_does_not_leak() -> None:
 
 
 def test_functions_are_checked_from_many_threads_at_once() -> None:
-    # every kind of callable at once - the answers Python caches are shared by the threads
+    # every kind of callable at once - the cached signatures are shared between threads
     class Holding(State):
         handler: _CalledBack
 

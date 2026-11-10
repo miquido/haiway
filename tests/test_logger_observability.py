@@ -297,7 +297,7 @@ async def test_scope_kind_is_accepted_by_the_logger_backend(
 
 
 class _Unformattable:
-    # formatting it fails the test - what is never kept must never be formatted
+    # formatting it fails the test - a discarded log must never be formatted
     def __str__(self) -> str:
         raise AssertionError("formatted a discarded record")
 
@@ -455,8 +455,7 @@ async def test_discarded_logs_are_not_formatted(
 def test_retained_context_is_not_checked_by_level(
     logger: tuple[Logger, list[LogRecord]],
 ) -> None:
-    # the summary of a retained context holds recordings whatever the logger level,
-    # so nothing may be skipped before reaching it
+    # a debug context summarizes recordings of every level, so none may be skipped
     instance, _ = logger
     assert LoggerObservability(instance, debug_context=True).level_checking is None
     assert LoggerObservability(instance, debug_context=False).level_checking is not None

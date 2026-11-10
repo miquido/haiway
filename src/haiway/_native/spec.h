@@ -56,7 +56,7 @@ typedef struct Spec {
     PyObject *data;
     Py_ssize_t count;
     struct Spec **children;
-    Signature *signature;   /* a function: how it is called, NULL for any way */
+    Signature *signature;   /* a function: the calls it has to accept, NULL for any */
 } Spec;
 
 static void
@@ -146,8 +146,8 @@ spec_compile(PyObject *description)
         }
     }
     spec->count = n;
-    /* a function stays pure - reading the signature of an exotic callable may run its code,
-     * but nothing read from JSON is callable, and a default is validated once, failing late */
+    /* a function stays pure - reading the signature of an unusual callable may run its code,
+     * but nothing read from JSON is callable, and a default is validated only once */
     spec->pure = spec->validating == NULL && spec->verifying == NULL && spec->kind != SPEC_CUSTOM
         && spec->kind != SPEC_CUSTOM_STATE && spec->kind != SPEC_ALIAS;
     spec->nested = n > 0 || spec->kind == SPEC_ALIAS || spec->kind == SPEC_STATE || spec->kind == SPEC_CUSTOM_STATE
@@ -400,12 +400,12 @@ check_elements(ModuleState *state, Spec *element, PyObject *items)
     return 1;
 }
 
-/* whether a callable can be called the way the annotation of a function tells */
+/* whether a callable accepts the calls the annotation of a function describes */
 static int
 function_accepts(ModuleState *state, Spec *spec, PyObject *value)
 {
     if (spec->signature == NULL) return 1;
-    return signature_accepts(state, spec->signature, spec->data, value);
+    return signature_accepts(state, spec->signature, value);
 }
 
 /* whether a value is accepted as it is - what the first pass of a union decides by */

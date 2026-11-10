@@ -21,8 +21,14 @@ from pytest import param
 from haiway import State, ValidationError, asynchronous, cache, retry, throttle, timeout
 from haiway._native import nstruct
 from haiway.attributes import native
+from haiway.attributes.annotations import (
+    CallableSignature,
+    FunctionAttribute,
+    FunctionSignature,
+    ProtocolSignature,
+)
 
-# --- a protocol describing a function, checked against what holds it ------------------------
+# --- callback protocols checked against the values of a field ------------------------------
 
 
 class Handler(Protocol):
@@ -130,7 +136,7 @@ HANDLERS: list[tuple[str, Any, bool]] = [
     ("extra required", _extra_required, False),
     ("anything", _anything, True),
     ("variadic without the name", _positional_variadic, False),
-    # given by position the retries end among the variadic ones, leaving the name without one
+    # passed by position, retries lands in *args, so the name has no parameter left
     ("variadic with the name", _variadic_named, False),
     ("lambda", lambda request, /, retries, *, timeout=1.0: request, True),  # pyright: ignore[reportUnknownLambdaType]
     ("bound method", _Service().handle, True),
@@ -152,7 +158,7 @@ def test_protocol_functions_are_called_the_way_the_protocol_tells(
     value: Any,
     accepted: bool,
 ) -> None:
-    for _ in range(2):  # told once, then answered from what was told for what is cached
+    for _ in range(2):  # read once, then answered from the cache where cached
         if accepted:
             assert Holding(handler=value).handler is value
             continue
@@ -295,7 +301,7 @@ def test_protocols_with_more_than_a_call_are_not_functions() -> None:
 
         def __call__(self, extra: int) -> None: ...
 
-    # told by its members, as a runtime checkable protocol always was - not by a signature
+    # checked by its members, as runtime checkable protocols always were - not by a signature
     assert isinstance(Holder(value=Value()).value, Value)  # pyright: ignore[reportArgumentType]
 
 
@@ -335,7 +341,7 @@ def test_concatenated_callable_only_checks_what_it_tells() -> None:
     assert Holder(function=first).function is first
 
 
-# --- every call a protocol allows, made to what holds it -------------------------------------
+# --- every call a protocol allows, made to the value ------------------------------------------
 
 _NAMES: Sequence[str] = ("a", "b", "c", "d")
 _KINDS: Sequence[Any] = (
@@ -346,7 +352,7 @@ _KINDS: Sequence[Any] = (
 
 
 def _random_parameters(generator: random.Random) -> list[inspect.Parameter]:
-    # a valid signature of a few parameters, sharing their names with the others generated
+    # a valid signature of a few parameters, drawing names from a shared pool
     names: list[str] = generator.sample(_NAMES, generator.randint(0, 3))
     parameters: list[inspect.Parameter] = []
     for name in names:
@@ -396,7 +402,7 @@ def _variants(
     generator: random.Random,
     parameters: list[inspect.Parameter],
 ) -> Iterator[tuple[str, Any]]:
-    # the same parameters taken by each kind of callable, and a partial of extra ones
+    # the same parameters accepted by each kind of callable, and by a partial of extra ones
     namespace: dict[str, Any] = {}
     after_self: str = "self, " if parameters else "self"
     exec(  # nosec: B102
@@ -426,8 +432,8 @@ def _variants(
         keywords: dict[str, Any] = dict.fromkeys(generator.sample(named, 1), 0)
         yield ("partial by name", partial(_function(parameters), **keywords))
 
-    # a placeholder left for the first parameter, by position only and given each time - the
-    # same parameters taken, a stored one following it
+    # a Placeholder for the first parameter, always passed by position - the same parameters
+    # accepted, followed by a stored argument
     if (
         parameters
         and parameters[0].kind is inspect.Parameter.POSITIONAL_ONLY
@@ -443,7 +449,7 @@ def _variants(
 
 def _calls(told: Sequence[inspect.Parameter]) -> Iterator[tuple[tuple[Any, ...], dict[str, Any]]]:
     # every way of calling a function of these parameters - by position or by name, each
-    # default given or left out, with the variadic arguments some more
+    # default passed or left out, and more arguments for *args and **kwargs
     positional: list[inspect.Parameter] = [
         parameter
         for parameter in told
@@ -456,7 +462,7 @@ def _calls(told: Sequence[inspect.Parameter]) -> Iterator[tuple[tuple[Any, ...],
     keywords: bool = any(parameter.kind is parameter.VAR_KEYWORD for parameter in told)
     for given in range(len(positional) + 1):
         rest: list[inspect.Parameter] = positional[given:]
-        # what is not given by position is given by name, or left out for its default
+        # what is not passed by position is passed by name, or left out for its default
         if any(
             parameter.kind is parameter.POSITIONAL_ONLY and parameter.default is parameter.empty
             for parameter in rest
@@ -477,7 +483,7 @@ def _calls(told: Sequence[inspect.Parameter]) -> Iterator[tuple[tuple[Any, ...],
             arguments: dict[str, Any] = {
                 parameter.name: 0 for parameter, used in zip(named, chosen, strict=True) if used
             }
-            # some more, and more than any generated function takes by position
+            # more arguments, also more than any generated function takes by position
             more: Sequence[int] = (0, 1, 6) if variadic and given == len(positional) else (0,)
             for extra in more:
                 for unknown in (False, True) if keywords else (False,):
@@ -536,13 +542,13 @@ def test_functions_are_accepted_exactly_when_they_take_every_call_of_the_protoco
                     value,
                 )
 
-    # both answers were checked, plenty of times
+    # both outcomes were exercised, many times
     assert checked[True] > 500
     assert checked[False] > 500
 
 
 def test_signatures_read_by_python_are_compared_the_same() -> None:
-    # the fallback compares what inspect reads - for a plain function the same as its code
+    # the inspect fallback - for a plain function it matches reading the code
     generator = random.Random(37)
     for _ in range(2000):
         told: list[inspect.Parameter] = _random_parameters(generator)
@@ -581,7 +587,7 @@ def test_functions_of_many_parameters_are_read() -> None:
     holder: type[State] = _protocol(told)
     function: Callable[..., None] = _function(told)
     assert holder(value=function).value is function  # pyright: ignore[reportCallIssue, reportAttributeAccessIssue]
-    # given by name, the last can't be given by position any more
+    # once passed by name, the last parameter can't be passed by position
     with pytest.raises(ValidationError):
         holder(value=partial(function, a79=0))  # pyright: ignore[reportCallIssue]
 
@@ -604,7 +610,7 @@ def test_replaced_code_is_read_when_validating() -> None:
         Holding(handler=function)
 
 
-# --- what is told of callables by their kind, without telling them apart wrongly ------------
+# --- signatures cached per kind of callable, never mixed up between callables --------------
 
 
 @functools.cache
@@ -623,7 +629,7 @@ class _TakingTwo(State):
 
 @pytest.mark.parametrize("first", [_cached_one, _cached_two])
 def test_wrappers_of_one_kind_are_told_by_what_they_wrap(first: Any) -> None:
-    # whichever is told first, the other is told on its own - not by the answer of its kind
+    # whichever is read first, the other is read on its own - not from a cache of its kind
     for value in (first, _cached_two if first is _cached_one else _cached_one):
         if value is _cached_two:
             assert _TakingTwo(function=value).function is value
@@ -652,9 +658,9 @@ def test_partials_giving_names_twice_are_told_each_on_its_own() -> None:
     def two(first: int, *, third: int, fourth: int) -> int:
         return first
 
-    # a partial of a partial, both giving names - kept apart by what each one holds
+    # a partial of a partial, both passing keywords - each read with its own
     inner_taking = partial(three, third=1)
-    inner_taking.kept = True  # an attribute of its own keeps functools from joining them
+    inner_taking.kept = True  # an attribute of its own keeps functools from merging them
     inner_refused = partial(two, third=1)
     inner_refused.kept = True
     taking = partial(inner_taking, fourth=1)
@@ -730,7 +736,7 @@ def test_decorated_functions_are_taken_as_what_they_decorate(
     assert Plain(fetching=value).fetching is value
 
 
-# --- every call of told parameters which more may follow, completed somehow -----------------
+# --- extensible signatures, each call completed by further arguments ------------------------
 
 
 def _completes_every_call(
@@ -738,9 +744,9 @@ def _completes_every_call(
     told: Sequence[inspect.Parameter],
     taking: Sequence[inspect.Parameter],
 ) -> bool:
-    # each call of the told parameters has to be made to work by giving more - positional
-    # arguments, or the names of what is left - as a parameter specification may give anything
-    # a partial given its first argument takes the rest at the positions of the parameters
+    # each call of the expected parameters has to succeed with some further arguments -
+    # positional ones, or the remaining names - as a ParamSpec may pass anything
+    # a partial passing the first argument takes the rest at the positions of the parameters
     keywords: Mapping[str, Any] = value.keywords if isinstance(value, partial) else {}
     positional: list[inspect.Parameter] = [
         parameter
@@ -824,11 +830,11 @@ def test_functions_are_accepted_exactly_when_they_complete_every_call_of_an_open
     assert checked[False] > 100
 
 
-# --- partials of every kind, with placeholders, keywords and partials around them -----------
+# --- partials with placeholders, keywords and outer partials --------------------------------
 
 
 def _random_arguments(generator: random.Random, count: int) -> list[Any]:
-    # stored arguments, some of them placeholders - never the last one, as functools refuses it
+    # stored arguments, some Placeholders - never the last one, which functools refuses
     arguments: list[Any] = [Placeholder if generator.random() < 0.4 else 0 for _ in range(count)]
     if arguments:
         arguments[-1] = 0
@@ -849,7 +855,7 @@ def _random_keywords(
 
 
 def _random_callee(generator: random.Random, parameters: list[inspect.Parameter]) -> Any:
-    # what a partial calls in the end - read of its code, or of its signature by Python
+    # what the partial calls in the end - read from its code, or by inspect
     variants: list[tuple[str, Any]] = [
         (kind, value)
         for kind, value in _variants(generator, parameters)
@@ -868,7 +874,7 @@ def _random_partial(generator: random.Random, parameters: list[inspect.Parameter
         *_random_arguments(generator, generator.randint(0, positional + 2)),
         **_random_keywords(generator, parameters),
     )
-    if generator.random() < 0.4:  # another one around it, kept apart from it
+    if generator.random() < 0.4:  # an outer partial, not merged with it
         value.kept = True
         value = partial(
             value,
@@ -877,7 +883,7 @@ def _random_partial(generator: random.Random, parameters: list[inspect.Parameter
         )
         assert isinstance(value.func, partial)
 
-    if generator.random() < 0.2:  # bound as a method - given the object first
+    if generator.random() < 0.2:  # a bound method - passing the object first
         value = MethodType(value, _REFERRED)
 
     return value
@@ -896,7 +902,7 @@ def test_partials_are_accepted_exactly_when_they_take_every_call_of_the_protocol
                 value: Any = _random_partial(generator, taking)
 
             except TypeError:
-                continue  # a partial functools refuses to make
+                continue  # functools refuses this partial
 
             held: Any = value.__func__ if isinstance(value, MethodType) else value
             placeholders += Placeholder in held.args or (
@@ -917,7 +923,7 @@ def test_partials_are_accepted_exactly_when_they_take_every_call_of_the_protocol
                 value,
             )
 
-    # fitting partials are the rarer ones - still plenty of both, most with placeholders
+    # fitting partials are rarer - still plenty of both, most with Placeholders
     assert checked[True] > 250
     assert checked[False] > 2000
     assert placeholders > 1000
@@ -952,7 +958,7 @@ def test_placeholders_are_given_by_the_call_first() -> None:
     with pytest.raises(ValidationError):
         TakingNone(function=holed)
 
-    # given by the call, by position only - never by name
+    # passed by the call, by position only - never by name
     class Named(Protocol):
         def __call__(self, first: int) -> None: ...
 
@@ -982,7 +988,7 @@ def test_placeholders_within_variadic_arguments_are_given_by_the_call() -> None:
 
 
 def test_many_placeholders_are_read() -> None:
-    # more holes than parameters are read without allocating them
+    # more holes than the stack buffer of the extension holds - read into an allocated one
     arguments: list[Any] = [Placeholder] * 30 + [0]
     value = partial(_holed_function(31), *arguments)
     assert _taking_positional(30)(value=value) is not None  # pyright: ignore[reportCallIssue]
@@ -1004,7 +1010,7 @@ def test_partials_around_partials_fill_their_placeholders_first() -> None:
 
     inner = partial(three, Placeholder, Placeholder, 3)
     inner.kept = True
-    filled = partial(inner, 1)  # fills the first hole - the second is left to the call
+    filled = partial(inner, 1)  # fills the first hole, leaving the second to the call
     assert filled.func is inner
     assert _taking_positional(1)(value=filled) is not None  # pyright: ignore[reportCallIssue]
     with pytest.raises(ValidationError):
@@ -1015,7 +1021,7 @@ def test_partials_around_partials_fill_their_placeholders_first() -> None:
     with pytest.raises(ValidationError):
         _taking_positional(1)(value=full)  # pyright: ignore[reportCallIssue]
 
-    holed = partial(inner, Placeholder, 2)  # a hole of its own, filling the inner one
+    holed = partial(inner, Placeholder, 2)  # its own hole, filling the inner one
     assert _taking_positional(1)(value=holed) is not None  # pyright: ignore[reportCallIssue]
 
 
@@ -1031,12 +1037,12 @@ def test_partials_of_their_own_kind_are_read_by_python() -> None:
         _taking_positional(2)(value=value)  # pyright: ignore[reportCallIssue]
 
 
-# --- what is read of callables is kept by what tells it, never by what looks alike -----------
+# --- cached signatures are keyed by their owner, never by a lookalike ------------------------
 
 
 class _Compiled(weakref.ref):  # pyright: ignore[reportMissingTypeArgument]
-    # a callable of C telling its own code, as a function compiled by Cython does - every one of
-    # its kind called through the same __call__ of C, each one taking its own parameters
+    # a C callable exposing its own code, as Cython functions do - all of its class share one
+    # __call__ of C, yet each accepts its own parameters
     __slots__ = ("__annotations__", "__code__", "__defaults__", "__kwdefaults__", "__name__")
 
 
@@ -1116,8 +1122,8 @@ def test_builtins_bound_to_classes_are_told_by_their_class(first: str) -> None:
 
 
 def _corpus() -> list[Any]:
-    # callables Python reads the signatures of - of modules, of classes, of objects and of
-    # what wraps them - many sharing a name or a kind with another one
+    # callables read by inspect - of modules, classes, objects and wrappers - many sharing a
+    # name or a class with another one
     modules: list[Any] = [builtins, math, operator, itertools, functools, datetime, decimal]
     classes: list[type[Any]] = [
         value for module in modules for value in vars(module).values() if isinstance(value, type)
@@ -1252,7 +1258,7 @@ def test_names_given_by_position_already_are_refused_by_open_protocols() -> None
 
     def taking(a: int, **keywords: Any) -> None: ...
 
-    # given `a` by position, the partial can't be given `a` by name - `**keywords` included
+    # once `a` is passed by position, the partial can't pass `a` by name - not even to `**keywords`
     with pytest.raises(ValidationError):
         Holder(value=partial(taking, 0))  # pyright: ignore[reportArgumentType]
 
@@ -1277,3 +1283,51 @@ def test_partials_made_to_call_themselves_are_refused() -> None:
     assert value.func is value
     with pytest.raises(ValidationError):
         _TakingOne(function=value)
+
+
+# --- the signature read from an annotation -----------------------------------------------------
+
+
+class _PositionalAndDefaulted(Protocol):
+    def __call__(self, a: int, /, b: int = 1) -> None: ...
+
+
+class _Forwarding[**P](Protocol):
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None: ...
+
+
+def _variadic[*Ts]() -> Any:
+    return Callable[[int, *Ts], None]
+
+
+@pytest.mark.parametrize(
+    ("annotation", "expected"),
+    [
+        (Callable[[int, str], None], (2, False)),
+        (Callable[[], None], (0, False)),
+        (Callable[Concatenate[int, ...], None], (1, True)),
+        (_variadic(), (1, True)),
+        (Callable[..., None], None),
+        (Callable, None),
+        (_Forwarding[...], None),
+    ],
+)
+def test_callable_signature_is_read(annotation: Any, expected: tuple[int, bool] | None) -> None:
+    signature: FunctionSignature | None = FunctionAttribute(base=annotation).signature
+    if expected is None:
+        assert signature is None
+
+    else:
+        assert isinstance(signature, CallableSignature)
+        assert (signature.arguments, signature.extensible) == expected
+
+
+def test_protocol_signature_drops_the_instance() -> None:
+    signature: FunctionSignature | None = FunctionAttribute(base=_PositionalAndDefaulted).signature
+    assert isinstance(signature, ProtocolSignature)
+    assert signature.protocol is _PositionalAndDefaulted
+    assert not signature.extensible
+    assert [(parameter.name, parameter.kind) for parameter in signature.parameters] == [
+        ("a", inspect.Parameter.POSITIONAL_ONLY),
+        ("b", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+    ]

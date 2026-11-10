@@ -115,11 +115,24 @@ def _no_trace_context(
 
 @runtime_checkable
 class ObservabilityLevelChecking(Protocol):
-    """Tell whether anything recorded at the given level within a scope would be kept.
+    """
+    Check whether recordings of a level within a scope would be kept.
 
-    Answering ``False`` lets a log, event, metric or attributes recorded at that
-    level be skipped before its arguments are passed on. Answering ``True`` only
-    lets the recording through - the recording functions still decide on their own.
+    Asked before a log, event, metric or attributes are passed to the recording
+    functions, so a discarded recording costs no formatting or argument passing.
+
+    Parameters
+    ----------
+    scope : ContextIdentifier
+        The scope of the recording.
+    level : ObservabilityLevel
+        The level of the recording.
+
+    Returns
+    -------
+    bool
+        ``False`` to skip the recording. ``True`` passes it on - the recording
+        functions may still discard it.
     """
 
     def __call__(
@@ -238,7 +251,7 @@ class Observability:  # avoiding State inheritance to prevent propagation as sco
         scope_exiting: ObservabilityScopeExiting,
         # optional - a backend with no trace position to hand out propagates nothing
         trace_context_encoding: ObservabilityTraceContextEncoding | None = None,
-        # optional - a backend which can't tell what it keeps gets every recording
+        # optional - without it every recording is passed on
         level_checking: ObservabilityLevelChecking | None = None,
     ) -> None:
         self.trace_identifying: ObservabilityTraceIdentifying
@@ -711,7 +724,7 @@ def LoggerObservability(  # noqa: C901, PLR0915
         attributes_recording=attributes_recording,
         scope_entering=scope_entering,
         scope_exiting=scope_exiting,
-        # a retained context keeps every recording for the summary, whatever its level
+        # a debug context summarizes every recording, whatever its level
         level_checking=None if debug_context else level_checking,
     )
 
@@ -838,7 +851,7 @@ class ContextObservability:
         cls,
         level: ObservabilityLevel,
         message: str,
-        # a tuple rather than unpacked - handed over as received, without repacking
+        # a tuple rather than *args - passed on as received, without repacking
         args: tuple[Any, ...] = (),
         /,
         *,
@@ -851,7 +864,7 @@ class ContextObservability:
 
         except LookupError:  # fallback for access out of context
             root: Logger = getLogger()
-            if root.isEnabledFor(level):  # skip formatting what would be discarded
+            if root.isEnabledFor(level):  # don't format what is discarded
                 root.log(
                     level,
                     format_log_message(message, args),
@@ -862,7 +875,7 @@ class ContextObservability:
 
         try:
             if context._discards(level):
-                return  # skip passing on what would be discarded
+                return  # discarded by the backend
 
             context.observability.log_recording(
                 context._scope,
@@ -905,7 +918,7 @@ class ContextObservability:
 
         try:  # catch exceptions - we don't want to blow up on observability
             if context._discards(level):
-                return  # skip passing on what would be discarded
+                return  # discarded by the backend
 
             context.observability.event_recording(
                 context._scope,
@@ -943,7 +956,7 @@ class ContextObservability:
 
         try:  # catch exceptions - we don't want to blow up on observability
             if context._discards(level):
-                return  # skip passing on what would be discarded
+                return  # discarded by the backend
 
             context.observability.metric_recording(
                 context._scope,
@@ -980,7 +993,7 @@ class ContextObservability:
 
         try:  # catch exceptions - we don't want to blow up on observability
             if context._discards(level):
-                return  # skip passing on what would be discarded
+                return  # discarded by the backend
 
             context.observability.attributes_recording(
                 context._scope,
@@ -1000,7 +1013,6 @@ class ContextObservability:
         level: ObservabilityLevel,
         /,
     ) -> bool:
-        # whether the observability tells it would discard what is recorded at the level
         checking: ObservabilityLevelChecking | None = self.observability.level_checking
         return checking is not None and not checking(self._scope, level)
 

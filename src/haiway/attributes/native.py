@@ -14,7 +14,7 @@ from types import (
     ModuleType,
     WrapperDescriptorType,
 )
-from typing import TYPE_CHECKING, Any, Final, get_origin
+from typing import TYPE_CHECKING, Any, Final, Literal
 from weakref import WeakKeyDictionary
 
 from haiway._native import nstruct
@@ -24,6 +24,7 @@ from haiway.attributes.annotations import (
     AttributeAnnotation,
     BoolAttribute,
     BytesAttribute,
+    CallableSignature,
     CustomAttribute,
     DateAttribute,
     DatetimeAttribute,
@@ -38,6 +39,7 @@ from haiway.attributes.annotations import (
     NoneAttribute,
     ObjectAttribute,
     PathAttribute,
+    ProtocolSignature,
     SequenceAttribute,
     SetAttribute,
     StrEnumAttribute,
@@ -50,7 +52,6 @@ from haiway.attributes.annotations import (
     UUIDAttribute,
     ValidableAttribute,
     _no_verify,  # pyright: ignore[reportPrivateUsage]
-    is_callback_protocol,
 )
 from haiway.attributes.attribute import Attribute
 from haiway.types.immutable import Immutable
@@ -422,11 +423,11 @@ def validate(
     return nstruct.validate(spec, value)
 
 
-# how a function is called - the parameters it is told, whether others may follow, and how
-# the errors word it - the data of the spec of a function
+# the data of a function spec: the parameters to check, whether more arguments may follow,
+# and the wording of the error
 type SignatureDescription = tuple[SignatureParameters, bool, str]
-# the parameters of a callable, each (name, kind, defaulted) - the name of a positional only
-# one left out, as it is never given by name
+# parameters as (name, kind, defaulted) - a positional only parameter has no name, as it
+# is never passed by name
 type SignatureParameters = tuple[tuple[str | None, int, bool], ...]
 
 
@@ -445,68 +446,53 @@ def _parameters(
 
 
 def _signature_description(annotation: FunctionAttribute, /) -> SignatureDescription | None:
-    parameters: Sequence[inspect.Parameter] = annotation.parameters
-    extensible: bool = annotation.extensible
-    if extensible and not parameters:
-        return None  # called any way at all - nothing to check
+    match annotation.signature:
+        case None:
+            return None  # accepts any call - nothing to check
 
-    origin: Any = get_origin(annotation.base) or annotation.base
-    description: str
-    if is_callback_protocol(origin):
-        description = f"as {origin.__name__}{inspect.Signature(parameters)}"
+        case CallableSignature(arguments=arguments, extensible=extensible):
+            return (
+                ((None, int(inspect.Parameter.POSITIONAL_ONLY), False),) * arguments,
+                extensible,
+                f"with {arguments} positional argument{'' if arguments == 1 else 's'}",
+            )
 
-    else:
-        description = (
-            f"with {len(parameters)} positional argument{'' if len(parameters) == 1 else 's'}"
-        )
-
-    return (_parameters(parameters), extensible, description)
+        case ProtocolSignature(protocol=protocol, parameters=parameters, extensible=extensible):
+            return (
+                _parameters(parameters),
+                extensible,
+                f"as {protocol.__name__}{inspect.Signature(parameters)}",
+            )
 
 
 def parameters(
     value: Any,
     /,
 ) -> SignatureParameters | None:
-    """
-    Read the parameters of a callable which is not a plain function.
-
-    The extension reads functions from their code, and leaves the rest - classes, builtins,
-    descriptors, objects called through a ``__call__`` which is not a function - to the
-    signature Python reads. What a partial gives is left by the extension in either case,
-    so ``value`` is what such a partial calls in the end.
-
-    Parameters
-    ----------
-    value : Any
-        A callable which is not a function written in Python.
-
-    Returns
-    -------
-    SignatureParameters | None
-        Its parameters as ``(name, kind, defaulted)``, the name of a positional only one
-        left out - or ``None`` when it has no signature to read, which is never refused.
-    """
+    # the extension hook reading callables which are not Python functions - classes,
+    # builtins, descriptors, objects with a __call__ of C. Partials are already unwrapped
+    # by the extension, so value is what they call in the end
     found: tuple[_Read, Any] | None = _read_of(value)
     if found is None:
         return _read(value)
 
-    read, name = found
+    read, key = found
     with _READ_LOCK:
-        if name in read:
-            return read[name]
+        if key in read:
+            return read[key]
 
     known: SignatureParameters | None = _read(value)
     with _READ_LOCK:
-        read[name] = known
+        read[key] = known
 
     return known
 
 
-# what was read of callables, by what owns their signature - a class, a module, a class or an
-# object a builtin is bound to, the class a descriptor is of, what a wrapper wraps, the class of
-# an object called through a __call__ of C - as reading a signature takes microseconds. Held
-# weakly by that owner, so nothing is kept alive by having been read. A callable is held by an
-# owner only when the owner tells its signature - when it gives that very callable
+# parameters read by inspect, cached per owner of the signature as reading one takes
+# microseconds. An owner is the class, the module, or the class of the bound object which
+# gives the callable, the class of a descriptor, what a wrapper wraps, or the class of an
+# object with a __call__ of C. Keyed weakly, so caching keeps nothing alive. A callable is
+# cached only when getting it from its owner gives it back - otherwise it is one of a kind
 type _Read = dict[Any, SignatureParameters | None]
 _READ: Final[WeakKeyDictionary[Any, _Read]] = WeakKeyDictionary()
 _READ_LOCK: Final[Lock] = Lock()
@@ -515,12 +501,19 @@ _DESCRIPTORS: Final[tuple[type[Any], ...]] = (
     WrapperDescriptorType,
     ClassMethodDescriptorType,
 )
+_ABSENT: Final[object] = object()
+
+# where a cached signature is found within its owner
+type _ReadKey = (
+    tuple[Literal["class", "called"], None]
+    | tuple[Literal["bound", "descriptor"], str]
+    | tuple[Literal["wrapped"], type[Any]]
+)
 
 
-def _owner(value: Any, /) -> tuple[Any, Any] | None:
-    # what owns the signature of a callable, and its name within that owner
+def _owner(value: Any, /) -> tuple[Any, _ReadKey] | None:
     if isinstance(value, type):
-        return (value, None)
+        return (value, ("class", None))
 
     if isinstance(value, BuiltinFunctionType | MethodWrapperType):
         return _bound_owner(value)
@@ -531,9 +524,8 @@ def _owner(value: Any, /) -> tuple[Any, Any] | None:
     return _object_owner(value)
 
 
-def _bound_owner(value: BuiltinFunctionType | MethodWrapperType, /) -> tuple[Any, Any] | None:
-    # a builtin is told by the attribute it was got of - a function of a module, a method
-    # of a class, or of the class of an object - only when that attribute gives it again
+def _bound_owner(value: BuiltinFunctionType | MethodWrapperType, /) -> tuple[Any, _ReadKey] | None:
+    # a builtin function of a module, or a builtin method of a class or of an object
     bound: Any = value.__self__
     name: str = value.__name__
     owner: Any
@@ -541,7 +533,7 @@ def _bound_owner(value: BuiltinFunctionType | MethodWrapperType, /) -> tuple[Any
     try:
         match bound:
             case None:
-                return None  # nothing to hold it by
+                return None  # nothing to cache it by
 
             case ModuleType():
                 owner = bound
@@ -556,17 +548,16 @@ def _bound_owner(value: BuiltinFunctionType | MethodWrapperType, /) -> tuple[Any
                 found = _got(_held(owner, name), bound, owner)
 
         if type(found) is not type(value) or found != value:
-            return None  # not what the owner gives - one of its own
+            return None  # not the one its owner gives
 
     except Exception:
-        return None  # an attribute which can't be got - nothing to tell it by
+        return None  # the attribute can't be got
 
     return (owner, ("bound", name))
 
 
 def _held(cls: type[Any], name: str, /) -> Any:
-    # what a class holds by the name, along the classes it is made of - without running what
-    # getting it would run
+    # the attribute along the MRO, without running a descriptor
     for base in cls.__mro__:
         attribute: Any = base.__dict__.get(name, _ABSENT)
         if attribute is not _ABSENT:
@@ -575,11 +566,8 @@ def _held(cls: type[Any], name: str, /) -> Any:
     return None
 
 
-_ABSENT: Final[object] = object()
-
-
 def _got(attribute: Any, instance: Any, owner: Any, /) -> Any:
-    # an attribute as getting it of an instance, or of the owner itself, gives it
+    # the attribute as attribute access on the instance, or on the owner, returns it
     kind: Any = attribute.__class__
     getter: Any = getattr(kind, "__get__", None)
     return attribute if getter is None else getter(attribute, instance, owner)
@@ -588,29 +576,28 @@ def _got(attribute: Any, instance: Any, owner: Any, /) -> Any:
 def _descriptor_owner(
     value: MethodDescriptorType | WrapperDescriptorType | ClassMethodDescriptorType,
     /,
-) -> tuple[Any, Any] | None:
+) -> tuple[Any, _ReadKey] | None:
     objclass: Any = value.__objclass__
     if _held(objclass, value.__name__) is not value:
-        return None  # not what its class holds - one of its own
+        return None  # not the one its class holds
 
     return (objclass, ("descriptor", value.__name__))
 
 
-def _object_owner(value: Any, /) -> tuple[Any, Any] | None:
-    # read of the object itself rather than of its kind - told apart by what it is
+def _object_owner(value: Any, /) -> tuple[Any, _ReadKey] | None:
     if isinstance(value, partial | MethodType) or getattr(value, "__signature__", None) is not None:
-        return None  # a signature of its own, which may differ for every one of its kind
+        return None  # a signature of its own, which may differ between objects of its class
 
-    kind: Any = value.__class__
+    kind: type[Any] = value.__class__
     if getattr(value, "__wrapped__", None) is not None:
-        try:  # a wrapper - a cached function, a static method - is read as what it wraps
+        try:  # a wrapper, like a cached function, is read as what it wraps
             wrapped: Any = inspect.unwrap(value, stop=_unwrapped)
 
         except ValueError:
-            return None  # wrapping itself, without an end
+            return None  # a cycle of wrappers
 
         if wrapped is value:
-            return None  # read of itself after all
+            return None  # inspect reads the wrapper itself
 
         return (wrapped, ("wrapped", kind))
 
@@ -619,29 +606,28 @@ def _object_owner(value: Any, /) -> tuple[Any, Any] | None:
         and getattr(value, "__code__", None) is None
         and getattr(value, "__text_signature__", None) is None
     ):
-        return (kind, ("called", None))  # called through a __call__ of C, the same for its kind
+        return (kind, ("called", None))  # a __call__ of C is the same for its whole class
 
-    # its own signature - a compiled function telling its own code, or a __call__ which may
-    # differ for every one of its kind
+    # a compiled function with its own code, or a __call__ which may differ between objects
     return None
 
 
 def _unwrapped(value: Any, /) -> bool:
-    # where inspect stops unwrapping - its signature is read from there
+    # where inspect stops unwrapping, reading the signature from there
     return hasattr(value, "__signature__") or isinstance(value, MethodType)
 
 
-def _read_of(value: Any, /) -> tuple[_Read, Any] | None:
-    owned: tuple[Any, Any] | None = _owner(value)
+def _read_of(value: Any, /) -> tuple[_Read, _ReadKey] | None:
+    owned: tuple[Any, _ReadKey] | None = _owner(value)
     if owned is None:
         return None
 
-    owner, name = owned
+    owner, key = owned
     try:
         with _READ_LOCK:
-            return (_READ.setdefault(owner, {}), name)
+            return (_READ.setdefault(owner, {}), key)
 
-    except TypeError:  # an owner which can't be referred to weakly
+    except TypeError:  # an owner which can't be weakly referenced
         return None
 
 
@@ -654,7 +640,7 @@ def _read(value: Any, /) -> SignatureParameters | None:
         )
 
     except TypeError, ValueError:
-        return None  # what can't be told is not refused
+        return None  # no signature to read - accepted without a check
 
     return _parameters(tuple(signature.parameters.values()))
 
@@ -728,7 +714,7 @@ class ValidationHooks(Immutable):
     report: Callable[[str, Exception], Any]  # raises a failure with its position
     unexpected: Callable[[type[Any], Any], Any]  # refuses a key of a mapping
     describe: Callable[[Any], Description]  # the description of an annotation resolved late
-    parameters: Callable[[Any], SignatureParameters | None]  # read of what is not a function
+    parameters: Callable[[Any], SignatureParameters | None]  # of what is not a Python function
     enum_values: Callable[[Any, bool], str]
     literal_values: Callable[[Sequence[Any]], str]
     b64decode: Callable[[str], bytes]
@@ -761,8 +747,8 @@ class TypeHooks(Immutable):
     path: type[Any]
     pathlike: type[Any]
     meta: type[Any]
-    partial: type[Any]  # functools.partial - what is unwrapped to the function it calls
-    placeholder: Any  # functools.Placeholder - a position of a partial given by the call
+    partial: type[Any]  # functools.partial - unwrapped to the function it calls
+    placeholder: Any  # functools.Placeholder - a position a partial leaves to the call
 
 
 def configure(
