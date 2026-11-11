@@ -18,6 +18,8 @@ else:
 
 
 @recursive_repr()
-def plain_repr[Key, Element](mapping: Mapping[Key, Element]) -> str:
+def plain_repr[Key, Element](
+    mapping: Mapping[Key, Element],
+) -> str:
     """The way a `dict` is printed, which `frozendict` does with the name of its class."""
     return repr({**mapping})

@@ -297,7 +297,7 @@ class Immutable(nstruct.Struct, metaclass=ImmutableMeta):
         return f"{self.__class__.__name__}({attributes})"
 
     def __repr__(self) -> str:
-        return str(self)
+        return self.__str__()
 
     def __copy__(self) -> Self:
         return self  # Immutable, no need to provide an actual copy
