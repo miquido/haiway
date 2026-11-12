@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence, Set
 from typing import Annotated, Any, Concatenate, Generic, NotRequired, Required, TypedDict, TypeVar
 
 import pytest
@@ -571,3 +571,46 @@ def test_special_forms_wrapping_a_parameter_resolve_it() -> None:
 
     with pytest.raises(ValidationError):
         _HoldsPartial[int](payload={"optional": 1})  # pyright: ignore[reportArgumentType]
+
+
+class _Collections[T](State):
+    sequence: Sequence[T] = ()
+    mapping: Mapping[str, T] | None = None
+    unique: Set[T] | None = None
+    listed: list[T] | None = None
+
+
+class _ItemsOf[T](TypedDict):
+    items: Sequence[T]
+
+
+class _HoldsItems(State):
+    payload: _ItemsOf[int]
+
+
+@pytest.mark.parametrize(
+    "values",
+    (
+        {"sequence": ["one"]},
+        {"mapping": {"key": "one"}},
+        {"unique": {"one"}},
+        {"listed": ["one"]},
+    ),
+)
+def test_collections_of_a_parameter_validate_their_elements(values: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        _Collections[int](**values)
+
+
+def test_collections_of_a_parameter_accept_matching_elements() -> None:
+    held = _Collections[int](sequence=[1], mapping={"key": 2}, unique={3}, listed=[4])
+    assert held.sequence == (1,)
+    assert held.mapping == {"key": 2}
+    assert held.unique == {3}
+    assert held.listed == (4,)
+
+
+def test_typed_dict_collection_of_a_parameter_validates_its_elements() -> None:
+    assert _HoldsItems(payload={"items": [1]}).payload == {"items": (1,)}
+    with pytest.raises(ValidationError):
+        _HoldsItems(payload={"items": ["one"]})  # pyright: ignore[reportArgumentType]

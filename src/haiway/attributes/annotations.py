@@ -5136,10 +5136,13 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 
     # a generic given a type parameter is specialized once the parameter is known - a
     # special form wrapping a parameter, `Annotated[T, ...]` among them, is resolved by
-    # its own case below instead, which resolves the parameter and keeps the form
+    # its own case below instead, which resolves the parameter and keeps the form. So is a
+    # builtin or abstract collection, `Sequence[T]` among them - it declares no type
+    # parameters to specialize, and its own case resolves the element types
     if (
         origin is not None
         and origin not in _PARAMETER_WRAPPING_FORMS
+        and getattr(origin, "__parameters__", ())
         and any(
             isinstance(argument, TypeVar)
             # a variadic parameter or a parameter specification is only given to a generic

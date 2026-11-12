@@ -265,9 +265,9 @@ async with ctx.scope("server"):          # owns the bus
         # this subscription ends when "request" exits, whether or not "server" is still open
 ```
 
-That is what makes a subscription safe to consume unboundedly in the scope which created it,
-including a task spawned there or in an enclosing scope. A scope completes its closing before
-joining its tasks, so the pending iteration ends first and the join never waits on it:
+That is what makes a subscription safe to consume unboundedly in a task spawned in the scope which
+created it, or in an enclosing scope. A scope completes its closing before joining its tasks, so the
+pending iteration ends first and the join never waits on it:
 
 ```python
 async with ctx.scope("server"):
@@ -275,6 +275,14 @@ async with ctx.scope("server"):
         ctx.spawn(consumer)   # async for ... in ctx.subscribe(OrderCreated)
     # "request" exits, ending the subscription and then joining the consumer
 ```
+
+Anywhere else, iterating to exhaustion waits for the very exit it blocks:
+
+- Directly in the body of the creating scope - the scope can't begin closing until its body returns.
+- In a task spawned in a nested scope, or within `ctx.disposables(...)` - those join the task before
+  the creating scope begins closing.
+
+Consume the subscription with a bound there, or create it within the consuming task itself.
 
 A subscription created after its bus already closed is not an error - it finishes immediately
 instead of waiting for an event which can never arrive.

@@ -143,9 +143,11 @@ it. Delivery goes upwards - the sending scope and every scope enclosing it - so 
 requests) never observe each other's events; use `ctx.send(event, broadcast=True)` to reach every
 subscriber on the bus. A subscription ends when the scope which *created* it exits - or the scope
 owning the bus, whichever comes first - draining the events which already arrived, so it is safe to
-iterate one to exhaustion within the scope which created it, or in a task spawned there or in an
-enclosing scope - never in a task spawned in a nested scope, which joins the task before the
-subscription can end. It is an async generator: wrap it in `ctx.closing(...)` when
+iterate one to exhaustion in a task spawned in the scope which created it, or in an enclosing scope.
+It hangs when iterated to exhaustion directly in the body of the creating scope (which can't begin
+closing until the body returns), or in a task spawned in a nested scope or within
+`ctx.disposables(...)` (which join the task before the subscription can end). It is an async
+generator: wrap it in `ctx.closing(...)` when
 the iteration is left early.
 
 ## Concurrency

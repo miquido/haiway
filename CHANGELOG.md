@@ -185,6 +185,9 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
 - **A type parameter of a generic `TypedDict` or class is validated** - bound to its argument
   without resolving it, it was taken as is, and `Required[T]`, `NotRequired[T]` and `Final[T]`
   around a parameter validated nothing.
+- **A collection of a type parameter validates its elements** - in a generic `State` or `TypedDict`,
+  `Sequence[T]`, `Mapping[K, T]`, `Set[T]`, `list[T]` and the other collections of a parameter
+  accepted elements of any type once specialized, so `Holder[int]` took `["one"]`.
 - `ctx.disposables` releases its disposables with the failure of a task spawned within it, or with
   the cancellation of joining them - they were released as if the body succeeded, so a disposable
   committing on success committed.
