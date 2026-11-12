@@ -836,10 +836,32 @@ class FileAccessContext:
         # an operation which its caller stopped waiting for keeps running in its
         # executor thread - it stays tracked until it completes, so closing waits
         # for it rather than pulling the descriptor from under it
-        running: Task[Result] = ensure_future(start(file_handle))
+        running: Task[Result] = ensure_future(
+            self._after(tuple(self._running), start(file_handle))
+            if not _POSITIONAL_IO
+            else start(file_handle)
+        )
         self._running.add(running)
         running.add_done_callback(self._finished)
         return await shield(running)
+
+    async def _after[Result](
+        self,
+        previous: Sequence[Future[Any]],
+        operation: Coroutine[None, None, Result],
+        /,
+    ) -> Result:
+        # without positional IO operations share the descriptor offset, so each
+        # waits for the ones started before it instead of interleaving with them
+        try:
+            if previous:
+                await wait(previous)
+
+        except BaseException:
+            operation.close()
+            raise
+
+        return await operation
 
     def _finished(
         self,

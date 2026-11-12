@@ -721,6 +721,22 @@ def _descriptor_is_open(file_handle: int) -> bool:
 
 
 @pytest.mark.asyncio
+async def test_file_access_concurrent_reads_without_positional_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(files_module, "_POSITIONAL_IO", False)
+    content: bytes = os.urandom(200_000)
+    async with files_module.FileAccessContext(
+        tmp_path / "shared_offset.bin", create=True, exclusive=False
+    ) as file:
+        await file.write(content)
+        results = await asyncio.gather(*(file.read() for _ in range(16)))
+
+    assert all(result == content for result in results)
+
+
+@pytest.mark.asyncio
 async def test_file_access_concurrent_reads_return_complete_content(tmp_path: Path) -> None:
     content: bytes = os.urandom(200_000)
     async with files_module.FileAccessContext(
@@ -906,6 +922,7 @@ async def test_abandoned_close_swallows_failures() -> None:
     files_module._close_abandoned_file_handle(read_end, exclusive=False)  # pyright: ignore[reportPrivateUsage]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="positional IO is POSIX only")
 @pytest.mark.asyncio
 async def test_write_continues_after_partial_writes(
     tmp_path: Path,
@@ -953,6 +970,7 @@ async def test_write_fails_when_nothing_gets_written(
             await file.write(b"abc")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="positional IO is POSIX only")
 @pytest.mark.asyncio
 async def test_read_assembles_content_from_short_reads(
     tmp_path: Path,
