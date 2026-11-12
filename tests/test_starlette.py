@@ -1636,6 +1636,37 @@ async def test_routes_of_different_mounts_are_reported_apart() -> None:
 
 
 @mark.asyncio
+async def test_parameterized_mounts_are_reported_by_their_templates() -> None:
+    logger: Logger = getLogger("test-parameterized-mounts")
+
+    async def endpoint(request: Request) -> Response:
+        return PlainTextResponse("done")
+
+    app: Starlette = application(
+        ServerContext(observability=logger),
+        routes=[
+            Mount(
+                "/tenants/{tenant}",
+                routes=[Mount("/teams/{team}", routes=[Route("/items/{identifier}", endpoint)])],
+            ),
+        ],
+    )
+
+    async def routes_of(path: str) -> str:
+        with LogCapture(logger) as records:
+            await send_request(app, path=path)
+
+        return "\n".join(record for record in records if "Attributes:" in record)
+
+    async with running(app):
+        # the values a mount matched would make a metric series of every tenant
+        matched: str = await routes_of("/tenants/acme/teams/red/items/1")
+        assert '"http.route"]: "/tenants/{tenant}/teams/{team}/items/{identifier}"' in matched
+        unmatched: str = await routes_of("/tenants/acme/teams/red/missing")
+        assert '"http.route"]: "/tenants/{tenant}/teams/{team}/{path}"' in unmatched
+
+
+@mark.asyncio
 async def test_control_characters_of_a_path_can_not_forge_records() -> None:
     logger: Logger = getLogger("test-forged-path")
 
