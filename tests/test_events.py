@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 from asyncio import Task, get_running_loop
 from collections.abc import Callable
 
@@ -962,3 +963,24 @@ async def test_cancelled_iteration_keeps_the_events_which_arrive_meanwhile() -> 
         # cancellation is still the next one to be delivered
         ctx.send(OrderCreated(order_id="order", amount=42.0))
         assert (await anext(subscription)).order_id == "order"
+
+
+@mark.asyncio
+async def test_send_from_another_thread_reaches_subscribers():
+    async with ctx.scope("test"):
+        subscription = ctx.subscribe(OrderCreated)
+
+        async def subscriber() -> OrderCreated:
+            return await anext(subscription)
+
+        task = ctx.spawn(subscriber)
+        await asyncio.sleep(0)  # let the subscriber start waiting
+
+        def send_from_thread() -> None:
+            ctx.send(OrderCreated(order_id="threaded", amount=1.0))
+
+        run_in_context = contextvars.copy_context().run
+        await get_running_loop().run_in_executor(None, run_in_context, send_from_thread)
+
+        event = await asyncio.wait_for(task, timeout=1)
+        assert event.order_id == "threaded"

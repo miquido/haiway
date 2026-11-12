@@ -1,4 +1,4 @@
-from asyncio import CancelledError, sleep
+from asyncio import CancelledError, sleep, timeout
 from collections.abc import AsyncGenerator
 from types import TracebackType
 from typing import NoReturn
@@ -761,3 +761,38 @@ async def test_reports_release_failure_of_a_merge_which_ended_without_an_error()
     with raises(FakeException, match="release failed"):
         async for _ in stream_concurrently(exhausting(), failing_to_release()):
             pass
+
+
+class _SlowToClose(AsyncGenerator[int]):
+    def __aiter__(self) -> _SlowToClose:
+        return self
+
+    async def __anext__(self) -> NoReturn:
+        raise StopAsyncIteration
+
+    async def asend(self, value: None = None, /) -> NoReturn:
+        raise StopAsyncIteration
+
+    async def athrow(
+        self,
+        typ: type[BaseException] | BaseException,
+        val: object = None,
+        tb: TracebackType | None = None,
+        /,
+    ) -> NoReturn:
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        await sleep(0.05)
+
+
+async def _nothing() -> AsyncGenerator[int]:
+    return
+    yield 0
+
+
+@mark.asyncio
+async def test_ends_when_producer_is_cancelled_while_closing_its_source():
+    merged = stream_concurrently(_nothing(), _SlowToClose())
+    async with timeout(2):  # used to wait forever
+        assert [element async for element in merged] == []

@@ -16,7 +16,6 @@ from haiway.attributes.annotations import (
     UnionAttribute,
     ValidableAttribute,
     resolve_attribute,
-    resolve_self_attribute,
 )
 from haiway.attributes.state import State
 from haiway.attributes.validation import ValidationError
@@ -96,7 +95,7 @@ def _collect_parameter_aliases(  # noqa: C901, PLR0911, PLR0912
 
 
 def test_recursive_aliases_are_resolved() -> None:
-    state_attribute = resolve_self_attribute(ParameterContainer, parameters={})
+    state_attribute = ParameterContainer.__SELF_ATTRIBUTE__
 
     parameters_attribute = state_attribute.attributes["parameters"]
     assert isinstance(parameters_attribute, SequenceAttribute)

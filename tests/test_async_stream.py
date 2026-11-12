@@ -1,4 +1,4 @@
-from asyncio import CancelledError, Task, sleep
+from asyncio import CancelledError, Task, create_task, sleep, to_thread
 
 import pytest
 from pytest import raises
@@ -324,3 +324,17 @@ async def test_aclosing_ends_the_stream():
 
     with raises(StopAsyncIteration):
         await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_finish_from_another_thread_releases_waiting_consumer_and_producer():
+    stream = AsyncStream[int]()
+    consumer = create_task(stream.__anext__())
+    await sleep(0)
+
+    await to_thread(stream.finish)
+
+    with raises(StopAsyncIteration):
+        await consumer
+
+    assert stream.finished

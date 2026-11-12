@@ -5,7 +5,7 @@ from collections.abc import Generator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from types import TracebackType
-from typing import Any
+from typing import Any, final
 
 import pytest
 
@@ -13,13 +13,13 @@ from haiway import (
     Configuration,
     ConfigurationRepository,
     ContextPresets,
-    Immutable,
     Pagination,
     State,
     asynchronous,
     ctx,
 )
 from haiway.starlette import ServerContext
+from haiway.types.frozen import refuse_assignment, refuse_deletion
 
 # A State handed over to the constructs of haiway - scopes, presets, disposables, tasks,
 # events, threads, configuration and the server context - is used as the very instance it
@@ -53,8 +53,16 @@ class Snapshot(State):
     mapping: Mapping[str, int]
 
 
-class Record(Immutable):
+@final
+class Record:
     value: int
+    __slots__ = ("value",)
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(self, *, value: int) -> None:
+        object.__setattr__(self, "value", value)
 
 
 class _Releasing:
@@ -274,7 +282,7 @@ async def test_states_and_records_are_shared_by_threads_and_tasks_as_they_are() 
     assert ctx.state(Snapshot, default=snapshot) is snapshot  # nothing left behind
     assert record.value == 3
     with pytest.raises(AttributeError):
-        object.__setattr__(record, "value", 4)
+        record.value = 4  # pyright: ignore[reportAttributeAccessIssue]
 
 
 # --- states made by the helpers ---------------------------------------------------

@@ -287,7 +287,7 @@ class Item(State, Named):  # TypeError - a State inherits from a single State
 
 The values of a `State` live inline in the instance, right after its header, so a base which brings
 slots, a `__dict__` or a layout of its own (as `int` does) could never be combined with it safely
-anyway. `Immutable` follows the same rule - its records inherit from `Immutable` alone.
+anyway.
 
 Slots, defaults, annotations, and type arguments are all resolved once, when the class is created,
 and the nominal identity that equality, instance checks, and schema generation rely on assumes they
@@ -627,12 +627,16 @@ A compiled extension stores the attributes of a State inline in the instance, va
 built-in annotation without calling back into Python, and converts to mappings and JSON natively.
 The immutability is real - an attribute can't be rebound through `object.__setattr__` either, and an
 instance has no `__dict__` or `__weakref__`. Calling `__init__` a second time on an instance raises.
-An instance takes the memory a `__slots__` object of the same attributes would. One holding nothing
-which can be part of a reference cycle - which is what validated values are, being made of tuples,
-frozensets, `Map`s and other instances - is left out of the collections of the garbage collector,
-together with those containers, and is reclaimed by reference counting alone. Keeping many instances
-alive therefore adds nothing for the collector to walk. One holding a mutable value, such as a
-`list` in an `Any` attribute, stays tracked, so a cycle through it is still collected.
+The class is just as fixed: once it is created, assigning or deleting one of its attributes raises
+`TypeError`, so neither a method nor the descriptor of an attribute can be replaced. Declare
+everything in the class body - `__init_subclass__` of an attribute-less base still runs in time to
+add to a class. An instance takes the memory a `__slots__` object of the same attributes would. One
+holding nothing which can be part of a reference cycle - which is what validated values are, being
+made of tuples, frozensets, `Map`s and other instances - is left out of the collections of the
+garbage collector, together with those containers, and is reclaimed by reference counting alone.
+Keeping many instances alive therefore adds nothing for the collector to walk. One holding a mutable
+value, such as a `list` in an `Any` attribute, stays tracked, so a cycle through it is still
+collected.
 
 What runs Python is the code of the user alone: a `Validator`, a `Verifier`, a class validating
 itself, a default factory. `ValidationError` reports a failure at its position the same way for
@@ -649,11 +653,9 @@ Calling a class with keyword arguments, `Point(x=1, y=2)`, and updating, `point.
 the fastest ways to build and change an instance. To build an instance from a mapping use
 `Point.validate(values)` rather than unpacking it into the call, `Point(**values)`.
 
-`Immutable` is stored the same way. It validates nothing, and its attributes are bound once:
-`setattr`, `delattr` and `object.__setattr__` all refuse to rebind one - while a mutable value it
-was given stays mutable. A class whose instances have to change after they are made - a client
-opening a connection, a response caching its body - is a plain class with `__slots__` instead. After
-changing the C source run `make native`, as `uv sync` does not recompile it.
+A class whose instances have to change after they are made - a client opening a connection, a
+response caching its body - is a plain class with `__slots__` instead. After changing the C source
+run `make native`, as `uv sync` does not recompile it.
 
 ### Performance Considerations
 

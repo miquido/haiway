@@ -1,20 +1,20 @@
 import asyncio
 import threading
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, final
 
 import pytest
 
 from haiway import (
     ContextPresets,
     ContextStateMissing,
-    Immutable,
     Map,
     State,
     asynchronous,
     ctx,
     statemethod,
 )
+from haiway.types.frozen import refuse_assignment, refuse_deletion
 
 # How a State behaves once handed to the context - stored as the very instance it is,
 # found by its exact type, inherited by the scopes and tasks within, and replaced only
@@ -69,8 +69,16 @@ class Counter(State):
         return self.count * 2
 
 
-class Record(Immutable):
+@final
+class Record:
     value: int
+    __slots__ = ("value",)
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(self, *, value: int) -> None:
+        object.__setattr__(self, "value", value)
 
 
 @pytest.mark.asyncio
@@ -275,7 +283,7 @@ async def test_statemethod_follows_the_state_in_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_immutable_record_is_carried_inside_a_state() -> None:
+async def test_a_frozen_record_is_carried_inside_a_state() -> None:
     record = Record(value=1)
     async with ctx.scope("test", Holder(items=(), mapping={}, payload=record)):
         assert ctx.state(Holder).payload is record

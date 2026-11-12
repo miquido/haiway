@@ -1,11 +1,14 @@
-from collections.abc import MutableMapping
+import re
+from collections.abc import MutableMapping, MutableSequence, Sequence
 from time import monotonic
-from typing import Any, final
+from typing import Any, Final, final
 
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException, WebSocketException
 from starlette.requests import ClientDisconnect
+from starlette.routing import BaseRoute, Host, Mount
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.websockets import WebSocketDisconnect
 
 from haiway.context import ObservabilityAttribute
 from haiway.context.access import ctx
@@ -72,9 +75,10 @@ class ContextMiddleware:
       headers - when it is nested below this middleware instead, which is what
       ``application()`` arranges.
 
-    ``HTTPException``, ``WebSocketException`` and ``ClientDisconnect`` are not a
-    failure of the request they end - the first two are how an application asks
-    for a specific response, the third is a consumer which went away. They are
+    ``HTTPException``, ``WebSocketException``, ``ClientDisconnect`` and
+    ``WebSocketDisconnect`` are not a failure of the request they end - the first
+    two are how an application asks for a specific response, the others are a
+    consumer which went away. They are
     withheld while the scope is left, so it does not record the request as
     failed, and reraised afterwards for whatever handles them upstream.
 
@@ -110,6 +114,7 @@ class ContextMiddleware:
     __slots__ = (
         "_app",
         "_context",
+        "_mounts",
     )
 
     def __init__(
@@ -120,6 +125,7 @@ class ContextMiddleware:
     ) -> None:
         self._app: ASGIApp = app
         self._context: ServerContext = context
+        self._mounts: _MountTemplates = _MountTemplates()
 
     async def __call__(
         self,
@@ -134,7 +140,7 @@ class ContextMiddleware:
                     scope=scope,
                     receive=receive,
                     send=send,
-                    name=f"{method} {scope['path']}",
+                    name=f"{method} {_printable(scope['path'])}",
                     method=method,
                     response_start="http.response.start",
                     duration_metric=REQUEST_DURATION_METRIC,
@@ -145,7 +151,7 @@ class ContextMiddleware:
                     scope=scope,
                     receive=receive,
                     send=send,
-                    name=f"WS {scope['path']}",
+                    name=f"WS {_printable(scope['path'])}",
                     # a websocket connection carries no method - the name of its
                     # scope says what it is instead, and nothing is recorded as
                     # the method it does not have
@@ -199,12 +205,16 @@ class ContextMiddleware:
                         # headers are optional in the message - a response without
                         # any is what an application sending raw messages can do
                         message.setdefault("headers", [])
-                        MutableHeaders(scope=message).update(
-                            {
-                                "trace-id": trace_id,
-                                **ctx.trace_context(),
-                            }
-                        )
+                        headers: MutableHeaders = MutableHeaders(scope=message)
+                        for header, value in {
+                            "trace-id": trace_id,
+                            **ctx.trace_context(),
+                        }.items():
+                            # an entry a header can not hold is left out - failing
+                            # the response it was meant to accompany would be worse
+                            # than a missing trace header
+                            if _header_name_safe(header) and _header_value_safe(value):
+                                headers[header] = value
 
                     await send(message)
 
@@ -217,7 +227,12 @@ class ContextMiddleware:
                     # records them as the failure of the request they belong to
                     await self._app(scope, receive, traced_send)
 
-                except (HTTPException, WebSocketException, ClientDisconnect) as exc:
+                except (
+                    HTTPException,
+                    WebSocketException,
+                    ClientDisconnect,
+                    WebSocketDisconnect,
+                ) as exc:
                     withheld = exc
 
                 finally:
@@ -229,6 +244,7 @@ class ContextMiddleware:
                     # request which failed, which is where it is needed most
                     attributes: MutableMapping[str, ObservabilityAttribute] = _request_attributes(
                         scope,
+                        mounts=self._mounts,
                         method=method,
                         status=status,
                     )
@@ -257,6 +273,7 @@ def _request_attributes(
     scope: Scope,
     /,
     *,
+    mounts: _MountTemplates,
     method: str | None,
     status: int | None,
 ) -> MutableMapping[str, ObservabilityAttribute]:
@@ -272,7 +289,10 @@ def _request_attributes(
     Starlette and FastAPI leaves the route it matched. A request which matched no
     route records no ``http.route``. Resolving it here instead would mean matching
     the route table a second time for every request, which is the cost the
-    routing already paid.
+    routing already paid. A route served from a mount is prefixed with the
+    templates of the mounts leading to it, found by the route itself once per
+    route - not with the root path, which holds the values a parameterized mount
+    matched.
 
     The method is recorded only for an ``http`` request - a websocket connection
     carries none, so reporting one would be inventing it. A method outside the
@@ -286,7 +306,7 @@ def _request_attributes(
     caller, which identifies it.
     """
     attributes: MutableMapping[str, ObservabilityAttribute] = {
-        "url.path": scope["path"],
+        "url.path": _printable(scope["path"]),
     }
 
     if method is not None:
@@ -304,9 +324,16 @@ def _request_attributes(
     # `path_format` is the template of the path a route matched, which both a
     # Starlette `Route` and a FastAPI `APIRoute` carry. Read defensively - the scope
     # of a request which matched nothing holds no route at all
-    route_path: Any | None = getattr(scope.get("route"), "path_format", None)
+    route: Any | None = scope.get("route")
+    route_path: Any | None = getattr(route, "path_format", None)
     if isinstance(route_path, str):
-        attributes["http.route"] = route_path
+        # the template of a route is relative to the mount it is served from, so
+        # the templates of the mounts are put in front of it - otherwise the routes
+        # of different mounts would be reported as one. The root path can't serve
+        # as the prefix, it holds the values a parameterized mount matched
+        prefix: str | None = mounts.prefix(scope, route=route)
+        if prefix is not None:
+            attributes["http.route"] = prefix + route_path
 
     protocol_version: Any | None = scope.get("http_version")
     if protocol_version:
@@ -316,3 +343,93 @@ def _request_attributes(
         attributes["http.response.status_code"] = status
 
     return attributes
+
+
+@final
+class _MountTemplates:
+    # the templates of the mounts leading to each route, found by the route itself -
+    # routing keeps the route it ended at alone. Worked out once per route of the
+    # application, a route added later is found when first requested. Keyed by
+    # identity, which a route does not hash by, holding the route to tell it apart
+    __slots__ = ("_known",)
+
+    def __init__(self) -> None:
+        self._known: MutableMapping[int, tuple[object, str | None]] = {}
+
+    def prefix(
+        self,
+        scope: Scope,
+        /,
+        *,
+        route: object,
+    ) -> str | None:
+        root_path: str = scope.get("root_path") or ""
+        if root_path == scope.get("app_root_path", root_path):
+            return ""  # served by no mount
+
+        known: tuple[object, str | None] | None = self._known.get(id(route))
+        if known is not None and known[0] is route:
+            return known[1]
+
+        prefix: str | None = _found_prefix(scope.get("router"), route=route)
+        self._known[id(route)] = (route, prefix)
+        return prefix
+
+
+def _found_prefix(
+    router: Any | None,
+    /,
+    *,
+    route: object,
+) -> str | None:
+    # None when the route is not reached exactly one way
+    found: MutableSequence[str] = []
+    pending: MutableSequence[tuple[str, Sequence[BaseRoute]]] = [
+        ("", getattr(router, "routes", ()))
+    ]
+    while pending:
+        prefix, routes = pending.pop()
+        for candidate in routes:
+            if candidate is route:
+                found.append(prefix)
+
+            if isinstance(candidate, Mount):
+                # the template routing normalized - `{tenant:int}` is `{tenant}`, as
+                # in the template of every route
+                template: str = candidate.path_format.removesuffix("/{path}")
+                pending.append((prefix + template, candidate.routes))
+
+            elif isinstance(candidate, Host):  # chosen by the host, adds no path
+                pending.append((prefix, candidate.routes))
+
+    return found[0] if len(found) == 1 else None
+
+
+def _printable(
+    value: str,
+    /,
+) -> str:
+    # the path is decoded by the server, so a request can carry control characters
+    # in it - escaped, so they can not forge lines of whatever renders the record
+    if value.isprintable():
+        return value
+
+    return "".join(char if char.isprintable() else repr(char)[1:-1] for char in value)
+
+
+# a token, the only form a header name takes (RFC 9110, section 5.1)
+_HEADER_NAME: Final[re.Pattern[str]] = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+
+
+def _header_name_safe(
+    name: str,
+    /,
+) -> bool:
+    return _HEADER_NAME.fullmatch(name) is not None
+
+
+def _header_value_safe(
+    value: str,
+    /,
+) -> bool:
+    return value.isascii() and value.isprintable()

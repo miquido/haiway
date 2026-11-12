@@ -6,9 +6,9 @@
 
 ## Native extension
 
-`State` and `Immutable` are stored by a compiled extension, which the wheels carry for Linux, macOS
-and Windows. Installing from the source distribution compiles it, which needs a C compiler. The
-extension requires the GIL - on a free-threaded interpreter, importing it enables the GIL.
+`State` is stored by a compiled extension, which the wheels carry for Linux, macOS and Windows.
+Installing from the source distribution compiles it, which needs a C compiler. The extension
+requires the GIL - on a free-threaded interpreter, importing it enables the GIL.
 
 ## Install from PyPI
 

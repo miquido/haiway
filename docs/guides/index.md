@@ -18,7 +18,7 @@ Learn how to work with Haiway's immutable state system, including:
 
 Reference for Haiway's foundational type primitives:
 
-- Immutable containers such as `Immutable`, `Map`, and `Meta`
+- Immutable containers such as `Map` and `Meta`
 - Sentinel handling with `Missing`
 - Field defaults with `Default(...)`
 - `Annotated` helpers such as `Alias`, `Description`, and `Specification`

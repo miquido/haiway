@@ -3,7 +3,6 @@ from asyncio import (
     AbstractEventLoop,
     Future,
     InvalidStateError,
-    get_running_loop,
     wait,
 )
 from collections.abc import AsyncGenerator, Collection, MutableMapping, Sequence
@@ -17,6 +16,7 @@ from haiway.context.closing import ContextClosing
 from haiway.context.identifier import ContextIdentifier
 from haiway.context.types import ContextMissing
 from haiway.utils.exceptions import thrown_exception
+from haiway.utils.loops import foreign_loop, loop_safe
 
 __all__ = (
     "ContextEvents",
@@ -197,14 +197,13 @@ class ContextEvents:
         self._threads: MutableMapping[type[State], Future[Event[Any]]] = {}
         self._token: Token[ContextEvents] | None = None
 
+    @loop_safe()
     def _send(
         self,
         payload: State,
         *,
         path: Sequence[UUID],
     ) -> None:
-        assert self._loop == get_running_loop()  # nosec: B101
-
         payload_type: type[State] = type(payload)
         current: Future[Event[State]] | None = self._threads.get(payload_type)
         if current is None:
@@ -227,7 +226,9 @@ class ContextEvents:
         scope_id: UUID,
         scope_closing: Future[UUID],
     ) -> EventsSubscription[Payload]:
-        assert self._loop == get_running_loop()  # nosec: B101
+        # unlike sending, subscribing returns a future of the owner loop - it can't be
+        # handed over, and creating it elsewhere would race with the owner
+        assert not foreign_loop(self._loop), "Events can be subscribed only within their loop"  # nosec: B101
 
         if self._token is None:  # no more events can arrive after closing
             closed_future: Future[Event[Payload]] = self._loop.create_future()

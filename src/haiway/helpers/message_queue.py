@@ -6,7 +6,8 @@ from typing import Any, Final, Protocol, final, overload, runtime_checkable
 from haiway.attributes import State
 from haiway.context import ObservabilityAttribute, ctx
 from haiway.helpers.statemethods import statemethod
-from haiway.types import FlatObject, Immutable, Meta
+from haiway.types import FlatObject, Map, Meta
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = (
     "MQMessage",
@@ -34,7 +35,7 @@ class MQMessageRejecting(Protocol):
 
 
 @final
-class MQMessageSource(Immutable):
+class MQMessageSource:
     """Where a message was received from, as queue adapters describe it.
 
     The system and the destination are what a message is attributed to, so they
@@ -52,12 +53,33 @@ class MQMessageSource(Immutable):
 
     system: str
     destination: str
-    attributes: Mapping[str, ObservabilityAttribute] = {}
+    attributes: Mapping[str, ObservabilityAttribute]
+    __slots__ = ("attributes", "destination", "system")
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
+
+    def __init__(
+        self,
+        *,
+        system: str,
+        destination: str,
+        attributes: Mapping[str, ObservabilityAttribute] | None = None,
+    ) -> None:
+        object.__setattr__(self, "system", system)
+        object.__setattr__(self, "destination", destination)
+        object.__setattr__(
+            self,
+            "attributes",
+            Map[str, ObservabilityAttribute]() if attributes is None else attributes,
+        )
 
 
 @final
-class MQMessage[Content](Immutable):
-    """Immutable message wrapper returned by queue consumers.
+class MQMessage[Content]:
+    """Frozen message wrapper returned by queue consumers.
     The message holds the deserialized `content` and accompanying `meta`
     information plus queue-provided `acknowledge` / `reject` callables. It is
     designed for async usage only; acknowledge/reject operations must be awaited
@@ -113,6 +135,13 @@ class MQMessage[Content](Immutable):
     _acknowledge: MQMessageAcknowledging
     _reject: MQMessageRejecting
 
+    __slots__ = ("_acknowledge", "_reject", "content", "meta", "source")
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
+
     def __init__(
         self,
         content: Content,
@@ -121,13 +150,12 @@ class MQMessage[Content](Immutable):
         meta: Meta,
         source: MQMessageSource | None = None,
     ) -> None:
-        super().__init__(
-            content=content,
-            _acknowledge=acknowledge,
-            _reject=reject,
-            meta=meta,
-            source=source,
-        )
+        # frozen - each value is bound once, right here
+        object.__setattr__(self, "content", content)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "_acknowledge", acknowledge)
+        object.__setattr__(self, "_reject", reject)
 
     def map[MappedContent](
         self,
@@ -242,7 +270,7 @@ class MQQueue[Content](State):
     state, publish messages from within scoped tasks, and consume via async
     iteration inside a managed scope so acknowledgements/retries are tied to the
     task outcome. Instances are immutable `State` objects; callers can invoke
-    the statemethods directly on the class via `ctx.state.MQQueue` or on an
+    the statemethods directly on the class (`MQQueue.publish(...)`) or on an
     instantiated queue passed through the state graph.
     """
 
@@ -293,15 +321,15 @@ class MQQueue[Content](State):
             absence of an exception.
         Notes
         -----
-        Decorated with ``@statemethod`` so it can be invoked on the class when
-        accessed through ``ctx.state`` or on an instance that is part of the
-        state graph. Prefer the class-level call inside scoped tasks where the
+        Decorated with ``@statemethod`` so it can be invoked on the class,
+        resolving the queue from the context, or on an instance that is part of
+        the state graph. Prefer the class-level call inside scoped tasks where the
         queue is attached to the active context; use an instance when you have a
         specific queue object already resolved.
         Examples
         --------
-        Class-level call via state:
-            await ctx.state.MQQueue.publish(message=payload, attributes={"k": "v"})
+        Class-level call resolving the queue from the context:
+            await MQQueue.publish(message=payload, attributes={"k": "v"})
         Instance-level call:
             await queue_instance.publish(payload, exchange="events")
         """
@@ -355,7 +383,7 @@ class MQQueue[Content](State):
         Examples
         --------
         Class-level consumption:
-            async with await ctx.state.MQQueue.consume() as messages:
+            async with await MQQueue.consume() as messages:
                 async for message in messages:
                     async with message as payload:
                         await handle(payload)

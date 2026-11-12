@@ -1,9 +1,11 @@
-from asyncio import Lock, sleep
-from collections import deque
-from collections.abc import Callable, Coroutine
+from asyncio import sleep
+from bisect import bisect_right, insort
+from collections.abc import Callable, Coroutine, Sequence
+from contextlib import suppress
 from datetime import timedelta
 from functools import wraps
 from inspect import iscoroutinefunction
+from itertools import chain
 from time import monotonic
 from typing import overload
 
@@ -93,8 +95,10 @@ def throttle[**Args, Result](
         function: Callable[Args, Coroutine[None, None, Result]],
     ) -> Callable[Args, Coroutine[None, None, Result]]:
         assert iscoroutinefunction(function)  # nosec: B101
-        entries: deque[float] = deque()
-        lock: Lock = Lock()
+        assert limit > 0, "Throttle limit has to be greater than 0"  # nosec: B101
+        # reserved starts, kept sorted - the ones which can't limit a call anymore are
+        # dropped as calls come, so a waiting call can give its reservation back
+        starts: list[float] = []
         throttle_period: float
         match period:
             case timedelta() as delta:
@@ -103,26 +107,37 @@ def throttle[**Args, Result](
             case period_seconds:
                 throttle_period = period_seconds
 
+        assert throttle_period >= 0, "Throttle period can't be negative"  # nosec: B101
+
         @wraps(function)
         async def throttle(
             *args: Args.args,
             **kwargs: Args.kwargs,
         ) -> Result:
-            async with lock:
-                time_now: float = monotonic()
-                while entries:  # cleanup old entries
-                    if entries[0] + throttle_period <= time_now:
-                        entries.popleft()
+            # reserve the slot without awaiting, so no other call can interleave
+            time_now: float = monotonic()
+            # compared as `start + period`, the way a candidate is made - subtracting
+            # would round differently and could refuse the slot a period after one
+            del starts[: bisect_right(starts, time_now, key=lambda start: start + throttle_period)]
+            start_at: float = _earliest_start(
+                starts,
+                time_now=time_now,
+                limit=limit,
+                period=throttle_period,
+            )
+            # in order - a slot given back may put this one ahead of later ones
+            insort(starts, start_at)
+            if start_at > time_now:
+                try:
+                    await sleep(start_at - time_now)
 
-                    else:
-                        break
+                except BaseException:
+                    # a call which never started does not count - any subset of the
+                    # reservations still keeps every period within the limit
+                    with suppress(ValueError):
+                        starts.remove(start_at)
 
-                if len(entries) >= limit:
-                    wait_for: float = entries[0] + throttle_period - time_now
-                    if wait_for > 0:
-                        await sleep(wait_for)
-
-                entries.append(monotonic())
+                    raise
 
             return await function(*args, **kwargs)
 
@@ -133,3 +148,46 @@ def throttle[**Args, Result](
 
     else:
         return _wrap
+
+
+def _earliest_start(
+    starts: Sequence[float],
+    /,
+    *,
+    time_now: float,
+    limit: int,
+    period: float,
+) -> float:
+    # the earliest start keeping every period within the limit - now, or a period
+    # after one of the reservations, a slot given back by a cancelled call included.
+    # A period after the last reservation always fits, which ends the search
+    for candidate in chain((time_now,), (start + period for start in starts)):
+        if candidate >= time_now and _fits(starts, candidate, limit=limit, period=period):
+            return candidate
+
+    raise AssertionError("A period after the last reservation always fits")
+
+
+def _fits(
+    starts: Sequence[float],
+    candidate: float,
+    /,
+    *,
+    limit: int,
+    period: float,
+) -> bool:
+    # within a period at most `limit` starts - with the candidate among the starts,
+    # each `limit + 1` consecutive ones including it span a whole period at least
+    position: int = bisect_right(starts, candidate)
+
+    def at(index: int) -> float:  # within the starts as if the candidate was among them
+        if index == position:
+            return candidate
+
+        return starts[index] if index < position else starts[index - 1]
+
+    for first in range(max(0, position - limit), min(position, len(starts) - limit) + 1):
+        if at(first) + period > at(first + limit):
+            return False
+
+    return True

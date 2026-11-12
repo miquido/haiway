@@ -77,8 +77,8 @@ Deep dive into core concepts with practical examples
 
 - **[State Management](guides/state.md)** - Immutable data structures with validation and type
   safety
-- **[Types](guides/types.md)** - `Missing`, `Default`, `Immutable`, `Map`, `Meta`, and annotation
-  metadata primitives
+- **[Types](guides/types.md)** - `Missing`, `Default`, `Map`, `Meta`, and annotation metadata
+  primitives
 - **[Functionalities](guides/functionalities.md)** - Organizing business logic with protocols and
   implementations
 - **[Utilities](guides/utilities.md)** - Environment helpers, async queues and streams, pagination,

@@ -14,7 +14,7 @@ from types import (
     ModuleType,
     WrapperDescriptorType,
 )
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, final
 from weakref import WeakKeyDictionary
 
 from haiway._native import nstruct
@@ -54,7 +54,7 @@ from haiway.attributes.annotations import (
     _no_verify,  # pyright: ignore[reportPrivateUsage]
 )
 from haiway.attributes.attribute import Attribute
-from haiway.types.immutable import Immutable
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = (
     "ConversionHooks",
@@ -158,7 +158,7 @@ def _is_plain_state(cls: Any, /) -> bool:
         return False
 
     validate: Any = inspect.getattr_static(cls, "validate", None)
-    return validate is nstruct.Validated.__dict__["validate"]
+    return validate is nstruct.Struct.__dict__["validate"]
 
 
 def describe(
@@ -702,36 +702,102 @@ def install(
         cls,
         tuple(_entry(field) for field in fields),
         tuple(sys.intern(name) for name in owned),
-        True,  # a State validates - failures are reported at their position
     )
 
 
-class ValidationHooks(Immutable):
+@final
+class ValidationHooks:
     """What the extension asks of Python while it validates, by the names it reads them under."""
 
-    missing: Any  # the Missing marker
-    check: Callable[[type[Any], Mapping[str, Any]], None]  # refuses what is not an attribute
-    report: Callable[[str, Exception], Any]  # raises a failure with its position
-    unexpected: Callable[[type[Any], Any], Any]  # refuses a key of a mapping
-    describe: Callable[[Any], Description]  # the description of an annotation resolved late
-    parameters: Callable[[Any], SignatureParameters | None]  # of what is not a Python function
+    missing: Any
+    check: Callable[[type[Any], Mapping[str, Any]], None]
+    report: Callable[[str, Exception], Any]
+    unexpected: Callable[[type[Any], Any], Any]
+    describe: Callable[[Any], Description]
+    parameters: Callable[[Any], SignatureParameters | None]
     enum_values: Callable[[Any, bool], str]
     literal_values: Callable[[Sequence[Any]], str]
     b64decode: Callable[[str], bytes]
     parse_duration: Callable[[str], Any]
     exception_group: type[Any]
+    __slots__ = (
+        "b64decode",
+        "check",
+        "describe",
+        "enum_values",
+        "exception_group",
+        "literal_values",
+        "missing",
+        "parameters",
+        "parse_duration",
+        "report",
+        "unexpected",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
+
+    def __init__(
+        self,
+        *,
+        missing: Any,
+        check: Callable[[type[Any], Mapping[str, Any]], None],
+        report: Callable[[str, Exception], Any],
+        unexpected: Callable[[type[Any], Any], Any],
+        describe: Callable[[Any], Description],
+        parameters: Callable[[Any], SignatureParameters | None],
+        enum_values: Callable[[Any, bool], str],
+        literal_values: Callable[[Sequence[Any]], str],
+        b64decode: Callable[[str], bytes],
+        parse_duration: Callable[[str], Any],
+        exception_group: type[Any],
+    ) -> None:
+        object.__setattr__(self, "missing", missing)
+        object.__setattr__(self, "check", check)
+        object.__setattr__(self, "report", report)
+        object.__setattr__(self, "unexpected", unexpected)
+        object.__setattr__(self, "describe", describe)
+        object.__setattr__(self, "parameters", parameters)
+        object.__setattr__(self, "enum_values", enum_values)
+        object.__setattr__(self, "literal_values", literal_values)
+        object.__setattr__(self, "b64decode", b64decode)
+        object.__setattr__(self, "parse_duration", parse_duration)
+        object.__setattr__(self, "exception_group", exception_group)
 
 
-class ConversionHooks(Immutable):
+@final
+class ConversionHooks:
     """What the extension asks of Python to convert a value it has no spelling for."""
 
     map: type[Any]
     basic_value: Callable[[Any, bool, tuple[str, ...]], Any]
     basic_key: Callable[[Any, bool, tuple[str, ...]], Any]
     recursive: Callable[[Any], Any]
+    __slots__ = ("basic_key", "basic_value", "map", "recursive")
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
+
+    def __init__(
+        self,
+        *,
+        map: type[Any],  # noqa: A002  # read by this name by the extension
+        basic_value: Callable[[Any, bool, tuple[str, ...]], Any],
+        basic_key: Callable[[Any, bool, tuple[str, ...]], Any],
+        recursive: Callable[[Any], Any],
+    ) -> None:
+        object.__setattr__(self, "map", map)
+        object.__setattr__(self, "basic_value", basic_value)
+        object.__setattr__(self, "basic_key", basic_key)
+        object.__setattr__(self, "recursive", recursive)
 
 
-class TypeHooks(Immutable):
+@final
+class TypeHooks:
     """The types the extension tells a value by, and converts a spelling into."""
 
     mapping: type[Any]
@@ -739,7 +805,7 @@ class TypeHooks(Immutable):
     set: type[Any]
     iterable: type[Any]
     uuid: type[Any]
-    safe_uuid: type[Any]  # what a UUID holds besides its number
+    safe_uuid: type[Any]
     datetime: type[Any]
     date: type[Any]
     time: type[Any]
@@ -747,8 +813,65 @@ class TypeHooks(Immutable):
     path: type[Any]
     pathlike: type[Any]
     meta: type[Any]
-    partial: type[Any]  # functools.partial - unwrapped to the function it calls
-    placeholder: Any  # functools.Placeholder - a position a partial leaves to the call
+    partial: type[Any]
+    placeholder: Any
+    __slots__ = (
+        "date",
+        "datetime",
+        "iterable",
+        "mapping",
+        "meta",
+        "partial",
+        "path",
+        "pathlike",
+        "placeholder",
+        "safe_uuid",
+        "sequence",
+        "set",
+        "time",
+        "timedelta",
+        "uuid",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
+
+    def __init__(  # noqa: PLR0913
+        self,
+        *,
+        mapping: type[Any],
+        sequence: type[Any],
+        set: type[Any],  # noqa: A002  # read by this name by the extension
+        iterable: type[Any],
+        uuid: type[Any],
+        safe_uuid: type[Any],
+        datetime: type[Any],
+        date: type[Any],
+        time: type[Any],
+        timedelta: type[Any],
+        path: type[Any],
+        pathlike: type[Any],
+        meta: type[Any],
+        partial: type[Any],
+        placeholder: Any,
+    ) -> None:
+        object.__setattr__(self, "mapping", mapping)
+        object.__setattr__(self, "sequence", sequence)
+        object.__setattr__(self, "set", set)
+        object.__setattr__(self, "iterable", iterable)
+        object.__setattr__(self, "uuid", uuid)
+        object.__setattr__(self, "safe_uuid", safe_uuid)
+        object.__setattr__(self, "datetime", datetime)
+        object.__setattr__(self, "date", date)
+        object.__setattr__(self, "time", time)
+        object.__setattr__(self, "timedelta", timedelta)
+        object.__setattr__(self, "path", path)
+        object.__setattr__(self, "pathlike", pathlike)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "partial", partial)
+        object.__setattr__(self, "placeholder", placeholder)
 
 
 def configure(

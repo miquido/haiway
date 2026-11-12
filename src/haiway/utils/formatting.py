@@ -1,4 +1,4 @@
-from collections.abc import ItemsView, Iterable, Mapping, Sequence, Set
+from collections.abc import ItemsView, Iterable, Mapping, MutableSequence, Sequence, Set
 from datetime import datetime
 from typing import Any, Final
 from uuid import UUID
@@ -239,7 +239,7 @@ def _object_variables(
     other: object,
     /,
 ) -> Iterable[tuple[str, str | None, Any]] | None:
-    # `State` and `Immutable` keep their values in slots, so the names come from
+    # `State` keeps its values in slots, so the names come from
     # what the type declares rather than from an instance `__dict__`
     if fields := getattr(type(other), "__FIELDS__", ()):
         # an attribute annotated with Sensitive carries the redaction to render
@@ -278,7 +278,7 @@ def _object_str(
         return head + "".join(f"{indent_str}{line}" for line in tail)
 
     header = f"{indent_str}┍━ {type(other).__name__}:"
-    parts: list[str] = [header]
+    parts: MutableSequence[str] = [header]
     for key, redaction, value in variables:
         if key.startswith("_"):
             continue  # skip private and dunder
@@ -318,7 +318,7 @@ def _mapping_str(
     items: ItemsView[Any, Any] = mapping.items()
 
     indent_str = " " * indent
-    parts: list[str] = []
+    parts: MutableSequence[str] = []
     for key, value in items:
         value_string: str = format_str(
             value,
@@ -357,7 +357,7 @@ def _set_str(
 ) -> str:
     indent_str: str = " " * indent
     element_indent_str: str = " " * (indent + 2)
-    parts: list[str] = []
+    parts: MutableSequence[str] = []
     for element in set_value:
         element_string: str = format_str(
             element,
@@ -386,7 +386,7 @@ def _sequence_str(
     indent: int,
 ) -> str:
     indent_str: str = " " * indent
-    parts: list[str] = []
+    parts: MutableSequence[str] = []
     for idx, element in enumerate(sequence):
         element_string: str = format_str(
             element,

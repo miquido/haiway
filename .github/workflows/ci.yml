@@ -114,3 +114,38 @@ jobs:
           --ignore-glob='*opentelemetry*' ./tests
         env:
           PYTHON_GIL: "0"
+
+  # INFORMATIONAL ONLY - not a gate, do not add it to the required checks. ty and Pyrefly are
+  # run on the latest release just to see how they do on the codebase; pyright stays the
+  # type check that has to pass (see the Lint step of `test`). Expect diagnostics here, they
+  # are noted for monitoring, not to be fixed. `continue-on-error` keeps a failing run from
+  # failing the workflow, the diagnostics are in the log
+  type-checkers-preview:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        checker: [ty, pyrefly]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.7"
+          python-version: "3.15"
+
+      - name: Install
+        run: uv sync --all-groups --all-extras --frozen
+
+      - name: ty
+        if: matrix.checker == 'ty'
+        run: uvx --refresh ty@latest check --python .venv ./src
+
+      - name: Pyrefly
+        if: matrix.checker == 'pyrefly'
+        run: uvx --refresh pyrefly@latest check --python-interpreter-path .venv/bin/python ./src

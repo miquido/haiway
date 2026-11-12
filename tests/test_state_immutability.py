@@ -1,12 +1,14 @@
 import copy
 import weakref
 from collections.abc import Mapping, Sequence, Set
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Self, final
 
 import pytest
 from pytest import mark, raises
 
-from haiway import Alias, Immutable, Missing, State, ValidationError
+from haiway import Alias, Missing, State, ValidationError
+from haiway.helpers.message_queue import MQMessageSource
+from haiway.types.frozen import refuse_assignment, refuse_deletion
 
 
 class Point(State):
@@ -115,8 +117,19 @@ def test_deepcopy_never_exposes_a_partially_copied_instance() -> None:
     assert not any(isinstance(value, _Holding) for value in (*seen, *memo.values()))
 
 
-class _Record(Immutable):
+@final
+class _Record:
     value: int
+    __slots__ = ("value",)
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(self, *, value: int) -> None:
+        object.__setattr__(self, "value", value)
+
+    def __deepcopy__(self, memo: dict[int, Any] | None) -> Self:
+        return self  # its own copy
 
 
 class _Recording(State):
@@ -135,7 +148,7 @@ class _Wrapping(State):
 
 
 def test_deepcopy_uses_the_copy_of_held_instances_defining_their_own() -> None:
-    # an Immutable is its own copy, and equal to itself alone - the copy holding it has to
+    # a frozen record is its own copy, and equal to itself alone - the copy holding it has to
     # hold the very record, or it would not be equal to what it was copied from
     recording = _Recording(record=_Record(value=1))
     duplicate = copy.deepcopy(recording)
@@ -415,3 +428,91 @@ def test_hashing_a_deeply_nested_state_does_not_overflow_the_stack() -> None:
 
     except RecursionError:
         pass
+
+
+def test_updating_an_instance_which_was_never_initialized_is_refused() -> None:
+    class Pair(State):
+        first: int
+        second: int = 0
+
+    blank: Pair = Pair.__new__(Pair)
+    # carrying over a value which is not there would make an instance missing it
+    with pytest.raises(TypeError, match="not initialized"):
+        blank.updating(first=1)
+
+    with pytest.raises(TypeError, match="not initialized"):
+        blank.updating(**{"first": 1, "unknown": 2})
+
+    assert blank.updating(first=1, second=2) == Pair(first=1, second=2)
+
+
+def test_class_can_not_be_changed_once_it_is_created() -> None:
+    class Counter(State):
+        value: int = 0
+
+        def doubled(self) -> int:
+            return self.value * 2
+
+    def initialize(self: Counter, **values: Any) -> None: ...
+
+    with pytest.raises(TypeError, match="immutable type"):
+        Counter.__init__ = initialize  # pyright: ignore[reportAttributeAccessIssue]
+
+    with pytest.raises(TypeError, match="immutable type"):
+        Counter.value = 1  # a descriptor replaced would hide the value of every instance
+
+    with pytest.raises(TypeError, match="immutable type"):
+        del Counter.value
+
+    with pytest.raises(TypeError, match="immutable type"):
+        Counter.doubled = lambda self: 0  # pyright: ignore[reportAttributeAccessIssue]
+
+    with pytest.raises(TypeError, match="immutable type"):
+        type.__setattr__(Counter, "extra", 1)
+
+    with pytest.raises(TypeError, match="immutable type"):
+        State.extra = 1  # pyright: ignore[reportAttributeAccessIssue]
+
+    counter = Counter(value=2)
+    assert counter.value == 2
+    assert counter.doubled() == 4
+
+
+def test_generic_class_can_not_be_changed_and_is_still_specialized() -> None:
+    class Box[T](State):
+        value: T
+
+    with pytest.raises(TypeError, match="immutable type"):
+        Box.value = 1  # pyright: ignore[reportAttributeAccessIssue]
+
+    with pytest.raises(TypeError, match="immutable type"):
+        Box[int].value = 1  # pyright: ignore[reportAttributeAccessIssue]
+
+    assert Box[int] is Box[int]
+    assert isinstance(Box[bool](value=True), Box[int])
+
+
+class _CopiedState(State):
+    value: int
+    source: Any = None
+
+
+_FIELD = _CopiedState.__FIELDS__[0]
+_FROZEN_RECORDS: Sequence[object] = (
+    MQMessageSource(system="system", destination="destination"),
+    _FIELD,
+    _FIELD.annotation,
+    _CopiedState.__SELF_ATTRIBUTE__,
+)
+
+
+@mark.parametrize("copying", [copy.copy, copy.deepcopy])
+@mark.parametrize("record", _FROZEN_RECORDS, ids=lambda record: type(record).__name__)
+def test_frozen_records_copy_to_themselves(copying: Any, record: object) -> None:
+    assert copying(record) is record
+
+
+def test_deepcopy_of_state_holding_frozen_record_keeps_it() -> None:
+    source = MQMessageSource(system="system", destination="destination")
+    copied = copy.deepcopy(_CopiedState(value=1, source=source))
+    assert copied.source is source

@@ -21,7 +21,7 @@ from uuid import UUID, SafeUUID
 
 import pytest
 
-from haiway import Alias, Default, Immutable, Map, Meta, State, ValidationError, Validator
+from haiway import Alias, Default, Map, Meta, State, ValidationError, Validator
 from haiway._native import nstruct
 
 # The native storage is checked here for what its tests of behavior would not show: that
@@ -282,16 +282,15 @@ def test_conversions_copies_and_comparison_do_not_leak() -> None:
     _assert_no_leak(operation)
 
 
-def test_immutable_records_do_not_leak() -> None:
-    class Record(Immutable):
-        a: int
-        b: Sequence[int] = ()
-
+def test_refused_changes_do_not_leak() -> None:
     def operation() -> None:
-        record = Record(a=1, b=[1])
-        _swallow(lambda: object.__setattr__(record, "a", 2))
-        _swallow(lambda: object.__delattr__(record, "a"))
-        _swallow(lambda: Record())  # noqa: PLW0108  # pyright: ignore[reportCallIssue]
+        state = _Loose(value=[1])
+        _swallow(lambda: object.__setattr__(state, "value", 2))
+        _swallow(lambda: object.__delattr__(state, "value"))
+        _swallow(lambda: _Loose(other=1))  # pyright: ignore[reportCallIssue]
+        blank: _Inner = _Inner.__new__(_Inner)
+        _swallow(lambda: blank.updating(a=[1]))
+        _swallow(lambda: blank.updating(**{"a": [1], "unknown": 2}))
 
     _assert_no_leak(operation)
 
@@ -325,68 +324,60 @@ def test_native_storage_refuses_a_layout_it_does_not_own(other: type) -> None:
     # live right after the header, where a base like these keeps its own data
     cls: Any = nstruct.StructMeta("Foreign", (nstruct.Struct, other), {"__slots__": ()})
     with pytest.raises(TypeError, match=r"layout of its own|slots, a __dict__"):
-        nstruct.compile_plan(cls, (_entry("value"),), ("value",), False)
+        nstruct.compile_plan(cls, (_entry("value"),), ("value",))
 
 
 def test_native_storage_refuses_a_class_reordering_the_attributes_of_its_base() -> None:
     base: Any = nstruct.StructMeta("Base", (nstruct.Struct,), {"__slots__": ()})
-    nstruct.compile_plan(base, (_entry("first"), _entry("second")), ("first", "second"), False)
+    nstruct.compile_plan(base, (_entry("first"), _entry("second")), ("first", "second"))
     derived: Any = nstruct.StructMeta("Derived", (base,), {"__slots__": ()})
     with pytest.raises(TypeError, match="keep the attributes of Base first"):
-        nstruct.compile_plan(derived, (_entry("second"), _entry("first")), (), False)
+        nstruct.compile_plan(derived, (_entry("second"), _entry("first")), ())
 
     shorter: Any = nstruct.StructMeta("Shorter", (base,), {"__slots__": ()})
     with pytest.raises(TypeError, match="keep the attributes of Base first"):
-        nstruct.compile_plan(shorter, (_entry("first"),), (), False)
+        nstruct.compile_plan(shorter, (_entry("first"),), ())
 
 
-class _Inner(Immutable):
+class _Inner(State):
     a: Any
     b: Any
     c: Any
 
 
-class _Outer(Immutable):
-    f: Any
-
-
-class _Holder(State):
-    inner: Any
-
-
-def test_records_are_bound_once_for_good() -> None:
-    # every value of a record, as of a State, is bound once - which is what lets the
-    # native code read them while code of the user runs on them
-    record = _Inner(a=1, b=object(), c=2)
-    bound: Any = record.b
+def test_values_are_bound_once_for_good() -> None:
+    # every value of a State is bound once - which is what lets the native code read
+    # them while code of the user runs on them
+    state = _Inner(a=1, b=object(), c=2)
+    bound: Any = state.b
     references: int = sys.getrefcount(bound)
     with pytest.raises(AttributeError):
-        object.__setattr__(record, "b", None)
+        object.__setattr__(state, "b", None)
 
     with pytest.raises(AttributeError):
-        object.__delattr__(record, "b")
+        object.__delattr__(state, "b")
 
     with pytest.raises(TypeError, match="initialized already"):
-        record.__init__(a=2, b=3, c=4)  # pyright: ignore[reportUnknownMemberType]
+        state.__init__(a=2, b=3, c=4)
 
-    assert record.b is bound
+    assert state.b is bound
     assert sys.getrefcount(bound) == references
 
 
-def test_conversions_of_records_running_code_of_the_user_do_not_leak() -> None:
+def test_conversions_of_nested_states_running_code_of_the_user_do_not_leak() -> None:
     class Spelled(datetime):
         def isoformat(self, sep: str = "T", timespec: str = "auto") -> str:
             return "2020-01-01T00:00:00"
 
     def operation() -> None:
-        outer = _Outer(f=_Inner(a=Spelled(2020, 1, 1), b="b", c=[Leaf(number=1)]))
-        state = _Holder(inner=outer)
+        outer = _Loose(value=_Inner(a=Spelled(2020, 1, 1), b="b", c=[Leaf(number=1)]))
+        state = _Loose(value=outer)
         state.to_json()
         state.to_mapping()
         state.to_basic_object()
         state.to_mapping(recursive=False)
         hash(state)
-        _ = state == _Holder(inner=outer)
+        _ = state == _Loose(value=outer)
         copy.deepcopy(state)
 
     _assert_no_leak(operation)
@@ -395,9 +386,9 @@ def test_conversions_of_records_running_code_of_the_user_do_not_leak() -> None:
 def test_refused_classes_do_not_leak() -> None:
     def operation() -> None:
         _swallow(lambda: types.new_class("Combined", (State, _Slotted)))
-        _swallow(lambda: types.new_class("Combined", (Immutable, _Plain)))
+        _swallow(lambda: types.new_class("Combined", (nstruct.Struct, _Plain)))
         foreign: Any = nstruct.StructMeta("Foreign", (nstruct.Struct, _Slotted), {"__slots__": ()})
-        _swallow(lambda: nstruct.compile_plan(foreign, (_entry("value"),), ("value",), False))
+        _swallow(lambda: nstruct.compile_plan(foreign, (_entry("value"),), ("value",)))
 
     _assert_no_leak(operation)
 
@@ -460,27 +451,27 @@ class _Loose(State):
 @pytest.mark.parametrize(
     "make",
     [
-        pytest.param(lambda record: [1], id="list"),  # pyright: ignore[reportUnknownLambdaType]
-        pytest.param(lambda record: ([1],), id="tuple of list"),  # pyright: ignore[reportUnknownLambdaType]
-        pytest.param(lambda record: (record,), id="tuple of record"),  # pyright: ignore[reportUnknownLambdaType]
-        pytest.param(lambda record: {"a": [1]}, id="dict"),  # pyright: ignore[reportUnknownLambdaType]
-        pytest.param(lambda record: Map({"a": (record,)}), id="map of record"),  # pyright: ignore[reportUnknownLambdaType]
+        pytest.param(lambda tracked: [1], id="list"),  # pyright: ignore[reportUnknownLambdaType]
+        pytest.param(lambda tracked: ([1],), id="tuple of list"),  # pyright: ignore[reportUnknownLambdaType]
+        pytest.param(lambda tracked: (tracked,), id="tuple of state"),  # pyright: ignore[reportUnknownLambdaType]
+        pytest.param(lambda tracked: {"a": [1]}, id="dict"),  # pyright: ignore[reportUnknownLambdaType]
+        pytest.param(lambda tracked: Map({"a": (tracked,)}), id="map of state"),  # pyright: ignore[reportUnknownLambdaType]
     ],
 )
 def test_instances_which_can_be_part_of_a_cycle_stay_tracked(
-    make: Callable[[_Outer], Any],
+    make: Callable[[_Loose], Any],
 ) -> None:
-    record = _Outer(f=[1])  # a record holding a list can be part of a cycle through it
-    assert gc.is_tracked(record)
-    assert gc.is_tracked(_Loose(value=make(record)))
+    tracked = _Loose(value=[1])  # holding a list, it can be part of a cycle through it
+    assert gc.is_tracked(tracked)
+    assert gc.is_tracked(_Loose(value=make(tracked)))
 
 
 def test_updates_look_at_what_replaced_the_values() -> None:
-    record = _Outer(f=[1])
+    tracked = _Loose(value=[1])
     untracked = _Loose(value=(1,))
     assert not gc.is_tracked(untracked)
     assert gc.is_tracked(untracked.updating(value=[1]))
-    assert gc.is_tracked(untracked.updating(value=(record,)))
+    assert gc.is_tracked(untracked.updating(value=(tracked,)))
     assert not gc.is_tracked(gc_free := untracked.updating(value=(2,)))
     assert gc.is_tracked(gc_free.updating(value=([1],)))
 
@@ -542,7 +533,7 @@ def test_cycle_through_a_rebound_uuid_is_collected() -> None:
     assert finalized == [True]
 
 
-def test_cycle_through_a_record_is_collected() -> None:
+def test_cycle_through_a_nested_state_is_collected() -> None:
     finalized: list[bool] = []
 
     class Finalized:
@@ -550,10 +541,10 @@ def test_cycle_through_a_record_is_collected() -> None:
             finalized.append(True)
 
     loop: list[Any] = []
-    record = _Outer(f=loop)
-    state = _Loose(value=(record, Finalized()))
-    loop.append(state)  # the cycle: state -> tuple -> record -> list -> state
-    del state, record, loop
+    nested = _Loose(value=loop)
+    state = _Loose(value=(nested, Finalized()))
+    loop.append(state)  # the cycle: state -> tuple -> nested -> list -> state
+    del state, nested, loop
     gc.collect()
     assert finalized == [True]
 
@@ -657,7 +648,7 @@ def test_a_plan_failing_while_it_is_compiled_does_not_leak() -> None:
             _entry("first"),
             (sys.intern("second"), None, _ANY, _interrupting_default, True),
         )
-        _interrupted(lambda: nstruct.compile_plan(cls, entries, ("first", "second"), False))
+        _interrupted(lambda: nstruct.compile_plan(cls, entries, ("first", "second")))
         with pytest.raises(TypeError, match="never given a plan"):
             cls()
 
@@ -697,7 +688,7 @@ _CONTAINERS: Mapping[str, Callable[[random.Random, int], Any]] = {
     "frozenset": lambda generator, depth: frozenset(range(generator.randrange(3))),
     "map": lambda generator, depth: Map(dict(enumerate(_random_items(generator, depth)))),
     "leaf": lambda generator, depth: Leaf(number=generator.randrange(10)),
-    "record": lambda generator, depth: _Outer(f=_random_value(generator, depth + 1)),
+    "state": lambda generator, depth: _Loose(value=_random_value(generator, depth + 1)),
 }
 
 

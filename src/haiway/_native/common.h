@@ -29,8 +29,7 @@
 /* what Python hands the native code to call back, and the types the module makes */
 typedef struct {
     PyTypeObject *meta_type;     /* StructMeta */
-    PyTypeObject *struct_type;   /* Struct - the storage of a record */
-    PyTypeObject *validated_type;  /* Validated - a Struct which validates what it is built from */
+    PyTypeObject *struct_type;   /* Struct - the storage of a State */
     PyTypeObject *spec_type;     /* Spec - a compiled description of an annotation */
     /* validation */
     PyObject *missing;           /* MISSING */

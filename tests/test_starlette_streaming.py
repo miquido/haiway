@@ -1,5 +1,6 @@
 from asyncio import sleep
 from collections.abc import AsyncGenerator, Iterable, MutableSequence
+from logging import Logger, getLogger
 from typing import Any
 from uuid import UUID
 
@@ -7,7 +8,7 @@ import pytest
 
 pytest.importorskip("starlette")
 
-from pytest import mark, raises
+from pytest import MonkeyPatch, mark, raises
 from starlette.applications import Starlette
 from starlette.requests import ClientDisconnect, Request
 from starlette.responses import Response, StreamingResponse
@@ -20,8 +21,10 @@ from haiway.starlette import (
     StreamResponse,
     application,
 )
+from haiway.starlette import streaming as streaming_module
 from tests.asgi import (
     TRACE_ID_HEADER,
+    LogCapture,
     Result,
     http_scope,
     receive_request,
@@ -448,3 +451,46 @@ async def _handled(
     exception: Exception,
 ) -> Response:
     return Response(status_code=400)
+
+
+@mark.asyncio
+async def test_server_below_required_spec_version_is_reported_once(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(streaming_module, "_spec_version_reported", False)
+    logger: Logger = getLogger("test-stream-spec-version")
+
+    async def endpoint(request: Request) -> Response:
+        async def content() -> AsyncGenerator[bytes]:
+            yield b"chunk"
+
+        return StreamResponse(content())
+
+    app: Starlette = application(
+        ServerContext(observability=logger),
+        routes=[Route("/example", endpoint)],
+    )
+
+    async def request(spec_version: str) -> None:
+        scope = http_scope()
+        scope["asgi"] = {"version": "3.0", "spec_version": spec_version}
+
+        async def receive() -> Message:
+            # below 2.4 the response listens for a disconnect while it streams
+            if spec_version >= "2.4":
+                return await receive_request()
+
+            await sleep(3600)
+            raise AssertionError("unreachable")
+
+        await app(scope, receive, Result().collecting())
+
+    with LogCapture(logger) as records:
+        async with running(app):
+            await request("2.4")
+            assert not any("spec version" in record for record in records)
+
+            await request("2.3")
+            await request("2.3")
+
+    assert sum("spec version" in record for record in records) == 1

@@ -11,7 +11,7 @@ The package groups into four areas:
 
 - JSON-like value aliases: `RawValue`, `BasicValue`, `BasicObject`, `FlatObject`
 - Sentinel and defaults: `Missing`, `Default`, `DefaultValue`
-- Immutable containers: `Immutable`, `Map`, `Meta`
+- Immutable containers: `Map`, `Meta`
 - Annotation metadata: `Alias`, `Description`, `Specification`, `TypeSpecification`
 
 All of them are exported from `haiway`.
@@ -125,7 +125,7 @@ Within a `match` statement refer to it through a module - `case haiway.Missing:`
 
 ## Defaults with `Default`
 
-`Default(...)` is a typed wrapper used by `Immutable` and `State` fields.
+`Default(...)` is a typed wrapper used by `State` fields.
 
 ```python
 from uuid import uuid4
@@ -159,33 +159,47 @@ Important behavior:
   variable by name
 - `Default(...)` is a field specifier, not a runtime descriptor
 
-## `Immutable`
+## Frozen records
 
-`Immutable` is Haiway's small frozen-record base class. Subclasses declare attributes with normal
-type annotations, and the metaclass:
-
-- collects annotated fields
-- creates `__slots__`
-- sets `__match_args__`
-- resolves `Default(...)` values
-- marks subclasses as `final`
+Haiway has no separate frozen-record base class - a value which has to be validated, compared and
+serialized is a `State`. A small record which has to hold what it is given as it is - callables,
+clients, anything a `State` would validate or copy - is a final, slotted class which binds its
+values once and refuses to rebind or delete them:
 
 ```python
-from haiway import Default, Immutable
+from collections.abc import Callable
+from typing import Any, NoReturn, final
 
-class RetryPolicy(Immutable):
-    attempts: int = Default(3)
+@final
+class RetryPolicy:
+    attempts: int
     backoff_seconds: float
+    on_retry: Callable[[int], None] | None
+    __slots__ = ("attempts", "backoff_seconds", "on_retry")
+
+    def __init__(
+        self,
+        *,
+        backoff_seconds: float,
+        attempts: int = 3,
+        on_retry: Callable[[int], None] | None = None,
+    ) -> None:
+        object.__setattr__(self, "attempts", attempts)
+        object.__setattr__(self, "backoff_seconds", backoff_seconds)
+        object.__setattr__(self, "on_retry", on_retry)
+
+    def __setattr__(self, name: str, value: Any) -> NoReturn:
+        raise AttributeError(f"Can't modify immutable RetryPolicy, attribute - '{name}'")
+
+    def __delattr__(self, name: str) -> NoReturn:
+        raise AttributeError(f"Can't modify immutable RetryPolicy, attribute - '{name}'")
 ```
 
-The attributes of an instance are bound once - assignment, deletion and `object.__setattr__` all
-raise, and calling `__init__` again does too. `copy.copy()` and `copy.deepcopy()` return the same
-instance because the record can't be rebound. What it holds is held as given: `Immutable` validates
-and copies nothing, so a mutable value such as a `list` stays mutable - use a `State` for values
-which have to be frozen through. A record inherits from `Immutable` alone - it is final, and can't
-be combined with mixins. An object whose internals change after it is made, like a client opening
-its connection or a response caching its body, is a plain class with `__slots__` rather than an
-`Immutable`.
+Equality and hashing stay by identity, so a record holding a callable or a mutable value still
+hashes. Nothing is validated or copied - a `list` it was given stays mutable. Note that
+`object.__setattr__` can still rebind an attribute of such a class, which a `State` refuses. An
+object whose internals change after it is made, like a client opening its connection or a response
+caching its body, is a plain class with `__slots__`.
 
 ## `Map`
 

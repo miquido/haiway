@@ -49,6 +49,7 @@ class Verifying[Type](Protocol):
     ) -> Type: ...
 
 
+@final
 class ValidationError(Exception):
     """
     Exception raised when validation fails.
@@ -177,8 +178,6 @@ class Validator[Type]:
         validator: Validating[Type],
         /,
     ) -> None:
-        assert validator  # nosec: B101
-
         self.validator: Validating[Type]
         object.__setattr__(
             self,
@@ -216,8 +215,6 @@ class Verifier[Type]:
         verifier: Verifying[Type],
         /,
     ) -> None:
-        assert verifier  # nosec: B101
-
         self.verifier: Verifying[Type]
         object.__setattr__(
             self,

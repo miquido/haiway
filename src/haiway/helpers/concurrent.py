@@ -658,8 +658,9 @@ def stream_concurrently[Element](  # noqa: C901
             ) -> None:
                 running.remove(task)
                 # a cancelled producer has no error of its own to report - it was
-                # cancelled by the merge ending, and asking it for one raises
-                exception: BaseException | None = task.exception()
+                # cancelled by the merge ending, and asking it for one raises. one is
+                # also cancelled while releasing its source, past the swallowed cancellation
+                exception: BaseException | None = None if task.cancelled() else task.exception()
                 if not running:  # finish when no more running
                     return merged_stream.finish(exception)
 

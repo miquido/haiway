@@ -126,7 +126,7 @@ class PostgresConnectionPool:
     One instance owns a single pool and supports one active scope at a time.
     """
 
-    # not an Immutable - the pool is created when the instance is entered, and dropped
+    # not a frozen record - the pool is created when the instance is entered, and dropped
     # when it is left
     __slots__ = (
         "_close_pool",
@@ -431,7 +431,7 @@ class PostgresConnectionPool:
 
 @final
 class _TransactionContext:
-    # not an Immutable - it records when the transaction begins
+    # not a frozen record - it records when the transaction begins
     __slots__ = (
         "_entered_at",
         "_transaction_context",
@@ -527,7 +527,7 @@ class _TransactionContext:
 
 @final
 class _ConnectionContext:
-    # not an Immutable - it holds the acquired connection until it is released
+    # not a frozen record - it holds the acquired connection until it is released
     __slots__ = (
         "_acquire_timeout",
         "_pool",

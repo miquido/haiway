@@ -7,7 +7,7 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 ### Native State
 
 The C extension introduced as opt-in in 0.60.0 becomes the only implementation: it is the storage
-of `State` and `Immutable`, and validates every built-in annotation, updates, compares, hashes and
+of `State`, and validates every built-in annotation, updates, compares, hashes and
 converts to mappings and JSON. There is no Python implementation of those any more. The extension
 is built for Linux, macOS and Windows on CPython 3.15, and the test suite runs on each.
 
@@ -29,18 +29,26 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `{} | meta` are plain `dict`s, as `dict.__or__` handles a `frozendict` itself.
 - `State.__init__` refuses to initialize an instance a second time, and a `State` instance can't be
   rebound through `object.__setattr__`.
-- **The attributes of an `Immutable` are bound once, for good** - `object.__setattr__` and
-  `object.__delattr__` refuse to rebind them too, as they do for a `State`. What is bound is held as
-  given: an `Immutable` validates and copies nothing, so a mutable value - a `list`, say - stays
-  mutable. `HTTPResponse`, `HTTPXClient` and
-  `PostgresConnectionPool`, which change after they are made, are plain classes with `__slots__`
-  instead, with the same constructors and methods.
+- **A `State` class can't be changed once it is created** - assigning or deleting an attribute of
+  the class raises `TypeError`, also through `type.__setattr__`. Replacing the descriptor of an
+  attribute hid the value of every instance, and an `__init__` assigned later was passed over.
 
-  Migration: a subclass of `Immutable` rebinding its own attributes becomes a plain class with
-  `__slots__`, or keeps what changes in a mutable holder it is given.
+  Migration: declare methods and class variables in the class body, or set them from
+  `__init_subclass__` of an attribute-less base, which runs before the class is complete. A class
+  decorator can no longer add to a `State`, and `mock.patch.object(SomeState, "method")` is
+  refused - hold what a test replaces as an attribute and construct the state with it.
+- **`Immutable` is removed** - a value which has to be validated, compared and serialized is a
+  `State`, and a record holding what it is given as it is, a final, slotted class refusing
+  `__setattr__` and `__delattr__` (equality and hashing by identity, and `copy`/`deepcopy` returning the
+  instance itself, as `Immutable` had). Unlike `Immutable`, such a class can be rebound through `object.__setattr__`.
+  `HTTPResponse`, `HTTPXClient` and `PostgresConnectionPool`, which change after they are made, are
+  plain classes with `__slots__`, with the same constructors and methods.
+
+  Migration: replace `class Record(Immutable)` with such a class, or with a `State` when the values should be
+  validated. `Default(...)` markers become defaults of the constructor.
 - **A `State` has a single base** - the `State` it refines, which declares no attributes (or the
   origin of a generic specialization), and `Generic` when it declares type parameters. Mixins and
-  multiple inheritance are refused, and an `Immutable` inherits from `Immutable` alone.
+  multiple inheritance are refused.
 
   Migration: share behavior through an attribute-less `State` base, and compose by holding instances
   as attributes.
@@ -77,6 +85,9 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `record_log(level, message, (first, second), exception=None)` - handing them on without
   unpacking and packing them again. Migration: wrap the arguments in a tuple; `ctx.log_*` are
   unchanged.
+- **`Paginated.of` is removed** - the constructor takes the items by position, the same way
+  `of` did: `Paginated(items, pagination=pagination)`. Passing `items=` by name keeps working.
+  Migration: replace `Paginated.of(` with `Paginated(`.
 
 #### Added
 
@@ -150,6 +161,11 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
 - `@asynchronous` submits its calls from an empty context, so a thread the executor starts for one
   never keeps the context of the caller - on the free-threaded build threads inherit it, which kept
   the state of the first scope using it alive for as long as the thread lived.
+- A class variable of a `State` declared under `from __future__ import annotations` is told from
+  an attribute - `ClassVar[...]` as text was read as an annotation which is not supported. A bare
+  `ClassVar` is one as well.
+- `updating` an instance which was never initialized (`State.__new__`) is refused when it would
+  carry a value over - it returned an instance missing the attributes which were not given.
 
 ## 0.60.0
 

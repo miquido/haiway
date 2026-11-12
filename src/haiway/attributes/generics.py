@@ -26,7 +26,10 @@ __all__ = (
 type Variance = typing.Literal["co", "contra", "inv"]
 
 
-def type_parameters_of(cls: type[Any], /) -> Sequence[Any]:
+def type_parameters_of(
+    cls: type[Any],
+    /,
+) -> Sequence[Any]:
     """
     The type parameters of a generic class, however they are declared.
 
@@ -44,7 +47,10 @@ def type_parameters_of(cls: type[Any], /) -> Sequence[Any]:
     return getattr(cls, "__type_params__", ()) or getattr(cls, "__parameters__", ())
 
 
-def unspecialized_defaults(cls: type[Any], /) -> Mapping[str, Any]:
+def unspecialized_defaults(
+    cls: type[Any],
+    /,
+) -> Mapping[str, Any]:
     """What the parameters of a generic class stand for when it is not specialized.
 
     The parameters which declare a default (PEP 696) stand for it, each in terms of
@@ -77,7 +83,10 @@ def unspecialized_defaults(cls: type[Any], /) -> Mapping[str, Any]:
     return defaults
 
 
-def is_open_type_argument(argument: Any, /) -> bool:
+def is_open_type_argument(
+    argument: Any,
+    /,
+) -> bool:
     """
     Whether an argument is a parameter itself, leaving the specialization unfinished.
 
@@ -162,7 +171,10 @@ def bind_type_arguments(
     return bindings, tuple(arguments)
 
 
-def _normalized(argument: Any, /) -> Any:
+def _normalized(
+    argument: Any,
+    /,
+) -> Any:
     # the argument of a `ParamSpec` is written as a list, which can't be hashed
     if isinstance(argument, list):
         return tuple(cast(list[Any], argument))
@@ -170,7 +182,10 @@ def _normalized(argument: Any, /) -> Any:
     return argument
 
 
-def _is_signature(arguments: Sequence[Any], /) -> bool:
+def _is_signature(
+    arguments: Sequence[Any],
+    /,
+) -> bool:
     # the one argument a `ParamSpec` can be given as it is
     return len(arguments) == 1 and (
         arguments[0] is Ellipsis
@@ -277,14 +292,16 @@ def parameter_variances(
     Mapping[str, Variance]
         ``"co"``, ``"contra"`` or ``"inv"`` for each parameter, by its name.
     """
-    cached: Mapping[str, Variance] | None = cls.__dict__.get("__VARIANCES__")
-    if cached is not None:
+    # a generic always has a parameter - an empty mapping is one not worked out yet
+    if cached := cls.__dict__.get("__VARIANCES__"):
         return cached
 
     computing: set[type[Any]] = _computing_variances()
-    computing.add(cls)  # a class using itself is read as it is declared, not recursed into
+    # what is worked out while another class is, leans on it not being known yet
+    outermost: bool = not computing
+    computing.add(cls)  # a class using itself adds nothing to what it is worked out from
     try:
-        return _worked_out_variances(cls)
+        return _worked_out_variances(cls, keep=outermost)
 
     finally:
         computing.discard(cls)
@@ -293,8 +310,8 @@ def parameter_variances(
 def _worked_out_variances(
     cls: type[Any],
     /,
+    keep: bool,
 ) -> Mapping[str, Variance]:
-
     variances: MutableMapping[str, Variance] = {}
     annotations: Mapping[str, Any] = getattr(cls, "__ANNOTATED__", {})
     for parameter in type_parameters_of(cls):
@@ -310,9 +327,11 @@ def _worked_out_variances(
             variances[parameter.__name__] = _inferred_variance(parameter, annotations)
 
     # a class which is not declared yet has no annotations to read the use of a
-    # parameter from - what is worked out then is not kept
-    if hasattr(cls, "__ANNOTATED__"):
-        cls.__VARIANCES__ = variances
+    # parameter from - what is worked out then is not kept. a generic State is made
+    # with the mapping they are kept in, as the class itself can't be changed
+    kept: MutableMapping[str, Variance] | None = cls.__dict__.get("__VARIANCES__")
+    if keep and kept is not None:
+        kept.update(variances)
 
     return variances
 
@@ -377,10 +396,11 @@ def _collect_positions(
     elif isinstance(origin, TypeAliasType):
         _collect_alias_positions(origin, arguments, name, positive, seen, depth)
 
-    elif (
-        getattr(origin, "__ANNOTATED__", None) is not None and origin not in _computing_variances()
-    ):
-        _collect_state_positions(origin, arguments, name, positive, seen, depth)
+    elif getattr(origin, "__ANNOTATED__", None) is not None:
+        if origin not in _computing_variances():
+            _collect_state_positions(origin, arguments, name, positive, seen, depth)
+
+        # else: a class being worked out, used by itself or by one it uses - nothing new
 
     else:
         # `Annotated` carries its metadata along as arguments, which are not types
@@ -442,9 +462,10 @@ def _collect_state_positions(
     /,
 ) -> None:
     # another generic State - an argument is used the way that State uses its parameter
-    variances: Mapping[str, Variance] = parameter_variances(origin)
-    for parameter, argument in zip(type_parameters_of(origin), arguments, strict=False):
-        match variances[parameter.__name__]:
+    # a variadic parameter takes several arguments - each one has its own variance
+    variances: Sequence[Variance] = argument_variances(origin, len(arguments))
+    for variance, argument in zip(variances, arguments, strict=False):
+        match variance:
             case "co":
                 _collect_positions(argument, name, positive, seen, depth + 1)
 

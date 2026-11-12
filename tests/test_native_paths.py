@@ -122,7 +122,7 @@ def test_configure_only_once() -> None:
         lambda: nstruct.basic_object(object(), True, ()),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.to_mapping(object(), False),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.from_json(int, "{}", False),  # pyright: ignore[reportArgumentType]
-        lambda: nstruct.compile_plan(int, (), (), False),
+        lambda: nstruct.compile_plan(int, (), ()),
         lambda: nstruct.validate(object(), 1),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.check(object(), 1),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.compile_spec(()),

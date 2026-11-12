@@ -14,28 +14,8 @@ static PyMethodDef struct_methods[] = {
     {"__replace__", (PyCFunction)(void (*)(void))struct_replace_fast, METH_FASTCALL | METH_KEYWORDS, NULL},
     {"updating", (PyCFunction)(void (*)(void))struct_replace_fast, METH_FASTCALL | METH_KEYWORDS, NULL},
     {"__deepcopy__", struct_deepcopy, METH_O, NULL},
-    {NULL, NULL, 0, NULL}
-};
-
-/* what a class validating its input adds to the storage - a plain record has no `validate` */
-static PyMethodDef validated_methods[] = {
     {"validate", (PyCFunction)struct_validate, METH_O | METH_CLASS, NULL},
     {NULL, NULL, 0, NULL}
-};
-
-static PyType_Slot validated_slots[] = {
-    {Py_tp_traverse, struct_traverse},
-    {Py_tp_clear, struct_clear},
-    {Py_tp_methods, validated_methods},
-    {0, NULL}
-};
-
-static PyType_Spec validated_spec = {
-    .name = "haiway._native._nstruct.Validated",
-    .basicsize = sizeof(PyObject),
-    .itemsize = 0,
-    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE,
-    .slots = validated_slots,
 };
 
 static PyType_Slot struct_slots[] = {
@@ -211,9 +191,6 @@ module_exec(PyObject *module)
     if (state->meta_type == NULL) return -1;
     state->struct_type = (PyTypeObject *)PyType_FromMetaclass(state->meta_type, module, &struct_spec, NULL);
     if (state->struct_type == NULL) return -1;
-    state->validated_type = (PyTypeObject *)PyType_FromMetaclass(
-        state->meta_type, module, &validated_spec, (PyObject *)state->struct_type);
-    if (state->validated_type == NULL) return -1;
     state->spec_type = (PyTypeObject *)PyType_FromMetaclass(NULL, module, &spec_spec, NULL);
     if (state->spec_type == NULL) return -1;
 
@@ -238,7 +215,6 @@ module_exec(PyObject *module)
 
     if (PyModule_AddObjectRef(module, "StructMeta", (PyObject *)state->meta_type) < 0
         || PyModule_AddObjectRef(module, "Struct", (PyObject *)state->struct_type) < 0
-        || PyModule_AddObjectRef(module, "Validated", (PyObject *)state->validated_type) < 0
         || PyModule_AddObjectRef(module, "Spec", (PyObject *)state->spec_type) < 0
         || add_kinds(module) < 0) {
         return -1;
@@ -247,7 +223,7 @@ module_exec(PyObject *module)
 }
 
 #define FOR_EACH_STATE_OBJECT(V) \
-    V(meta_type) V(struct_type) V(validated_type) V(spec_type) \
+    V(meta_type) V(struct_type) V(spec_type) \
     V(missing) V(check) V(report) V(unexpected) V(describe) V(parameters) V(enum_values) V(literal_values) \
     V(b64decode) V(parse_duration) V(exception_group) \
     V(map) V(basic_value) V(basic_key) V(recursive) \

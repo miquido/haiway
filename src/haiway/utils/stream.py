@@ -10,6 +10,7 @@ from types import TracebackType
 from typing import Any, NoReturn, final
 
 from haiway.utils.exceptions import thrown_exception
+from haiway.utils.loops import loop_safe
 
 __all__ = ("AsyncStream",)
 
@@ -148,6 +149,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             self._pending.append((consumed, element))
             await consumed
 
+    @loop_safe()
     def finish(
         self,
         exception: BaseException | None = None,
@@ -159,7 +161,10 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         released, and the consumer receives the provided exception or
         ``StopAsyncIteration`` when attempting to get the next element.
 
-        If the stream is already finished, this method does nothing.
+        If the stream is already finished, this method does nothing. It may be
+        called from another thread (so may ``cancel()``), it takes effect on the
+        stream's loop then - the stream is not finished yet when it returns. Every
+        other operation has to run within the loop of the stream.
 
         Parameters
         ----------
@@ -183,24 +188,10 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             if consumed.done():
                 continue  # skip dropped
 
-            if get_running_loop() is not self._loop:
-                self._loop.call_soon_threadsafe(
-                    consumed.set_result,
-                    None,
-                )
-
-            else:
-                consumed.set_result(None)
+            consumed.set_result(None)
 
         if self._waiting is not None and not self._waiting.done():
-            if get_running_loop() is not self._loop:
-                self._loop.call_soon_threadsafe(
-                    self._waiting.set_exception,
-                    reason,
-                )
-
-            else:
-                self._waiting.set_exception(reason)
+            self._waiting.set_exception(reason)
 
     def cancel(self) -> None:
         """
@@ -232,7 +223,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         """
         assert self._waiting is None, "Only a single stream consumer is supported!"  # nosec: B101
 
-        if self._finish_reason:
+        if self._finish_reason is not None:
             raise self._finish_reason
 
         while self._pending:

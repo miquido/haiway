@@ -1,12 +1,21 @@
 import os
 import sys
-from asyncio import Future, Lock, Task, ensure_future, shield, sleep
-from collections.abc import Awaitable, Coroutine, Iterable, MutableSequence, Sequence
+from asyncio import (
+    AbstractEventLoop,
+    Future,
+    Task,
+    ensure_future,
+    get_running_loop,
+    shield,
+    sleep,
+    wait,
+)
+from collections.abc import Awaitable, Callable, Coroutine, MutableSequence, Sequence
 from errno import ELOOP, EMLINK, ENOENT, ENOTDIR
 from pathlib import Path
 from stat import S_ISLNK, S_ISREG
 from types import TracebackType
-from typing import Final, NamedTuple, Protocol, final, overload, runtime_checkable
+from typing import Any, Final, NamedTuple, Protocol, final, overload, runtime_checkable
 
 from haiway.attributes import State
 from haiway.helpers.asynchrony import asynchronous
@@ -21,6 +30,7 @@ if sys.platform != "win32":
     LOCK_EX: Final[int] = _LOCK_EX
     LOCK_NB: Final[int] = _LOCK_NB
     LOCK_UN: Final[int] = _LOCK_UN
+
 else:
     LOCK_EX: Final[int] = 0
     LOCK_NB: Final[int] = 0
@@ -33,12 +43,15 @@ else:
 # O_NOFOLLOW is POSIX only - where it is missing the open follows a link like any
 # other path, so the entry has to be examined before it, see `_refused_link`
 NO_FOLLOW: Final[int] = getattr(os, "O_NOFOLLOW", 0)
+# without it Windows translates line endings and stops reading at Ctrl-Z
+_BINARY: Final[int] = getattr(os, "O_BINARY", 0)
+_READ_CHUNK: Final[int] = 64 * 1024
 # platforms disagree on which error a refused symlink produces
 _NO_FOLLOW_ERRORS: Final[frozenset[int]] = frozenset((ELOOP, EMLINK))
 # flags for stepping into a single path component - the component has to be a
 # directory and must not be a link, so a planted link is refused instead of
 # silently redirecting everything below it
-_DIRECTORY_FLAGS: Final[int] = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NO_FOLLOW
+_DIRECTORY_FLAGS: Final[int] = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NO_FOLLOW | _BINARY
 # opening relative to a directory descriptor is POSIX only - without it each
 # path can only be resolved in full, leaving the ancestors up to the platform
 _DIRECTORY_HANDLES: Final[bool] = (
@@ -120,13 +133,14 @@ class FileWriting(Protocol):
     """
     Protocol for asynchronous file writing operations.
     Implementations write the provided content to the file, completely
-    replacing any existing content. In the default implementation, writes are
-    synchronized only by the per-FileAccessContext lock and become
-    cross-context or cross-process safe only when Files.access(...,
-    exclusive=True) acquires the file lock. The default implementation also
-    fsyncs after each in-place update, but it is not atomic across processes
-    unless exclusive=True is used or the caller adopts an atomic temp-file
-    rename pattern.
+    replacing any existing content. The default implementation is bound to the
+    event loop which opened the file and raises FileException when used from
+    another one. Operations on one open file run one at a time, in the order they
+    were started - also one whose caller stopped waiting for it. Writes become cross-context or
+    cross-process safe only when Files.access(..., exclusive=True) acquires the
+    file lock. The default implementation fsyncs after each in-place update, but
+    it is not atomic across processes unless exclusive=True is used or the
+    caller adopts an atomic temp-file rename pattern.
     """
 
     async def __call__(
@@ -306,9 +320,7 @@ def _open_file_handle(
     try:
         # never traverse a symlink - a link planted at the target would otherwise
         # redirect reads and writes to a file chosen by whoever created it
-        flags: int = os.O_RDWR | NO_FOLLOW
-        if create:
-            flags |= os.O_CREAT
+        flags: int = os.O_RDWR | NO_FOLLOW | _BINARY
 
         if _refused_link(path):
             raise FileException(f"File is a symbolic link: {path}")
@@ -420,7 +432,7 @@ def _open_file(
 
         # no directory handle to sync here, so a freshly created entry is left
         # exactly as durable as the platform chooses to make it
-        return os.open(path, flags, mode)
+        return os.open(path, flags | os.O_CREAT if create else flags, mode)
 
     # the parent chain is walked one component at a time, so the file is opened
     # relative to a directory reached without traversing a single link
@@ -430,16 +442,38 @@ def _open_file(
         mode=directory_mode,
     )
     try:
-        file_handle: int = os.open(path.name, flags, mode, dir_fd=directory_handle)
-        if create:
-            try:
-                # syncing the contents of a new file does not make the entry
-                # pointing at it outlive a crash - the directory holds that
-                os.fsync(directory_handle)
+        if not create:
+            return os.open(path.name, flags, dir_fd=directory_handle)
 
-            except OSError:
-                os.close(file_handle)
-                raise
+        # an existing file is opened as it is - only an entry created here has
+        # to be made durable, so the directory is not synced on every open
+        try:
+            return os.open(path.name, flags, mode, dir_fd=directory_handle)
+
+        except FileNotFoundError:
+            pass  # a link pointing nowhere fails differently, and is refused
+
+        try:
+            file_handle: int = os.open(
+                path.name,
+                flags | os.O_CREAT | os.O_EXCL,
+                mode,
+                dir_fd=directory_handle,
+            )
+
+        except FileExistsError:
+            # created concurrently, or a link planted in the meantime - opening
+            # it as an existing entry applies the very same checks
+            return os.open(path.name, flags, mode, dir_fd=directory_handle)
+
+        try:
+            # syncing the contents of a new file does not make the entry
+            # pointing at it outlive a crash - the directory holds that
+            os.fsync(directory_handle)
+
+        except OSError:
+            os.close(file_handle)
+            raise
 
         return file_handle
 
@@ -615,15 +649,23 @@ def _read_file_contents(
     file_handle: int,
 ) -> bytes:
     try:
-        os.lseek(file_handle, 0, os.SEEK_SET)
         # Read all bytes to EOF, avoiding TOCTOU on externally changing file size.
+        # The first chunk covers the whole file as it is now, plus the byte
+        # proving there is nothing more to read.
+        chunk_size: int = max(os.fstat(file_handle).st_size + 1, _READ_CHUNK)
         chunks: MutableSequence[bytes] = []
+        # operations of a file run one at a time - the offset is this one's alone
+        os.lseek(file_handle, 0, os.SEEK_SET)
         while True:
-            chunk: bytes = os.read(file_handle, 64 * 1024)
+            chunk: bytes = os.read(file_handle, chunk_size)
             if not chunk:
                 break
+
             chunks.append(chunk)
-        return b"".join(chunks)
+            chunk_size = _READ_CHUNK
+
+        return chunks[0] if len(chunks) == 1 else b"".join(chunks)
+
     except OSError as exc:
         raise FileException("Failed to read file content") from exc
 
@@ -635,21 +677,26 @@ def _write_file_contents(
     content: bytes,
 ) -> None:
     try:
-        os.lseek(file_handle, 0, os.SEEK_SET)
-        # Write all bytes, handling partial writes
+        # a view, so continuing after a partial write does not copy the rest
+        remaining: memoryview = memoryview(content)
         offset: int = 0
-        while offset < len(content):
-            bytes_written: int = os.write(file_handle, content[offset:])
+        # operations of a file run one at a time - the offset is this one's alone
+        os.lseek(file_handle, 0, os.SEEK_SET)
+        while offset < len(remaining):
+            bytes_written: int = os.write(file_handle, remaining[offset:])
             if bytes_written == 0:
                 raise FileException("Failed to write file content")
+
             offset += bytes_written
+
         os.ftruncate(file_handle, len(content))
         os.fsync(file_handle)
+
     except OSError as exc:
         raise FileException("Failed to write file content") from exc
 
 
-async def _close_file_handle(
+def _close_file_handle(
     file_handle: int,
     *,
     exclusive: bool,
@@ -673,13 +720,65 @@ async def _close_file_handle(
         raise FileException("Failed to unlock file handle") from unlock_error
 
 
+def _close_abandoned_file_handle(
+    file_handle: int,
+    /,
+    *,
+    exclusive: bool,
+) -> None:
+    try:
+        _close_file_handle(file_handle, exclusive=exclusive)
+
+    except FileException:
+        pass  # abandoned already, there is nobody left to tell it failed
+
+
+@final
+class _FileEntry:
+    # a single entry of a context - what a `File` returned by it may act on. Its
+    # identity tells the entry apart, a descriptor number can be reused by the next
+    __slots__ = (
+        "file_handle",
+        "loop",
+        "running",
+    )
+
+    def __init__(
+        self,
+        file_handle: int,
+        loop: AbstractEventLoop,
+    ) -> None:
+        self.file_handle: int = file_handle
+        self.loop: AbstractEventLoop = loop
+        # unfinished operations in the order they were started - the last one
+        # is what the next one waits for, and closing waits for them all
+        self.running: dict[Future[Any], None] = {}
+
+    @property
+    def last(self) -> Future[Any] | None:
+        return next(reversed(self.running), None)
+
+    def finished(
+        self,
+        running: Future[Any],
+        /,
+    ) -> None:
+        self.running.pop(running, None)
+        if not running.cancelled():
+            running.exception()  # nobody may be left to retrieve it
+
+
 @final
 class FileAccessContext:
+    # Bound to the event loop which entered it - the descriptor is shared with
+    # executor jobs which that loop tracks, so it is never touched from another.
+    # Operations of an entry run one at a time, in the order they were started -
+    # ordered on the loop rather than locked, including those abandoned by their
+    # callers, which keep running in their executor threads.
     __slots__ = (
         "_create",
+        "_entry",
         "_exclusive",
-        "_file_handle",
-        "_lock",
         "_mode",
         "path",
     )
@@ -695,11 +794,13 @@ class FileAccessContext:
         self._create: bool = create
         self._exclusive: bool = exclusive
         self._mode: int = mode
-        self._file_handle: int | None = None
-        self._lock: Lock = Lock()
+        self._entry: _FileEntry | None = None
 
     async def __aenter__(self) -> File:
-        assert self._file_handle is None  # nosec: B101
+        if self._entry is not None:
+            raise FileException(f"File is already open: {self.path}")
+
+        loop: AbstractEventLoop = get_running_loop()
         file_handle: int = await _opened_file_handle(
             self.path,
             create=self._create,
@@ -713,26 +814,19 @@ class FileAccessContext:
         except BaseException:
             # cancellation included - waiting for the lock is meant to be given
             # up on, the descriptor opened for it is not meant to be left behind
-            await _close_file_handle(file_handle, exclusive=False)
+            _close_file_handle(file_handle, exclusive=False)
             raise
 
-        self._file_handle = file_handle
+        entry: _FileEntry = _FileEntry(file_handle, loop)
+        self._entry = entry
 
         async def read_file() -> bytes:
-            assert self._file_handle is not None  # nosec: B101
-            return await self._exclusively(
-                _read_file_contents(
-                    self._file_handle,
-                )
-            )
+            return await self._operation(entry, _read_file_contents)
 
         async def write_file(content: bytes) -> None:
-            assert self._file_handle is not None  # nosec: B101
-            await self._exclusively(
-                _write_file_contents(
-                    self._file_handle,
-                    content=content,
-                )
+            await self._operation(
+                entry,
+                lambda handle: _write_file_contents(handle, content=content),
             )
 
         return File(
@@ -741,23 +835,25 @@ class FileAccessContext:
             writing=write_file,
         )
 
-    async def _exclusively[Result](
+    async def _operation[Result](
         self,
-        operation: Coroutine[None, None, Result],
+        entry: _FileEntry,
+        start: Callable[[int], Coroutine[None, None, Result]],
         /,
     ) -> Result:
-        # the descriptor carries a single shared offset, and an operation which
-        # its caller stopped waiting for keeps running in its executor thread -
-        # the lock is held until it completes rather than until it is awaited
-        try:
-            await self._lock.acquire()
+        # a `File` of an earlier entry must not reach the one opened after it
+        if self._entry is not entry:
+            raise FileException(f"File is closed: {self.path}")
 
-        except BaseException:
-            operation.close()  # never started, so it has nothing to unwind
-            raise
+        if get_running_loop() is not entry.loop:
+            raise FileException(f"File used from a different event loop: {self.path}")
 
-        running: Task[Result] = ensure_future(operation)
-        running.add_done_callback(lambda _: self._lock.release())
+        # an operation which its caller stopped waiting for keeps running in its
+        # executor thread - it stays tracked until it completes, so closing waits
+        # for it rather than pulling the descriptor from under it
+        running: Task[Result] = ensure_future(_after_previous(entry.last, start(entry.file_handle)))
+        entry.running[running] = None
+        running.add_done_callback(entry.finished)
         return await shield(running)
 
     async def __aexit__(
@@ -766,19 +862,54 @@ class FileAccessContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        assert self._file_handle is not None  # nosec: B101
-        file_handle: int = self._file_handle
-        self._file_handle = None
-        try:
-            # an abandoned operation outlives its caller - closing underneath it
-            # would hand its bytes to whatever reuses the descriptor number
-            await self._lock.acquire()
+        entry: _FileEntry | None = self._entry
+        if entry is None:
+            raise FileException(f"File is closed: {self.path}")
 
-        finally:
-            await _close_file_handle(
-                file_handle,
-                exclusive=self._exclusive,
-            )
+        if get_running_loop() is not entry.loop:
+            raise FileException(f"File used from a different event loop: {self.path}")
+
+        # no new operation can start from here on - an entry made later has
+        # operations of its own, it does not wait for those of this one
+        self._entry = None
+        if entry.running:
+            draining: Future[Any] = ensure_future(wait(tuple(entry.running)))
+            try:
+                await shield(draining)
+
+            except BaseException:
+                # closing is only postponed, never skipped - once the abandoned
+                # operations are done there is nothing left using the descriptor
+                draining.add_done_callback(
+                    lambda _: _close_abandoned_file_handle(
+                        entry.file_handle,
+                        exclusive=self._exclusive,
+                    )
+                )
+                raise
+
+        _close_file_handle(
+            entry.file_handle,
+            exclusive=self._exclusive,
+        )
+
+
+async def _after_previous[Result](
+    previous: Future[Any] | None,
+    operation: Coroutine[None, None, Result],
+    /,
+) -> Result:
+    # operations share the descriptor offset and a write truncates what it leaves,
+    # so each waits for the one started before it - which waited for its own
+    try:
+        if previous is not None:
+            await wait((previous,))
+
+    except BaseException:
+        operation.close()
+        raise
+
+    return await operation
 
 
 @asynchronous
@@ -796,58 +927,35 @@ def _traverse_path_contents(
     files: MutableSequence[Path] = []
     directories: MutableSequence[Path] = []
     try:
-        if recursive:
-            # os.walk discards errors unless told otherwise, which would turn an
-            # unreadable subtree into a silently incomplete result
-            for current_root, dir_names, file_names in os.walk(
-                root,
-                onerror=_traversal_failure,
-            ):
-                current: Path = Path(current_root)
-                _collect(
-                    (current / name for name in (*dir_names, *file_names)),
-                    files=files,
-                    directories=directories,
-                )
+        # depth first, each directory listed once - the type of an entry comes
+        # with the listing, so nothing is described again with a call of its own,
+        # and a failure anywhere in the subtree surfaces instead of leaving the
+        # result silently incomplete
+        pending: MutableSequence[Path] = [root]
+        while pending:
+            found: MutableSequence[Path] = []
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    # links are refused everywhere else, they are no result here
+                    if entry.is_symlink():
+                        continue
 
-        else:
-            _collect(
-                root.iterdir(),
-                files=files,
-                directories=directories,
-            )
+                    elif entry.is_dir(follow_symlinks=False):
+                        directories.append(Path(entry.path))
+                        found.append(Path(entry.path))
+
+                    elif entry.is_file(follow_symlinks=False):
+                        files.append(Path(entry.path))
+
+                    # anything else - a socket, a fifo, a device - is no result
+
+            if recursive:
+                pending.extend(reversed(found))
 
         return Paths(tuple(files), tuple(directories))
 
     except OSError as exc:
         raise FileException(f"Failed to traverse directory: {root}") from exc
-
-
-def _traversal_failure(
-    error: OSError,
-    /,
-) -> None:
-    raise error
-
-
-def _collect(
-    entries: Iterable[Path],
-    /,
-    *,
-    files: MutableSequence[Path],
-    directories: MutableSequence[Path],
-) -> None:
-    for entry in entries:
-        if entry.is_symlink():
-            continue  # links are refused everywhere else, they are no result here
-
-        elif entry.is_dir():
-            directories.append(entry)
-
-        elif entry.is_file():
-            files.append(entry)
-
-        # anything else - a socket, a fifo, a device - is not a traversal result
 
 
 @final

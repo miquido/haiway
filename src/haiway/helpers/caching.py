@@ -170,7 +170,8 @@ def cache[**Args, Result](
     Notes
     -----
     - Only coroutine functions are supported; synchronous functions will trigger an assertion.
-    - The default cache keeps state per decorated function and is not thread-safe.
+    - The default cache keeps state per decorated function and is safe to share between
+      event loops running within different threads, without locking.
     - Concurrent calls missing the same entry are not merged - each runs the function and
       the last one to complete is kept.
     - For custom cache backends (e.g., Redis), use :func:`cache_externally`.
@@ -279,13 +280,21 @@ class _LocalCache[**Args, Result]:
             **kwargs,
         )
 
+        # calls may come from event loops running within different threads - each
+        # operation on the store is atomic by itself, while an entry looked up a moment
+        # ago may be gone by the next one, which is tolerated instead of locking
         entry: _CacheEntry[Result] | None = self._cached.get(key)
         if entry is not None:
             if (expire := entry[1]) and expire < monotonic():
-                del self._cached[key]  # continue the same way as if empty
+                self._cached.pop(key, None)  # continue the same way as if empty
 
             else:
-                self._cached.move_to_end(key)
+                try:
+                    self._cached.move_to_end(key)
+
+                except KeyError:
+                    pass  # evicted meanwhile, the value is still valid
+
                 return entry[0]
 
         result: Result = await self._function(*args, **kwargs)
@@ -293,9 +302,19 @@ class _LocalCache[**Args, Result]:
             value=result,
             expire=self._next_expire_time(),
         )
-        if len(self._cached) > self._limit:
+        try:
+            self._cached.move_to_end(key)
+
+        except KeyError:
+            pass  # evicted meanwhile
+
+        while len(self._cached) > self._limit:
             # keep the size limit
-            self._cached.popitem(last=False)
+            try:
+                self._cached.popitem(last=False)
+
+            except KeyError:
+                break  # emptied meanwhile
 
         return result
 

@@ -1,7 +1,10 @@
+import annotationlib
 import base64
 import inspect
 import json
 import os
+import re
+import sys
 import threading
 import types
 import typing
@@ -10,7 +13,6 @@ from collections.abc import (
     Iterable,
     Mapping,
     MutableMapping,
-    MutableSequence,
     Sequence,
     Set,
 )
@@ -21,7 +23,7 @@ from dataclasses import is_dataclass
 from datetime import date, datetime, time, timedelta
 from functools import Placeholder, partial
 from pathlib import Path
-from types import GenericAlias, MemberDescriptorType
+from types import GenericAlias
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -71,9 +73,74 @@ from haiway.types import (
 )
 from haiway.types.basic import basic_key, basic_value, parse_duration
 from haiway.types.guards import is_iterable, is_mapping
-from haiway.types.immutable import attribute_names, namespace_annotations
 
 __all__ = ("State",)
+
+
+# the annotations of a class resolve names against its namespace, which holds a slot
+# descriptor for every attribute once the class exists - an attribute named after the
+# type annotating it, such as `date: date`, would resolve to that descriptor. resolving
+# before the class is created leaves the module scope to answer. the FORWARDREF format
+# carries a name which cannot be resolved yet - the class annotating itself above all -
+# as a `ForwardRef` instead of failing
+def _namespace_annotations(
+    namespace: Mapping[str, Any],
+    /,
+) -> Mapping[str, Any] | None:
+    annotate = annotationlib.get_annotate_from_class_namespace(namespace)
+    if annotate is not None:
+        return annotationlib.call_annotate_function(
+            annotate,
+            annotationlib.Format.FORWARDREF,
+        )
+
+    # `from __future__ import annotations` stores them already, as text, with no
+    # function to call - they are resolved later, once the class exists
+    stored: Mapping[str, Any] | None = namespace.get("__annotations__")
+    return stored or None  # nothing annotated within the class body otherwise
+
+
+# what a class body declares as attributes, by name - neither the dunder specials
+# nor the class variables are
+def _attribute_annotations(
+    namespace: Mapping[str, Any],
+    /,
+) -> Mapping[str, Any]:
+    annotations: Mapping[str, Any] | None = _namespace_annotations(namespace)
+    if annotations is None:
+        return {}
+
+    module: str | None = namespace.get("__module__")
+    return {
+        key: annotation
+        for key, annotation in annotations.items()
+        if not key.startswith("__") and not _is_class_variable(annotation, module=module)
+    }
+
+
+_QUALIFIED_NAME: Final[re.Pattern[str]] = re.compile(r"\s*(?:(\w+)\s*\.\s*)?(\w+)")
+
+
+def _is_class_variable(
+    annotation: Any,
+    /,
+    module: str | None,
+) -> bool:
+    if not isinstance(annotation, str):
+        return annotation is ClassVar or get_origin(annotation) is ClassVar
+
+    # deferred, as text - told by the name it begins with, looked up where the class
+    # is declared, the way dataclasses tell it. evaluating the text is not an option,
+    # the names it refers to may not exist yet
+    spelled: re.Match[str] | None = _QUALIFIED_NAME.match(annotation)
+    if spelled is None or module is None:
+        return False
+
+    scope: Any = sys.modules.get(module)
+    if (qualifier := spelled.group(1)) is not None:
+        scope = getattr(scope, qualifier, None)
+
+    return getattr(scope, spelled.group(2), None) is ClassVar
 
 
 # Default is deliberately not declared as a field specifier: type checkers
@@ -111,6 +178,9 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
     __SERIALIZABLE__: bool
     __DEFAULTED__: Set[str]
     __ANNOTATED__: Mapping[str, Any]
+    # held by a generic class alone, filled in place when first asked for
+    __SPECIALIZATIONS__: MutableMapping[tuple[Any, ...], Any]
+    __VARIANCES__: MutableMapping[str, Variance]
     __slots__: tuple[str, ...]
     __match_args__: tuple[str, ...]
     # declared by a specialization alone - `__SPECIALIZED__` tells whether the
@@ -149,7 +219,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         # declared default still standing there answers for the type of the same
         # name, as in `str: str = "text"` resolving to `"text"`. the keys do not
         # depend on that, which is why the annotations are resolved again below
-        names: Sequence[str] = attribute_names(namespace_annotations(namespace))
+        names: tuple[str, ...] = tuple(_attribute_annotations(namespace))
         # a specialized generic re-collects the fields of its origin, whose
         # defaults are no longer class attributes - they are carried over from
         # the fields the origin already resolved them into. a specialization is
@@ -166,18 +236,14 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         defaults.update(declared_defaults)
         # resolved again, now that no declared default can answer for a type of
         # the same name - see the note on the names above
-        declared: Mapping[str, Any] | None = namespace_annotations(namespace)
-        # slots are only ever created by `type.__new__`, so they have to be
-        # declared within the namespace handed to it - assigning `__slots__` to a
-        # finished class defines no descriptors and leaves the instances with a
-        # `__dict__`, which is what the whole slot declaration exists to avoid
-        owned_names: tuple[str, ...] = _declared_slots(
+        declared: Mapping[str, Any] = _attribute_annotations(namespace)
+        _refuse_shadowing(
             name,
             names=names,
             bases=bases,
         )
-        # natively stored fields live inline in the instance, behind descriptors
-        # installed below - there are no slots to declare, and no `__dict__` either
+        # the values live inline in the instance, behind descriptors installed with
+        # the plan below - there are no slots to declare, and no `__dict__` either
         namespace["__slots__"] = ()
 
         cls = type.__new__(
@@ -188,7 +254,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
             **kwargs,
         )
 
-        # with the defaults gone from the namespace and a slot descriptor in place
+        # with the defaults gone from the namespace and a descriptor in place
         # of each of them, having a default can no longer be told by looking the
         # name up on the class - it is recorded here and inherited explicitly
         defaulted: Set[str] = frozenset(declared_defaults.keys()).union(
@@ -197,15 +263,13 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         cls.__DEFAULTED__ = defaulted  # pyright: ignore[reportConstantRedefinition]
 
         # a specialized generic declares nothing of its own, so it resolves the
-        # annotations of its origin - which were resolved there before the slots
+        # annotations of its origin - which were resolved there before the descriptors
         # of that class could shadow them
         annotations: MutableMapping[str, Any] = {}
         for base in reversed(bases):
             annotations.update(getattr(base, "__ANNOTATED__", {}))
 
-        if declared is not None:
-            annotations.update(declared)
-
+        annotations.update(declared)
         cls.__ANNOTATED__ = annotations  # pyright: ignore[reportConstantRedefinition]
 
         # a specialization is the only class binding type parameters, and the
@@ -231,6 +295,16 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         # which would otherwise make it interchangeable with each of its siblings
         cls.__SPECIALIZED__ = bool(type_parameters)  # pyright: ignore[reportConstantRedefinition]
         cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportAttributeAccessIssue]
+        if Generic in bases:
+            # the variants of a generic, by their arguments - held by the class which
+            # is specialized rather than by a registry of the module, which would keep
+            # every class created at runtime, together with all of its variants, alive
+            # for as long as the process runs. here the variants reference their origin
+            # and are referenced by it, a cycle which is collected along with it
+            cls.__SPECIALIZATIONS__ = {}  # pyright: ignore[reportConstantRedefinition]
+            # the variance of its parameters, worked out when first asked for - once
+            # the classes its annotations refer to exist
+            cls.__VARIANCES__ = {}  # pyright: ignore[reportConstantRedefinition]
 
         if not any(isinstance(base, StateMeta) for base in bases):
             # the base class - no fields specified
@@ -242,12 +316,11 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
                 "additionalProperties": False,
             }
             cls.__FIELDS__ = ()  # pyright: ignore[reportConstantRedefinition]
-            native.install(cls, (), ())
-
             cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
             cls.__ALIASES__ = {}  # pyright: ignore[reportConstantRedefinition]
             cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
             cls.__match_args__ = ()
+            native.install(cls, (), ())  # last - the class can't be changed after
 
             return cls  # early exit - base class
 
@@ -292,8 +365,6 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
             cls.__SPECIFICATION__ = _no_specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
 
         cls.__FIELDS__ = fields  # pyright: ignore[reportConstantRedefinition]
-        native.install(cls, fields, owned_names)
-
         cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
         # resolved here so that updates can be normalized to canonical names
         # without rebuilding this mapping of the class on each of them
@@ -303,6 +374,9 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         # every field, unlike `__slots__` which holds the names declared here - a
         # specialized generic declares none of them and matches all of them
         cls.__match_args__ = tuple(field.name for field in fields)
+        # the attributes are declared here, all of them - or none, by a specialization
+        # reading the ones of its origin. last - the class can't be changed after
+        native.install(cls, fields, names)
 
         return cls
 
@@ -444,17 +518,8 @@ def _specialize_locked(
     type_arguments: tuple[Any, ...],
     /,
 ) -> Any:
-    # held by the class which is specialized rather than by a registry of the
-    # module - a registry would keep every class created at runtime, together
-    # with all of its variants, alive for as long as the process runs. here
-    # the variants reference their origin and are referenced by it, a cycle
-    # which is collected along with it
-    specializations: MutableMapping[tuple[Any, ...], Any] | None = cls.__dict__.get(
-        "__SPECIALIZATIONS__"
-    )
-    if specializations is None:
-        specializations = {}
-        cls.__SPECIALIZATIONS__ = specializations
+    # only a generic is specialized - `__class_getitem__` refuses any other class
+    specializations: MutableMapping[tuple[Any, ...], Any] = cls.__dict__["__SPECIALIZATIONS__"]
 
     # the arguments as they bind - the defaults are given, the arguments of a
     # variadic parameter are its own, a list is a tuple. a variant is the same
@@ -559,36 +624,23 @@ def _refuse_inheriting(
             )
 
 
-def _declared_slots(
+def _refuse_shadowing(
     name: str,
     /,
     names: Sequence[str],
     bases: tuple[type, ...],
-) -> tuple[str, ...]:
-    slots: MutableSequence[str] = []
+) -> None:
+    # the bases of a class declaring attributes declare none themselves, so whatever
+    # is inherited under the name of one is a method or a class variable - which the
+    # descriptor of the attribute would shadow
     for key in names:
-        inherited: Any = Missing
         for base in bases:
-            inherited = getattr(base, key, Missing)
+            inherited: Any = getattr(base, key, Missing)
             if inherited is not Missing:
-                break
-
-        if inherited is Missing:
-            slots.append(key)  # nothing above declares it, this class owns the slot
-            continue
-
-        if isinstance(inherited, MemberDescriptorType):
-            continue  # a name a base already declared keeps using the slot defined there
-
-        # anything else inherited under that name is not a slot to reuse -
-        # declaring one here would shadow it, while leaving it out makes the
-        # attribute unassignable, failing only when the first instance is built
-        raise TypeError(
-            f"{name} declares attribute '{key}' shadowing the inherited"
-            f" {type(inherited).__name__} of the same name"
-        )
-
-    return tuple(slots)
+                raise TypeError(
+                    f"{name} declares attribute '{key}' shadowing the inherited"
+                    f" {type(inherited).__name__} of the same name"
+                )
 
 
 def _allowed_fields(
@@ -838,7 +890,7 @@ class _NoSpecification:
 _no_specification: _NoSpecification = _NoSpecification()
 
 
-class State(nstruct.Validated, metaclass=StateMeta):
+class State(nstruct.Struct, metaclass=StateMeta):
     """
     Base class for immutable data structures.
 
@@ -905,6 +957,8 @@ class State(nstruct.Validated, metaclass=StateMeta):
     instance, with neither a ``__dict__`` nor a ``__weakref__``. A ``State``
     can't be held by ``weakref.ref`` or a ``WeakValueDictionary`` because of
     that, and its attributes can't be rebound by any means.
+    A class can't be changed once it is created either - assigning or deleting an
+    attribute of it raises ``TypeError``.
     """
 
     _: ClassVar[Self]
@@ -1374,7 +1428,7 @@ def _basic_mapping(  # noqa: PLR0911
     elif isinstance(value, State):
         return _basic_object(value, strict=strict, path=path)
 
-    elif is_dataclass(value) and not isinstance(value, type):
+    elif _is_dataclass_instance(value):
         return Map(_basic_fields(value, strict=strict, path=path))
 
     elif is_mapping(value):

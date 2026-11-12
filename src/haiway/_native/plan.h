@@ -44,7 +44,6 @@ typedef struct CompiledPlan {
     PyObject *cached; /* the cached defaults, as a list */
     KeySlot *key_slots;  /* every name and alias by the hash of its bytes, open addressing */
     size_t key_mask;
-    int reporting;    /* whether a failure is reported at its position, and a key which is not an attribute refused */
     int native_copy;  /* whether `__deepcopy__` is the native one - a class overriding it is copied through it */
     Py_ssize_t count;
     FieldPlan fields[];
@@ -130,7 +129,6 @@ static void
 report_failure(ModuleState *state, PyTypeObject *type, PyObject *kwargs, PyObject *name)
 {
     if (!PyErr_ExceptionMatches(PyExc_Exception)) return;  /* not ours to wrap */
-    if (!PLAN_OF(type)->reporting) return;  /* a plain record raises what fails as it is */
     if (kwargs != NULL) {
         PyObject *exc = PyErr_GetRaisedException();
         PyObject *r = PyObject_CallFunctionObjArgs(state->check, (PyObject *)type, kwargs, NULL);
@@ -185,7 +183,7 @@ field_for_key(CompiledPlan *plan, PyObject *key)
  * What the garbage collector has to look at. A value can be part of a cycle when it is
  * tracked, or when it is untracked for now but can become tracked later - which only
  * the containers which can never change are safe of: an exact tuple, frozenset,
- * frozendict or Map, and a validated instance, each untracked only once nothing it
+ * frozendict or Map, and an instance, each untracked only once nothing it
  * holds can be part of a cycle. That is the rule of CPython itself, for its tuples.
  */
 static inline int
@@ -385,7 +383,7 @@ check_layout(ModuleState *state, PyTypeObject *type, PyObject *entries)
     }
     CompiledPlan *inherited = PLAN_OF(base);
     if (inherited == NULL) {
-        /* Struct and Validated themselves - a class which failed to get a plan is no base */
+        /* Struct itself - a class which failed to get a plan is no base */
         if (base->tp_basicsize == (Py_ssize_t)sizeof(PyObject)) return 0;
         PyErr_Format(PyExc_TypeError, "%s can't inherit from %s, which was never given a plan", type->tp_name, base->tp_name);
         return -1;
@@ -408,8 +406,21 @@ check_layout(ModuleState *state, PyTypeObject *type, PyObject *entries)
     return 0;
 }
 
+/* the descriptors made for a plan which is let go of read it - so they are let go of as
+ * well, keeping the error which is set */
+static void
+remove_descriptors(PyObject *cls, CompiledPlan *plan, PyObject *owned, Py_ssize_t count)
+{
+    PyObject *error = PyErr_GetRaisedException();
+    for (Py_ssize_t k = 0; k < count; k++) {
+        FieldPlan *field = &plan->fields[field_for_key(plan, PyTuple_GET_ITEM(owned, k))];
+        if (PyObject_DelAttr(cls, field->name) < 0) PyErr_Clear();
+    }
+    PyErr_SetRaisedException(error);
+}
+
 /*
- * compile_plan(cls, plan, owned, reporting) - the plan of the class as C data, kept on
+ * compile_plan(cls, plan, owned) - the plan of the class as C data, kept on
  * the class, and a read-only descriptor on the class for each of the attributes it
  * declares itself (`owned`, a tuple of their names - the others read theirs through the
  * descriptors of a base). `plan` is a tuple with an entry for each attribute:
@@ -421,11 +432,9 @@ check_layout(ModuleState *state, PyTypeObject *type, PyObject *entries)
  * is the same every time - the validated default of such an attribute is kept here when
  * the spec promises an immutable result with no code of the user involved. A default
  * which fails to validate is left to fail where the instance is created.
- * `reporting` tells a class which validates: a failure is reported at its position and a
- * keyword which is not an attribute refused - a plain record raises what fails as it is
- * and passes over what it does not know.
  * The size of an instance is decided here, so the class can't have been instantiated
- * before, nor be given a plan twice. The call of the class goes through the plan when
+ * before, nor be given a plan twice. The class is made immutable with it - the plan is
+ * the last thing a class is given. The call of the class goes through the plan when
  * the class does not take over its construction.
  */
 static PyObject *
@@ -435,8 +444,7 @@ compile_plan(PyObject *mod, PyObject *args)
     PyObject *cls;
     PyObject *entries;
     PyObject *owned;
-    int reporting;
-    if (!PyArg_ParseTuple(args, "OO!O!p", &cls, &PyTuple_Type, &entries, &PyTuple_Type, &owned, &reporting)) return NULL;
+    if (!PyArg_ParseTuple(args, "OO!O!", &cls, &PyTuple_Type, &entries, &PyTuple_Type, &owned)) return NULL;
     if (!PyType_Check(cls) || !PyType_IsSubtype((PyTypeObject *)cls, state->struct_type)) {
         PyErr_SetString(PyExc_TypeError, "compile_plan expects a Struct class");
         return NULL;
@@ -467,7 +475,6 @@ compile_plan(PyObject *mod, PyObject *args)
     plan->keys = NULL;
     plan->cached = NULL;
     plan->key_slots = NULL;
-    plan->reporting = reporting;
     plan->native_copy = 1;
     plan->count = n;
     plan->names = PyTuple_New(2 * n);
@@ -542,39 +549,9 @@ compile_plan(PyObject *mod, PyObject *args)
         }
     }
 
-    /* the descriptors of the attributes declared here - a base declares the rest */
-    for (Py_ssize_t k = 0; k < PyTuple_GET_SIZE(owned); k++) {
-        PyObject *name = PyTuple_GET_ITEM(owned, k);
-        Py_ssize_t i = field_for_key(plan, name);
-        if (i < 0 || plan->fields[i].name != name) {
-            /* owned names are interned attribute names, never aliases */
-            PyObject *interned = NULL;
-            for (Py_ssize_t j = 0; j < n; j++) {
-                int same = PyUnicode_Compare(plan->fields[j].name, name);
-                if (same == 0) {
-                    i = j;
-                    interned = plan->fields[j].name;
-                    break;
-                }
-                if (same < 0 && PyErr_Occurred()) goto fail;
-            }
-            if (interned == NULL) {
-                PyErr_Format(PyExc_TypeError, "%U is not an attribute of %s", name, type->tp_name);
-                goto fail;
-            }
-        }
-        PyObject *descriptor = PyDescr_NewMember(type, &plan->fields[i].member);
-        if (descriptor == NULL) goto fail;
-        int failed = PyObject_SetAttr(cls, plan->fields[i].name, descriptor);
-        Py_DECREF(descriptor);
-        if (failed < 0) goto fail;
-    }
-
-    /* the size of an instance, and the call of the class - a class taking over its
-     * construction, or one with more attributes than the fast path matches, is called
-     * the usual way */
-    /* a class with a `__deepcopy__` of its own - an Immutable returning itself, say - is copied
-     * by it, also where it is held by another instance */
+    /* a class with a `__deepcopy__` of its own - one returning itself, say - is copied
+     * by it, also where it is held by another instance. looked up before the descriptors
+     * are made, which read the plan - nothing fails once the class has them */
     PyObject *own_copy = PyObject_GetAttrString(cls, "__deepcopy__");
     PyObject *native_copy = own_copy == NULL ? NULL : PyObject_GetAttrString((PyObject *)state->struct_type, "__deepcopy__");
     if (native_copy == NULL) {
@@ -585,11 +562,40 @@ compile_plan(PyObject *mod, PyObject *args)
     Py_DECREF(own_copy);
     Py_DECREF(native_copy);
 
+    /* the descriptors of the attributes declared here - a base declares the rest. what
+     * is not the name of an attribute is refused before any descriptor is made */
+    Py_ssize_t owned_count = PyTuple_GET_SIZE(owned);
+    for (Py_ssize_t k = 0; k < owned_count; k++) {
+        PyObject *name = PyTuple_GET_ITEM(owned, k);
+        Py_ssize_t i = PyUnicode_Check(name) ? field_for_key(plan, name) : -1;
+        if (i < 0 || PyUnicode_Compare(plan->fields[i].name, name) != 0) {
+            PyErr_Format(PyExc_TypeError, "%R is not an attribute of %s", name, type->tp_name);
+            goto fail;
+        }
+    }
+    for (Py_ssize_t k = 0; k < owned_count; k++) {
+        FieldPlan *field = &plan->fields[field_for_key(plan, PyTuple_GET_ITEM(owned, k))];
+        PyObject *descriptor = PyDescr_NewMember(type, &field->member);
+        int failed = descriptor == NULL || PyObject_SetAttr(cls, field->name, descriptor) < 0;
+        Py_XDECREF(descriptor);
+        if (!failed) continue;
+        remove_descriptors(cls, plan, owned, k);
+        goto fail;
+    }
+
+    /* the class is complete - nothing of it changes from here on, the way nothing of an
+     * instance does: a descriptor replaced would hide a value, a constructor assigned
+     * later would be one the class was not made for. the flag is set here rather than
+     * by `PyType_Freeze`, which refuses a class with a base which can change - and
+     * `typing.Generic` can. nothing else has seen the class yet */
+    type->tp_flags |= Py_TPFLAGS_IMMUTABLETYPE;
+    PyType_Modified(type);
+
+    /* the size of an instance, and the call of the class - which tells by itself a class
+     * taking over its construction, or one with more attributes than the fast path matches */
     type->tp_basicsize = (Py_ssize_t)sizeof(PyObject) + n * (Py_ssize_t)sizeof(PyObject *);
     PLAN_OF(type) = plan;
-    if (type->tp_new == struct_new && type->tp_init == struct_init && n <= FAST_MAX_FIELDS) {
-        type->tp_vectorcall = struct_vectorcall;
-    }
+    type->tp_vectorcall = struct_vectorcall;
     Py_RETURN_NONE;
 
 fail:

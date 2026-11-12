@@ -1,5 +1,6 @@
 from collections.abc import Callable, MutableMapping
 from functools import update_wrapper
+from inspect import iscoroutinefunction, markcoroutinefunction
 from typing import Any, Concatenate
 
 from haiway.attributes import State
@@ -15,6 +16,10 @@ class statemethod[Subject: State, **Arguments, Result]:
     - When accessed on an instance, it passes that instance directly.
     - When accessed on the class, it resolves an instance from the current context
       via `ctx.state(cls)` and passes it.
+
+    The state is resolved when the class-level call is made. For an async method this is
+    the moment the coroutine is created, not the moment it is awaited, so a coroutine
+    created within one scope and awaited within another keeps the state of the first.
 
     The wrapped function must be defined with the instance as the first parameter:
 
@@ -63,6 +68,10 @@ class statemethod[Subject: State, **Arguments, Result]:
             return self._method(ctx.state(owner), *args, **kwargs)
 
         update_wrapper(class_method, self._method)
+        if iscoroutinefunction(self._method):
+            # the closure returns the coroutine of the method, keep it recognizable as one
+            markcoroutinefunction(class_method)
+
         return class_method
 
     def __set_name__(
