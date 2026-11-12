@@ -188,45 +188,86 @@ def test_rejects_non_positive_limit(limit: int):
         throttle(limit=limit)(call)
 
 
+class _FakeClock:
+    # time of the throttle moved by the test - a sleep ends once the time is moved
+    # past it, and fails instead of hanging when it never is
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.now: float = 0.0
+        self.delays: list[float] = []
+        monkeypatch.setattr(throttling, "monotonic", lambda: self.now)
+        monkeypatch.setattr(throttling, "sleep", self.sleep)
+
+    async def sleep(self, delay: float) -> None:
+        self.delays.append(delay)
+        until: float = self.now + delay
+        for _ in range(1000):
+            if self.now >= until:
+                return
+
+            await sleep(0)
+
+        raise AssertionError(f"Sleep until {until} never ended, time is {self.now}")
+
+    async def settle(self) -> None:
+        for _ in range(5):
+            await sleep(0)
+
+
 @pytest.mark.asyncio
 async def test_reservations_stay_ordered_after_cancellations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    clock: list[float] = [0.0]
-    delays: list[float] = []
-
-    async def clocked_sleep(delay: float) -> None:
-        delays.append(delay)
-        until: float = clock[0] + delay
-        while clock[0] < until:
-            await sleep(0)
-
-    async def settle() -> None:
-        for _ in range(5):
-            await sleep(0)
-
-    monkeypatch.setattr(throttling, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(throttling, "sleep", clocked_sleep)
+    clock = _FakeClock(monkeypatch)
 
     @throttle(limit=2, period=10)
     async def call() -> float:
-        return clock[0]
+        return clock.now
 
     assert [await call(), await call()] == [0.0, 0.0]
     cancelled = [create_task(call()), create_task(call())]  # reserved for 10
     later = create_task(call())  # reserved for 20
-    await settle()
+    await clock.settle()
     for task in cancelled:
         task.cancel()
 
     await gather(*cancelled, return_exceptions=True)
-    clock[0] = 10.0
+    clock.now = 10.0
     assert await call() == 10.0  # a slot given back by a cancelled call
-    delays.clear()
+    clock.delays.clear()
+    # starts at 10, 10 and 20 keep each period within two - no waiting
+    assert await call() == 10.0
+    assert clock.delays == []
     pending = create_task(call())
-    await settle()
-    # two starts within a period - at 10 and 20 - so the next one waits until 20
-    assert delays == [10.0]
-    clock[0] = 20.0
+    await clock.settle()
+    # 10 is taken twice now - the next slot is a period after the first of them
+    assert clock.delays == [10.0]
+    clock.now = 20.0
     assert await later == 20.0
     assert await pending == 20.0
+
+
+@pytest.mark.asyncio
+async def test_slot_given_back_is_taken_before_later_reservations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _FakeClock(monkeypatch)
+
+    @throttle(limit=1, period=10)
+    async def call() -> float:
+        return clock.now
+
+    assert await call() == 0.0
+    given_back = create_task(call())  # reserved for 10
+    later = create_task(call())  # reserved for 20
+    await clock.settle()
+    given_back.cancel()
+    await gather(given_back, return_exceptions=True)
+    clock.delays.clear()
+    taking = create_task(call())
+    await clock.settle()
+    # 10 is free again and a period apart from both 0 and 20 - not 30
+    assert clock.delays == [10.0]
+    clock.now = 10.0
+    assert await taking == 10.0
+    clock.now = 20.0
+    assert await later == 20.0
