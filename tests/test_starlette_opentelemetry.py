@@ -34,7 +34,7 @@ from haiway.starlette import (
     StreamResponse,
     application,
 )
-from haiway.starlette.middleware import _request_attributes
+from haiway.starlette.middleware import _MountTemplates, _request_attributes
 from haiway.starlette.observability import request_metric_attributes
 from tests.asgi import (
     TRACE_ID_HEADER,
@@ -526,7 +526,12 @@ async def test_unknown_method_is_bounded_on_the_span_and_its_name(
 
 
 def test_unknown_method_is_a_bounded_metric_dimension() -> None:
-    attributes = _request_attributes(http_scope(), method="BREW", status=200)
+    attributes = _request_attributes(
+        http_scope(),
+        mounts=_MountTemplates(),
+        method="BREW",
+        status=200,
+    )
 
     assert request_metric_attributes(attributes)["http.request.method"] == "_OTHER"
 

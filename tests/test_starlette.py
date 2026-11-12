@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException, WebSocketException
 from starlette.middleware import Middleware
 from starlette.requests import ClientDisconnect, Request
 from starlette.responses import PlainTextResponse, Response, StreamingResponse
-from starlette.routing import Mount, Route, WebSocketRoute
+from starlette.routing import Host, Mount, Route, Router, WebSocketRoute
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -36,6 +36,7 @@ from haiway.starlette import (
 # where the backend recording a request is built out of a `Logger` - patched to
 # count how many of them a run of an application builds
 from haiway.starlette import context as server_context_module
+from haiway.starlette.middleware import _MountTemplates  # pyright: ignore[reportPrivateUsage]
 from tests.asgi import (
     TRACE_ID_HEADER,
     LogCapture,
@@ -1664,6 +1665,51 @@ async def test_parameterized_mounts_are_reported_by_their_templates() -> None:
         assert '"http.route"]: "/tenants/{tenant}/teams/{team}/items/{identifier}"' in matched
         unmatched: str = await routes_of("/tenants/acme/teams/red/missing")
         assert '"http.route"]: "/tenants/{tenant}/teams/{team}/{path}"' in unmatched
+
+
+@mark.asyncio
+async def test_routes_behind_a_host_are_reported_with_their_mounts() -> None:
+    logger: Logger = getLogger("test-host-routes")
+
+    async def endpoint(request: Request) -> Response:
+        return PlainTextResponse("done")
+
+    app: Starlette = application(
+        ServerContext(observability=logger),
+        routes=[
+            Host(
+                "api.example.com",
+                app=Router([Mount("/v1", routes=[Route("/items/{identifier}", endpoint)])]),
+            ),
+        ],
+    )
+
+    async with running(app):
+        with LogCapture(logger) as records:
+            await send_request(
+                app,
+                path="/v1/items/1",
+                headers=[(b"host", b"api.example.com")],
+            )
+
+    recorded: str = "\n".join(record for record in records if "Attributes:" in record)
+    assert '"http.route"]: "/v1/items/{identifier}"' in recorded
+
+
+def test_mount_templates_are_found_once_per_route() -> None:
+    async def endpoint(request: Request) -> Response:
+        return PlainTextResponse("done")
+
+    leaf = Route("/items/{identifier}", endpoint)
+    router = Router([Mount("/tenants/{tenant}", routes=[leaf])])
+    scope: dict[str, Any] = {"root_path": "/tenants/acme", "app_root_path": "", "router": router}
+    mounts = _MountTemplates()
+    assert mounts.prefix(scope, route=leaf) == "/tenants/{tenant}"
+    # found again from what is known - the route tree is not walked anymore
+    router.routes.clear()
+    assert mounts.prefix(scope, route=leaf) == "/tenants/{tenant}"
+    # a route which is not the one known under its identity is looked up anew
+    assert _MountTemplates().prefix(scope, route=leaf) is None
 
 
 @mark.asyncio

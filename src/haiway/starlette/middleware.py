@@ -5,7 +5,7 @@ from typing import Any, final
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException, WebSocketException
 from starlette.requests import ClientDisconnect
-from starlette.routing import BaseRoute, Mount
+from starlette.routing import BaseRoute, Host, Mount
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
 
@@ -113,6 +113,7 @@ class ContextMiddleware:
     __slots__ = (
         "_app",
         "_context",
+        "_mounts",
     )
 
     def __init__(
@@ -123,6 +124,7 @@ class ContextMiddleware:
     ) -> None:
         self._app: ASGIApp = app
         self._context: ServerContext = context
+        self._mounts: _MountTemplates = _MountTemplates()
 
     async def __call__(
         self,
@@ -241,6 +243,7 @@ class ContextMiddleware:
                     # request which failed, which is where it is needed most
                     attributes: MutableMapping[str, ObservabilityAttribute] = _request_attributes(
                         scope,
+                        mounts=self._mounts,
                         method=method,
                         status=status,
                     )
@@ -269,6 +272,7 @@ def _request_attributes(
     scope: Scope,
     /,
     *,
+    mounts: _MountTemplates,
     method: str | None,
     status: int | None,
 ) -> MutableMapping[str, ObservabilityAttribute]:
@@ -285,8 +289,9 @@ def _request_attributes(
     route records no ``http.route``. Resolving it here instead would mean matching
     the route table a second time for every request, which is the cost the
     routing already paid. A route served from a mount is prefixed with the
-    templates of the mounts leading to it, found by the route itself - not with
-    the root path, which holds the values a parameterized mount matched.
+    templates of the mounts leading to it, found by the route itself once per
+    route - not with the root path, which holds the values a parameterized mount
+    matched.
 
     The method is recorded only for an ``http`` request - a websocket connection
     carries none, so reporting one would be inventing it. A method outside the
@@ -325,7 +330,7 @@ def _request_attributes(
         # the templates of the mounts are put in front of it - otherwise the routes
         # of different mounts would be reported as one. The root path can't serve
         # as the prefix, it holds the values a parameterized mount matched
-        prefix: str | None = _mount_templates(scope, route=route)
+        prefix: str | None = mounts.prefix(scope, route=route)
         if prefix is not None:
             attributes["http.route"] = prefix + route_path
 
@@ -339,19 +344,44 @@ def _request_attributes(
     return attributes
 
 
-def _mount_templates(
-    scope: Scope,
+@final
+class _MountTemplates:
+    # the templates of the mounts leading to each route, found by the route itself -
+    # routing keeps the route it ended at alone. Worked out once per route of the
+    # application, a route added later is found when first requested. Keyed by
+    # identity, which a route does not hash by, holding the route to tell it apart
+    __slots__ = ("_known",)
+
+    def __init__(self) -> None:
+        self._known: MutableMapping[int, tuple[object, str | None]] = {}
+
+    def prefix(
+        self,
+        scope: Scope,
+        /,
+        *,
+        route: object,
+    ) -> str | None:
+        root_path: str = scope.get("root_path") or ""
+        if root_path == scope.get("app_root_path", root_path):
+            return ""  # served by no mount
+
+        known: tuple[object, str | None] | None = self._known.get(id(route))
+        if known is not None and known[0] is route:
+            return known[1]
+
+        prefix: str | None = _found_prefix(scope.get("router"), route=route)
+        self._known[id(route)] = (route, prefix)
+        return prefix
+
+
+def _found_prefix(
+    router: Any | None,
     /,
     *,
     route: object,
 ) -> str | None:
-    root_path: str = scope.get("root_path") or ""
-    if root_path == scope.get("app_root_path", root_path):
-        return ""  # served by no mount
-
-    # the mounts leading to the route, found by the route itself - routing keeps
-    # the route it ended at alone. None when it is not reached exactly one way
-    router: Any | None = scope.get("router")
+    # None when the route is not reached exactly one way
     found: MutableSequence[str] = []
     pending: MutableSequence[tuple[str, Sequence[BaseRoute]]] = [
         ("", getattr(router, "routes", ()))
@@ -364,6 +394,9 @@ def _mount_templates(
 
             if isinstance(candidate, Mount):
                 pending.append((prefix + candidate.path, candidate.routes))
+
+            elif isinstance(candidate, Host):  # chosen by the host, adds no path
+                pending.append((prefix, candidate.routes))
 
     return found[0] if len(found) == 1 else None
 
