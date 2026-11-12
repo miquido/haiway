@@ -5,6 +5,7 @@ from time import monotonic
 import pytest
 
 from haiway import throttle
+from haiway.helpers import throttling
 
 
 @pytest.mark.asyncio
@@ -185,3 +186,47 @@ def test_rejects_non_positive_limit(limit: int):
 
     with pytest.raises(AssertionError):
         throttle(limit=limit)(call)
+
+
+@pytest.mark.asyncio
+async def test_reservations_stay_ordered_after_cancellations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock: list[float] = [0.0]
+    delays: list[float] = []
+
+    async def clocked_sleep(delay: float) -> None:
+        delays.append(delay)
+        until: float = clock[0] + delay
+        while clock[0] < until:
+            await sleep(0)
+
+    async def settle() -> None:
+        for _ in range(5):
+            await sleep(0)
+
+    monkeypatch.setattr(throttling, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(throttling, "sleep", clocked_sleep)
+
+    @throttle(limit=2, period=10)
+    async def call() -> float:
+        return clock[0]
+
+    assert [await call(), await call()] == [0.0, 0.0]
+    cancelled = [create_task(call()), create_task(call())]  # reserved for 10
+    later = create_task(call())  # reserved for 20
+    await settle()
+    for task in cancelled:
+        task.cancel()
+
+    await gather(*cancelled, return_exceptions=True)
+    clock[0] = 10.0
+    assert await call() == 10.0  # a slot given back by a cancelled call
+    delays.clear()
+    pending = create_task(call())
+    await settle()
+    # two starts within a period - at 10 and 20 - so the next one waits until 20
+    assert delays == [10.0]
+    clock[0] = 20.0
+    assert await later == 20.0
+    assert await pending == 20.0

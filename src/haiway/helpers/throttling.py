@@ -1,4 +1,5 @@
 from asyncio import sleep
+from bisect import insort
 from collections import deque
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
@@ -95,7 +96,7 @@ def throttle[**Args, Result](
     ) -> Callable[Args, Coroutine[None, None, Result]]:
         assert iscoroutinefunction(function)  # nosec: B101
         assert limit > 0, "Throttle limit has to be greater than 0"  # nosec: B101
-        # reserved starts, in order - the ones which can't limit a call anymore are
+        # reserved starts, kept sorted - the ones which can't limit a call anymore are
         # dropped as calls come, so a waiting call can give its reservation back
         starts: deque[float] = deque()
         throttle_period: float
@@ -122,7 +123,8 @@ def throttle[**Args, Result](
             if len(starts) >= limit:  # a period after the last `limit` reserved starts
                 start_at = max(time_now, starts[-limit] + throttle_period)
 
-            starts.append(start_at)
+            # in order - a reservation given back may leave this one ahead of later ones
+            insort(starts, start_at)
             if start_at > time_now:
                 try:
                     await sleep(start_at - time_now)
