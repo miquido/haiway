@@ -14,7 +14,8 @@ in.
 - Scope exit waits for in-scope tasks to settle.
 - A failed task does not cancel the scope body, its siblings, or the code awaiting it. The body runs
   to its end and the failures are raised when the scope exits: a single failed task raises its error
-  as is, while multiple failed tasks raise an `ExceptionGroup` of their errors - never the
+  as is, while multiple failed tasks raise an `ExceptionGroup` of their errors (at most 32 - the
+  rest are counted in its message, every failure is logged as it happens) - never the
   `unhandled errors in a TaskGroup` wrapper of `asyncio.TaskGroup`. An error the body already
   handled by awaiting the task is still raised on exit, so no failure is silently lost.
 - When the body itself fails, its tasks are cancelled and its error takes precedence - the errors of

@@ -286,7 +286,8 @@ queue.finish()
 items = [item async for item in queue]  # [2, 3]
 ```
 
-- Overflow drops the oldest buffered element silently; `enqueue()` never blocks or raises.
+- Overflow drops the oldest buffered element silently; `enqueue()` never blocks, and raises only
+  when the queue is already finished.
 - Elements handed straight to a waiting consumer never enter the buffer, so they never count against
   the limit.
 - `limit` must be positive when provided, and the effective value is readable through the `.limit`

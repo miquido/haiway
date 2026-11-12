@@ -76,8 +76,8 @@ Guidelines for external caches:
 
 - `await cached_fn.clear_cache()` clears all entries for the in-memory decorator.
 - `await cached_fn.clear_cache(key)` clears a specific entry when using `cache_externally`; omit
-  `key` to flush the backend entirely. Calling `clear_cache` requires that `clear` was provided to
-  `cache_externally`.
+  `key` to flush the backend entirely. Without a `clear` callable given to `cache_externally`,
+  `clear_cache` does nothing.
 
 The default in-memory cache clears entries immediately, while external backends delegate to the
 `clear` coroutine you supply.

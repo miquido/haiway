@@ -199,7 +199,7 @@ str_container = Container[str](value="hello")
 The type parameter is enforced during validation:
 
 ```python
-int_container.updating(value="string")  # Raises TypeError
+int_container.updating(value="string")  # Raises ValidationError
 ```
 
 Each specialization is a distinct class - `Container[int]` is not `Container[str]` - while the
