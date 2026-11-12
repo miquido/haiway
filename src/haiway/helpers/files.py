@@ -45,9 +45,6 @@ else:
 NO_FOLLOW: Final[int] = getattr(os, "O_NOFOLLOW", 0)
 # without it Windows translates line endings and stops reading at Ctrl-Z
 _BINARY: Final[int] = getattr(os, "O_BINARY", 0)
-# positional reads and writes need no shared offset, so operations running in
-# different executor threads cannot disturb each other - POSIX only
-_POSITIONAL_IO: Final[bool] = hasattr(os, "pread") and hasattr(os, "pwrite")
 _READ_CHUNK: Final[int] = 64 * 1024
 # platforms disagree on which error a refused symlink produces
 _NO_FOLLOW_ERRORS: Final[frozenset[int]] = frozenset((ELOOP, EMLINK))
@@ -138,8 +135,8 @@ class FileWriting(Protocol):
     Implementations write the provided content to the file, completely
     replacing any existing content. The default implementation is bound to the
     event loop which opened the file and raises FileException when used from
-    another one. Operations on one file are not ordered against each other -
-    await one before starting the next. Writes become cross-context or
+    another one. Operations on one open file run one at a time, in the order they
+    were started - also one whose caller stopped waiting for it. Writes become cross-context or
     cross-process safe only when Files.access(..., exclusive=True) acquires the
     file lock. The default implementation fsyncs after each in-place update, but
     it is not atomic across processes unless exclusive=True is used or the
@@ -657,23 +654,14 @@ def _read_file_contents(
         # proving there is nothing more to read.
         chunk_size: int = max(os.fstat(file_handle).st_size + 1, _READ_CHUNK)
         chunks: MutableSequence[bytes] = []
-        offset: int = 0
-        if not _POSITIONAL_IO:
-            os.lseek(file_handle, 0, os.SEEK_SET)
-
+        # operations of a file run one at a time - the offset is this one's alone
+        os.lseek(file_handle, 0, os.SEEK_SET)
         while True:
-            chunk: bytes
-            if sys.platform != "win32" and _POSITIONAL_IO:
-                chunk = os.pread(file_handle, chunk_size, offset)
-
-            else:
-                chunk = os.read(file_handle, chunk_size)
-
+            chunk: bytes = os.read(file_handle, chunk_size)
             if not chunk:
                 break
 
             chunks.append(chunk)
-            offset += len(chunk)
             chunk_size = _READ_CHUNK
 
         return chunks[0] if len(chunks) == 1 else b"".join(chunks)
@@ -692,17 +680,10 @@ def _write_file_contents(
         # a view, so continuing after a partial write does not copy the rest
         remaining: memoryview = memoryview(content)
         offset: int = 0
-        if not _POSITIONAL_IO:
-            os.lseek(file_handle, 0, os.SEEK_SET)
-
+        # operations of a file run one at a time - the offset is this one's alone
+        os.lseek(file_handle, 0, os.SEEK_SET)
         while offset < len(remaining):
-            bytes_written: int
-            if sys.platform != "win32" and _POSITIONAL_IO:
-                bytes_written = os.pwrite(file_handle, remaining[offset:], offset)
-
-            else:
-                bytes_written = os.write(file_handle, remaining[offset:])
-
+            bytes_written: int = os.write(file_handle, remaining[offset:])
             if bytes_written == 0:
                 raise FileException("Failed to write file content")
 
@@ -785,9 +766,9 @@ class _FileEntry:
 class FileAccessContext:
     # Bound to the event loop which entered it - the descriptor is shared with
     # executor jobs which that loop tracks, so it is never touched from another.
-    # Operations carry their own positions and are not ordered against each
-    # other, a caller needing an order awaits one before starting the next.
-    # Without positional IO they share the descriptor offset and run one by one.
+    # Operations of an entry run one at a time, in the order they were started -
+    # ordered on the loop rather than locked, including those abandoned by their
+    # callers, which keep running in their executor threads.
     __slots__ = (
         "_create",
         "_entry",
@@ -866,8 +847,6 @@ class FileAccessContext:
         # for it rather than pulling the descriptor from under it
         running: Task[Result] = ensure_future(
             _after_previous(tuple(entry.running), start(entry.file_handle))
-            if not _POSITIONAL_IO
-            else start(entry.file_handle)
         )
         entry.running.add(running)
         running.add_done_callback(entry.finished)
@@ -916,8 +895,8 @@ async def _after_previous[Result](
     operation: Coroutine[None, None, Result],
     /,
 ) -> Result:
-    # without positional IO operations share the descriptor offset, so each
-    # waits for the ones started before it instead of interleaving with them
+    # operations share the descriptor offset and a write truncates what it leaves,
+    # so each waits for the ones started before it instead of interleaving
     try:
         if previous:
             await wait(previous)

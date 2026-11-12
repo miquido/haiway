@@ -212,11 +212,10 @@ async def manage_config():
 
 An opened file belongs to the event loop which entered its context. Using the `File` or exiting the
 context from another loop raises `FileException`; after the context exits it can be entered again,
-on any loop. Reading and writing run in executor threads using positional I/O, so operations do not
-share a file offset, but they are not ordered against each other - await one before starting the
-next when the order matters. An operation abandoned by cancellation keeps its descriptor until it is
-done, closing the context waits for it. Windows has no positional I/O, so concurrent operations on
-one open file are not supported there.
+on any loop. Reading and writing run in executor threads, one operation of an open file at a time,
+in the order they were started - ordered on the event loop, without locks. An operation abandoned by
+cancellation keeps running until it is done: an operation started after it waits for it, and closing
+the context waits for it too.
 
 ### Durable In-Place Updates
 
