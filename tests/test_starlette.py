@@ -21,9 +21,9 @@ from starlette.exceptions import HTTPException, WebSocketException
 from starlette.middleware import Middleware
 from starlette.requests import ClientDisconnect, Request
 from starlette.responses import PlainTextResponse, Response, StreamingResponse
-from starlette.routing import Route, WebSocketRoute
+from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from haiway import ContextMissing, ContextPresets, LoggerObservability, Observability, State, ctx
 from haiway.starlette import (
@@ -1602,3 +1602,139 @@ async def test_unknown_request_method_is_bounded_as_the_conventions_require() ->
     recorded: str = "\n".join(record for record in records if "Attributes:" in record)
     assert '"http.request.method"]: "_OTHER"' in recorded
     assert '"http.request.method_original"]: "BREW"' in recorded
+
+
+@mark.asyncio
+async def test_routes_of_different_mounts_are_reported_apart() -> None:
+    logger: Logger = getLogger("test-mounted-routes")
+
+    async def endpoint(request: Request) -> Response:
+        return PlainTextResponse("done")
+
+    app: Starlette = application(
+        ServerContext(observability=logger),
+        routes=[
+            Mount("/a", routes=[Route("/{identifier}", endpoint)]),
+            Mount("/b", routes=[Mount("/c", routes=[Route("/{identifier}", endpoint)])]),
+        ],
+    )
+
+    async def routes_of(path: str) -> str:
+        with LogCapture(logger) as records:
+            await send_request(app, path=path)
+
+        return "\n".join(record for record in records if "Attributes:" in record)
+
+    async with running(app):
+        # relative to its mount the template is the same one - reported with the
+        # prefix of the mount it is served from, so the routes stay distinguishable
+        assert '"http.route"]: "/a/{identifier}"' in await routes_of("/a/1")
+        assert '"http.route"]: "/b/c/{identifier}"' in await routes_of("/b/c/2")
+        # a request which no route of the mount matched is left with the mount
+        # itself, which must not repeat its own prefix
+        assert '"http.route"]: "/a/{path}"' in await routes_of("/a/1/missing")
+
+
+@mark.asyncio
+async def test_control_characters_of_a_path_can_not_forge_records() -> None:
+    logger: Logger = getLogger("test-forged-path")
+
+    async def endpoint(request: Request) -> Response:
+        return PlainTextResponse("done")
+
+    app: Starlette = application(
+        ServerContext(observability=logger),
+        routes=[Route("/example", endpoint)],
+    )
+
+    with LogCapture(logger) as records:
+        async with running(app):
+            await send_request(app, path="/x\nFORGED LINE\r\x1b[31m")
+
+    recorded: str = "\n".join(records)
+    assert "\nFORGED LINE" not in recorded
+    assert "\x1b" not in recorded
+    assert '"url.path"]: "/x\\nFORGED LINE\\r\\x1b[31m"' in recorded
+
+
+@mark.asyncio
+async def test_websocket_disconnect_is_not_recorded_as_a_failure() -> None:
+    recorded: MutableSequence[str | None] = []
+
+    def scope_exiting(
+        scope: Any,
+        /,
+        *,
+        exception: BaseException | None,
+    ) -> None:
+        recorded.append(None if exception is None else type(exception).__name__)
+
+    context = ServerContext(
+        observability=Observability(
+            trace_identifying=lambda scope, /: _TRACE_ID,
+            log_recording=lambda scope, /, level, message, *args, exception: None,
+            metric_recording=lambda scope, /, level, **kwargs: None,
+            event_recording=lambda scope, /, level, **kwargs: None,
+            attributes_recording=lambda scope, /, level, attributes: None,
+            scope_entering=lambda scope, /: _TRACE_ID.hex,
+            scope_exiting=scope_exiting,
+            trace_context_encoding=lambda scope, /: {},
+        )
+    )
+
+    async def disconnecting(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        raise WebSocketDisconnect(1001)
+
+    app: ASGIApp = ContextMiddleware(disconnecting, context=context)
+
+    async with context.lifespan():
+        with raises(WebSocketDisconnect):
+            await app(websocket_scope(), receive_request, Result().collecting())
+
+    assert recorded == [None]
+
+
+@mark.asyncio
+async def test_trace_header_which_can_not_be_held_is_left_out() -> None:
+    context = ServerContext(
+        observability=Observability(
+            trace_identifying=lambda scope, /: _TRACE_ID,
+            log_recording=lambda scope, /, level, message, *args, exception: None,
+            metric_recording=lambda scope, /, level, **kwargs: None,
+            event_recording=lambda scope, /, level, **kwargs: None,
+            attributes_recording=lambda scope, /, level, attributes: None,
+            scope_entering=lambda scope, /: _TRACE_ID.hex,
+            scope_exiting=lambda scope, /, *, exception: None,
+            trace_context_encoding=lambda scope, /: {
+                "traceparent": "00-valid-01",
+                "tracestate": "key=\u20acvalue",  # not representable in a header
+                "injected": "a\r\nset-cookie: forged=1",  # would split the response
+            },
+        )
+    )
+
+    async def responding(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    app: ASGIApp = ContextMiddleware(responding, context=context)
+    result = Result()
+
+    async with context.lifespan():
+        await app(http_scope(), receive_request, result.collecting())
+
+    assert result.status == 200
+    assert result.body == b"ok"
+    assert result.headers[TRACE_ID_HEADER] == _TRACE_ID.hex
+    assert result.headers["traceparent"] == "00-valid-01"
+    assert "tracestate" not in result.headers
+    assert "injected" not in result.headers
+    assert "set-cookie" not in result.headers
