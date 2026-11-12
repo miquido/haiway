@@ -178,6 +178,9 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
     __SERIALIZABLE__: bool
     __DEFAULTED__: Set[str]
     __ANNOTATED__: Mapping[str, Any]
+    # held by a generic class alone, filled in place when first asked for
+    __SPECIALIZATIONS__: MutableMapping[tuple[Any, ...], Any]
+    __VARIANCES__: MutableMapping[str, Variance]
     __slots__: tuple[str, ...]
     __match_args__: tuple[str, ...]
     # declared by a specialization alone - `__SPECIALIZED__` tells whether the
@@ -298,10 +301,10 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
             # every class created at runtime, together with all of its variants, alive
             # for as long as the process runs. here the variants reference their origin
             # and are referenced by it, a cycle which is collected along with it
-            cls.__SPECIALIZATIONS__ = {}  # pyright: ignore[reportAttributeAccessIssue]
+            cls.__SPECIALIZATIONS__ = {}  # pyright: ignore[reportConstantRedefinition]
             # the variance of its parameters, worked out when first asked for - once
             # the classes its annotations refer to exist
-            cls.__VARIANCES__ = {}  # pyright: ignore[reportAttributeAccessIssue]
+            cls.__VARIANCES__ = {}  # pyright: ignore[reportConstantRedefinition]
 
         if not any(isinstance(base, StateMeta) for base in bases):
             # the base class - no fields specified
