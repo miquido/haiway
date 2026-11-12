@@ -662,11 +662,13 @@ def _read_file_contents(
             os.lseek(file_handle, 0, os.SEEK_SET)
 
         while True:
-            chunk: bytes = (
-                os.pread(file_handle, chunk_size, offset)
-                if _POSITIONAL_IO
-                else os.read(file_handle, chunk_size)
-            )
+            chunk: bytes
+            if sys.platform != "win32" and _POSITIONAL_IO:
+                chunk = os.pread(file_handle, chunk_size, offset)
+
+            else:
+                chunk = os.read(file_handle, chunk_size)
+
             if not chunk:
                 break
 
@@ -694,11 +696,13 @@ def _write_file_contents(
             os.lseek(file_handle, 0, os.SEEK_SET)
 
         while offset < len(remaining):
-            bytes_written: int = (
-                os.pwrite(file_handle, remaining[offset:], offset)
-                if _POSITIONAL_IO
-                else os.write(file_handle, remaining[offset:])
-            )
+            bytes_written: int
+            if sys.platform != "win32" and _POSITIONAL_IO:
+                bytes_written = os.pwrite(file_handle, remaining[offset:], offset)
+
+            else:
+                bytes_written = os.write(file_handle, remaining[offset:])
+
             if bytes_written == 0:
                 raise FileException("Failed to write file content")
 
