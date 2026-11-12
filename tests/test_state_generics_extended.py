@@ -5,6 +5,7 @@ from typing import Annotated, Any, Concatenate, Generic, TypeVar
 import pytest
 
 from haiway import State, Verifier
+from haiway.attributes import annotations
 from haiway.attributes.generics import argument_variances, bind_type_arguments, parameter_variances
 from haiway.attributes.validation import ValidationError
 
@@ -444,3 +445,24 @@ def test_bound_arguments_are_split_around_a_variadic_parameter() -> None:
 
     with pytest.raises(TypeError):
         bind_type_arguments(Mixed, (int,))
+
+
+def test_recursion_keys_of_specializations_are_stable(monkeypatch: pytest.MonkeyPatch) -> None:
+    keys: list[str] = []
+    original = annotations._recursion_key  # pyright: ignore[reportPrivateUsage]
+
+    def recording(**kwargs: Any) -> str:
+        key: str = original(**kwargs)
+        keys.append(key)
+        return key
+
+    monkeypatch.setattr(annotations, "_recursion_key", recording)
+
+    class Node[T](State):
+        value: T
+
+    assert Node[int](value=1).value == 1
+    specialized: list[str] = [key for key in keys if key.startswith("Node[int][")]
+    # equal records have to give equal keys - an address would differ between them
+    assert specialized
+    assert all("IntegerAttribute(" in key and "object at 0x" not in key for key in specialized)

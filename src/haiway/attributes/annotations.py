@@ -96,12 +96,26 @@ __all__ = (
 )
 
 
+def _record_text(
+    self: object,
+) -> str:
+    # built from the values a record holds rather than its address - recursion
+    # keys are made of these, so equal records have to read the same
+    slots: tuple[str, ...] = getattr(type(self), "__slots__", ())
+    fields: str = ", ".join(
+        f"{name}: {getattr(self, name)}" for name in slots if not name.startswith("_")
+    )
+    return f"{type(self).__name__}({fields})"
+
+
 @final
 class NotRequired:
     __slots__ = ()
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -230,6 +244,8 @@ class AnyAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -347,6 +363,8 @@ class AliasAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -502,6 +520,8 @@ class MissingAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -620,6 +640,8 @@ class NoneAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -740,6 +762,8 @@ class LiteralAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -864,6 +888,8 @@ class BoolAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -982,6 +1008,8 @@ class IntegerAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -1100,6 +1128,8 @@ class FloatAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -1218,6 +1248,8 @@ class BytesAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -1336,6 +1368,8 @@ class UUIDAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -1454,6 +1488,8 @@ class StringAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -1572,6 +1608,8 @@ class DatetimeAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -1690,6 +1728,8 @@ class DateAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -1808,6 +1848,8 @@ class TimedeltaAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -1926,6 +1968,8 @@ class TimeAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -2044,6 +2088,8 @@ class PathAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -2166,6 +2212,8 @@ class TupleAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -2292,6 +2340,8 @@ class SequenceAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -2418,6 +2468,8 @@ class SetAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -2546,6 +2598,8 @@ class MappingAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -2672,6 +2726,8 @@ class MetaAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -2775,6 +2831,8 @@ class ValidableAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -2941,6 +2999,8 @@ class ObjectAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -3073,6 +3133,8 @@ class TypedDictAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -3201,6 +3263,8 @@ class FunctionAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -3331,6 +3395,8 @@ class CallableSignature:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -3364,6 +3430,8 @@ class ProtocolSignature:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -3510,6 +3578,8 @@ class UnionAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -3636,6 +3706,8 @@ class CustomAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -3760,6 +3832,8 @@ class StrEnumAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
@@ -3880,6 +3954,8 @@ class IntEnumAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __repr__ = _record_text
+    __str__ = _record_text
 
     def __init__(
         self,
