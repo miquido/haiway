@@ -85,6 +85,9 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `record_log(level, message, (first, second), exception=None)` - handing them on without
   unpacking and packing them again. Migration: wrap the arguments in a tuple; `ctx.log_*` are
   unchanged.
+- **`Paginated.of` is removed** - the constructor takes the items by position, the same way
+  `of` did: `Paginated(items, pagination=pagination)`. Passing `items=` by name keeps working.
+  Migration: replace `Paginated.of(` with `Paginated(`.
 
 #### Added
 
