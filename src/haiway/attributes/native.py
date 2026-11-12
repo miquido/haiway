@@ -54,7 +54,7 @@ from haiway.attributes.annotations import (
     _no_verify,  # pyright: ignore[reportPrivateUsage]
 )
 from haiway.attributes.attribute import Attribute
-from haiway.types.frozen import refuse_assignment, refuse_deletion
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = (
     "ConversionHooks",
@@ -736,6 +736,8 @@ class ValidationHooks:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
 
     def __init__(
         self,
@@ -777,6 +779,8 @@ class ConversionHooks:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
 
     def __init__(
         self,
@@ -831,6 +835,8 @@ class TypeHooks:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
 
     def __init__(  # noqa: PLR0913
         self,

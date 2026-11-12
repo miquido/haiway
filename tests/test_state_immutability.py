@@ -7,6 +7,7 @@ import pytest
 from pytest import mark, raises
 
 from haiway import Alias, Missing, State, ValidationError
+from haiway.helpers.message_queue import MQMessageSource
 from haiway.types.frozen import refuse_assignment, refuse_deletion
 
 
@@ -489,3 +490,29 @@ def test_generic_class_can_not_be_changed_and_is_still_specialized() -> None:
 
     assert Box[int] is Box[int]
     assert isinstance(Box[bool](value=True), Box[int])
+
+
+class _CopiedState(State):
+    value: int
+    source: Any = None
+
+
+_FIELD = _CopiedState.__FIELDS__[0]
+_FROZEN_RECORDS: Sequence[object] = (
+    MQMessageSource(system="system", destination="destination"),
+    _FIELD,
+    _FIELD.annotation,
+    _CopiedState.__SELF_ATTRIBUTE__,
+)
+
+
+@mark.parametrize("copying", [copy.copy, copy.deepcopy])
+@mark.parametrize("record", _FROZEN_RECORDS, ids=lambda record: type(record).__name__)
+def test_frozen_records_copy_to_themselves(copying: Any, record: object) -> None:
+    assert copying(record) is record
+
+
+def test_deepcopy_of_state_holding_frozen_record_keeps_it() -> None:
+    source = MQMessageSource(system="system", destination="destination")
+    copied = copy.deepcopy(_CopiedState(value=1, source=source))
+    assert copied.source is source

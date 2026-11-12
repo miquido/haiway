@@ -7,7 +7,7 @@ from haiway.attributes import State
 from haiway.context import ObservabilityAttribute, ctx
 from haiway.helpers.statemethods import statemethod
 from haiway.types import FlatObject, Map, Meta
-from haiway.types.frozen import refuse_assignment, refuse_deletion
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = (
     "MQMessage",
@@ -58,6 +58,8 @@ class MQMessageSource:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
 
     def __init__(
         self,
@@ -137,6 +139,8 @@ class MQMessage[Content]:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
 
     def __init__(
         self,

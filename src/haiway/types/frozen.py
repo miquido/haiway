@@ -3,6 +3,8 @@ from typing import Any, NoReturn
 __all__ = (
     "refuse_assignment",
     "refuse_deletion",
+    "same_copy",
+    "same_deepcopy",
 )
 
 
@@ -44,3 +46,26 @@ def refuse_deletion(
     raise AttributeError(
         f"Can't modify immutable {type(self).__name__}, attribute - '{name}' cannot be deleted"
     )
+
+
+def same_copy[Value](
+    self: Value,
+    /,
+) -> Value:
+    """Copy of an instance which can't change - the instance itself.
+
+    Assigned as ``__copy__`` of a final, slotted class which binds its values once.
+    """
+    return self
+
+
+def same_deepcopy[Value](
+    self: Value,
+    memo: dict[int, Any] | None,
+    /,
+) -> Value:
+    """Deep copy of an instance which can't change - the instance itself.
+
+    Assigned as ``__deepcopy__`` of a final, slotted class which binds its values once.
+    """
+    return self

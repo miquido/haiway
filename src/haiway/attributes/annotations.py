@@ -54,7 +54,7 @@ from haiway.types import (
     Specification,
     TypeSpecification,
 )
-from haiway.types.frozen import refuse_assignment, refuse_deletion
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = (
     "AliasAttribute",
@@ -114,6 +114,8 @@ class NotRequired:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -244,6 +246,8 @@ class AnyAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -363,6 +367,8 @@ class AliasAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -520,6 +526,8 @@ class MissingAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -640,6 +648,8 @@ class NoneAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -762,6 +772,8 @@ class LiteralAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -888,6 +900,8 @@ class BoolAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -1008,6 +1022,8 @@ class IntegerAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -1128,6 +1144,8 @@ class FloatAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -1248,6 +1266,8 @@ class BytesAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -1368,6 +1388,8 @@ class UUIDAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -1488,6 +1510,8 @@ class StringAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -1608,6 +1632,8 @@ class DatetimeAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -1728,6 +1754,8 @@ class DateAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -1848,6 +1876,8 @@ class TimedeltaAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -1968,6 +1998,8 @@ class TimeAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -2088,6 +2120,8 @@ class PathAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -2212,6 +2246,8 @@ class TupleAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -2340,6 +2376,8 @@ class SequenceAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -2468,6 +2506,8 @@ class SetAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -2598,6 +2638,8 @@ class MappingAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -2726,6 +2768,8 @@ class MetaAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -2831,6 +2875,8 @@ class ValidableAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -2999,6 +3045,8 @@ class ObjectAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -3133,6 +3181,8 @@ class TypedDictAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -3263,6 +3313,8 @@ class FunctionAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -3395,6 +3447,8 @@ class CallableSignature:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -3430,6 +3484,8 @@ class ProtocolSignature:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -3578,6 +3634,8 @@ class UnionAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -3706,6 +3764,8 @@ class CustomAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -3832,6 +3892,8 @@ class StrEnumAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 
@@ -3954,6 +4016,8 @@ class IntEnumAttribute:
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
 

@@ -39,7 +39,8 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   refused - hold what a test replaces as an attribute and construct the state with it.
 - **`Immutable` is removed** - a value which has to be validated, compared and serialized is a
   `State`, and a record holding what it is given as it is, a final, slotted class refusing
-  `__setattr__` and `__delattr__` (equality and hashing by identity, as `Immutable` had). Unlike `Immutable`, such a class can be rebound through `object.__setattr__`.
+  `__setattr__` and `__delattr__` (equality and hashing by identity, and `copy`/`deepcopy` returning the
+  instance itself, as `Immutable` had). Unlike `Immutable`, such a class can be rebound through `object.__setattr__`.
   `HTTPResponse`, `HTTPXClient` and `PostgresConnectionPool`, which change after they are made, are
   plain classes with `__slots__`, with the same constructors and methods.
 
