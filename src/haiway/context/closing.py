@@ -35,6 +35,8 @@ class ContextClosing:
         if future is None:
             future = closing._loop.create_future()
             closing._future = future
+            if closing._token is None:  # already closed - nothing is left to wait for
+                future.set_result(closing._identifier)
 
         return future
 
@@ -74,7 +76,7 @@ class ContextClosing:
             # always with the identifier - the way a scope ends is not a result of
             # waiting for it, a waiter must not receive the error of the scope body
             future: Future[UUID] | None = self._future
-            if future is not None:
+            if future is not None and not future.done():
                 future.set_result(self._identifier)
                 future.result()  # silence warning
 

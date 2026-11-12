@@ -1,11 +1,13 @@
 from asyncio import CancelledError, run, sleep
-from collections.abc import AsyncIterator, Callable, Generator
+from collections.abc import AsyncIterator, Callable, Coroutine, Generator, Hashable
 from contextlib import asynccontextmanager
+from inspect import iscoroutinefunction
 from threading import Thread
+from typing import Any
 
 from pytest import fixture, mark, raises
 
-from haiway import cache, cache_externally, ctx
+from haiway import cache, cache_externally, ctx, retry, throttle
 
 
 class FakeException(Exception):
@@ -312,3 +314,85 @@ def test_local_cache_is_consistent_across_threads():
         thread.join()
 
     assert errors == []
+
+
+def _externally_cached[**Args, Result](
+    function: Callable[Args, Coroutine[None, None, Result]],
+) -> Callable[Args, Coroutine[None, None, Result]]:
+    stored: dict[Hashable, Result] = {}
+
+    async def read(key: Hashable) -> Result | None:
+        return stored.get(key)
+
+    async def write(key: Hashable, value: Result) -> None:
+        stored[key] = value
+
+    return cache_externally(
+        make_key=lambda *args, **kwargs: (args, tuple(kwargs.items())),
+        read=read,
+        write=write,
+    )(function)
+
+
+_CACHING: tuple[Callable[[Callable[..., Coroutine[None, None, int]]], Any], ...] = (
+    cache,
+    cache(limit=4),
+    _externally_cached,
+)
+
+
+@mark.parametrize("caching", _CACHING)
+def test_cached_function_is_a_coroutine_function(caching: Callable[..., Any]) -> None:
+    async def function(value: int) -> int:
+        return value
+
+    assert iscoroutinefunction(caching(function))
+
+
+@mark.asyncio
+@mark.parametrize("caching", _CACHING)
+async def test_retry_over_cached_function_retries(caching: Callable[..., Any]) -> None:
+    calls: list[int] = []
+
+    async def function(value: int) -> int:
+        calls.append(value)
+        if len(calls) < 2:
+            raise FakeException()
+
+        return value
+
+    retried = retry(limit=2)(caching(function))
+    async with ctx.scope("test"):
+        assert await retried(1) == 1
+
+    assert calls == [1, 1]
+
+
+@mark.asyncio
+@mark.parametrize("caching", _CACHING)
+async def test_throttle_over_cached_function_runs(caching: Callable[..., Any]) -> None:
+    async def function(value: int) -> int:
+        return value
+
+    throttled = throttle(limit=1)(caching(function))
+    async with ctx.scope("test"):
+        assert await throttled(1) == 1
+
+
+@mark.asyncio
+async def test_cache_key_tells_apart_types_and_keywords() -> None:
+    calls: list[object] = []
+
+    @cache(limit=8)
+    async def function(value: object, *, flag: bool = False) -> object:
+        calls.append(value)
+        return value
+
+    await function(1)
+    await function(1)
+    await function(1.0)
+    await function(1, flag=True)
+    await function(1, flag=True)
+    await function(True)
+
+    assert calls == [1, 1.0, 1, True]

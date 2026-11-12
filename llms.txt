@@ -1,6 +1,6 @@
 # Haiway — LLM Usage Guide
 
-Haiway (Python 3.14+) is a strictly typed, functional/async framework. Everything is built from
+Haiway (Python 3.15+) is a strictly typed, functional/async framework. Everything is built from
 three primitives: immutable `State`, the scoped context `ctx`, and structured concurrency. There is
 no DI container and no mutable service objects — behavior is `Protocol`-typed functions held inside
 `State` and resolved from the current scope.
@@ -88,7 +88,7 @@ class Invoice(State):
   `list`/`dict`/`set`; use `X | None`, never `Optional[X]`.
 - Values are validated against annotations at construction. Sequences/sets become
   `tuple`/`frozenset`; mappings become the immutable `Map`.
-- Defaults: `Default(value)`, `Default(default_factory=...)`, `Default(env="VAR")`.
+- Defaults: `Default(value)`, `Default(factory=...)`, `Default(env="VAR")`.
 - `Annotated` metadata: `Alias`, `Description`, `Specification`, `Validator` (pre-validation, may
   coerce), `Verifier` (post-validation, enforces invariants), `Sensitive` (renders as `<redacted>` in
   `str`/`repr`/`format_str`, value kept for serialization - use it for every secret).
@@ -143,7 +143,11 @@ it. Delivery goes upwards - the sending scope and every scope enclosing it - so 
 requests) never observe each other's events; use `ctx.send(event, broadcast=True)` to reach every
 subscriber on the bus. A subscription ends when the scope which *created* it exits - or the scope
 owning the bus, whichever comes first - draining the events which already arrived, so it is safe to
-iterate one to exhaustion in any scope. It is an async generator: wrap it in `ctx.closing(...)` when
+iterate one to exhaustion in a task spawned in the scope which created it, or in an enclosing scope.
+It hangs when iterated to exhaustion directly in the body of the creating scope (which can't begin
+closing until the body returns), or in a task spawned in a nested scope or within
+`ctx.disposables(...)` (which join the task before the subscription can end). It is an async
+generator: wrap it in `ctx.closing(...)` when
 the iteration is left early.
 
 ## Concurrency
@@ -151,11 +155,14 @@ the iteration is left early.
 - `ctx.spawn(fn, *args, **kwargs)` -> `Task` in the current scope's task group. Every scope owns one,
   so the task is awaited by the scope it was spawned in - never by an enclosing one. Scope exit
   awaits spawned tasks rather than cancelling them, so a task must be able to finish on its own: it
-  must not wait for anything signalled after its scope exits. A failed task raises its error out of
+  must not wait for anything signalled after its scope exits (such as `ContextClosing` of an
+  enclosing scope). Tasks spawned within `ctx.disposables(...)` are joined when its body exits,
+  before the disposables are released. A failed task raises its error out of
   the scope as is, many failing together an `ExceptionGroup` of their errors - never the
   `unhandled errors in a TaskGroup` wrapper. Iterating a `ctx.subscribe(...)`
-  subscription to exhaustion is fine anywhere - a scope completes its closing before joining its
-  tasks, which ends the iteration first. `ctx.spawn_background(...)` only when work must outlive the
+  subscription to exhaustion is fine in a task spawned in the scope which created it (or an
+  enclosing one) - a scope completes its closing before joining its tasks, which ends the iteration
+  first. `ctx.spawn_background(...)` only when work must outlive the
   scope - such a
   task runs with an empty context, so `ctx.state(...)`/`ctx.subscribe(...)` raise `ContextMissing`
   within it. Nothing joins a background task on its own - `ctx.shutdown_background_tasks()` cancels

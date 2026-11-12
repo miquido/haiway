@@ -1,4 +1,6 @@
-from typing import Any, NoReturn, final
+from typing import final
+
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = ("Alias",)
 
@@ -25,7 +27,8 @@ class Alias:
         name: str,
         /,
     ) -> None:
-        assert name  # nosec: B101
+        if not name:
+            raise ValueError("Alias name can't be empty")
 
         self.name: str
         object.__setattr__(
@@ -34,15 +37,7 @@ class Alias:
             name,
         )
 
-    def __setattr__(
-        self,
-        __name: str,
-        __value: Any,
-    ) -> NoReturn:
-        raise AttributeError("Alias can't be modified")
-
-    def __delattr__(
-        self,
-        __name: str,
-    ) -> NoReturn:
-        raise AttributeError("Alias can't be modified")
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy

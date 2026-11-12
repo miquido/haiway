@@ -75,9 +75,7 @@ class Meta(MapBase[str, BasicValue]):
         """
         match value:
             case {**values}:
-                return cls(
-                    {key: basic_value(element, strict=True) for key, element in values.items()}
-                )
+                return cls(_validated_values(values))
 
             case _:
                 raise TypeError(f"'{type(value).__name__}' is not matching expected type of 'Meta'")
@@ -128,19 +126,23 @@ class Meta(MapBase[str, BasicValue]):
         """
         if meta is None:
             if values:
-                return cls({key: basic_value(value, strict=True) for key, value in values.items()})
+                return cls(_validated_values(values))
 
             else:
                 return cls.empty
 
+        # raised rather than asserted - an optimized build would drop the values silently
+        elif values:
+            raise ValueError("Meta values can't be given together with metadata")
+
         elif isinstance(meta, Meta):
-            assert not values  # nosec: B101
             return cast(Self, meta)
 
+        elif is_mapping(meta):
+            return cls(_validated_values(meta))
+
         else:
-            assert not values  # nosec: B101
-            assert isinstance(meta, Mapping)  # nosec: B101
-            return cls({key: basic_value(value, strict=True) for key, value in meta.items()})
+            raise TypeError(f"'{type(meta).__name__}' is not matching expected type of 'Meta'")
 
     @classmethod
     def from_mapping(
@@ -161,7 +163,7 @@ class Meta(MapBase[str, BasicValue]):
         Self
             Metadata containing the normalized mapping contents.
         """
-        return cls({key: basic_value(value, strict=True) for key, value in mapping.items()})
+        return cls(_validated_values(mapping))
 
     @classmethod
     def from_json(
@@ -641,7 +643,7 @@ class Meta(MapBase[str, BasicValue]):
         return self.__class__(
             {
                 **self,  # already validated
-                **{key: basic_value(value, strict=True) for key, value in values.items()},
+                **_validated_values(values),
             }
         )
 
@@ -761,10 +763,7 @@ class Meta(MapBase[str, BasicValue]):
         return self.__class__(
             {
                 **self,  # already validated
-                **{
-                    _validated_meta_key(key): basic_value(value, strict=True)
-                    for key, value in other.items()
-                },
+                **_validated_values(other),
             }
         )
 
@@ -777,10 +776,7 @@ class Meta(MapBase[str, BasicValue]):
 
         return self.__class__(
             {
-                **{
-                    _validated_meta_key(key): basic_value(value, strict=True)
-                    for key, value in other.items()
-                },
+                **_validated_values(other),
                 **self,  # already validated
             }
         )
@@ -804,6 +800,12 @@ class Meta(MapBase[str, BasicValue]):
         memo: dict[int, Any] | None,
     ) -> Self:
         return self  # Meta is immutable, no need to provide an actual copy
+
+
+def _validated_values(values: Mapping[Any, Any], /) -> dict[str, BasicValue]:
+    return {
+        _validated_meta_key(key): basic_value(value, strict=True) for key, value in values.items()
+    }
 
 
 def _validated_meta_key(value: Any) -> str:

@@ -1,7 +1,9 @@
+import inspect
 import threading
 from asyncio import create_task, gather, get_running_loop, sleep
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
+from functools import partial
 from time import monotonic
 from time import sleep as blocking_sleep
 
@@ -145,3 +147,41 @@ def test_rejects_coroutine_functions() -> None:
 
     with pytest.raises(AssertionError):
         asynchronous(coroutine)  # pyright: ignore[reportArgumentType, reportCallIssue]
+
+
+@asynchronous
+def _declared_before(value: "_DeclaredLater") -> "_DeclaredLater":  # noqa: UP037
+    return value
+
+
+@asynchronous
+def _annotated_before(value: _AnnotatedLater) -> _AnnotatedLater:
+    return value
+
+
+class _DeclaredLater: ...
+
+
+class _AnnotatedLater: ...
+
+
+@pytest.mark.asyncio
+async def test_wraps_function_annotated_with_names_declared_later() -> None:
+    later: _AnnotatedLater = _AnnotatedLater()
+    assert await _annotated_before(later) is later
+    # the annotations of the wrapped function, as `functools.wraps` gives them
+    assert _annotated_before.__annotations__ == {
+        "value": _AnnotatedLater,
+        "return": _AnnotatedLater,
+    }
+    assert inspect.signature(_annotated_before).parameters["value"].annotation is _AnnotatedLater
+    assert _declared_before.__name__ == "_declared_before"
+
+
+def test_wraps_callable_without_function_attributes() -> None:
+    def add(first: int, second: int) -> int:
+        return first + second
+
+    wrapped = asynchronous(partial(add, 1))
+    assert inspect.iscoroutinefunction(wrapped)
+    assert wrapped.__wrapped__.func is add  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue]

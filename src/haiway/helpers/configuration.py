@@ -8,27 +8,34 @@ from haiway.types import Meta
 
 __all__ = (
     "Configuration",
+    "ConfigurationDefining",
     "ConfigurationInvalid",
+    "ConfigurationListing",
+    "ConfigurationLoading",
     "ConfigurationMissing",
+    "ConfigurationRemoving",
     "ConfigurationRepository",
 )
 
 
 class ConfigurationMissing(Exception):
-    """Raised when a required configuration is not found.
-    This exception is thrown when attempting to load a configuration with
-    `required=True` but no configuration data is available for the given
-    identifier.
-    Attributes:
-        identifier: The configuration identifier that was not found.
-    Example:
-        ```python
-        try:
-            config = await MyConfig.load(required=True)
-        except ConfigurationMissing as exc:
-            print(f"Missing config: {exc.identifier}")
-            # Handle missing configuration...
-        ```
+    """
+    Raised when a required configuration is not found.
+
+    Raised by loading with ``required=True`` when the repository holds nothing for the
+    identifier and the configuration can't be resolved from the context either.
+
+    Attributes
+    ----------
+    identifier : str
+        The configuration identifier which was not found.
+
+    Examples
+    --------
+    >>> try:
+    ...     config = await MyConfig.load(required=True)
+    ... except ConfigurationMissing as exc:
+    ...     ctx.log_error(f"Missing configuration: {exc.identifier}")
     """
 
     __slots__ = ("identifier",)
@@ -43,21 +50,26 @@ class ConfigurationMissing(Exception):
 
 
 class ConfigurationInvalid(Exception):
-    """Raised when configuration data fails validation during loading.
-    This exception is thrown when configuration data is found but cannot
-    be converted to the target Configuration class due to type validation
-    errors or missing required fields.
-    Attributes:
-        identifier: The configuration identifier that failed validation.
-        reason: Detailed description of the validation failure.
-    Example:
-        ```python
-        try:
-            config = await DatabaseConfig.load()
-        except ConfigurationInvalid as exc:
-            print(f"Invalid config {exc.identifier}: {exc.reason}")
-            # Handle invalid configuration data...
-        ```
+    """
+    Raised when loading a configuration fails.
+
+    The loading backend raised - the stored data could not be validated as the requested
+    configuration class, or the backend failed to read it. The original error is chained as
+    the cause.
+
+    Attributes
+    ----------
+    identifier : str
+        The configuration identifier which failed to load.
+    reason : str
+        The message of the original error.
+
+    Examples
+    --------
+    >>> try:
+    ...     config = await DatabaseConfig.load()
+    ... except ConfigurationInvalid as exc:
+    ...     ctx.log_error(f"Invalid configuration {exc.identifier}: {exc.reason}")
     """
 
     __slots__ = (
@@ -77,34 +89,27 @@ class ConfigurationInvalid(Exception):
 
 
 class Configuration(State):
-    """Base class for typed configuration objects.
-    Configuration classes inherit from State and provide type-safe loading
-    from configuration repositories. They support various loading patterns
-    including optional loading, required loading, and loading with defaults.
-    The class uses the current ConfigurationRepository from the context to
-    load configuration data, converting it to the appropriate typed instance
-    using Haiway's State validation system.
-    Example:
-        ```python
-        class DatabaseConfig(Configuration):
-            host: str = "localhost"
-            port: int = 5432
-            username: str
-            password: str
-            timeout: float = 30.0
-        # Optional loading - returns None if not found
-        config = await DatabaseConfig.load()
-        if config is not None:
-            connect_to_db(config.host, config.port)
-        # Required loading - raises ConfigurationMissing if not found
-        config = await DatabaseConfig.load(required=True)
-        # Loading with default fallback
-        config = await DatabaseConfig.load(
-            default=DatabaseConfig(username="admin", password="secret")
-        )
-        # Custom identifier (defaults to class __qualname__)
-        config = await DatabaseConfig.load(identifier="prod_db_config")
-        ```
+    """
+    Base class for typed configuration objects.
+
+    A configuration is a ``State`` loaded through the ``ConfigurationRepository`` of the
+    current context - optionally, with a default, or as required.
+
+    Examples
+    --------
+    >>> class DatabaseConfig(Configuration):
+    ...     host: str = "localhost"
+    ...     port: int = 5432
+    ...     username: str
+    ...     password: str
+    ...
+    >>> async with ctx.scope("app", ConfigurationRepository.volatile(stored_config)):
+    ...     optional = await DatabaseConfig.load()  # None when not found
+    ...     required = await DatabaseConfig.load(required=True)
+    ...     fallback = await DatabaseConfig.load(
+    ...         default=DatabaseConfig(username="admin", password="secret"),
+    ...     )
+    ...     named = await DatabaseConfig.load(identifier="production_db")
     """
 
     @overload
@@ -113,15 +118,7 @@ class Configuration(State):
         cls,
         identifier: str | None = None,
         **extra: Any,
-    ) -> Self | None:
-        """Load configuration optionally.
-        Args:
-            identifier: Configuration identifier. Defaults to class __qualname__.
-            **extra: Additional parameters passed to the loading protocol.
-        Returns:
-            Configuration instance if found, None otherwise.
-        """
-        ...
+    ) -> Self | None: ...
 
     @overload
     @classmethod
@@ -131,16 +128,7 @@ class Configuration(State):
         *,
         default: Self,
         **extra: Any,
-    ) -> Self:
-        """Load configuration with a default fallback.
-        Args:
-            identifier: Configuration identifier. Defaults to class __qualname__.
-            default: Default configuration instance to return if not found.
-            **extra: Additional parameters passed to the loading protocol.
-        Returns:
-            Configuration instance from repository or the provided default.
-        """
-        ...
+    ) -> Self: ...
 
     @overload
     @classmethod
@@ -150,26 +138,7 @@ class Configuration(State):
         *,
         required: Literal[True],
         **extra: Any,
-    ) -> Self:
-        """Load configuration as required.
-        Args:
-            identifier: Configuration identifier. Defaults to class __qualname__.
-            required: Must be True to use this overload.
-            **extra: Additional parameters passed to the loading protocol.
-        Returns:
-            Configuration instance resolved from the repository or current context.
-        Raises:
-            ConfigurationMissing: If configuration is not found and class cannot be
-                be resolved from context.
-            ConfigurationInvalid: If configuration data fails validation.
-        Note:
-            If the configuration is not found in the repository, this method falls back
-            to ``ctx.state(cls)``. That means an already-bound contextual instance wins,
-            and state types that can be instantiated without arguments may still resolve
-            successfully through ``ctx.state(...)``. ``ConfigurationMissing`` is raised
-            only when neither strategy yields a value.
-        """
-        ...
+    ) -> Self: ...
 
     @classmethod
     async def load(
@@ -180,25 +149,35 @@ class Configuration(State):
         required: bool = False,
         **extra: Any,
     ) -> Self | None:
-        """Load configuration from the current repository.
-        This method delegates to ConfigurationRepository.load() using the
-        current repository instance from the context.
-        Args:
-            identifier: Configuration identifier. Defaults to class __qualname__.
-            default: Default instance to return if not found.
-            required: Whether to raise an exception if not found.
-            **extra: Additional parameters passed to the loading protocol.
-        Returns:
-            Configuration instance, default, or None based on parameters.
-        Raises:
-            ConfigurationMissing: If required=True and configuration cannot be loaded
-                from the repository or resolved from context.
-            ConfigurationInvalid: If configuration data fails validation.
-        Note:
-            When ``required=True`` and the repository returns no value, this method
-            falls back to ``ctx.state(cls)``. This allows contextual overrides to win
-            and also permits lazy default instance creation when the state type can be
-            constructed without arguments.
+        """
+        Load the configuration from the repository of the current context.
+
+        Delegates to ``ConfigurationRepository.load`` with this class.
+
+        Parameters
+        ----------
+        identifier : str | None, default=None
+            Identifier of the configuration, the ``__qualname__`` of the class when not given.
+        default : Self | None, default=None
+            Returned when the repository holds nothing for the identifier.
+        required : bool, default=False
+            Whether a missing configuration is an error - it is resolved from the context
+            with ``ctx.state`` first, so a contextual instance, or one the class constructs
+            without arguments, is used before ``ConfigurationMissing`` is raised.
+        **extra : Any
+            Additional parameters passed to the loading backend.
+
+        Returns
+        -------
+        Self | None
+            The loaded configuration, the default, or None when missing and not required.
+
+        Raises
+        ------
+        ConfigurationMissing
+            When required and neither the repository nor the context provides it.
+        ConfigurationInvalid
+            When the loading backend fails.
         """
         return await ConfigurationRepository.load(
             cls,
@@ -247,6 +226,13 @@ class ConfigurationRemoving(Protocol):
     ) -> None: ...
 
 
+def _configuration(value: Any, /) -> Configuration:
+    if isinstance(value, Configuration):
+        return value
+
+    raise TypeError(f"'{type(value).__name__}' is not a Configuration")
+
+
 async def _empty_listing(
     config: type[Configuration] | None,
     **extra: Any,
@@ -278,84 +264,83 @@ async def _noop_removing(
 
 
 class ConfigurationRepository(State):
-    """Central repository for configuration management.
-    The ConfigurationRepository manages configuration storage and retrieval through
-    pluggable protocol implementations. It provides methods for loading, defining,
-    and removing configurations while integrating with Haiway's context system.
-    The repository uses protocol-based backends for different operations:
-    - ConfigurationListing: List available configuration identifiers
-    - ConfigurationLoading: Load configuration data by identifier
-    - ConfigurationDefining: Store/update configuration data
-    - ConfigurationRemoving: Remove configuration data
-    Attributes:
-        listing: Protocol implementation for listing configurations (defaults to empty)
-        loading: Protocol implementation for loading configurations (defaults to None)
-        defining: Protocol implementation for storing configurations (defaults to no-op)
-        removing: Protocol implementation for removing configurations (defaults to no-op)
-    Example:
-        ```python
-        # Create repository with custom backends
-        class FileStorage(State):
-            config_dir: Path
-            async def list_configs(self, **extra: Any) -> Sequence[str]:
-                return tuple(f.stem for f in self.config_dir.glob("*.json"))
-            async def load_config(
-                self, identifier: str, **extra: Any
-            ) -> Mapping[str, BasicValue] | None:
-                config_file = self.config_dir / f"{identifier}.json"
-                return json.loads(config_file.read_text()) if config_file.exists() else None
-        storage = FileStorage(config_dir=Path("./configs"))
-        repo = ConfigurationRepository(
-            listing=storage.list_configs,
-            loading=storage.load_config
-        )
-        async with ctx.scope("app", repo):
-            # Repository available throughout the scope
-            configs = await ConfigurationRepository.configurations()
-            my_config = await MyConfig.load("production")
-        ```
+    """
+    Repository of configurations, backed by replaceable functions.
+
+    Each operation is a function the repository holds - listing, loading, defining and
+    removing - so a backend is provided by passing its functions, and the repository is
+    used through the context as any other state.
+
+    Attributes
+    ----------
+    listing : ConfigurationListing
+        Lists the identifiers of stored configurations - nothing by default.
+    loading : ConfigurationLoading
+        Loads a configuration as the requested class - None by default.
+    defining : ConfigurationDefining
+        Stores a configuration - does nothing by default.
+    removing : ConfigurationRemoving
+        Removes a configuration - does nothing by default.
+    meta : Meta
+        Metadata describing the repository.
+
+    Examples
+    --------
+    >>> async def load_file[Config: Configuration](
+    ...     config: type[Config],
+    ...     identifier: str,
+    ...     **extra: Any,
+    ... ) -> Config | None:
+    ...     path = Path("./configs") / f"{identifier}.json"
+    ...     return config.from_json(path.read_text()) if path.exists() else None
+    ...
+    >>> async with ctx.scope("app", ConfigurationRepository(loading=load_file)):
+    ...     config = await MyConfig.load(identifier="production")
     """
 
     @classmethod
-    def volatile(  # noqa: C901
+    def volatile(
         cls,
         *configs: Configuration,
         **named_configs: Configuration,
     ) -> Self:
-        """Create a volatile in-memory configuration repository.
-        This factory method creates a repository that stores configurations in memory.
-        It's useful for testing, development, or applications that don't need persistent
-        configuration storage.
-        Args:
-            *configs: Configuration instances to store using their class __qualname__ as identifier.
-            **named_configs: Configuration instances with explicit identifiers.
-        Returns:
-            ConfigurationRepository instance with in-memory storage.
-        Example:
-            ```python
-            # Store configurations with automatic identifiers
-            db_config = DatabaseConfig(host="localhost", database="myapp")
-            api_config = APIConfig(base_url="https://api.example.com")
-            repo = ConfigurationRepository.volatile(db_config, api_config)
-            # Store configurations with custom identifiers
-            repo = ConfigurationRepository.volatile(
-                production_db=DatabaseConfig(host="prod.db.com", database="prod"),
-                staging_db=DatabaseConfig(host="stage.db.com", database="stage")
-            )
-            async with ctx.scope("app", repo):
-                # Load by class name
-                db_config = await DatabaseConfig.load()  # Uses DatabaseConfig.__qualname__
-                # Load by custom identifier
-                prod_db = await DatabaseConfig.load(identifier="production_db")
-            ```
+        """
+        Create a repository keeping configurations in memory.
+
+        Useful for tests, development and applications without persistent configuration.
+
+        Parameters
+        ----------
+        *configs : Configuration
+            Configurations stored under the ``__qualname__`` of their class.
+        **named_configs : Configuration
+            Configurations stored under the given identifiers.
+
+        Returns
+        -------
+        Self
+            Repository storing the configurations in memory.
+
+        Raises
+        ------
+        TypeError
+            When a given value is not a ``Configuration``.
+
+        Examples
+        --------
+        >>> repository = ConfigurationRepository.volatile(
+        ...     DatabaseConfig(host="localhost", database="app"),
+        ...     production_db=DatabaseConfig(host="prod.db.com", database="prod"),
+        ... )
+        >>> async with ctx.scope("app", repository):
+        ...     local = await DatabaseConfig.load()
+        ...     production = await DatabaseConfig.load(identifier="production_db")
         """
         storage: MutableMapping[str, Configuration] = {}
         for element in configs:
-            assert isinstance(element, Configuration)  # nosec: B101
-            storage[type(element).__qualname__] = element
+            storage[type(_configuration(element)).__qualname__] = element
         for key, element in named_configs.items():
-            assert isinstance(element, Configuration)  # nosec: B101
-            storage[key] = element
+            storage[key] = _configuration(element)
 
         async def listing(
             config: type[Configuration] | None,
@@ -363,12 +348,8 @@ class ConfigurationRepository(State):
         ) -> Sequence[str]:
             if config is None:
                 return tuple(storage.keys())
-            configs: list[str] = []
-            for key, value in storage.items():
-                if type(value).__name__ != config.__name__:
-                    continue
-                configs.append(key)
-            return tuple(configs)
+            # the same configurations which loading accepts as the class
+            return tuple(key for key, value in storage.items() if isinstance(value, config))
 
         async def loading[Config: Configuration](
             config: type[Config],
@@ -424,20 +405,20 @@ class ConfigurationRepository(State):
         config: type[Configuration] | None = None,
         **extra: Any,
     ) -> Sequence[str]:
-        """List all available configuration identifiers.
-        Uses the current repository's listing protocol to retrieve all available
-        configuration identifiers.
-        Args:
-            config: type[Configuration] | None = None - configuration type to choose
-            **extra: Additional parameters passed to the listing protocol.
-        Returns:
-            Sequence of configuration identifiers available in the repository.
-        Example:
-            ```python
-            async with ctx.scope("app", my_repository):
-                identifiers = await ConfigurationRepository.configurations()
-                print(f"Available configurations: {', '.join(identifiers)}")
-            ```
+        """
+        List the identifiers of stored configurations.
+
+        Parameters
+        ----------
+        config : type[Configuration] | None, default=None
+            Lists only the configurations of this class when given.
+        **extra : Any
+            Additional parameters passed to the listing backend.
+
+        Returns
+        -------
+        Sequence[str]
+            Identifiers of the stored configurations.
         """
         return await self.listing(config=config, **extra)
 
@@ -459,16 +440,7 @@ class ConfigurationRepository(State):
         *,
         identifier: str | None = None,
         **extra: Any,
-    ) -> Config | None:
-        """Load configuration optionally by type.
-        Args:
-            config: Configuration class to load.
-            identifier: Configuration identifier. Defaults to config.__qualname__.
-            **extra: Additional parameters passed to the loading protocol.
-        Returns:
-            Configuration instance if found, None otherwise.
-        """
-        ...
+    ) -> Config | None: ...
 
     @overload
     @classmethod
@@ -490,17 +462,7 @@ class ConfigurationRepository(State):
         identifier: str | None = None,
         default: Config,
         **extra: Any,
-    ) -> Config:
-        """Load configuration with default fallback by type.
-        Args:
-            config: Configuration class to load.
-            identifier: Configuration identifier. Defaults to config.__qualname__.
-            default: Default configuration instance to return if not found.
-            **extra: Additional parameters passed to the loading protocol.
-        Returns:
-            Configuration instance from repository or the provided default.
-        """
-        ...
+    ) -> Config: ...
 
     @overload
     @classmethod
@@ -522,27 +484,7 @@ class ConfigurationRepository(State):
         identifier: str | None = None,
         required: Literal[True],
         **extra: Any,
-    ) -> Config:
-        """Load configuration as required by type.
-        Args:
-            config: Configuration class to load.
-            identifier: Configuration identifier. Defaults to config.__qualname__.
-            required: Must be True to use this overload.
-            **extra: Additional parameters passed to the loading protocol.
-        Returns:
-            Configuration instance resolved from the repository or current context.
-        Raises:
-            ConfigurationMissing: If configuration is not found and class cannot be
-                resolved from context.
-            ConfigurationInvalid: If configuration data fails validation.
-        Note:
-            If the configuration is not found in the repository, this method falls back
-            to ``ctx.state(config)``. That means an already-bound contextual instance wins,
-            and state types that can be instantiated without arguments may still resolve
-            successfully through ``ctx.state(...)``. ``ConfigurationMissing`` is raised
-            only when neither strategy yields a value.
-        """
-        ...
+    ) -> Config: ...
 
     @overload
     @classmethod
@@ -567,44 +509,41 @@ class ConfigurationRepository(State):
         required: bool = False,
         **extra: Any,
     ) -> Config | None:
-        """Load typed configuration from the current repository.
-        This method provides direct loading of configuration classes with full
-        type safety. It handles error logging, validation, and fallback logic.
-        Args:
-            config: Configuration class to load and validate against.
-            identifier: Configuration identifier. Defaults to config.__qualname__.
-            default: Default instance to return if not found.
-            required: Whether to raise an exception if not found.
-            **extra: Additional parameters passed to the loading protocol.
-        Returns:
-            Typed configuration instance, default, or None based on parameters.
-        Raises:
-            ConfigurationMissing: If required=True and configuration cannot be loaded
-                from the repository or resolved from context.
-            ConfigurationInvalid: If configuration data fails validation.
-        Note:
-            When ``required=True`` and the repository returns no value, this method
-            falls back to ``ctx.state(config)``. This allows contextual overrides to win
-            and also permits lazy default instance creation when the state type can be
-            constructed without arguments.
-        Example:
-            ```python
-            # Load with different patterns
-            config = await ConfigurationRepository.load(DatabaseConfig)
-            config = await ConfigurationRepository.load(
-                DatabaseConfig,
-                identifier="production_db"
-            )
-            config = await ConfigurationRepository.load(
-                DatabaseConfig,
-                default=DatabaseConfig(host="localhost")
-            )
-            # This will load from the repository first, then fall back to ctx.state(...)
-            config = await ConfigurationRepository.load(
-                DatabaseConfig,
-                required=True
-            )
-            ```
+        """
+        Load a configuration as the given class.
+
+        Parameters
+        ----------
+        config : type[Config]
+            Class of the configuration to load.
+        identifier : str | None, default=None
+            Identifier of the configuration, the ``__qualname__`` of the class when not given.
+        default : Config | None, default=None
+            Returned when the repository holds nothing for the identifier.
+        required : bool, default=False
+            Whether a missing configuration is an error - it is resolved from the context
+            with ``ctx.state`` first, so a contextual instance, or one the class constructs
+            without arguments, is used before ``ConfigurationMissing`` is raised.
+        **extra : Any
+            Additional parameters passed to the loading backend.
+
+        Returns
+        -------
+        Config | None
+            The loaded configuration, the default, or None when missing and not required.
+
+        Raises
+        ------
+        ConfigurationMissing
+            When required and neither the repository nor the context provides it.
+        ConfigurationInvalid
+            When the loading backend fails, the original error chained as the cause.
+
+        Examples
+        --------
+        >>> config = await ConfigurationRepository.load(DatabaseConfig)
+        >>> named = await ConfigurationRepository.load(DatabaseConfig, identifier="production_db")
+        >>> required = await ConfigurationRepository.load(DatabaseConfig, required=True)
         """
         config_identifier: str = config.__qualname__ if identifier is None else identifier
         ctx.log_info(f"Loading configuration '{config_identifier}'...")
@@ -709,13 +648,7 @@ class ConfigurationRepository(State):
         config: Configuration,
         /,
         **extra: Any,
-    ) -> None:
-        """Store a configuration instance using its class name as identifier.
-        Args:
-            config: Configuration instance to store.
-            **extra: Additional parameters passed to the defining protocol.
-        """
-        ...
+    ) -> None: ...
 
     @overload
     @classmethod
@@ -733,14 +666,7 @@ class ConfigurationRepository(State):
         /,
         value: Configuration,
         **extra: Any,
-    ) -> None:
-        """Store configuration data under a custom identifier.
-        Args:
-            config: Configuration identifier to store under.
-            value: Configuration instance or raw data to store.
-            **extra: Additional parameters passed to the defining protocol.
-        """
-        ...
+    ) -> None: ...
 
     @statemethod
     async def define(
@@ -750,37 +676,47 @@ class ConfigurationRepository(State):
         value: Configuration | None = None,
         **extra: Any,
     ) -> None:
-        """Store configuration data in the repository.
-        This method supports two usage patterns:
-        1. Store a Configuration instance using its class name as identifier
-        2. Store data under a custom identifier
-        The configuration data is serialized to basic values before being
-        passed to the defining protocol implementation.
-        Args:
-            config: Configuration instance or string identifier.
-            value: Configuration data when using string identifier (ignored otherwise).
-            **extra: Additional parameters passed to the defining protocol.
-        Example:
-            ```python
-            # Store using class name as identifier
-            db_config = DatabaseConfig(host="localhost", database="myapp")
-            await ConfigurationRepository.define(db_config)
-            # Store using custom identifier
-            await ConfigurationRepository.define(
-                "production_db",
-                DatabaseConfig(host="prod.db.com", database="prod"),
-            )
-            ```
+        """
+        Store a configuration in the repository.
+
+        The configuration is passed to the defining backend as it is - stored under the
+        ``__qualname__`` of its class, or under the identifier given before it.
+
+        Parameters
+        ----------
+        config : Configuration | str
+            The configuration to store, or the identifier to store ``value`` under.
+        value : Configuration | None, default=None
+            The configuration to store - required with an identifier, refused otherwise.
+        **extra : Any
+            Additional parameters passed to the defining backend.
+
+        Raises
+        ------
+        TypeError
+            When ``value`` is missing with an identifier, or given with a configuration.
+
+        Examples
+        --------
+        >>> await ConfigurationRepository.define(DatabaseConfig(host="localhost", database="app"))
+        >>> await ConfigurationRepository.define(
+        ...     "production_db",
+        ...     DatabaseConfig(host="prod.db.com", database="prod"),
+        ... )
         """
         config_identifier: str
         config_value: Configuration
         if isinstance(config, str):
             config_identifier = config
             ctx.log_info(f"Defining configuration '{config_identifier}'...")
-            assert value is not None  # nosec: B101
+            if value is None:
+                raise TypeError(f"Configuration '{config_identifier}' requires a value to define")
+
             config_value = value
         else:
-            assert value is None  # nosec: B101
+            if value is not None:
+                raise TypeError("A value can't be given together with a configuration to define")
+
             config_identifier = config.__class__.__qualname__
             ctx.log_info(f"Defining configuration '{config_identifier}'...")
             config_value = config
@@ -835,19 +771,20 @@ class ConfigurationRepository(State):
         /,
         **extra: Any,
     ) -> None:
-        """Remove configuration data from the repository.
-        This method removes configuration data associated with the given
-        identifier from the storage backend.
-        Args:
-            identifier: Configuration class (uses __qualname__) or string identifier.
-            **extra: Additional parameters passed to the removing protocol.
-        Example:
-            ```python
-            # Remove by class
-            await ConfigurationRepository.remove(DatabaseConfig)
-            # Remove by string identifier
-            await ConfigurationRepository.remove("production_db")
-            ```
+        """
+        Remove a configuration from the repository.
+
+        Parameters
+        ----------
+        identifier : type[Config] | str
+            Class of the configuration, removed by its ``__qualname__``, or its identifier.
+        **extra : Any
+            Additional parameters passed to the removing backend.
+
+        Examples
+        --------
+        >>> await ConfigurationRepository.remove(DatabaseConfig)
+        >>> await ConfigurationRepository.remove("production_db")
         """
         config_identifier: str
         if isinstance(identifier, str):

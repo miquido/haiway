@@ -11,6 +11,8 @@ from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, s
 
 __all__ = (
     "MQMessage",
+    "MQMessageAcknowledging",
+    "MQMessageRejecting",
     "MQMessageSource",
     "MQQueue",
 )

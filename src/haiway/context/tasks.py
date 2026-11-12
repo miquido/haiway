@@ -3,7 +3,6 @@ from asyncio import (
     CancelledError,
     Task,
     TaskGroup,
-    gather,
     get_running_loop,
     wait,
 )
@@ -20,7 +19,7 @@ from contextlib import contextmanager
 from contextvars import Context, ContextVar, Token, copy_context
 from inspect import iscoroutine
 from types import CoroutineType, FunctionType, MethodType, TracebackType
-from typing import Any, ClassVar, Self, cast, final
+from typing import Any, ClassVar, Final, Self, cast, final
 from weakref import WeakKeyDictionary
 
 from haiway.context.observability import ContextObservability, ObservabilityLevel
@@ -106,6 +105,8 @@ class BackgroundTaskGroup:
             return
 
         else:
+            # the failures of the tasks are retrieved by their done callbacks, nothing is
+            # left to wait for here - cancelling is all of it
 
             def cancel_tasks() -> None:
                 for task in loop_tasks:
@@ -113,25 +114,10 @@ class BackgroundTaskGroup:
                         task.cancel()
 
                     except RuntimeError:
-                        pass
+                        pass  # the loop closed meanwhile, it runs nothing anymore
 
-            async def drain_tasks() -> None:
-                await gather(
-                    *loop_tasks,
-                    return_exceptions=True,
-                )
-
-            def schedule_cleanup() -> None:
-                cancel_tasks()
-
-                try:
-                    loop.create_task(drain_tasks())  # noqa: RUF006
-
-                except RuntimeError:
-                    pass
-
-            try:
-                loop.call_soon_threadsafe(schedule_cleanup)
+            try:  # within the loop of the tasks - cancelling is not thread safe
+                loop.call_soon_threadsafe(cancel_tasks)
 
             except RuntimeError:
                 cancel_tasks()
@@ -162,11 +148,18 @@ def _coroutine[Result, **Arguments](
     return cast("Coroutine[None, None, Result]", coro)
 
 
+# a scope living long, a server for instance, would otherwise keep every failure of its tasks
+# until it ends - every failure is logged when it happens, the ones past the limit are then
+# only counted
+_MAX_COLLECTED_ERRORS: Final[int] = 32
+
+
 @final
 class _ScopeTasks:
     __slots__ = (
         "_cancelling",
         "_closed",
+        "_dropped",
         "_errors",
         "_loop",
         "_tasks",
@@ -176,6 +169,7 @@ class _ScopeTasks:
         self._loop: AbstractEventLoop = get_running_loop()
         self._tasks: MutableSet[Task[Any]] = set()
         self._errors: list[BaseException] = []
+        self._dropped: int = 0
         self._closed: bool = False
         self._cancelling: bool = False
 
@@ -211,15 +205,27 @@ class _ScopeTasks:
             return
 
         # retrieving it here also marks it as handled - it is raised on join instead
-        if (exception := task.exception()) is not None:
+        if (exception := task.exception()) is None:
+            return
+
+        # reported right away, a failure of a task must not stay unnoticed until the scope ends
+        ContextObservability.record_log(
+            ObservabilityLevel.ERROR,
+            "Context scope task failed",
+            exception=exception,
+        )
+        if len(self._errors) < _MAX_COLLECTED_ERRORS:
             self._errors.append(exception)
+
+        else:
+            self._dropped += 1
 
     async def join(
         self,
         *,
         cancelling: bool,
         shielded: bool,
-    ) -> tuple[Sequence[BaseException], CancelledError | None]:
+    ) -> tuple[Sequence[BaseException], int, CancelledError | None]:
         """
         Wait until all of the tasks complete, including the ones spawned meanwhile.
 
@@ -243,7 +249,7 @@ class _ScopeTasks:
                     self._cancel()
 
         self._closed = True
-        return tuple(self._errors), cancellation
+        return tuple(self._errors), self._dropped, cancellation
 
     def _cancel(self) -> None:
         self._cancelling = True
@@ -350,11 +356,12 @@ class ScopeTaskGroup:
         assert self._tasks is not None  # nosec: B101
 
         errors: Sequence[BaseException]
+        dropped: int
         cancellation: CancelledError | None
         try:
             # tasks are cancelled together with a failing body, a cancelled body of an
             # isolated scope is the only exception - its tasks are shielded from it
-            errors, cancellation = await self._tasks.join(
+            errors, dropped, cancellation = await self._tasks.join(
                 cancelling=exc_val is not None
                 and not (self._isolated and isinstance(exc_val, CancelledError)),
                 shielded=self._isolated,
@@ -365,14 +372,8 @@ class ScopeTaskGroup:
             self._token = None
             self._tasks = None
 
-        failure: BaseException | None = self._failure(errors) if errors else None
-        if failure is not None:
-            ContextObservability.record_log(
-                ObservabilityLevel.ERROR,
-                "Context task group exit failed",
-                exception=failure,
-            )
-
+        # not logged again - each of the errors was logged when its task failed
+        failure: BaseException | None = self._failure(errors, dropped) if errors else None
         if cancellation is not None:
             # cancellation requested while joining is never replaced by task errors
             if cancellation is exc_val:
@@ -388,27 +389,52 @@ class ScopeTaskGroup:
 
         # the exception propagating through the body takes precedence over the errors of
         # the tasks which failed alongside it - they are chained as its cause instead
-        # an explicit cause of the body error is never replaced - the failure is logged
-        if not isinstance(exc_val, CancelledError) and exc_val.__cause__ is None:
+        # an explicit cause of the body error is never replaced - the failure was logged
+        # the body reraising the error of a task it awaited is that error itself
+        if (
+            not isinstance(exc_val, CancelledError)
+            and exc_val.__cause__ is None
+            and not _contains(failure, exc_val)
+        ):
             exc_val.__cause__ = failure
 
     @staticmethod
     def _failure(
         errors: Sequence[BaseException],
+        dropped: int,
         /,
     ) -> BaseException:
+        message: str = "Context task group failed"
+        if dropped:
+            message = f"{message}, {dropped} more errors were logged only"
+
         match errors:
-            case [error]:
+            case [error] if not dropped:
                 return error  # a single error is raised on its own
 
             case _:
                 if all(isinstance(error, Exception) for error in errors):
                     return ExceptionGroup(
-                        "Context task group failed",
+                        message,
                         cast(list[Exception], list(errors)),
                     )
 
-                return BaseExceptionGroup("Context task group failed", list(errors))
+                return BaseExceptionGroup(message, list(errors))
+
+
+def _contains(
+    failure: BaseException,
+    error: BaseException,
+    /,
+) -> bool:
+    if failure is error:
+        return True
+
+    if isinstance(failure, BaseExceptionGroup):
+        group: BaseExceptionGroup[BaseException] = cast(BaseExceptionGroup[BaseException], failure)
+        return any(_contains(element, error) for element in group.exceptions)
+
+    return False
 
 
 @final

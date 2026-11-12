@@ -554,3 +554,67 @@ async def test_disposal_errors_are_logged_when_cancellation_takes_precedence(
         record.exc_info is not None and isinstance(record.exc_info[1], FakeException)
         for record in caplog.records
     )
+
+
+@mark.asyncio
+async def test_reraised_task_error_is_not_its_own_cause():
+    async def failing() -> None:
+        raise FakeException("task failure")
+
+    with raises(FakeException) as failure:
+        async with ctx.scope("awaited-task"):
+            await ctx.spawn(failing)
+
+    assert failure.value.__cause__ is not failure.value
+
+
+@mark.asyncio
+async def test_reraised_task_error_within_group_is_not_its_own_cause():
+    async def failing(tag: str) -> None:
+        raise FakeException(tag)
+
+    with raises(FakeException) as failure:
+        async with ctx.scope("awaited-tasks"):
+            first = ctx.spawn(failing, "first")
+            ctx.spawn(failing, "second")
+            await first
+
+    assert failure.value.__cause__ is None  # the group would contain the error itself
+
+
+@mark.asyncio
+async def test_failures_of_long_living_scope_are_bounded_and_counted():
+    async def failing() -> None:
+        raise FakeException("task failure")
+
+    with raises(ExceptionGroup) as failure:
+        async with ctx.scope("long-living"):
+            for _ in range(100):
+                ctx.spawn(failing)
+
+            await asyncio.sleep(0.01)
+
+    assert len(failure.value.exceptions) == 32
+    assert "68 more" in failure.value.message
+
+
+@mark.asyncio
+async def test_failed_task_is_logged_once(caplog: LogCaptureFixture):
+    async def failing() -> None:
+        raise FakeException("task failure")
+
+    with caplog.at_level(logging.ERROR), raises(FakeException):
+        async with ctx.scope("logged-once"):
+            ctx.spawn(failing)
+
+    logged: list[logging.LogRecord] = [
+        record
+        for record in caplog.records
+        if record.exc_info is not None
+        and isinstance(record.exc_info[1], FakeException)
+        and "Context" in record.getMessage()
+        and "task" in record.getMessage()
+    ]
+    assert [record.getMessage().split("] ")[-1] for record in logged] == [
+        "Context scope task failed"
+    ]

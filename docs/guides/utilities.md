@@ -91,9 +91,10 @@ If the variable is set but parsing fails, `getenv()` raises `ValueError`.
 
 ### Loading `.env`
 
-`load_env(path=None, override=True)` is intentionally minimal:
+`load_env(path=".env", override=False)` is intentionally minimal:
 
 - It defaults to `.env` in the current working directory.
+- It keeps variables which are already set, unless `override=True`.
 - It ignores lines starting with `#`.
 - It expects `KEY=VALUE` per line.
 - It silently does nothing when the file does not exist.
@@ -285,7 +286,8 @@ queue.finish()
 items = [item async for item in queue]  # [2, 3]
 ```
 
-- Overflow drops the oldest buffered element silently; `enqueue()` never blocks or raises.
+- Overflow drops the oldest buffered element silently; `enqueue()` never blocks, and raises only
+  when the queue is already finished.
 - Elements handed straight to a waiting consumer never enter the buffer, so they never count against
   the limit.
 - `limit` must be positive when provided, and the effective value is readable through the `.limit`

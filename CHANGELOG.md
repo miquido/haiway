@@ -88,6 +88,36 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
 - **`Paginated.of` is removed** - the constructor takes the items by position, the same way
   `of` did: `Paginated(items, pagination=pagination)`. Passing `items=` by name keeps working.
   Migration: replace `Paginated.of(` with `Paginated(`.
+- **An opened `File` belongs to the event loop which entered its context.** Using it, or exiting
+  its context, from another loop raises `FileException`; once the context is exited it can be
+  entered again on any loop. Operations of an open file run one at a time in the order they were
+  started, ordered on the event loop instead of a lock, and one abandoned by cancellation keeps
+  running until done - the next operation and closing the context wait for it. Migration: open a
+  file within the loop which uses it.
+- **`http.route` of a route served from a `Mount` carries the templates of the mounts leading to
+  it** - `/api/users/{id}` rather than `/users/{id}`, so the routes of different mounts are no
+  longer reported as one in traces and in the request duration metric. A route reached more than
+  one way through the route table records no `http.route`. Dashboards and alerts keyed by the
+  previous values need updating.
+- **Invalid arguments raise instead of failing an assertion**, so an optimized build (`python -O`)
+  no longer lets them through:
+  - `Alias("")` and `Specification({})` raise `ValueError`.
+  - A `Default` combining a factory with a value or a variable raises `ValueError`, and so does
+    a mapping without a variable.
+  - `Meta.of` raises `ValueError` for values given together with metadata (an optimized build
+    dropped them), and `TypeError` for something which is not a mapping.
+  - `AsyncQueue(limit=...)` raises `ValueError` for a limit which is not positive (an optimized
+    build made a queue dropping everything).
+  - A second consumer of an `AsyncQueue` or an `AsyncStream`, and sending to an `AsyncStream`
+    from another event loop, raise `RuntimeError`.
+  - `ConfigurationRepository.volatile` and `define` raise `TypeError` for arguments which are
+    not configurations, or a value missing or given where it does not belong.
+
+  Migration: catch the new exceptions instead of `AssertionError`.
+- **`Meta` refuses keys which are not strings** in `validate`, `of`, `from_mapping` and
+  `merged_with`, as `|` always did - a `TypeError`.
+- `ConfigurationRepository.volatile` lists the configurations which loading accepts as the given
+  class, compared by `isinstance` - it compared the names of the classes.
 
 #### Added
 
@@ -137,11 +167,55 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
 - **`ctx.updating` merges into the state current when it is entered**, as `ctx.scope` does, instead
   of the state current when it was called. Entering it where it was made behaves the same.
 - `ctx.log_warning` and `ctx.log_debug` accept any `BaseException`, as `ctx.log_error` does.
+- **Tasks spawned within `ctx.disposables` are joined before the disposables are released**, and
+  cancelled together with a failing body - they belonged to the enclosing scope and could outlive
+  the resources they used. Leaving `ctx.disposables` now waits for them.
+- **A failed task is logged when it fails**, not only once its scope ends, and a scope keeps at most
+  32 errors of its tasks - the rest are counted in the message of the raised `ExceptionGroup`. A
+  scope living long, a server for instance, held every failure until it ended.
 - `make coverage-native` measures the line coverage of the native extension by the tests. CI runs
   Bandit, and the whole suite on the free-threaded build with the GIL off.
 
 #### Fixed
 
+- **A generic `State` keeps the metadata of an annotated type parameter** - in
+  `value: Annotated[T, ...]` a `Sensitive` marker, an `Alias`, a `Description` and the validators
+  were ignored, so a `Sensitive` value was printed in `repr` and in logs. Present since generic
+  states were introduced.
+- **A type parameter of a generic `TypedDict` or class is validated** - bound to its argument
+  without resolving it, it was taken as is, and `Required[T]`, `NotRequired[T]` and `Final[T]`
+  around a parameter validated nothing.
+- **A collection of a type parameter validates its elements** - in a generic `State` or `TypedDict`,
+  `Sequence[T]`, `Mapping[K, T]`, `Set[T]`, `list[T]` and the other collections of a parameter
+  accepted elements of any type once specialized, so `Holder[int]` took `["one"]`.
+- `ctx.disposables` releases its disposables with the failure of a task spawned within it, or with
+  the cancellation of joining them - they were released as if the body succeeded, so a disposable
+  committing on success committed.
+- `cache` and `cache_externally` return a coroutine function - `retry` over a cached function
+  never retried, and `throttle` over one refused it.
+- `asynchronous` wraps a function annotated with names declared after it - the annotations were
+  read eagerly, raising `NameError`. The wrapper carries the attributes of the function through
+  `functools.update_wrapper`, so its `__annotations__` are those of the function - the return
+  annotation is no longer rewritten to a `Coroutine`.
+- A finished `AsyncQueue` or `AsyncStream` raises its finish reason with the same traceback on
+  every call - raising the same instance again extended its traceback each time.
+- `escape_controls`, and the formatting of logs with it, escapes the Unicode line and paragraph
+  separators (U+2028, U+2029), which split a record into lines as a line feed does.
+- `Alias`, `Description`, `Default`, `Sensitive` and `Specification` can be copied, returning
+  themselves as other immutable values do - `copy` and `deepcopy` raised `AttributeError`.
+- No private API of the standard library or CPython is used any more: the default cache key, the
+  resolution of generic aliases, callback protocols and forward references, and the lazy
+  compilation of aliases in the extension (`PyMutex` instead of CPython's internal atomics) use
+  public interfaces. A test guards against reintroducing them.
+- `State.updating`, `validate`, `__replace__` and `__deepcopy__` carry docstrings, and the
+  protocols used in public signatures of the helpers (`CacheClear`, `FileReading`, `FileWriting`,
+  `PathTraversing`, `MQMessageAcknowledging`, `MQMessageRejecting` and the `Configuration*ing`
+  protocols) are exported from `haiway.helpers`.
+- An event subscription made after its scope began closing - from a task spawned within it -
+  completes at once instead of waiting forever.
+- The observability backend learns a scope ended when resetting its context fails, as for an async
+  generator holding a scope closed from another task.
+- The error of a task which the body awaited and reraised is no longer chained as its own cause.
 - A scope cancelled again while it disposes what it prepared before failing or being cancelled
   waits for that disposal to complete - it went on while the disposal ran detached.
 - `process_concurrently` keeps only the tasks still running - it held every task it spawned until
@@ -166,6 +240,12 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `ClassVar` is one as well.
 - `updating` an instance which was never initialized (`State.__new__`) is refused when it would
   carry a value over - it returned an instance missing the attributes which were not given.
+- The Starlette `ContextMiddleware` no longer records a `WebSocketDisconnect` as a failure of the
+  connection - it is withheld while the scope is left and reraised, as `ClientDisconnect` is.
+- The Starlette `ContextMiddleware` leaves out a trace header it can not send - a name which is not
+  an HTTP token, or a value which is not printable ASCII - instead of failing the response.
+- The Starlette `ContextMiddleware` escapes control characters of the requested path in the name of
+  the scope and in `url.path`, so a request can not forge lines of the records.
 
 ## 0.60.0
 

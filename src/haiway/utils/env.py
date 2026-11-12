@@ -501,8 +501,8 @@ def load_env(
 
     Parameters
     ----------
-    path : str | None, default=".env"
-        Path to the environment file. If None, defaults to '.env'
+    path : str, default=".env"
+        Path to the environment file.
     override : bool, default=False
         If True, overrides existing environment variables with values from the file.
         If False, only sets variables that don't already exist in the environment.

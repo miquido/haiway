@@ -176,7 +176,7 @@ struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
         if (error) goto fail;
 
         if (value == NULL) {
-            /* an absent key carries the attribute over - a MISSING value clears it */
+            /* an absent key carries the attribute over - a Missing value clears it */
             target[i] = carried_value(type, source[i]);
             if (target[i] == NULL) goto fail;
             continue;
@@ -441,7 +441,7 @@ struct_replace_fast(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyO
     for (Py_ssize_t i = 0; i < plan->count; i++) {
         FieldPlan *field = &plan->fields[i];
         if (given[i] < 0) {
-            /* an absent key carries the attribute over - a MISSING value clears it */
+            /* an absent key carries the attribute over - a Missing value clears it */
             target[i] = carried_value(type, source[i]);
             if (target[i] == NULL) {
                 Py_DECREF(copy);

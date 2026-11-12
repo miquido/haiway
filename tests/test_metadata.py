@@ -1,4 +1,5 @@
 import builtins
+from collections.abc import Callable
 from copy import copy, deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -691,3 +692,30 @@ def test_dict_or_meta_is_a_plain_dict_where_meta_is_a_frozendict() -> None:
 
     assert type(merged) is dict
     assert merged == {"a": 1, "b": 2}
+
+
+@pytest.mark.parametrize(
+    "making",
+    [
+        lambda: Meta.of({1: "value"}),  # pyright: ignore[reportArgumentType]
+        lambda: Meta.validate({1: "value"}),
+        lambda: Meta.from_mapping({1: "value"}),  # pyright: ignore[reportArgumentType]
+        lambda: Meta.empty.merged_with({1: "value"}),  # pyright: ignore[reportArgumentType]
+    ],
+    ids=["of", "validate", "from_mapping", "merged_with"],
+)
+def test_meta_rejects_keys_which_are_not_strings(making: Callable[[], Meta]) -> None:
+    with pytest.raises(TypeError):
+        making()
+
+
+def test_meta_of_rejects_values_given_together_with_metadata() -> None:
+    # raised rather than asserted - an optimized build would drop the values silently
+    with pytest.raises(ValueError):
+        Meta.of({"name": "value"}, other="value")
+
+    with pytest.raises(ValueError):
+        Meta.of(Meta.of({"name": "value"}), other="value")
+
+    with pytest.raises(TypeError):
+        Meta.of(["not", "a", "mapping"])  # pyright: ignore[reportArgumentType]

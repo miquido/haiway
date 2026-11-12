@@ -10,11 +10,41 @@
 #include "json_write.h"
 #include "json_read.h"
 
+PyDoc_STRVAR(struct_updating_doc,
+"updating($self, /, **values)\n--\n\n"
+"Copy of the instance with the given attributes replaced.\n\n"
+"Parameters\n----------\n"
+"**values : Any\n    New values of attributes, by name or alias - validated as on construction.\n\n"
+"Returns\n-------\nSelf\n    A new instance, or this one when no values are given.\n\n"
+"Raises\n------\nTypeError\n    For a name which is not an attribute.\n"
+"ValidationError\n    When a value does not match its annotation.");
+
+PyDoc_STRVAR(struct_replace_doc,
+"__replace__($self, /, **values)\n--\n\n"
+"Copy of the instance with the given attributes replaced - the same as ``updating``, "
+"for ``copy.replace``.");
+
+PyDoc_STRVAR(struct_deepcopy_doc,
+"__deepcopy__($self, memo, /)\n--\n\n"
+"Deep copy of the instance - the values are copied deeply, unless the class takes over "
+"its copying.");
+
+PyDoc_STRVAR(struct_validate_doc,
+"validate($cls, value, /)\n--\n\n"
+"Validate a value as an instance of the class.\n\n"
+"Parameters\n----------\n"
+"value : Any\n    An instance of the class, returned as it is, or a mapping of its attributes.\n\n"
+"Returns\n-------\nSelf\n    The validated instance.\n\n"
+"Raises\n------\nTypeError\n    For a value which is neither.\n"
+"ValidationError\n    When a value of the mapping does not match its annotation.");
+
 static PyMethodDef struct_methods[] = {
-    {"__replace__", (PyCFunction)(void (*)(void))struct_replace_fast, METH_FASTCALL | METH_KEYWORDS, NULL},
-    {"updating", (PyCFunction)(void (*)(void))struct_replace_fast, METH_FASTCALL | METH_KEYWORDS, NULL},
-    {"__deepcopy__", struct_deepcopy, METH_O, NULL},
-    {"validate", (PyCFunction)struct_validate, METH_O | METH_CLASS, NULL},
+    {"__replace__", (PyCFunction)(void (*)(void))struct_replace_fast, METH_FASTCALL | METH_KEYWORDS,
+     struct_replace_doc},
+    {"updating", (PyCFunction)(void (*)(void))struct_replace_fast, METH_FASTCALL | METH_KEYWORDS,
+     struct_updating_doc},
+    {"__deepcopy__", struct_deepcopy, METH_O, struct_deepcopy_doc},
+    {"validate", (PyCFunction)struct_validate, METH_O | METH_CLASS, struct_validate_doc},
     {NULL, NULL, 0, NULL}
 };
 

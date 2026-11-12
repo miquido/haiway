@@ -110,3 +110,11 @@ def test_without_missing_typed_returns_same_content() -> None:
 @pytest.mark.parametrize("converter", [as_list, as_tuple, as_set, as_dict, as_map])
 def test_none_passthrough(converter: object) -> None:
     assert converter(None) is None  # pyright: ignore[reportCallIssue]
+
+
+@pytest.mark.parametrize("typed", [Mapping[str, Any], dict[str, Any]])
+def test_without_missing_typed_narrows_the_static_type_only(typed: Any) -> None:
+    result = without_missing({"a": 1, "b": Missing}, typed=typed)
+
+    assert type(result) is dict
+    assert result == {"a": 1}

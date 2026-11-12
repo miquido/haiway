@@ -1,10 +1,7 @@
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine, Hashable
-from functools import (
-    _make_key,  # pyright: ignore[reportPrivateUsage]
-    update_wrapper,
-)
-from inspect import iscoroutinefunction
+from functools import update_wrapper
+from inspect import iscoroutinefunction, markcoroutinefunction
 from time import monotonic
 from typing import NamedTuple, Protocol, overload
 
@@ -209,6 +206,9 @@ def cache[**Args, Result](
             expiration=expiration,
         )
         update_wrapper(cached, function)
+        # called it returns a coroutine - kept recognizable as a coroutine function, which
+        # is what decorators wrapping it, `retry` or `throttle` among them, tell it by
+        markcoroutinefunction(cached)
         return cached
 
     if function is not None:
@@ -227,10 +227,13 @@ def _default_make_key[**Args](
     *args: Args.args,
     **kwargs: Args.kwargs,
 ) -> Hashable:
-    return _make_key(
-        args=args,
-        kwds=kwargs,
-        typed=True,
+    # the types are a part of the key - `1`, `1.0` and `True` are equal, yet each is
+    # cached on its own
+    return (
+        args,
+        tuple(kwargs.items()),
+        tuple(type(argument) for argument in args),
+        tuple(type(argument) for argument in kwargs.values()),
     )
 
 
@@ -372,6 +375,7 @@ def cache_externally[**Args, Result, Key: Hashable](
             clear=clear,
         )
         update_wrapper(cached, function)
+        markcoroutinefunction(cached)  # recognizable as a coroutine function, as `cache` is
         return cached
 
     return _wrap

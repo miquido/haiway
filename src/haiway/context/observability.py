@@ -1052,18 +1052,20 @@ class ContextObservability:
         exc_tb: TracebackType | None,
     ) -> None:
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
-        ContextObservability._context.reset(self._token)
-        self._token = None
-
         try:
-            self.observability.scope_exiting(
-                self._scope,
-                exception=exc_val,
-            )
+            ContextObservability._context.reset(self._token)
 
-        except Exception as exc:
-            ContextObservability.record_log(
-                ObservabilityLevel.ERROR,
-                "Failed to properly exit observability scope",
-                exception=exc,
-            )
+        finally:  # the backend has to learn the scope ended even when the reset fails
+            self._token = None
+            try:
+                self.observability.scope_exiting(
+                    self._scope,
+                    exception=exc_val,
+                )
+
+            except Exception as exc:
+                ContextObservability.record_log(
+                    ObservabilityLevel.ERROR,
+                    "Failed to properly exit observability scope",
+                    exception=exc,
+                )

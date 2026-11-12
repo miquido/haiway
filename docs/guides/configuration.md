@@ -132,10 +132,10 @@ entries by `type(config).__qualname__`.
 Implement storage protocols for persistent configuration:
 
 ```python
-import json
 from pathlib import Path
+from typing import Any
 
-from haiway import asynchronous
+from haiway import Configuration, ConfigurationRepository, asynchronous, ctx
 
 
 @asynchronous
@@ -155,25 +155,37 @@ def _mkdir(path: Path) -> None:
 
 @asynchronous
 def _write_text(path: Path, content: str) -> None:
+    # owner-only access - a configuration may hold credentials
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
     path.write_text(content)
 
 
 class FileStorage:
-    def __init__(self, config_dir: Path):
+    def __init__(self, config_dir: Path) -> None:
         self.config_dir = config_dir
 
-    async def load_config(self, identifier: str, **extra):
+    async def load_config[Config: Configuration](
+        self,
+        config: type[Config],
+        identifier: str,
+        **extra: Any,
+    ) -> Config | None:
         config_file = self.config_dir / f"{identifier}.json"
         if await _path_exists(config_file):
-            content = await _read_text(config_file)
-            return json.loads(content)
+            return config.from_json(await _read_text(config_file))
+
         return None
 
-    async def define_config(self, identifier: str, value, **extra):
+    async def define_config(
+        self,
+        identifier: str,
+        value: Configuration,
+        **extra: Any,
+    ) -> None:
         await _mkdir(self.config_dir)
         config_file = self.config_dir / f"{identifier}.json"
-        content = json.dumps(value, indent=2)
-        await _write_text(config_file, content)
+        await _write_text(config_file, value.to_json(indent=2))
 
 # Use custom storage
 storage = FileStorage(Path("./configs"))

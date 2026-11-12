@@ -32,7 +32,7 @@ typedef struct {
     PyTypeObject *struct_type;   /* Struct - the storage of a State */
     PyTypeObject *spec_type;     /* Spec - a compiled description of an annotation */
     /* validation */
-    PyObject *missing;           /* MISSING */
+    PyObject *missing;           /* Missing */
     PyObject *check;             /* (cls, mapping) -> None, raises on unexpected / duplicate keys */
     PyObject *report;            /* (segment, exc) -> NoReturn, the failure at a position */
     PyObject *unexpected;        /* (cls, key) -> NoReturn, a key of a mapping which is not an attribute */

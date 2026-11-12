@@ -2,9 +2,9 @@ from asyncio import AbstractEventLoop, get_running_loop
 from collections.abc import Callable, Coroutine
 from concurrent.futures import Executor
 from contextvars import Context, copy_context
-from functools import partial
+from functools import partial, update_wrapper
 from inspect import iscoroutinefunction
-from typing import Any, cast, overload
+from typing import overload
 
 from haiway.types.missing import Missing
 
@@ -122,71 +122,13 @@ def asynchronous[**Args, Result](
                 partial(wrapped, *args, **kwargs),
             )
 
-        return _mimic_async(wrapped, within=asynchronous)
+        # the attributes of the function, its annotations evaluated only once read - they may
+        # name what is declared after it - and `__wrapped__`, which its signature is read from
+        update_wrapper(asynchronous, wrapped)
+        return asynchronous
 
     if function is not None:
         return wrap(wrapped=function)
 
     else:
         return wrap
-
-
-def _mimic_async[**Args, Result](
-    function: Callable[Args, Result],
-    /,
-    within: Callable[..., Coroutine[None, None, Result]],
-) -> Callable[Args, Coroutine[None, None, Result]]:
-    try:
-        annotations: Any = getattr(  # noqa: B009
-            function,
-            "__annotations__",
-        )
-        object.__setattr__(
-            within,
-            "__annotations__",
-            {
-                **annotations,
-                "return": Coroutine[None, None, annotations.get("return", Any)],
-            },
-        )
-
-    except AttributeError:
-        pass
-
-    for attribute in (
-        "__module__",
-        "__name__",
-        "__qualname__",
-        "__doc__",
-        "__type_params__",
-        "__defaults__",
-        "__kwdefaults__",
-    ):
-        try:
-            object.__setattr__(
-                within,
-                attribute,
-                getattr(
-                    function,
-                    attribute,
-                ),
-            )
-
-        except AttributeError:
-            pass
-    try:
-        within.__dict__.update(function.__dict__)
-
-    except AttributeError:
-        pass
-
-    object.__setattr__(  # mimic functools.wraps behavior for correct signature checks
-        within,
-        "__wrapped__",
-        function,
-    )
-
-    return cast(
-        Callable[Args, Coroutine[None, None, Result]],
-        within,
-    )

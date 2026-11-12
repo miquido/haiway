@@ -348,5 +348,47 @@ def test_volatile_has_source_meta_and_rejects_non_configurations() -> None:
     repo = ConfigurationRepository.volatile()
     assert repo.meta.get("source") == "volatile"
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(TypeError):
         ConfigurationRepository.volatile(object())  # pyright: ignore[reportArgumentType]
+
+
+def _homonym() -> type[Configuration]:
+    class DatabaseConfiguration(Configuration):  # same name, another class
+        url: str = "sqlite://"
+
+    return DatabaseConfiguration
+
+
+@pytest.mark.asyncio
+async def test_volatile_listing_matches_what_loading_accepts() -> None:
+    repository = ConfigurationRepository.volatile(
+        DatabaseConfiguration(host="primary", port=5432),
+        replica=DatabaseConfiguration(host="replica", port=5433),
+        other=_homonym()(),
+    )
+    async with ctx.scope("test", repository):
+        listed = await ConfigurationRepository.configurations(DatabaseConfiguration)
+        assert set(listed) == {"DatabaseConfiguration", "replica"}
+        for identifier in listed:
+            assert await DatabaseConfiguration.load(identifier=identifier) is not None
+
+
+def test_volatile_rejects_values_which_are_not_configurations() -> None:
+    with pytest.raises(TypeError):
+        ConfigurationRepository.volatile(cast(Any, {"host": "localhost"}))
+
+    with pytest.raises(TypeError):
+        ConfigurationRepository.volatile(named=cast(Any, {"host": "localhost"}))
+
+
+@pytest.mark.asyncio
+async def test_define_rejects_inconsistent_arguments() -> None:
+    async with ctx.scope("test", ConfigurationRepository.volatile()):
+        with pytest.raises(TypeError):
+            await ConfigurationRepository.define("named")  # pyright: ignore[reportCallIssue]
+
+        with pytest.raises(TypeError):
+            await ConfigurationRepository.define(  # pyright: ignore[reportCallIssue]
+                CacheConfiguration(ttl=1),
+                CacheConfiguration(ttl=2),
+            )

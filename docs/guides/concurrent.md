@@ -14,7 +14,8 @@ in.
 - Scope exit waits for in-scope tasks to settle.
 - A failed task does not cancel the scope body, its siblings, or the code awaiting it. The body runs
   to its end and the failures are raised when the scope exits: a single failed task raises its error
-  as is, while multiple failed tasks raise an `ExceptionGroup` of their errors - never the
+  as is, while multiple failed tasks raise an `ExceptionGroup` of their errors (at most 32 - the
+  rest are counted in its message, every failure is logged as it happens) - never the
   `unhandled errors in a TaskGroup` wrapper of `asyncio.TaskGroup`. An error the body already
   handled by awaiting the task is still raised on exit, so no failure is silently lost.
 - When the body itself fails, its tasks are cancelled and its error takes precedence - the errors of
@@ -27,11 +28,17 @@ Because scope exit joins the tasks spawned within it, such a task must be able t
 Two shapes cannot:
 
 - Waiting for something signalled only after the scope exits - the scope waits for the task while
-  the task waits for the scope.
-- Iterating a `ctx.subscribe(...)` subscription to exhaustion in a nested non-isolated scope. A
-  subscription ends when the scope owning the event bus exits, and a nested non-isolated scope
-  shares the bus of an ancestor, so consume it with a bound or spawn the consumer in the scope
-  owning the bus - a root or `isolated=True` scope.
+  the task waits for the scope. That includes the `ContextClosing` future of an enclosing scope.
+- Iterating a `ctx.subscribe(...)` subscription to exhaustion in a task spawned in a scope nested
+  below the one which created the subscription. The subscription ends when its creating scope exits,
+  which happens only after the nested scope has joined the task. Spawn the consumer in the scope
+  which created the subscription (or an enclosing one), create the subscription within the task
+  itself, or consume it with a bound.
+
+Tasks spawned within `ctx.disposables(...)` follow the same rule: they are joined when its body
+exits, before the disposables are released and before the enclosing scope begins closing. It enters
+no scope of its own, so a subscription created within such a task still belongs to the enclosing
+scope - consume it with a bound.
 
 ### Isolated scopes
 
@@ -311,7 +318,8 @@ the one path which keeps the buffer.
 
 ## Cancellation and Failure Semantics
 
-All four helpers are implemented with local `ContextTaskGroup`s plus `ctx.spawn(...)`.
+All four helpers are implemented with local `ContextTaskGroup`s, running their handlers with
+`ContextTaskGroup.run(...)` instead of `ctx.spawn(...)`.
 
 That gives them predictable behavior:
 
