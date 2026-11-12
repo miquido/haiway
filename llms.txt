@@ -1,6 +1,6 @@
 # Haiway — LLM Usage Guide
 
-Haiway (Python 3.14+) is a strictly typed, functional/async framework. Everything is built from
+Haiway (Python 3.15+) is a strictly typed, functional/async framework. Everything is built from
 three primitives: immutable `State`, the scoped context `ctx`, and structured concurrency. There is
 no DI container and no mutable service objects — behavior is `Protocol`-typed functions held inside
 `State` and resolved from the current scope.
@@ -88,7 +88,7 @@ class Invoice(State):
   `list`/`dict`/`set`; use `X | None`, never `Optional[X]`.
 - Values are validated against annotations at construction. Sequences/sets become
   `tuple`/`frozenset`; mappings become the immutable `Map`.
-- Defaults: `Default(value)`, `Default(default_factory=...)`, `Default(env="VAR")`.
+- Defaults: `Default(value)`, `Default(factory=...)`, `Default(env="VAR")`.
 - `Annotated` metadata: `Alias`, `Description`, `Specification`, `Validator` (pre-validation, may
   coerce), `Verifier` (post-validation, enforces invariants), `Sensitive` (renders as `<redacted>` in
   `str`/`repr`/`format_str`, value kept for serialization - use it for every secret).

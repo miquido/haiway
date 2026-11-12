@@ -60,7 +60,7 @@ from uuid import uuid4
 from haiway import Default, State
 
 class ServiceConfig(State):
-    correlation_id: str = Default(default_factory=lambda: uuid4().hex)
+    correlation_id: str = Default(factory=lambda: uuid4().hex)
     timeout_seconds: float = Default(1.5)  # literal defaults still work
 
 config = ServiceConfig()

@@ -88,6 +88,17 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
 - **`Paginated.of` is removed** - the constructor takes the items by position, the same way
   `of` did: `Paginated(items, pagination=pagination)`. Passing `items=` by name keeps working.
   Migration: replace `Paginated.of(` with `Paginated(`.
+- **An opened `File` belongs to the event loop which entered its context.** Using it, or exiting
+  its context, from another loop raises `FileException`; once the context is exited it can be
+  entered again on any loop. Operations of an open file run one at a time in the order they were
+  started, ordered on the event loop instead of a lock, and one abandoned by cancellation keeps
+  running until done - the next operation and closing the context wait for it. Migration: open a
+  file within the loop which uses it.
+- **`http.route` of a route served from a `Mount` carries the templates of the mounts leading to
+  it** - `/api/users/{id}` rather than `/users/{id}`, so the routes of different mounts are no
+  longer reported as one in traces and in the request duration metric. A route reached more than
+  one way through the route table records no `http.route`. Dashboards and alerts keyed by the
+  previous values need updating.
 
 #### Added
 
@@ -166,6 +177,12 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `ClassVar` is one as well.
 - `updating` an instance which was never initialized (`State.__new__`) is refused when it would
   carry a value over - it returned an instance missing the attributes which were not given.
+- The Starlette `ContextMiddleware` no longer records a `WebSocketDisconnect` as a failure of the
+  connection - it is withheld while the scope is left and reraised, as `ClientDisconnect` is.
+- The Starlette `ContextMiddleware` leaves out a trace header it can not send - a name which is not
+  an HTTP token, or a value which is not printable ASCII - instead of failing the response.
+- The Starlette `ContextMiddleware` escapes control characters of the requested path in the name of
+  the scope and in `url.path`, so a request can not forge lines of the records.
 
 ## 0.60.0
 
