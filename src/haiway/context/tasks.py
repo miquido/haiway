@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from contextvars import Context, ContextVar, Token, copy_context
 from inspect import iscoroutine
 from types import CoroutineType, FunctionType, MethodType, TracebackType
-from typing import Any, ClassVar, Self, cast, final
+from typing import Any, ClassVar, Final, Self, cast, final
 from weakref import WeakKeyDictionary
 
 from haiway.context.observability import ContextObservability, ObservabilityLevel
@@ -163,8 +163,9 @@ def _coroutine[Result, **Arguments](
 
 
 # a scope living long, a server for instance, would otherwise keep every failure of its tasks
-# until it ends - the ones past the limit are logged when they happen, then only counted
-_MAX_COLLECTED_ERRORS: int = 32
+# until it ends - every failure is logged when it happens, the ones past the limit are then
+# only counted
+_MAX_COLLECTED_ERRORS: Final[int] = 32
 
 
 @final
@@ -385,14 +386,8 @@ class ScopeTaskGroup:
             self._token = None
             self._tasks = None
 
+        # not logged again - each of the errors was logged when its task failed
         failure: BaseException | None = self._failure(errors, dropped) if errors else None
-        if failure is not None:
-            ContextObservability.record_log(
-                ObservabilityLevel.ERROR,
-                "Context task group exit failed",
-                exception=failure,
-            )
-
         if cancellation is not None:
             # cancellation requested while joining is never replaced by task errors
             if cancellation is exc_val:
@@ -408,7 +403,7 @@ class ScopeTaskGroup:
 
         # the exception propagating through the body takes precedence over the errors of
         # the tasks which failed alongside it - they are chained as its cause instead
-        # an explicit cause of the body error is never replaced - the failure is logged
+        # an explicit cause of the body error is never replaced - the failure was logged
         # the body reraising the error of a task it awaited is that error itself
         if (
             not isinstance(exc_val, CancelledError)

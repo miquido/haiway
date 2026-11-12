@@ -596,3 +596,25 @@ async def test_failures_of_long_living_scope_are_bounded_and_counted():
 
     assert len(failure.value.exceptions) == 32
     assert "68 more" in failure.value.message
+
+
+@mark.asyncio
+async def test_failed_task_is_logged_once(caplog: LogCaptureFixture):
+    async def failing() -> None:
+        raise FakeException("task failure")
+
+    with caplog.at_level(logging.ERROR), raises(FakeException):
+        async with ctx.scope("logged-once"):
+            ctx.spawn(failing)
+
+    logged: list[logging.LogRecord] = [
+        record
+        for record in caplog.records
+        if record.exc_info is not None
+        and isinstance(record.exc_info[1], FakeException)
+        and "Context" in record.getMessage()
+        and "task" in record.getMessage()
+    ]
+    assert [record.getMessage().split("] ")[-1] for record in logged] == [
+        "Context scope task failed"
+    ]
