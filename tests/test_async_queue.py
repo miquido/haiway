@@ -369,6 +369,47 @@ async def test_cancelled_consumer_does_not_lose_delivered_element():
 
 
 @mark.asyncio
+@mark.parametrize("closing", ["aclose", "athrow"])
+async def test_closed_queue_does_not_restore_delivered_element(closing: str):
+    queue = AsyncQueue[int]()
+    consumer = create_task(queue.next())
+    await sleep(0)  # consumer waits
+
+    queue.enqueue(1)  # delivered to the waiting consumer
+    if closing == "aclose":
+        await queue.aclose()
+
+    else:
+        with raises(ValueError):
+            await queue.athrow(ValueError("closed"))
+
+    consumer.cancel()  # cancelled before it could resume
+    with raises(CancelledError):
+        await consumer
+
+    # closed by the consumer side - nothing is handed out anymore
+    with raises(StopAsyncIteration if closing == "aclose" else ValueError):
+        queue.pending_next()
+
+
+@mark.asyncio
+async def test_finished_queue_restores_delivered_element():
+    queue = AsyncQueue[int]()
+    consumer = create_task(queue.next())
+    await sleep(0)
+
+    queue.enqueue(1)
+    queue.finish()  # the producer is done, accepted elements are kept
+    consumer.cancel()
+    with raises(CancelledError):
+        await consumer
+
+    assert queue.pending_next() == 1
+    with raises(StopAsyncIteration):
+        queue.pending_next()
+
+
+@mark.asyncio
 async def test_finish_from_another_thread_releases_waiting_consumer():
     queue = AsyncQueue[int]()
     consumer = create_task(queue.next())

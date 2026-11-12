@@ -48,6 +48,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
     """
 
     __slots__ = (
+        "_closed",
         "_finish_reason",
         "_loop",
         "_queue",
@@ -84,6 +85,13 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             self,
             "_finish_reason",
             None,
+        )
+        # ended by its consumer - unlike a producer finishing it, nothing is kept
+        self._closed: bool
+        object.__setattr__(
+            self,
+            "_closed",
+            False,
         )
 
     def __setattr__(
@@ -279,7 +287,8 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             # element is the one a bounded buffer drops anyway
             waiting: Future[Element] | None = self._waiting
             if (
-                waiting is not None
+                not self._closed
+                and waiting is not None
                 and waiting.done()
                 and not waiting.cancelled()
                 and waiting.exception() is None
@@ -361,6 +370,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         exception: BaseException = thrown_exception(typ, val, tb)
 
         self.finish(exception=exception)
+        object.__setattr__(self, "_closed", True)
         self._queue.clear()  # the consumer is gone - buffered elements have nowhere to go
         raise exception
 
@@ -381,6 +391,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         element which was already accepted.
         """
         self.finish()
+        object.__setattr__(self, "_closed", True)
         # dropped after finishing - a waiting consumer was already released with the
         # finish reason, so there is nobody left to deliver the buffer to
         self._queue.clear()
