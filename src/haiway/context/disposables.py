@@ -299,6 +299,7 @@ class ContextDisposables:
     __slots__ = (
         "_context_state",
         "_disposables",
+        "_task_group",
     )
 
     def __init__(
@@ -308,6 +309,7 @@ class ContextDisposables:
     ) -> None:
         self._disposables: Disposables = Disposables(disposables)
         self._context_state: ContextState | None = None
+        self._task_group: ScopeTaskGroup | None = None
 
     def __bool__(self) -> bool:
         return bool(self._disposables)
@@ -321,6 +323,10 @@ class ContextDisposables:
         self._context_state = ContextState.updating(prepared)
         self._context_state.__enter__()
 
+        # tasks spawned within the body are joined before the disposables are released
+        self._task_group = ScopeTaskGroup()
+        self._task_group.enter()
+
     async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
@@ -328,14 +334,25 @@ class ContextDisposables:
         exc_tb: TracebackType | None,
     ) -> None:
         assert self._context_state is not None  # nosec: B101
+        assert self._task_group is not None  # nosec: B101
 
+        task_group: ScopeTaskGroup = self._task_group
+        self._task_group = None
         try:
-            with ScopeTaskGroup.forbidding():
-                await self._disposables.__aexit__(
+            try:
+                await task_group.__aexit__(
                     exc_type,
                     exc_val,
                     exc_tb,
                 )
+
+            finally:  # released even when a task failed or the join was cancelled
+                with ScopeTaskGroup.forbidding():
+                    await self._disposables.__aexit__(
+                        exc_type,
+                        exc_val,
+                        exc_tb,
+                    )
 
         finally:
             self._context_state.__exit__(

@@ -311,7 +311,8 @@ the one path which keeps the buffer.
 
 ## Cancellation and Failure Semantics
 
-All four helpers are implemented with local `ContextTaskGroup`s plus `ctx.spawn(...)`.
+All four helpers are implemented with local `ContextTaskGroup`s, running their handlers with
+`ContextTaskGroup.run(...)` instead of `ctx.spawn(...)`.
 
 That gives them predictable behavior:
 

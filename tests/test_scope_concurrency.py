@@ -554,3 +554,45 @@ async def test_disposal_errors_are_logged_when_cancellation_takes_precedence(
         record.exc_info is not None and isinstance(record.exc_info[1], FakeException)
         for record in caplog.records
     )
+
+
+@mark.asyncio
+async def test_reraised_task_error_is_not_its_own_cause():
+    async def failing() -> None:
+        raise FakeException("task failure")
+
+    with raises(FakeException) as failure:
+        async with ctx.scope("awaited-task"):
+            await ctx.spawn(failing)
+
+    assert failure.value.__cause__ is not failure.value
+
+
+@mark.asyncio
+async def test_reraised_task_error_within_group_is_not_its_own_cause():
+    async def failing(tag: str) -> None:
+        raise FakeException(tag)
+
+    with raises(FakeException) as failure:
+        async with ctx.scope("awaited-tasks"):
+            first = ctx.spawn(failing, "first")
+            ctx.spawn(failing, "second")
+            await first
+
+    assert failure.value.__cause__ is None  # the group would contain the error itself
+
+
+@mark.asyncio
+async def test_failures_of_long_living_scope_are_bounded_and_counted():
+    async def failing() -> None:
+        raise FakeException("task failure")
+
+    with raises(ExceptionGroup) as failure:
+        async with ctx.scope("long-living"):
+            for _ in range(100):
+                ctx.spawn(failing)
+
+            await asyncio.sleep(0.01)
+
+    assert len(failure.value.exceptions) == 32
+    assert "68 more" in failure.value.message

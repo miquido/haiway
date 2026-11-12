@@ -1,8 +1,9 @@
 import asyncio
+from types import TracebackType
 
 import pytest
 
-from haiway import ctx
+from haiway import State, ctx
 from haiway.context import Disposables
 from haiway.helpers import cache_externally
 
@@ -179,3 +180,76 @@ async def test_failed_background_task_is_logged_to_root_after_scope_exit(
     ]
     assert len(records) == 1
     assert records[0].name == "root"
+
+
+class _Ping(State):
+    value: int = 0
+
+
+class _Resource:
+    def __init__(self, log: list[str]) -> None:
+        self._log: list[str] = log
+
+    async def __aenter__(self) -> State:
+        return _Ping()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        self._log.append("disposed")
+
+
+@pytest.mark.asyncio
+async def test_late_subscription_within_nested_scope_finishes() -> None:
+    async def scope_with_late_subscriber() -> None:
+        async with ctx.scope("outer"):
+            async with ctx.scope("inner"):
+
+                async def late_subscriber() -> None:
+                    await asyncio.sleep(0.01)
+                    async for _ in ctx.subscribe(_Ping):
+                        pass
+
+                ctx.spawn(late_subscriber)
+
+    await asyncio.wait_for(scope_with_late_subscriber(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_tasks_spawned_within_disposables_are_joined_before_disposal() -> None:
+    log: list[str] = []
+
+    async def task() -> None:
+        await asyncio.sleep(0.02)
+        log.append("task")
+
+    async with ctx.scope("disposables"):
+        async with ctx.disposables(_Resource(log)):
+            ctx.spawn(task)
+
+    assert log == ["task", "disposed"]
+
+
+@pytest.mark.asyncio
+async def test_tasks_of_failing_disposables_body_are_cancelled_and_disposed() -> None:
+    log: list[str] = []
+
+    async def task() -> None:
+        try:
+            await asyncio.sleep(10)
+
+        except asyncio.CancelledError:
+            log.append("cancelled")
+            raise
+
+    with pytest.raises(RuntimeError):
+        async with ctx.scope("disposables"):
+            async with ctx.disposables(_Resource(log)):
+                ctx.spawn(task)
+                await asyncio.sleep(0)
+                raise RuntimeError("body")
+
+    assert log == ["cancelled", "disposed"]

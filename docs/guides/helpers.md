@@ -59,8 +59,8 @@ These decorators do not install state by themselves; they wrap the target callab
 
 ## Concurrency Helpers
 
-The helpers in `haiway.helpers.concurrent` all integrate with Haiway task management via
-`ctx.spawn(...)` and local `ContextTaskGroup`s.
+The helpers in `haiway.helpers.concurrent` all integrate with Haiway task management via local
+`ContextTaskGroup`s.
 
 - `process_concurrently` is for side effects only.
 - `execute_concurrently` applies one async handler to elements and returns results in input order.

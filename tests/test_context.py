@@ -714,3 +714,45 @@ async def test_failing_scope_exit_is_reported() -> None:
     assert [record.levelno for record in records if "exit failed" in record.getMessage()] == [
         logging.ERROR
     ]
+
+
+@mark.asyncio
+async def test_observability_scope_exits_when_released_from_a_different_context() -> None:
+    exited: list[ContextIdentifier] = []
+    entered: list[ContextIdentifier] = []
+
+    def trace_identifying(scope: ContextIdentifier, /) -> UUID:
+        return uuid4()
+
+    def scope_entering(scope: ContextIdentifier, /) -> str:
+        entered.append(scope)
+        return "trace"
+
+    def scope_exiting(scope: ContextIdentifier, /, *, exception: BaseException | None) -> None:
+        exited.append(scope)
+
+    observability = Observability(
+        trace_identifying=trace_identifying,
+        log_recording=lambda scope, /, level, message, *, exception: None,
+        metric_recording=lambda scope, /, level, **kwargs: None,
+        event_recording=lambda scope, /, level, **kwargs: None,
+        attributes_recording=lambda scope, /, level, attributes: None,
+        scope_entering=scope_entering,
+        scope_exiting=scope_exiting,
+    )
+
+    async def source():
+        async with ctx.scope("generator", observability=observability):
+            for element in range(100):
+                yield element
+
+    async with ctx.scope("test"):
+        generator = source()
+        assert await anext(generator) == 0
+        closing = asyncio.get_running_loop().create_task(generator.aclose())
+        with raises(ExceptionGroup):
+            await closing
+
+    # releasing the context variable failed, the backend still has to learn the scope ended
+    assert exited == entered
+    assert len(exited) == 1
