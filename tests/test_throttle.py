@@ -271,3 +271,30 @@ async def test_slot_given_back_is_taken_before_later_reservations(
     assert await taking == 10.0
     clock.now = 20.0
     assert await later == 20.0
+
+
+@pytest.mark.parametrize(
+    ("now", "period"),
+    [(98765432.1234567, 0.1), (123456.789, 1.7), (5000000.7, 0.3)],
+)
+@pytest.mark.asyncio
+async def test_slot_a_period_later_fits_at_large_clock_values(
+    monkeypatch: pytest.MonkeyPatch,
+    now: float,
+    period: float,
+) -> None:
+    clock = _FakeClock(monkeypatch)
+    clock.now = now
+
+    @throttle(limit=1, period=period)
+    async def call() -> float:
+        return clock.now
+
+    assert await call() == now
+    waiting = create_task(call())
+    await clock.settle()
+    # `now + period - now` rounds below the period at such values - the slot a
+    # period later is still the one taken, not refused
+    assert clock.delays == [now + period - now]
+    clock.now = now + period
+    assert await waiting == now + period

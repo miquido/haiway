@@ -116,7 +116,9 @@ def throttle[**Args, Result](
         ) -> Result:
             # reserve the slot without awaiting, so no other call can interleave
             time_now: float = monotonic()
-            del starts[: bisect_right(starts, time_now - throttle_period)]
+            # compared as `start + period`, the way a candidate is made - subtracting
+            # would round differently and could refuse the slot a period after one
+            del starts[: bisect_right(starts, time_now, key=lambda start: start + throttle_period)]
             start_at: float = _earliest_start(
                 starts,
                 time_now=time_now,
@@ -185,7 +187,7 @@ def _fits(
         return starts[index] if index < position else starts[index - 1]
 
     for first in range(max(0, position - limit), min(position, len(starts) - limit) + 1):
-        if at(first + limit) - at(first) < period:
+        if at(first) + period > at(first + limit):
             return False
 
     return True
