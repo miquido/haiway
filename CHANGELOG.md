@@ -148,11 +148,22 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
 - **`ctx.updating` merges into the state current when it is entered**, as `ctx.scope` does, instead
   of the state current when it was called. Entering it where it was made behaves the same.
 - `ctx.log_warning` and `ctx.log_debug` accept any `BaseException`, as `ctx.log_error` does.
+- **Tasks spawned within `ctx.disposables` are joined before the disposables are released**, and
+  cancelled together with a failing body - they belonged to the enclosing scope and could outlive
+  the resources they used. Leaving `ctx.disposables` now waits for them.
+- **A failed task is logged when it fails**, not only once its scope ends, and a scope keeps at most
+  32 errors of its tasks - the rest are counted in the message of the raised `ExceptionGroup`. A
+  scope living long, a server for instance, held every failure until it ended.
 - `make coverage-native` measures the line coverage of the native extension by the tests. CI runs
   Bandit, and the whole suite on the free-threaded build with the GIL off.
 
 #### Fixed
 
+- An event subscription made after its scope began closing - from a task spawned within it -
+  completes at once instead of waiting forever.
+- The observability backend learns a scope ended when resetting its context fails, as for an async
+  generator holding a scope closed from another task.
+- The error of a task which the body awaited and reraised is no longer chained as its own cause.
 - A scope cancelled again while it disposes what it prepared before failing or being cancelled
   waits for that disposal to complete - it went on while the disposal ran detached.
 - `process_concurrently` keeps only the tasks still running - it held every task it spawned until
