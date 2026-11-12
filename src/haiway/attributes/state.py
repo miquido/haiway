@@ -292,6 +292,16 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         # which would otherwise make it interchangeable with each of its siblings
         cls.__SPECIALIZED__ = bool(type_parameters)  # pyright: ignore[reportConstantRedefinition]
         cls._ = AttributePath(cls, attribute=cls)  # pyright: ignore[reportCallIssue, reportAttributeAccessIssue]
+        if Generic in bases:
+            # the variants of a generic, by their arguments - held by the class which
+            # is specialized rather than by a registry of the module, which would keep
+            # every class created at runtime, together with all of its variants, alive
+            # for as long as the process runs. here the variants reference their origin
+            # and are referenced by it, a cycle which is collected along with it
+            cls.__SPECIALIZATIONS__ = {}  # pyright: ignore[reportAttributeAccessIssue]
+            # the variance of its parameters, worked out when first asked for - once
+            # the classes its annotations refer to exist
+            cls.__VARIANCES__ = {}  # pyright: ignore[reportAttributeAccessIssue]
 
         if not any(isinstance(base, StateMeta) for base in bases):
             # the base class - no fields specified
@@ -303,12 +313,11 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
                 "additionalProperties": False,
             }
             cls.__FIELDS__ = ()  # pyright: ignore[reportConstantRedefinition]
-            native.install(cls, (), ())
-
             cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
             cls.__ALIASES__ = {}  # pyright: ignore[reportConstantRedefinition]
             cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
             cls.__match_args__ = ()
+            native.install(cls, (), ())  # last - the class can't be changed after
 
             return cls  # early exit - base class
 
@@ -353,10 +362,6 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
             cls.__SPECIFICATION__ = _no_specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
 
         cls.__FIELDS__ = fields  # pyright: ignore[reportConstantRedefinition]
-        # the attributes are declared here, all of them - or none, by a specialization
-        # reading the ones of its origin
-        native.install(cls, fields, names)
-
         cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
         # resolved here so that updates can be normalized to canonical names
         # without rebuilding this mapping of the class on each of them
@@ -366,6 +371,9 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         # every field, unlike `__slots__` which holds the names declared here - a
         # specialized generic declares none of them and matches all of them
         cls.__match_args__ = tuple(field.name for field in fields)
+        # the attributes are declared here, all of them - or none, by a specialization
+        # reading the ones of its origin. last - the class can't be changed after
+        native.install(cls, fields, names)
 
         return cls
 
@@ -507,17 +515,8 @@ def _specialize_locked(
     type_arguments: tuple[Any, ...],
     /,
 ) -> Any:
-    # held by the class which is specialized rather than by a registry of the
-    # module - a registry would keep every class created at runtime, together
-    # with all of its variants, alive for as long as the process runs. here
-    # the variants reference their origin and are referenced by it, a cycle
-    # which is collected along with it
-    specializations: MutableMapping[tuple[Any, ...], Any] | None = cls.__dict__.get(
-        "__SPECIALIZATIONS__"
-    )
-    if specializations is None:
-        specializations = {}
-        cls.__SPECIALIZATIONS__ = specializations
+    # only a generic is specialized - `__class_getitem__` refuses any other class
+    specializations: MutableMapping[tuple[Any, ...], Any] = cls.__dict__["__SPECIALIZATIONS__"]
 
     # the arguments as they bind - the defaults are given, the arguments of a
     # variadic parameter are its own, a list is a tuple. a variant is the same
@@ -955,6 +954,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
     instance, with neither a ``__dict__`` nor a ``__weakref__``. A ``State``
     can't be held by ``weakref.ref`` or a ``WeakValueDictionary`` because of
     that, and its attributes can't be rebound by any means.
+    A class can't be changed once it is created either - assigning or deleting an
+    attribute of it raises ``TypeError``.
     """
 
     _: ClassVar[Self]

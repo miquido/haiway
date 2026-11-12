@@ -99,6 +99,8 @@ class Invoice(State):
 - A `State` has a single base: `State`, or an attribute-less `State` sharing behavior - plus
   `Generic` for type parameters. A class declaring attributes is final; mixins and multiple
   inheritance are refused. Compose by holding instances as attributes.
+- A `State` class is immutable too: assigning or deleting a class attribute after the class is
+  created raises `TypeError` (no class decorators adding attributes, no `patch.object` on it).
 - `Missing` is the "not provided" sentinel (PEP 661), both value and type like `None`:
   `note: str | Missing | None = Missing`. Compare with `value is Missing` - it is truthy, and a
   bare `case Missing:` captures instead of matching (use `case haiway.Missing:`).

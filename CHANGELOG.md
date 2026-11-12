@@ -29,6 +29,14 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `{} | meta` are plain `dict`s, as `dict.__or__` handles a `frozendict` itself.
 - `State.__init__` refuses to initialize an instance a second time, and a `State` instance can't be
   rebound through `object.__setattr__`.
+- **A `State` class can't be changed once it is created** - assigning or deleting an attribute of
+  the class raises `TypeError`, also through `type.__setattr__`. Replacing the descriptor of an
+  attribute hid the value of every instance, and an `__init__` assigned later was passed over.
+
+  Migration: declare methods and class variables in the class body, or set them from
+  `__init_subclass__` of an attribute-less base, which runs before the class is complete. A class
+  decorator can no longer add to a `State`, and `mock.patch.object(SomeState, "method")` is
+  refused - hold what a test replaces as an attribute and construct the state with it.
 - **`Immutable` is removed** - a value which has to be validated, compared and serialized is a
   `State`, and a record holding what it is given as it is, a final, slotted class refusing
   `__setattr__` and `__delattr__` (equality and hashing by identity, as `Immutable` had). Unlike `Immutable`, such a class can be rebound through `object.__setattr__`.
@@ -154,8 +162,6 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   `ClassVar` is one as well.
 - `updating` an instance which was never initialized (`State.__new__`) is refused when it would
   carry a value over - it returned an instance missing the attributes which were not given.
-- An `__init__` or `__new__` assigned to a `State` class after it was created is used by the call
-  of the class - it was passed over.
 
 ## 0.60.0
 

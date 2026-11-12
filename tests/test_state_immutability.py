@@ -445,20 +445,47 @@ def test_updating_an_instance_which_was_never_initialized_is_refused() -> None:
     assert blank.updating(first=1, second=2) == Pair(first=1, second=2)
 
 
-def test_constructor_assigned_after_the_class_was_created_is_used() -> None:
+def test_class_can_not_be_changed_once_it_is_created() -> None:
     class Counter(State):
-        value: int
+        value: int = 0
 
-    def initialize(self: Counter, **values: Any) -> None:
-        State.__init__(self, value=values["value"] + 1)
+        def doubled(self) -> int:
+            return self.value * 2
 
-    Counter.__init__ = initialize  # pyright: ignore[reportAttributeAccessIssue]
-    try:
-        assert Counter(value=1).value == 2
-        assert Counter.validate({"value": 1}).value == 2
-        assert Counter.from_json('{"value": 1}').value == 2
+    def initialize(self: Counter, **values: Any) -> None: ...
 
-    finally:
-        del Counter.__init__
+    with pytest.raises(TypeError, match="immutable type"):
+        Counter.__init__ = initialize  # pyright: ignore[reportAttributeAccessIssue]
 
-    assert Counter(value=1).value == 1
+    with pytest.raises(TypeError, match="immutable type"):
+        Counter.value = 1  # a descriptor replaced would hide the value of every instance
+
+    with pytest.raises(TypeError, match="immutable type"):
+        del Counter.value
+
+    with pytest.raises(TypeError, match="immutable type"):
+        Counter.doubled = lambda self: 0  # pyright: ignore[reportAttributeAccessIssue]
+
+    with pytest.raises(TypeError, match="immutable type"):
+        type.__setattr__(Counter, "extra", 1)
+
+    with pytest.raises(TypeError, match="immutable type"):
+        State.extra = 1  # pyright: ignore[reportAttributeAccessIssue]
+
+    counter = Counter(value=2)
+    assert counter.value == 2
+    assert counter.doubled() == 4
+
+
+def test_generic_class_can_not_be_changed_and_is_still_specialized() -> None:
+    class Box[T](State):
+        value: T
+
+    with pytest.raises(TypeError, match="immutable type"):
+        Box.value = 1  # pyright: ignore[reportAttributeAccessIssue]
+
+    with pytest.raises(TypeError, match="immutable type"):
+        Box[int].value = 1  # pyright: ignore[reportAttributeAccessIssue]
+
+    assert Box[int] is Box[int]
+    assert isinstance(Box[bool](value=True), Box[int])

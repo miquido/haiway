@@ -406,6 +406,19 @@ check_layout(ModuleState *state, PyTypeObject *type, PyObject *entries)
     return 0;
 }
 
+/* the descriptors made for a plan which is let go of read it - so they are let go of as
+ * well, keeping the error which is set */
+static void
+remove_descriptors(PyObject *cls, CompiledPlan *plan, PyObject *owned, Py_ssize_t count)
+{
+    PyObject *error = PyErr_GetRaisedException();
+    for (Py_ssize_t k = 0; k < count; k++) {
+        FieldPlan *field = &plan->fields[field_for_key(plan, PyTuple_GET_ITEM(owned, k))];
+        if (PyObject_DelAttr(cls, field->name) < 0) PyErr_Clear();
+    }
+    PyErr_SetRaisedException(error);
+}
+
 /*
  * compile_plan(cls, plan, owned) - the plan of the class as C data, kept on
  * the class, and a read-only descriptor on the class for each of the attributes it
@@ -420,7 +433,8 @@ check_layout(ModuleState *state, PyTypeObject *type, PyObject *entries)
  * the spec promises an immutable result with no code of the user involved. A default
  * which fails to validate is left to fail where the instance is created.
  * The size of an instance is decided here, so the class can't have been instantiated
- * before, nor be given a plan twice. The call of the class goes through the plan when
+ * before, nor be given a plan twice. The class is made immutable with it - the plan is
+ * the last thing a class is given. The call of the class goes through the plan when
  * the class does not take over its construction.
  */
 static PyObject *
@@ -565,15 +579,17 @@ compile_plan(PyObject *mod, PyObject *args)
         int failed = descriptor == NULL || PyObject_SetAttr(cls, field->name, descriptor) < 0;
         Py_XDECREF(descriptor);
         if (!failed) continue;
-        /* the descriptors made so far read the plan, which is let go of - so are they */
-        PyObject *error = PyErr_GetRaisedException();
-        while (k-- > 0) {
-            field = &plan->fields[field_for_key(plan, PyTuple_GET_ITEM(owned, k))];
-            if (PyObject_DelAttr(cls, field->name) < 0) PyErr_Clear();
-        }
-        PyErr_SetRaisedException(error);
+        remove_descriptors(cls, plan, owned, k);
         goto fail;
     }
+
+    /* the class is complete - nothing of it changes from here on, the way nothing of an
+     * instance does: a descriptor replaced would hide a value, a constructor assigned
+     * later would be one the class was not made for. the flag is set here rather than
+     * by `PyType_Freeze`, which refuses a class with a base which can change - and
+     * `typing.Generic` can. nothing else has seen the class yet */
+    type->tp_flags |= Py_TPFLAGS_IMMUTABLETYPE;
+    PyType_Modified(type);
 
     /* the size of an instance, and the call of the class - which tells by itself a class
      * taking over its construction, or one with more attributes than the fast path matches */

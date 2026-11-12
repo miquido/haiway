@@ -292,8 +292,8 @@ def parameter_variances(
     Mapping[str, Variance]
         ``"co"``, ``"contra"`` or ``"inv"`` for each parameter, by its name.
     """
-    cached: Mapping[str, Variance] | None = cls.__dict__.get("__VARIANCES__")
-    if cached is not None:
+    # a generic always has a parameter - an empty mapping is one not worked out yet
+    if cached := cls.__dict__.get("__VARIANCES__"):
         return cached
 
     computing: set[type[Any]] = _computing_variances()
@@ -327,9 +327,11 @@ def _worked_out_variances(
             variances[parameter.__name__] = _inferred_variance(parameter, annotations)
 
     # a class which is not declared yet has no annotations to read the use of a
-    # parameter from - what is worked out then is not kept
-    if keep and hasattr(cls, "__ANNOTATED__"):
-        cls.__VARIANCES__ = variances
+    # parameter from - what is worked out then is not kept. a generic State is made
+    # with the mapping they are kept in, as the class itself can't be changed
+    kept: MutableMapping[str, Variance] | None = cls.__dict__.get("__VARIANCES__")
+    if keep and kept is not None:
+        kept.update(variances)
 
     return variances
 

@@ -49,7 +49,6 @@ def ensure_positive(value: int) -> int:
 @contextmanager
 def register_type(name: str, obj: Any) -> Iterator[None]:
     previous = globals().get(name, _SENTINEL)
-    obj.__module__ = __name__
     globals()[name] = obj
     try:
         yield

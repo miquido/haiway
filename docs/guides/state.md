@@ -627,12 +627,16 @@ A compiled extension stores the attributes of a State inline in the instance, va
 built-in annotation without calling back into Python, and converts to mappings and JSON natively.
 The immutability is real - an attribute can't be rebound through `object.__setattr__` either, and an
 instance has no `__dict__` or `__weakref__`. Calling `__init__` a second time on an instance raises.
-An instance takes the memory a `__slots__` object of the same attributes would. One holding nothing
-which can be part of a reference cycle - which is what validated values are, being made of tuples,
-frozensets, `Map`s and other instances - is left out of the collections of the garbage collector,
-together with those containers, and is reclaimed by reference counting alone. Keeping many instances
-alive therefore adds nothing for the collector to walk. One holding a mutable value, such as a
-`list` in an `Any` attribute, stays tracked, so a cycle through it is still collected.
+The class is just as fixed: once it is created, assigning or deleting one of its attributes raises
+`TypeError`, so neither a method nor the descriptor of an attribute can be replaced. Declare
+everything in the class body - `__init_subclass__` of an attribute-less base still runs in time to
+add to a class. An instance takes the memory a `__slots__` object of the same attributes would. One
+holding nothing which can be part of a reference cycle - which is what validated values are, being
+made of tuples, frozensets, `Map`s and other instances - is left out of the collections of the
+garbage collector, together with those containers, and is reclaimed by reference counting alone.
+Keeping many instances alive therefore adds nothing for the collector to walk. One holding a mutable
+value, such as a `list` in an `Any` attribute, stays tracked, so a cycle through it is still
+collected.
 
 What runs Python is the code of the user alone: a `Validator`, a `Verifier`, a class validating
 itself, a default factory. `ValidationError` reports a failure at its position the same way for
