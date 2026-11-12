@@ -750,14 +750,20 @@ class _FileEntry:
     ) -> None:
         self.file_handle: int = file_handle
         self.loop: AbstractEventLoop = loop
-        self.running: set[Future[Any]] = set()
+        # unfinished operations in the order they were started - the last one
+        # is what the next one waits for, and closing waits for them all
+        self.running: dict[Future[Any], None] = {}
+
+    @property
+    def last(self) -> Future[Any] | None:
+        return next(reversed(self.running), None)
 
     def finished(
         self,
         running: Future[Any],
         /,
     ) -> None:
-        self.running.discard(running)
+        self.running.pop(running, None)
         if not running.cancelled():
             running.exception()  # nobody may be left to retrieve it
 
@@ -845,10 +851,8 @@ class FileAccessContext:
         # an operation which its caller stopped waiting for keeps running in its
         # executor thread - it stays tracked until it completes, so closing waits
         # for it rather than pulling the descriptor from under it
-        running: Task[Result] = ensure_future(
-            _after_previous(tuple(entry.running), start(entry.file_handle))
-        )
-        entry.running.add(running)
+        running: Task[Result] = ensure_future(_after_previous(entry.last, start(entry.file_handle)))
+        entry.running[running] = None
         running.add_done_callback(entry.finished)
         return await shield(running)
 
@@ -891,15 +895,15 @@ class FileAccessContext:
 
 
 async def _after_previous[Result](
-    previous: Sequence[Future[Any]],
+    previous: Future[Any] | None,
     operation: Coroutine[None, None, Result],
     /,
 ) -> Result:
     # operations share the descriptor offset and a write truncates what it leaves,
-    # so each waits for the ones started before it instead of interleaving
+    # so each waits for the one started before it - which waited for its own
     try:
-        if previous:
-            await wait(previous)
+        if previous is not None:
+            await wait((previous,))
 
     except BaseException:
         operation.close()

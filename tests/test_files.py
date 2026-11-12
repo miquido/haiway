@@ -779,7 +779,7 @@ async def test_file_access_tracks_running_operations_until_done(tmp_path: Path) 
         await file.write(b"data")
         await file.read()
         # nothing stays referenced once the operations are done
-        assert _open_entry(access).running == set()
+        assert _open_entry(access).running == {}
 
 
 @pytest.mark.asyncio
