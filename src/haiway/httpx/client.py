@@ -121,7 +121,7 @@ class HTTPXClient:
       ``httpx2.AsyncClient`` with the same configuration.
     """
 
-    # not an Immutable - the internal client is replaced when a closed instance is
+    # not a frozen record - the internal client is replaced when a closed instance is
     # entered again
     __slots__ = (
         "_client",

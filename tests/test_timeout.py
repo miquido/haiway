@@ -1,9 +1,10 @@
 from asyncio import CancelledError, Task, sleep
 from asyncio import timeout as async_timeout
+from inspect import iscoroutinefunction
 
 from pytest import mark, raises
 
-from haiway import timeout
+from haiway import throttle, timeout
 
 
 class FakeException(Exception):
@@ -87,3 +88,24 @@ async def test_raises_with_cancel_from_within():
     with raises(CancelledError):
         async with async_timeout(1):  # guard against awaiting forever
             await long_running()
+
+
+@mark.asyncio
+async def test_stays_a_coroutine_function_and_stacks():
+    @throttle(limit=5, period=1)
+    @timeout(3)
+    async def stacked(value: int) -> int:
+        return value
+
+    assert iscoroutinefunction(stacked)
+    assert await stacked(3) == 3
+
+
+@mark.asyncio
+async def test_binds_as_a_method():
+    class Holder:
+        @timeout(3)
+        async def method(self, value: int) -> int:
+            return value
+
+    assert await Holder().method(7) == 7

@@ -102,10 +102,9 @@ class Invoice(State):
 - `Missing` is the "not provided" sentinel (PEP 661), both value and type like `None`:
   `note: str | Missing | None = Missing`. Compare with `value is Missing` - it is truthy, and a
   bare `case Missing:` captures instead of matching (use `case haiway.Missing:`).
-- `Immutable` is the lighter, non-validating frozen record for values that must not propagate as
-  scope state. Its attributes are bound once - not even `object.__setattr__` rebinds them - but
-  values are held as given, so a mutable value stays mutable. An object with changing internals (a
-  client, a response caching its body) is a plain `__slots__` class. `Map` is an immutable mapping
+- A small record holding values as given (callables, clients) is a final, slotted class
+  refusing `__setattr__`/`__delattr__` (`NoReturn`); there is no `Immutable` base class. An object with changing internals (a client, a response caching its body) is a plain
+  `__slots__` class. `Map` is an immutable mapping
   (a `frozendict`, not a `dict`).
 
 ## Context & Scopes
@@ -304,7 +303,7 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
 
 - Fully type every parameter, return, and attribute. Avoid `Any` outside third-party boundaries.
 - Public APIs accept `Mapping`/`Sequence`/`Set`/`Iterable`, never concrete mutables.
-- Never mutate `State` or `Immutable`; build new instances. Prefer composition over inheritance -
+- Never mutate a `State`; build new instances. Prefer composition over inheritance -
   a `State` has a single base, and mixins are refused.
 - Async all the way down; never block the event loop.
 - Name contracts with gerunds (`UserFetching`, `ElementCreating`); add `@runtime_checkable` only

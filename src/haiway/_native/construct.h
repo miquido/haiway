@@ -26,7 +26,7 @@ given_value(PyObject *kwargs, FieldPlan *field, Py_ssize_t *consumed, CompiledPl
         if (r > 0) {
             (*consumed)++;
             int both = PyDict_Contains(kwargs, field->name);
-            if (both < 0 || (both > 0 && plan->reporting)) {
+            if (both != 0) {
                 Py_DECREF(value);
                 if (both > 0) raise_key_error(plan->state, type, kwargs);
                 *error = 1;
@@ -72,7 +72,7 @@ bind_values(CompiledPlan *plan, PyTypeObject *type, PyObject *kwargs, PyObject *
         values[i] = validated;
     }
 
-    if (plan->reporting && kwargs != NULL && consumed != PyDict_GET_SIZE(kwargs)) {
+    if (kwargs != NULL && consumed != PyDict_GET_SIZE(kwargs)) {
         raise_key_error(plan->state, type, kwargs);
         goto fail;
     }
@@ -83,8 +83,7 @@ fail:
     return 0;
 }
 
-/* whether any value is bound already - a plain record can unbind some of its values
- * (`object.__delattr__`), which must not make it initializable again */
+/* whether any value is bound already - an instance is initialized once */
 static inline int
 any_bound(PyObject **items, Py_ssize_t n)
 {
@@ -137,6 +136,18 @@ struct_init(PyObject *obj, PyObject *args, PyObject *kwargs)
     return 0;
 }
 
+/* the value an update carries over, a new reference - an instance which was never
+ * initialized has none, and one made of it would be missing them for good */
+static inline PyObject *
+carried_value(PyTypeObject *type, PyObject *value)
+{
+    if (value == NULL) {
+        PyErr_Format(PyExc_TypeError, "%s is not initialized", type->tp_name);
+        return NULL;
+    }
+    return Py_NewRef(value);
+}
+
 /* a new instance of the same class, with the values it is given */
 static PyObject *
 struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
@@ -166,7 +177,8 @@ struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
 
         if (value == NULL) {
             /* an absent key carries the attribute over - a MISSING value clears it */
-            target[i] = Py_XNewRef(source[i]);
+            target[i] = carried_value(type, source[i]);
+            if (target[i] == NULL) goto fail;
             continue;
         }
 
@@ -179,7 +191,7 @@ struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
         target[i] = validated;
     }
 
-    if (plan->reporting && consumed != PyDict_GET_SIZE(kwargs)) {
+    if (consumed != PyDict_GET_SIZE(kwargs)) {
         raise_key_error(plan->state, type, kwargs);
         goto fail;
     }
@@ -235,13 +247,22 @@ keywords_dict(PyObject *const *values, PyObject *kwnames, Py_ssize_t nkw)
     return dict;
 }
 
+/* whether the class is constructed here - one declaring a `__new__` or an `__init__` of
+ * its own takes over, whenever it is given one */
+static inline int
+constructs_natively(PyTypeObject *type)
+{
+    return type->tp_new == struct_new && type->tp_init == struct_init;
+}
+
 static PyObject *
 struct_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf, PyObject *kwnames)
 {
     PyTypeObject *type = (PyTypeObject *)callable;
     Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
     Py_ssize_t nkw = kwnames == NULL ? 0 : PyTuple_GET_SIZE(kwnames);
-    CompiledPlan *plan = nkw <= FAST_MAX_FIELDS && nargs == 0 ? PLAN_OF(type) : NULL;
+    int native = constructs_natively(type);
+    CompiledPlan *plan = native && nkw <= FAST_MAX_FIELDS && nargs == 0 ? PLAN_OF(type) : NULL;
     int given[FAST_MAX_FIELDS];
 
     if (plan == NULL || plan->count > FAST_MAX_FIELDS || !match_keywords(plan, kwnames, nkw, given)) {
@@ -254,8 +275,14 @@ struct_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf, PyOb
             Py_DECREF(positional);
             return NULL;
         }
-        PyObject *self = struct_new(type, positional, kwargs);
-        if (self != NULL && struct_init(self, positional, kwargs) < 0) Py_CLEAR(self);
+        PyObject *self;
+        if (native) {
+            self = struct_new(type, positional, kwargs);
+            if (self != NULL && struct_init(self, positional, kwargs) < 0) Py_CLEAR(self);
+        } else {
+            /* the usual call of a class, through the constructor it declares */
+            self = PyType_Type.tp_call(callable, positional, kwargs);
+        }
         Py_DECREF(positional);
         Py_XDECREF(kwargs);
         return self;
@@ -341,7 +368,7 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
     PyObject *self = NULL;
     if (empty == NULL) {
         /* nothing to build with */
-    } else if (type->tp_new != struct_new || type->tp_init != struct_init) {
+    } else if (!constructs_natively(type)) {
         /* the class takes over its construction - what it makes of the keys is its own */
         self = PyObject_Call(cls, empty, kwargs);
     } else {
@@ -415,7 +442,11 @@ struct_replace_fast(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyO
         FieldPlan *field = &plan->fields[i];
         if (given[i] < 0) {
             /* an absent key carries the attribute over - a MISSING value clears it */
-            target[i] = Py_XNewRef(source[i]);
+            target[i] = carried_value(type, source[i]);
+            if (target[i] == NULL) {
+                Py_DECREF(copy);
+                return NULL;
+            }
             continue;
         }
         PyObject *validated = validate_field(field, plan, args[nargs + given[i]]);

@@ -2,7 +2,6 @@ from haiway.types.alias import Alias
 from haiway.types.basic import BasicObject, BasicValue, FlatObject, RawValue
 from haiway.types.default import Default, DefaultValue
 from haiway.types.description import Description
-from haiway.types.immutable import Immutable
 from haiway.types.map import Map
 from haiway.types.meta import (
     Meta,
@@ -21,7 +20,6 @@ __all__ = (
     "DefaultValue",
     "Description",
     "FlatObject",
-    "Immutable",
     "Map",
     "Meta",
     "MetaTags",

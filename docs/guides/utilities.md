@@ -202,7 +202,7 @@ describes the page.
 ```python
 from haiway import Paginated, Pagination
 
-page = Paginated.of(
+page = Paginated(
     [1, 2, 3],
     pagination=Pagination(limit=3, arguments={}),
 )

@@ -208,6 +208,16 @@ async def manage_config():
         await File.write(yaml.dump(data).encode())
 ```
 
+### Event Loop and Concurrency
+
+An opened file belongs to the event loop which entered its context. Using the `File` or exiting the
+context from another loop raises `FileException`; after the context exits it can be entered again,
+on any loop. Reading and writing run in executor threads using positional I/O, so operations do not
+share a file offset, but they are not ordered against each other - await one before starting the
+next when the order matters. An operation abandoned by cancellation keeps its descriptor until it is
+done, closing the context waits for it. Windows has no positional I/O, so concurrent operations on
+one open file are not supported there.
+
 ### Durable In-Place Updates
 
 Writes are in-place with `os.write` followed by `fsync`; they are **not** copy-on-write or rename

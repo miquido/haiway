@@ -5,6 +5,7 @@ from types import TracebackType
 from typing import Any, NoReturn, cast, final
 
 from haiway.utils.exceptions import thrown_exception
+from haiway.utils.loops import loop_safe
 
 __all__ = (
     "AsyncQueue",
@@ -158,6 +159,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         else:
             self._queue.append(element)
 
+    @loop_safe()
     def finish(
         self,
         exception: BaseException | None = None,
@@ -168,7 +170,10 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         After finishing, no more elements can be enqueued. Already buffered
         elements remain available to the consumer. Once the buffer is drained,
         the consumer receives the provided exception or ``StopAsyncIteration``.
-        If the queue is already finished, this method does nothing.
+        If the queue is already finished, this method does nothing. It may be
+        called from another thread (so may ``cancel()`` and ``clear()``), it takes effect on the
+        queue's loop then - the queue is not finished yet when it returns. Every other
+        operation has to run within the loop of the queue.
 
         This is the producer side of ending a queue and it keeps the buffer - use
         ``aclose()`` to end the iteration itself, which drops it.
@@ -185,23 +190,13 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         object.__setattr__(
             self,
             "_finish_reason",
-            exception or StopAsyncIteration(),
+            StopAsyncIteration() if exception is None else exception,
         )
 
         if self._waiting is not None and not self._waiting.done():
             finish_reason: BaseException | None = self._finish_reason
             assert finish_reason is not None  # nosec: B101
-            # checking loop only on finish as the rest of operations
-            # should always have a valid loop in a typical environment
-            # and we are not supporting multithreading yet
-            if get_running_loop() is not self._loop:
-                self._loop.call_soon_threadsafe(
-                    self._waiting.set_exception,
-                    finish_reason,
-                )
-
-            else:
-                self._waiting.set_exception(finish_reason)
+            self._waiting.set_exception(finish_reason)
 
     def cancel(self) -> None:
         """
@@ -276,6 +271,23 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             )
             # wait for the result
             return await cast(Awaitable[Element], self._waiting)
+
+        except CancelledError:
+            # an element delivered to the waiting consumer cancelled before it resumed
+            # would be lost - it goes back to the front of the buffer instead, unless
+            # the buffer has been refilled up to its limit, in which case the oldest
+            # element is the one a bounded buffer drops anyway
+            waiting: Future[Element] | None = self._waiting
+            if (
+                waiting is not None
+                and waiting.done()
+                and not waiting.cancelled()
+                and waiting.exception() is None
+                and (self._queue.maxlen is None or len(self._queue) < self._queue.maxlen)
+            ):
+                self._queue.appendleft(waiting.result())
+
+            raise
 
         finally:
             # cleanup
@@ -373,13 +385,15 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         # finish reason, so there is nobody left to deliver the buffer to
         self._queue.clear()
 
+    @loop_safe()
     def clear(self) -> None:
         """
         Clear all pending elements from the queue.
 
         This method removes currently buffered elements only. It does nothing
         while a consumer is actively waiting for the next element, so that a
-        queued wake-up is not disrupted.
+        queued wake-up is not disrupted. Like ``finish()``, it may be called from
+        another thread and takes effect on the queue's loop then.
         """
         if self._waiting is None or self._waiting.done():
             self._queue.clear()

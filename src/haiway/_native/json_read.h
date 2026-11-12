@@ -428,7 +428,7 @@ static PyObject *
 decode_struct_unbounded(Decoder *d, PyTypeObject *type)
 {
     CompiledPlan *plan = PLAN_OF(type);
-    if (plan == NULL || type->tp_new != struct_new || type->tp_init != struct_init) return NULL;
+    if (plan == NULL || !constructs_natively(type)) return NULL;
     if (d->p >= d->end || *d->p != '{') return NULL;
     d->p++;
     /* what is kept pending from here on is kept for this instance and those within it -

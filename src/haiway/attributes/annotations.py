@@ -21,7 +21,6 @@ from collections.abc import (
 from types import GenericAlias
 from typing import (
     Any,
-    ClassVar,
     Final,
     ForwardRef,
     Literal,
@@ -50,13 +49,12 @@ from haiway.attributes.validation import (
 from haiway.types import (
     Alias,
     Description,
-    Immutable,
     Meta,
     Sensitive,
     Specification,
     TypeSpecification,
 )
-from haiway.types.default import Default
+from haiway.types.frozen import refuse_assignment, refuse_deletion
 
 __all__ = (
     "AliasAttribute",
@@ -98,8 +96,17 @@ __all__ = (
 )
 
 
-class NotRequired(Immutable):
-    pass
+@final
+class NotRequired:
+    __slots__ = ()
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+    ) -> None:
+        pass
 
 
 NOT_REQUIRED: Final[NotRequired] = NotRequired()
@@ -200,15 +207,50 @@ def _iterable_snapshot(value: Any) -> Any:
     return cast(Any, value)
 
 
-class AnyAttribute(Immutable):
-    type_name: Final[Literal["Any"]] = "Any"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class AnyAttribute:
+    type_name: Literal["Any"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["Any"] = "Any",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> Any:
@@ -295,11 +337,29 @@ class _AliasTarget:
         self.annotation: AttributeAnnotation | None = annotation
 
 
-class AliasAttribute(Immutable):
+@final
+class AliasAttribute:
     type_alias: str
     module: str
-    annotations: Sequence[Annotation] = ()
-    _target: _AliasTarget = Default(factory=_AliasTarget)
+    annotations: Sequence[Annotation]
+    _target: _AliasTarget
+    __slots__ = ("_target", "annotations", "module", "type_alias")
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_alias: str,
+        module: str,
+        annotations: Sequence[Annotation] = (),
+        _target: _AliasTarget | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_alias", type_alias)
+        object.__setattr__(self, "module", module)
+        object.__setattr__(self, "annotations", annotations)
+        object.__setattr__(self, "_target", _AliasTarget() if _target is None else _target)
 
     @property
     def _resolved(self) -> AttributeAnnotation | None:
@@ -419,15 +479,50 @@ class AliasAttribute(Immutable):
         return self._resolved
 
 
-class MissingAttribute(Immutable):
-    type_name: Final[Literal["Missing"]] = "Missing"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = False
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class MissingAttribute:
+    type_name: Literal["Missing"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["Missing"] = "Missing",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = False,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> Any:  # the sentinel - it is its own type
@@ -502,15 +597,50 @@ class MissingAttribute(Immutable):
         return self
 
 
-class NoneAttribute(Immutable):
-    type_name: Final[Literal["None"]] = "None"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class NoneAttribute:
+    type_name: Literal["None"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["None"] = "None",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> None:
@@ -585,16 +715,54 @@ class NoneAttribute(Immutable):
         return self
 
 
-class LiteralAttribute(Immutable):
+@final
+class LiteralAttribute:
     base: Any
     values: Sequence[Any]
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "values",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        base: Any,
+        values: Sequence[Any],
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def type_name(self) -> str:
@@ -673,15 +841,50 @@ class LiteralAttribute(Immutable):
         return self
 
 
-class BoolAttribute(Immutable):
-    type_name: Final[Literal["bool"]] = "bool"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class BoolAttribute:
+    type_name: Literal["bool"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["bool"] = "bool",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[bool]:
@@ -756,15 +959,50 @@ class BoolAttribute(Immutable):
         return self
 
 
-class IntegerAttribute(Immutable):
-    type_name: Final[Literal["int"]] = "int"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class IntegerAttribute:
+    type_name: Literal["int"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["int"] = "int",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[int]:
@@ -839,15 +1077,50 @@ class IntegerAttribute(Immutable):
         return self
 
 
-class FloatAttribute(Immutable):
-    type_name: Final[Literal["float"]] = "float"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class FloatAttribute:
+    type_name: Literal["float"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["float"] = "float",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[float]:
@@ -922,15 +1195,50 @@ class FloatAttribute(Immutable):
         return self
 
 
-class BytesAttribute(Immutable):
-    type_name: Final[Literal["bytes"]] = "bytes"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class BytesAttribute:
+    type_name: Literal["bytes"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["bytes"] = "bytes",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[bytes]:
@@ -1005,15 +1313,50 @@ class BytesAttribute(Immutable):
         return self
 
 
-class UUIDAttribute(Immutable):
-    type_name: Final[Literal["UUID"]] = "UUID"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class UUIDAttribute:
+    type_name: Literal["UUID"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["UUID"] = "UUID",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[uuid.UUID]:
@@ -1088,15 +1431,50 @@ class UUIDAttribute(Immutable):
         return self
 
 
-class StringAttribute(Immutable):
-    type_name: Final[Literal["str"]] = "str"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class StringAttribute:
+    type_name: Literal["str"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["str"] = "str",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[str]:
@@ -1171,15 +1549,50 @@ class StringAttribute(Immutable):
         return self
 
 
-class DatetimeAttribute(Immutable):
-    type_name: Final[Literal["datetime"]] = "datetime"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class DatetimeAttribute:
+    type_name: Literal["datetime"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["datetime"] = "datetime",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[datetime.datetime]:
@@ -1254,15 +1667,50 @@ class DatetimeAttribute(Immutable):
         return self
 
 
-class DateAttribute(Immutable):
-    type_name: Final[Literal["date"]] = "date"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class DateAttribute:
+    type_name: Literal["date"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["date"] = "date",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[datetime.date]:
@@ -1337,15 +1785,50 @@ class DateAttribute(Immutable):
         return self
 
 
-class TimedeltaAttribute(Immutable):
-    type_name: Final[Literal["timedelta"]] = "timedelta"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class TimedeltaAttribute:
+    type_name: Literal["timedelta"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["timedelta"] = "timedelta",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[datetime.timedelta]:
@@ -1420,15 +1903,50 @@ class TimedeltaAttribute(Immutable):
         return self
 
 
-class TimeAttribute(Immutable):
-    type_name: Final[Literal["time"]] = "time"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class TimeAttribute:
+    type_name: Literal["time"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["time"] = "time",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[datetime.time]:
@@ -1503,15 +2021,50 @@ class TimeAttribute(Immutable):
         return self
 
 
-class PathAttribute(Immutable):
-    type_name: Final[Literal["Path"]] = "Path"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class PathAttribute:
+    type_name: Literal["Path"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["Path"] = "Path",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[pathlib.Path]:
@@ -1586,17 +2139,58 @@ class PathAttribute(Immutable):
         return self
 
 
-class TupleAttribute(Immutable):
-    type_name: Final[Literal["tuple"]] = "tuple"
+@final
+class TupleAttribute:
+    type_name: Literal["tuple"]
     base: type[Sequence[Any]]
     values: Sequence[AttributeAnnotation]
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "values",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["tuple"] = "tuple",
+        base: type[Sequence[Any]],
+        values: Sequence[AttributeAnnotation],
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     def annotated(  # noqa: C901
         self,
@@ -1671,17 +2265,58 @@ class TupleAttribute(Immutable):
         return self
 
 
-class SequenceAttribute(Immutable):
-    type_name: Final[Literal["Sequence"]] = "Sequence"
+@final
+class SequenceAttribute:
+    type_name: Literal["Sequence"]
     base: type[Sequence[Any]]
     values: AttributeAnnotation
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "values",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["Sequence"] = "Sequence",
+        base: type[Sequence[Any]],
+        values: AttributeAnnotation,
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     def annotated(  # noqa: C901
         self,
@@ -1756,17 +2391,58 @@ class SequenceAttribute(Immutable):
         return self
 
 
-class SetAttribute(Immutable):
-    type_name: Final[Literal["Set"]] = "Set"
+@final
+class SetAttribute:
+    type_name: Literal["Set"]
     base: type[Set[Any]]
     values: AttributeAnnotation
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "values",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["Set"] = "Set",
+        base: type[Set[Any]],
+        values: AttributeAnnotation,
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     def annotated(  # noqa: C901
         self,
@@ -1841,18 +2517,62 @@ class SetAttribute(Immutable):
         return self
 
 
-class MappingAttribute(Immutable):
-    type_name: Final[Literal["Mapping"]] = "Mapping"
+@final
+class MappingAttribute:
+    type_name: Literal["Mapping"]
     base: type[Mapping[Any, Any]]
     keys: AttributeAnnotation
     values: AttributeAnnotation
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "keys",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "values",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["Mapping"] = "Mapping",
+        base: type[Mapping[Any, Any]],
+        keys: AttributeAnnotation,
+        values: AttributeAnnotation,
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "keys", keys)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     def annotated(  # noqa: C901
         self,
@@ -1929,15 +2649,50 @@ class MappingAttribute(Immutable):
         return self
 
 
-class MetaAttribute(Immutable):
-    type_name: Final[Literal["Meta"]] = "Meta"
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+@final
+class MetaAttribute:
+    type_name: Literal["Meta"]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "type_name",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["Meta"] = "Meta",
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def base(self) -> type[haiway_types.Meta]:
@@ -2012,9 +2767,23 @@ class MetaAttribute(Immutable):
         return self
 
 
-class ValidableAttribute(Immutable):
+@final
+class ValidableAttribute:
     attribute: AttributeAnnotation
     validating: Validating[Any]
+    __slots__ = ("attribute", "validating")
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        attribute: AttributeAnnotation,
+        validating: Validating[Any],
+    ) -> None:
+        object.__setattr__(self, "attribute", attribute)
+        object.__setattr__(self, "validating", validating)
 
     @property
     def type_name(self) -> str:
@@ -2145,17 +2914,58 @@ def _any_redaction(
     )
 
 
-class ObjectAttribute(Immutable):
+@final
+class ObjectAttribute:
     base: Any
-    parameters: Sequence[AttributeAnnotation] = ()
+    parameters: Sequence[AttributeAnnotation]
     attributes: Mapping[str, AttributeAnnotation]
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "attributes",
+        "base",
+        "description",
+        "meta",
+        "parameters",
+        "redaction",
+        "required",
+        "specification",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        base: Any,
+        parameters: Sequence[AttributeAnnotation] = (),
+        attributes: Mapping[str, AttributeAnnotation],
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "parameters", parameters)
+        object.__setattr__(self, "attributes", attributes)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def type_name(self) -> str:
@@ -2236,17 +3046,58 @@ class ObjectAttribute(Immutable):
         return self
 
 
-class TypedDictAttribute(Immutable):
+@final
+class TypedDictAttribute:
     base: Any
-    parameters: Sequence[AttributeAnnotation] = ()
+    parameters: Sequence[AttributeAnnotation]
     attributes: Mapping[str, AttributeAnnotation]
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "attributes",
+        "base",
+        "description",
+        "meta",
+        "parameters",
+        "redaction",
+        "required",
+        "specification",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        base: Any,
+        parameters: Sequence[AttributeAnnotation] = (),
+        attributes: Mapping[str, AttributeAnnotation],
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "parameters", parameters)
+        object.__setattr__(self, "attributes", attributes)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def type_name(self) -> str:
@@ -2327,15 +3178,50 @@ class TypedDictAttribute(Immutable):
         return self
 
 
-class FunctionAttribute(Immutable):
+@final
+class FunctionAttribute:
     base: Any
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        base: Any,
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def type_name(self) -> str:
@@ -2426,7 +3312,7 @@ class FunctionAttribute(Immutable):
 
 
 @final
-class CallableSignature(Immutable):
+class CallableSignature:
     """
     The arguments of a ``Callable`` annotation, all passed by position.
 
@@ -2441,10 +3327,23 @@ class CallableSignature(Immutable):
 
     arguments: int
     extensible: bool
+    __slots__ = ("arguments", "extensible")
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        arguments: int,
+        extensible: bool,
+    ) -> None:
+        object.__setattr__(self, "arguments", arguments)
+        object.__setattr__(self, "extensible", extensible)
 
 
 @final
-class ProtocolSignature(Immutable):
+class ProtocolSignature:
     """
     The parameters of the ``__call__`` of a callback protocol.
 
@@ -2461,6 +3360,21 @@ class ProtocolSignature(Immutable):
     protocol: type[Any]
     parameters: Sequence[inspect.Parameter]
     extensible: bool
+    __slots__ = ("extensible", "parameters", "protocol")
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        protocol: type[Any],
+        parameters: Sequence[inspect.Parameter],
+        extensible: bool,
+    ) -> None:
+        object.__setattr__(self, "protocol", protocol)
+        object.__setattr__(self, "parameters", parameters)
+        object.__setattr__(self, "extensible", extensible)
 
 
 type FunctionSignature = CallableSignature | ProtocolSignature
@@ -2571,16 +3485,54 @@ def _protocol_signature(
     return ProtocolSignature(protocol=protocol, parameters=parameters, extensible=False)
 
 
-class UnionAttribute(Immutable):
+@final
+class UnionAttribute:
     base: Any
-    alternatives: Sequence[AttributeAnnotation] = ()
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alternatives: Sequence[AttributeAnnotation]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "alternatives",
+        "base",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        base: Any,
+        alternatives: Sequence[AttributeAnnotation] = (),
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "alternatives", alternatives)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def type_name(self) -> str:
@@ -2659,16 +3611,54 @@ class UnionAttribute(Immutable):
         return self
 
 
-class CustomAttribute(Immutable):
+@final
+class CustomAttribute:
     base: Any
-    parameters: Sequence[AttributeAnnotation] = ()
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    parameters: Sequence[AttributeAnnotation]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "meta",
+        "parameters",
+        "redaction",
+        "required",
+        "specification",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        base: Any,
+        parameters: Sequence[AttributeAnnotation] = (),
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "parameters", parameters)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def type_name(self) -> str:
@@ -2747,15 +3737,50 @@ class CustomAttribute(Immutable):
         return self
 
 
-class StrEnumAttribute(Immutable):
+@final
+class StrEnumAttribute:
     base: type[enum.StrEnum]
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        base: type[enum.StrEnum],
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def type_name(self) -> str:
@@ -2832,15 +3857,50 @@ class StrEnumAttribute(Immutable):
         return self
 
 
-class IntEnumAttribute(Immutable):
+@final
+class IntEnumAttribute:
     base: type[enum.IntEnum]
-    alias: str | None = None
-    description: str | None = None
-    verifying: Verifying[Any] = _no_verify
-    required: bool = True
-    specification: TypeSpecification | None = None
-    meta: Meta = Meta.empty
-    redaction: str | None = None
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "verifying",
+    )
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        base: type[enum.IntEnum],
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def type_name(self) -> str:
@@ -2921,14 +3981,13 @@ def resolve_self_attribute(
     cls: type[Any],
     /,
     parameters: Mapping[str, Any],
-    namespace: Mapping[str, Any] | None = None,
+    # annotations of the attributes of the class, the inherited ones included, read
+    # by the caller before the class existed - its namespace would otherwise shadow
+    # a type used as an annotation with the descriptor of the same name
+    annotations: Mapping[str, Any],
     # names the class provides a default for - the class itself can't be asked,
-    # since a slot descriptor stands in for every attribute, default or not
+    # since a descriptor stands in for every attribute, default or not
     defaults: Set[str] = frozenset(),
-    # annotations of the class and everything it inherits, resolved by the caller
-    # before the class existed - its namespace would otherwise shadow a type used
-    # as an annotation with the slot descriptor of the same name
-    annotations: Mapping[str, Any] | None = None,
 ) -> ObjectAttribute:
     recursion_guard: MutableMapping[Any, AttributeAnnotation] = {}
     resolved_parameters: Mapping[str, AttributeAnnotation] = {
@@ -2957,62 +4016,7 @@ def resolve_self_attribute(
         )
     ] = self_attribute
 
-    resolved_annotations: Mapping[str, Any]
-    annotate = (
-        annotationlib.get_annotate_from_class_namespace(namespace)
-        if namespace is not None and annotations is None
-        else None
-    )
-    if annotations is not None:
-        resolved_annotations = annotations
-
-    elif annotate is not None:
-        collected: MutableMapping[str, Any] = {}
-        for base in reversed(self_attribute.base.__mro__[1:-1]):
-            base_annotate = getattr(base, "__annotate__", None)
-            if base_annotate is not None:
-                collected.update(
-                    annotationlib.call_annotate_function(
-                        base_annotate,
-                        annotationlib.Format.FORWARDREF,
-                        owner=base,
-                    )
-                )
-
-            else:
-                collected.update(
-                    get_type_hints(
-                        base,
-                        localns={base.__name__: base},
-                        include_extras=True,
-                    )
-                )
-
-        collected.update(
-            annotationlib.call_annotate_function(
-                annotate,
-                annotationlib.Format.FORWARDREF,
-                owner=self_attribute.base,
-            )
-        )
-        resolved_annotations = collected
-
-    else:
-        resolved_annotations = get_type_hints(
-            self_attribute.base,
-            localns={
-                self_attribute.base.__name__: self_attribute.base,
-            },
-            include_extras=True,
-        )
-
-    for key, annotation in resolved_annotations.items():
-        if key.startswith("__"):
-            continue  # do not include special items
-
-        if get_origin(annotation) is ClassVar:
-            continue  # do not include class variables
-
+    for key, annotation in annotations.items():
         attribute: AttributeAnnotation = resolve_attribute(
             annotation,
             localns={self_attribute.base.__name__: self_attribute.base},

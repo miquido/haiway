@@ -1,12 +1,13 @@
 import copy
 import weakref
 from collections.abc import Mapping, Sequence, Set
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Self, final
 
 import pytest
 from pytest import mark, raises
 
-from haiway import Alias, Immutable, Missing, State, ValidationError
+from haiway import Alias, Missing, State, ValidationError
+from haiway.types.frozen import refuse_assignment, refuse_deletion
 
 
 class Point(State):
@@ -115,8 +116,19 @@ def test_deepcopy_never_exposes_a_partially_copied_instance() -> None:
     assert not any(isinstance(value, _Holding) for value in (*seen, *memo.values()))
 
 
-class _Record(Immutable):
+@final
+class _Record:
     value: int
+    __slots__ = ("value",)
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(self, *, value: int) -> None:
+        object.__setattr__(self, "value", value)
+
+    def __deepcopy__(self, memo: dict[int, Any] | None) -> Self:
+        return self  # its own copy
 
 
 class _Recording(State):
@@ -135,7 +147,7 @@ class _Wrapping(State):
 
 
 def test_deepcopy_uses_the_copy_of_held_instances_defining_their_own() -> None:
-    # an Immutable is its own copy, and equal to itself alone - the copy holding it has to
+    # a frozen record is its own copy, and equal to itself alone - the copy holding it has to
     # hold the very record, or it would not be equal to what it was copied from
     recording = _Recording(record=_Record(value=1))
     duplicate = copy.deepcopy(recording)
@@ -415,3 +427,38 @@ def test_hashing_a_deeply_nested_state_does_not_overflow_the_stack() -> None:
 
     except RecursionError:
         pass
+
+
+def test_updating_an_instance_which_was_never_initialized_is_refused() -> None:
+    class Pair(State):
+        first: int
+        second: int = 0
+
+    blank: Pair = Pair.__new__(Pair)
+    # carrying over a value which is not there would make an instance missing it
+    with pytest.raises(TypeError, match="not initialized"):
+        blank.updating(first=1)
+
+    with pytest.raises(TypeError, match="not initialized"):
+        blank.updating(**{"first": 1, "unknown": 2})
+
+    assert blank.updating(first=1, second=2) == Pair(first=1, second=2)
+
+
+def test_constructor_assigned_after_the_class_was_created_is_used() -> None:
+    class Counter(State):
+        value: int
+
+    def initialize(self: Counter, **values: Any) -> None:
+        State.__init__(self, value=values["value"] + 1)
+
+    Counter.__init__ = initialize  # pyright: ignore[reportAttributeAccessIssue]
+    try:
+        assert Counter(value=1).value == 2
+        assert Counter.validate({"value": 1}).value == 2
+        assert Counter.from_json('{"value": 1}').value == 2
+
+    finally:
+        del Counter.__init__
+
+    assert Counter(value=1).value == 1

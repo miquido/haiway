@@ -1,4 +1,4 @@
-from asyncio import Lock, sleep
+from asyncio import sleep
 from collections import deque
 from collections.abc import Callable, Coroutine
 from datetime import timedelta
@@ -93,8 +93,8 @@ def throttle[**Args, Result](
         function: Callable[Args, Coroutine[None, None, Result]],
     ) -> Callable[Args, Coroutine[None, None, Result]]:
         assert iscoroutinefunction(function)  # nosec: B101
-        entries: deque[float] = deque()
-        lock: Lock = Lock()
+        assert limit > 0, "Throttle limit has to be greater than 0"  # nosec: B101
+        starts: deque[float] = deque(maxlen=limit)
         throttle_period: float
         match period:
             case timedelta() as delta:
@@ -103,26 +103,22 @@ def throttle[**Args, Result](
             case period_seconds:
                 throttle_period = period_seconds
 
+        assert throttle_period >= 0, "Throttle period can't be negative"  # nosec: B101
+
         @wraps(function)
         async def throttle(
             *args: Args.args,
             **kwargs: Args.kwargs,
         ) -> Result:
-            async with lock:
-                time_now: float = monotonic()
-                while entries:  # cleanup old entries
-                    if entries[0] + throttle_period <= time_now:
-                        entries.popleft()
+            # reserve the slot without awaiting, so no other call can interleave
+            time_now: float = monotonic()
+            start_at: float = time_now
+            if len(starts) >= limit:  # oldest of the last `limit` reserved starts
+                start_at = max(time_now, starts[0] + throttle_period)
 
-                    else:
-                        break
-
-                if len(entries) >= limit:
-                    wait_for: float = entries[0] + throttle_period - time_now
-                    if wait_for > 0:
-                        await sleep(wait_for)
-
-                entries.append(monotonic())
+            starts.append(start_at)  # bounded, drops the oldest start
+            if start_at > time_now:
+                await sleep(start_at - time_now)
 
             return await function(*args, **kwargs)
 

@@ -168,6 +168,7 @@ def retry[**Args, Result](
 
     if function is not None:
         return _wrap(function)
+
     else:
         return _wrap
 
@@ -190,6 +191,7 @@ def _wrap_sync[**Args, Result](
         while True:
             try:
                 return function(*args, **kwargs)
+
             except CancelledError:
                 raise
 
@@ -236,6 +238,7 @@ def _wrap_async[**Args, Result](
         while True:
             try:
                 return await function(*args, **kwargs)
+
             except CancelledError:
                 raise
 

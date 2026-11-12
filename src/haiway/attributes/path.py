@@ -1,10 +1,10 @@
 import builtins
 import types
 import typing
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections import abc as collections_abc
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from copy import copy
 from typing import (
     Any,
@@ -18,6 +18,7 @@ from typing import (
     get_args,
     get_origin,
     overload,
+    runtime_checkable,
 )
 
 from haiway.attributes.annotations import ObjectAttribute
@@ -26,19 +27,10 @@ from haiway.types import Missing
 __all__ = ("AttributePath",)
 
 
-class _Replaceable(Protocol):
-    # `copy.replace` support - what State and Immutable implement
-    def __replace__(self, **changes: Any) -> Self: ...
-
-
-def _replaceable(value: object, /) -> TypeIs[_Replaceable]:
-    # what a runtime checkable protocol tells, without its far costlier check
-    return hasattr(value, "__replace__")
-
-
-class AttributePathComponent(ABC):
+@runtime_checkable
+class AttributePathComponent(Protocol):
     """
-    Abstract base class for components in an attribute path.
+    Base for components in an attribute path.
 
     This class defines the interface for components that make up an attribute path,
     such as property access, sequence item access, or mapping item access.
@@ -117,11 +109,10 @@ class AttributePathComponent(ABC):
         TypeError
             If the subject cannot be updated with the given value
         """
-        ...
 
 
 @final
-class PropertyAttributePathComponent(AttributePathComponent):
+class PropertyAttributePathComponent:
     __slots__ = (
         "_access",
         "_assigning",
@@ -299,7 +290,7 @@ class PropertyAttributePathComponent(AttributePathComponent):
 
 
 @final
-class SequenceItemAttributePathComponent(AttributePathComponent):
+class SequenceItemAttributePathComponent:
     """
     Path component for accessing items in a sequence by index.
 
@@ -471,7 +462,7 @@ class SequenceItemAttributePathComponent(AttributePathComponent):
 
 
 @final
-class MappingItemAttributePathComponent(AttributePathComponent):
+class MappingItemAttributePathComponent:
     __slots__ = (
         "_access",
         "_assigning",
@@ -733,7 +724,7 @@ class AttributePath[Root, Attribute]:
             "__attribute__",
             attribute,
         )
-        self.__components__: tuple[AttributePathComponent, ...]
+        self.__components__: Sequence[AttributePathComponent]
         object.__setattr__(
             self,
             "__components__",
@@ -741,7 +732,7 @@ class AttributePath[Root, Attribute]:
         )
         # a path is immutable, so the one reached by an attribute or an item is always the
         # same - it is made once and kept, instead of resolving its annotation again
-        self.__children__: dict[Any, AttributePath[Root, Any]]
+        self.__children__: MutableMapping[Any, AttributePath[Root, Any]]
         object.__setattr__(
             self,
             "__children__",
@@ -839,7 +830,7 @@ class AttributePath[Root, Attribute]:
         AttributeError
             If the attribute is not found or cannot be accessed
         """
-        children: dict[Any, AttributePath[Root, Any]] = self.__children__
+        children: MutableMapping[Any, AttributePath[Root, Any]] = self.__children__
         if (known := children.get(name)) is not None:
             return known
 
@@ -911,7 +902,7 @@ class AttributePath[Root, Attribute]:
         """
         # the items of the same kind, from the same path, are the same path
         item: tuple[str, str | int] = (type(key).__name__, key)
-        children: dict[Any, AttributePath[Root, Any]] = self.__children__
+        children: MutableMapping[Any, AttributePath[Root, Any]] = self.__children__
         if (known := children.get(item)) is not None:
             return known
 
@@ -1180,3 +1171,13 @@ def _unaliased_origin(base: Any) -> Any:
         return tuple(_unaliased_origin(arg) for arg in get_args(base))
 
     return get_origin(base) or base
+
+
+class _Replaceable(Protocol):
+    # `copy.replace` support - what State implements
+    def __replace__(self, **changes: Any) -> Self: ...
+
+
+def _replaceable(value: object, /) -> TypeIs[_Replaceable]:
+    # what a runtime checkable protocol tells, without its far costlier check
+    return hasattr(value, "__replace__")

@@ -239,7 +239,7 @@ def _object_variables(
     other: object,
     /,
 ) -> Iterable[tuple[str, str | None, Any]] | None:
-    # `State` and `Immutable` keep their values in slots, so the names come from
+    # `State` keeps its values in slots, so the names come from
     # what the type declares rather than from an instance `__dict__`
     if fields := getattr(type(other), "__FIELDS__", ()):
         # an attribute annotated with Sensitive carries the redaction to render

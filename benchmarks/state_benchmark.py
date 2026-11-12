@@ -13,6 +13,7 @@ numbers depend on the machine, compare runs made on the same one.
 """
 
 import argparse
+import asyncio
 import copy
 import json
 import sys
@@ -25,7 +26,7 @@ from timeit import Timer
 from typing import Annotated, Any
 from uuid import UUID
 
-from haiway import Alias, State
+from haiway import Alias, State, ctx, statemethod
 
 
 class Mode(StrEnum):
@@ -107,6 +108,14 @@ def _double(value: int) -> int:
     return value * 2
 
 
+class Stated(State):
+    number: int
+
+    @statemethod
+    def add(self, value: int) -> int:
+        return self.number + value
+
+
 SIMPLE_KWARGS: Mapping[str, Any] = {"number": 1, "text": "text", "ratio": 1.5, "flag": True}
 ALIASED_KWARGS: Mapping[str, Any] = {"id": 1, "name": "name"}
 RICH_KWARGS: Mapping[str, Any] = {
@@ -159,6 +168,7 @@ def cases() -> Mapping[str, Callable[[], object]]:
     operation: Operation = Operation(apply=_double)
     plain: PlainSimple = PlainSimple(**SIMPLE_KWARGS)
     aliased: Aliased = Aliased(**ALIASED_KWARGS)
+    stated: Stated = Stated(number=1)
 
     return {
         # creation
@@ -227,6 +237,11 @@ def cases() -> Mapping[str, Callable[[], object]]:
         "copy/shallow": lambda: copy.copy(simple),
         "copy/deep simple": lambda: copy.deepcopy(simple),
         "copy/deep nested": lambda: copy.deepcopy(outer),
+        # statemethod - the class call resolves the state from the scope main enters
+        "statemethod/class call (state from ctx)": lambda: Stated.add(1),
+        "statemethod/instance call": lambda: stated.add(1),
+        "statemethod/instance access": lambda: stated.add,
+        "statemethod/class access": lambda: Stated.add,
         # definition
         "define/class with four attributes": _define_simple,
         "define/generic class and a variant": _define_generic,
@@ -274,14 +289,21 @@ def format_time(nanoseconds: float) -> str:
     return f"{nanoseconds:9.1f} ns"
 
 
+async def run(arguments: argparse.Namespace) -> int:
+    async with ctx.scope("benchmark", Stated(number=1)):
+        return measure_all(arguments)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0] if __doc__ else None)
     parser.add_argument("--json", type=Path)
     parser.add_argument("--compare", type=Path)
     parser.add_argument("--filter", default="")
     parser.add_argument("--budget", type=float, default=0.2)
-    arguments = parser.parse_args()
+    return asyncio.run(run(parser.parse_args()))
 
+
+def measure_all(arguments: argparse.Namespace) -> int:
     baseline: Mapping[str, float] = (
         json.loads(arguments.compare.read_text()) if arguments.compare else {}
     )

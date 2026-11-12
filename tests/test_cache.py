@@ -1,6 +1,7 @@
-from asyncio import CancelledError, sleep
+from asyncio import CancelledError, run, sleep
 from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import asynccontextmanager
+from threading import Thread
 
 from pytest import fixture, mark, raises
 
@@ -283,3 +284,31 @@ async def test_external_cache_writes_while_disposables_are_prepared() -> None:
     # the computed value is returned and cached instead of lost to a failed spawn
     assert computed == [5]
     assert backend == {"cache:alpha": 5}
+
+
+def test_local_cache_is_consistent_across_threads():
+    @cache(limit=4, expiration=0.0005)
+    async def cached(value: int) -> int:
+        return value
+
+    errors: list[BaseException] = []
+
+    def worker(seed: int) -> None:
+        async def work() -> None:
+            for index in range(3000):
+                try:
+                    assert await cached((index + seed) % 8) == (index + seed) % 8
+
+                except BaseException as exc:
+                    errors.append(exc)
+
+        run(work())
+
+    threads = [Thread(target=worker, args=(seed,)) for seed in range(6)]
+    for thread in threads:
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    assert errors == []

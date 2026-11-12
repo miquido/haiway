@@ -176,7 +176,13 @@ def basic_object(
     strict: bool = True,
     path: tuple[str, ...] = (),
 ) -> BasicObject:
-    return Map(_basic_items(mapping, strict=strict, path=path))
+    return Map(
+        _basic_items(
+            mapping,
+            strict=strict,
+            path=path,
+        )
+    )
 
 
 # Keys are converted through the same table and then spelled the way json spells

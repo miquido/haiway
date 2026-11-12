@@ -16,8 +16,8 @@ class DefaultValue:
     Immutable resolver for field default values.
 
     ``DefaultValue`` stores exactly one default source: a literal value, a factory
-    callable, or an environment variable lookup. The owning ``Immutable`` or
-    ``State`` type calls the instance during object construction to resolve the
+    callable, or an environment variable lookup. The owning ``State``
+    type calls the instance during object construction to resolve the
     effective value for that field.
 
     Parameters
@@ -206,11 +206,11 @@ def Default[Value](
     # the overloads resolve the field type, an environment backed default with a
     # fallback resolves to the union of the two and cannot be stated here
 ) -> Any:
-    """Create a field default resolver for ``Immutable`` and ``State`` types.
+    """Create a field default resolver for ``State`` types.
 
     The returned object is a ``DefaultValue`` instance disguised as ``Value`` so
     static type checkers treat the annotated field as its resolved runtime type.
-    Haiway consumes it while constructing an ``Immutable`` or ``State``
+    Haiway consumes it while constructing a ``State``
     subclass; it is not a descriptor and it does not defer resolution until
     attribute access.
 

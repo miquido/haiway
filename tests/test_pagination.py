@@ -39,7 +39,7 @@ def test_pagination_limit_validation() -> None:
 
 
 def test_paginated_is_sequence_and_immutable() -> None:
-    page = Paginated.of([1, 2, 3], pagination=Pagination(limit=3, arguments={}))
+    page = Paginated([1, 2, 3], pagination=Pagination(limit=3, arguments={}))
 
     assert len(page) == 3
     assert list(page) == [1, 2, 3]
@@ -122,7 +122,7 @@ def test_pagination_with_arguments_does_not_modify_original() -> None:
 
 def test_paginated_exposes_items_and_pagination() -> None:
     pagination = Pagination.of(token="next", limit=2)
-    page: Paginated[str] = Paginated.of(iter(["a", "b"]), pagination=pagination)
+    page: Paginated[str] = Paginated(iter(["a", "b"]), pagination=pagination)
 
     assert page.items == ("a", "b")
     assert page.pagination is pagination
@@ -138,7 +138,7 @@ def test_paginated_exposes_items_and_pagination() -> None:
 
 def test_paginated_does_not_follow_source_mutations() -> None:
     source = [1, 2]
-    page: Paginated[int] = Paginated.of(source, pagination=Pagination.of(limit=10))
+    page: Paginated[int] = Paginated(source, pagination=Pagination.of(limit=10))
 
     source.append(3)
 
@@ -163,7 +163,7 @@ def test_paginated_has_next_page(
     limit: int,
     expected: bool,
 ) -> None:
-    page: Paginated[int] = Paginated.of(
+    page: Paginated[int] = Paginated(
         range(items), pagination=Pagination.of(token=token, limit=limit)
     )
 
@@ -171,14 +171,14 @@ def test_paginated_has_next_page(
 
 
 def test_paginated_empty_page_is_falsy() -> None:
-    page: Paginated[int] = Paginated.of((), pagination=Pagination.of(limit=1))
+    page: Paginated[int] = Paginated((), pagination=Pagination.of(limit=1))
 
     assert not page
     assert len(page) == 0
 
 
 def test_paginated_rejects_attribute_changes() -> None:
-    page: Paginated[int] = Paginated.of([1], pagination=Pagination.of(limit=1))
+    page: Paginated[int] = Paginated([1], pagination=Pagination.of(limit=1))
 
     with pytest.raises(AttributeError, match="cannot be modified"):
         page.items = ()  # pyright: ignore[reportAttributeAccessIssue]
@@ -191,7 +191,7 @@ def test_paginated_rejects_attribute_changes() -> None:
 
 
 def test_paginated_str_repr_and_copies() -> None:
-    page: Paginated[int] = Paginated.of([1, 2], pagination=Pagination.of(limit=2))
+    page: Paginated[int] = Paginated([1, 2], pagination=Pagination.of(limit=2))
 
     assert str(page).startswith("Paginated(items: (1, 2), pagination: ")
     assert repr(page) == str(page)

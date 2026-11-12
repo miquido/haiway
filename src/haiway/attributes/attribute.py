@@ -1,28 +1,45 @@
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, final
 
 from haiway._native import nstruct
 from haiway.attributes.annotations import AttributeAnnotation
 from haiway.attributes.specification import type_specification
 from haiway.types import (
     DefaultValue,
-    Immutable,
     Missing,
     TypeSpecification,
 )
+from haiway.types.frozen import refuse_assignment, refuse_deletion
 
 __all__ = ("Attribute",)
 
 
-class Attribute(Immutable):
+@final
+class Attribute:
     name: str
     annotation: AttributeAnnotation
     default: DefaultValue
-    # the compiled description of the annotation, what validates a value of it
     spec: Any
-    # text rendered instead of the value when the attribute is marked sensitive,
-    # resolved once from the annotation - the renderers read it on each rendering
-    redaction: str | None = None
+    redaction: str | None
+    __slots__ = ("annotation", "default", "name", "redaction", "spec")
+
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        annotation: AttributeAnnotation,
+        default: DefaultValue,
+        spec: Any,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "annotation", annotation)
+        object.__setattr__(self, "default", default)
+        object.__setattr__(self, "spec", spec)
+        object.__setattr__(self, "redaction", redaction)
 
     @property
     def alias(self) -> str | None:

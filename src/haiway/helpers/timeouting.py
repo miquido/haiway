@@ -36,7 +36,7 @@ def timeout[**Args, Result](
       TimeoutError is raised only after the cancellation has fully unwound, so
       the caller can rely on all resources being released once it observes it.
     - The wrapped function runs within the caller's task, its context is shared.
-    - Not thread-safe, should only be used within a single event loop.
+    - Holds no state of its own, so it is safe to use from any event loop or thread.
     - The original function should handle cancellation properly to ensure
       resources are released when timeout occurs.
 
@@ -51,49 +51,21 @@ def timeout[**Args, Result](
     def _wrap(
         function: Callable[Args, Coroutine[None, None, Result]],
     ) -> Callable[Args, Coroutine[None, None, Result]]:
-        return wraps(function)(
-            _AsyncTimeout(
-                function,
-                timeout=timeout,
-            )
-        )
+        # a plain coroutine function - it stays recognizable as one, so it can be wrapped
+        # further (throttle, cache), and binds as a method like the function it wraps
+        @wraps(function)
+        async def timed(
+            *args: Args.args,
+            **kwargs: Args.kwargs,
+        ) -> Result:
+            # asyncio.timeout awaits the cancellation it triggers before raising,
+            # and takes care of distinguishing it from cancellation coming from outside
+            async with async_timeout(timeout):
+                return await function(
+                    *args,
+                    **kwargs,
+                )
+
+        return timed
 
     return _wrap
-
-
-class _AsyncTimeout[**Args, Result]:
-    __slots__ = (
-        "__annotations__",
-        "__defaults__",
-        "__dict__",
-        "__doc__",
-        "__globals__",
-        "__kwdefaults__",
-        "__name__",
-        "__qualname__",
-        "__wrapped__",
-        "_function",
-        "_timeout",
-    )
-
-    def __init__(
-        self,
-        function: Callable[Args, Coroutine[None, None, Result]],
-        /,
-        timeout: float,
-    ) -> None:
-        self._function: Callable[Args, Coroutine[None, None, Result]] = function
-        self._timeout: float = timeout
-
-    async def __call__(
-        self,
-        *args: Args.args,
-        **kwargs: Args.kwargs,
-    ) -> Result:
-        # asyncio.timeout awaits the cancellation it triggers before raising,
-        # and takes care of distinguishing it from cancellation coming from outside
-        async with async_timeout(self._timeout):
-            return await self._function(
-                *args,
-                **kwargs,
-            )

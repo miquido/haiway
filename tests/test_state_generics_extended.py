@@ -5,6 +5,7 @@ from typing import Annotated, Any, Concatenate, Generic, TypeVar
 import pytest
 
 from haiway import State, Verifier
+from haiway.attributes.generics import argument_variances, bind_type_arguments, parameter_variances
 from haiway.attributes.validation import ValidationError
 
 
@@ -410,3 +411,36 @@ def test_variance_is_read_through_a_concatenate() -> None:
 
     assert issubclass(Prefixed[[Animal]], Prefixed[[Dog]])  # pyright: ignore[reportArgumentType]
     assert not issubclass(Prefixed[[Dog]], Prefixed[[Animal]])  # pyright: ignore[reportArgumentType]
+
+
+def test_variance_is_taken_through_a_nested_generic_with_a_variadic_parameter() -> None:
+    class Consuming[*Ts, U](State):
+        call: Callable[[U], None]
+
+    class Wrapper[T](State):
+        inner: Consuming[int, str, T]
+
+    assert parameter_variances(Wrapper) == {"T": "contra"}
+    assert issubclass(Wrapper[Animal], Wrapper[Dog])  # pyright: ignore[reportArgumentType]
+    assert not issubclass(Wrapper[Dog], Wrapper[Animal])  # pyright: ignore[reportArgumentType]
+
+
+def test_argument_variances_follow_the_arguments_around_a_variadic_parameter() -> None:
+    class Mixed[T, *Ts, U](State):
+        call: Callable[[U], T]
+
+    assert argument_variances(Mixed, 4) == ["co", "co", "co", "contra"]
+    assert argument_variances(Mixed, 2) == ["co", "contra"]
+
+
+def test_bound_arguments_are_split_around_a_variadic_parameter() -> None:
+    class Mixed[T, *Ts, U](State):
+        value: T
+
+    bindings, flat = bind_type_arguments(Mixed, (int, str, bytes, float))
+
+    assert [argument for _, argument in bindings] == [int, (str, bytes), float]
+    assert flat == (int, str, bytes, float)
+
+    with pytest.raises(TypeError):
+        bind_type_arguments(Mixed, (int,))

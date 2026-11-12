@@ -142,3 +142,12 @@ def test_rejects_sync_functions() -> None:
 
     with pytest.raises(AssertionError):
         throttle(sync_function)  # pyright: ignore[reportArgumentType, reportCallIssue]
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_rejects_non_positive_limit(limit: int):
+    async def call() -> None:
+        pass
+
+    with pytest.raises(AssertionError):
+        throttle(limit=limit)(call)

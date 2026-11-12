@@ -217,7 +217,7 @@ class HTTPResponse:
     >>> data = json.loads(await response.body())
     """
 
-    # not an Immutable - the body is read, and cached, after the response is made. the
+    # not a frozen record - the body is read, and cached, after the response is made. the
     # status and the headers are bound once, the body is the one thing which changes
     __slots__ = (
         "_body",

@@ -287,7 +287,7 @@ class Item(State, Named):  # TypeError - a State inherits from a single State
 
 The values of a `State` live inline in the instance, right after its header, so a base which brings
 slots, a `__dict__` or a layout of its own (as `int` does) could never be combined with it safely
-anyway. `Immutable` follows the same rule - its records inherit from `Immutable` alone.
+anyway.
 
 Slots, defaults, annotations, and type arguments are all resolved once, when the class is created,
 and the nominal identity that equality, instance checks, and schema generation rely on assumes they
@@ -649,11 +649,9 @@ Calling a class with keyword arguments, `Point(x=1, y=2)`, and updating, `point.
 the fastest ways to build and change an instance. To build an instance from a mapping use
 `Point.validate(values)` rather than unpacking it into the call, `Point(**values)`.
 
-`Immutable` is stored the same way. It validates nothing, and its attributes are bound once:
-`setattr`, `delattr` and `object.__setattr__` all refuse to rebind one - while a mutable value it
-was given stays mutable. A class whose instances have to change after they are made - a client
-opening a connection, a response caching its body - is a plain class with `__slots__` instead. After
-changing the C source run `make native`, as `uv sync` does not recompile it.
+A class whose instances have to change after they are made - a client opening a connection, a
+response caching its body - is a plain class with `__slots__` instead. After changing the C source
+run `make native`, as `uv sync` does not recompile it.
 
 ### Performance Considerations
 
