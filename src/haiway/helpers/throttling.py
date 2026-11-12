@@ -1,6 +1,7 @@
 from asyncio import sleep
 from collections import deque
 from collections.abc import Callable, Coroutine
+from contextlib import suppress
 from datetime import timedelta
 from functools import wraps
 from inspect import iscoroutinefunction
@@ -94,7 +95,9 @@ def throttle[**Args, Result](
     ) -> Callable[Args, Coroutine[None, None, Result]]:
         assert iscoroutinefunction(function)  # nosec: B101
         assert limit > 0, "Throttle limit has to be greater than 0"  # nosec: B101
-        starts: deque[float] = deque(maxlen=limit)
+        # reserved starts, in order - the ones which can't limit a call anymore are
+        # dropped as calls come, so a waiting call can give its reservation back
+        starts: deque[float] = deque()
         throttle_period: float
         match period:
             case timedelta() as delta:
@@ -112,13 +115,25 @@ def throttle[**Args, Result](
         ) -> Result:
             # reserve the slot without awaiting, so no other call can interleave
             time_now: float = monotonic()
-            start_at: float = time_now
-            if len(starts) >= limit:  # oldest of the last `limit` reserved starts
-                start_at = max(time_now, starts[0] + throttle_period)
+            while starts and starts[0] + throttle_period <= time_now:
+                starts.popleft()
 
-            starts.append(start_at)  # bounded, drops the oldest start
+            start_at: float = time_now
+            if len(starts) >= limit:  # a period after the last `limit` reserved starts
+                start_at = max(time_now, starts[-limit] + throttle_period)
+
+            starts.append(start_at)
             if start_at > time_now:
-                await sleep(start_at - time_now)
+                try:
+                    await sleep(start_at - time_now)
+
+                except BaseException:
+                    # a call which never started does not count - any subset of the
+                    # reservations still keeps every period within the limit
+                    with suppress(ValueError):
+                        starts.remove(start_at)
+
+                    raise
 
             return await function(*args, **kwargs)
 

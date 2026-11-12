@@ -136,6 +136,40 @@ async def test_cancellation_while_waiting_propagates() -> None:
     assert calls == [1]
 
 
+@pytest.mark.asyncio
+async def test_cancelled_waiting_calls_give_their_reservations_back() -> None:
+    @throttle(limit=1, period=0.3)
+    async def call() -> float:
+        return monotonic()
+
+    first: float = await call()
+    waiting = [create_task(call()) for _ in range(3)]
+    await sleep(0)
+    for task in waiting:
+        task.cancel()
+
+    await gather(*waiting, return_exceptions=True)
+    # one period after the call which ran, not after the ones which never did
+    started: float = await call()
+    assert 0.25 <= started - first < 0.5
+
+
+@pytest.mark.asyncio
+async def test_cancelled_reservation_does_not_open_extra_slot() -> None:
+    @throttle(limit=2, period=0.3)
+    async def call() -> float:
+        return monotonic()
+
+    first: float = await call()
+    await call()
+    waiting = create_task(call())
+    await sleep(0)
+    waiting.cancel()
+    await gather(waiting, return_exceptions=True)
+    # both slots of the period are still taken by the calls which ran
+    assert await call() - first >= 0.25
+
+
 def test_rejects_sync_functions() -> None:
     def sync_function() -> None:
         return None
