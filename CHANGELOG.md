@@ -99,6 +99,25 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
   longer reported as one in traces and in the request duration metric. A route reached more than
   one way through the route table records no `http.route`. Dashboards and alerts keyed by the
   previous values need updating.
+- **Invalid arguments raise instead of failing an assertion**, so an optimized build (`python -O`)
+  no longer lets them through:
+  - `Alias("")` and `Specification({})` raise `ValueError`.
+  - A `Default` combining a factory with a value or a variable raises `ValueError`, and so does
+    a mapping without a variable.
+  - `Meta.of` raises `ValueError` for values given together with metadata (an optimized build
+    dropped them), and `TypeError` for something which is not a mapping.
+  - `AsyncQueue(limit=...)` raises `ValueError` for a limit which is not positive (an optimized
+    build made a queue dropping everything).
+  - A second consumer of an `AsyncQueue` or an `AsyncStream`, and sending to an `AsyncStream`
+    from another event loop, raise `RuntimeError`.
+  - `ConfigurationRepository.volatile` and `define` raise `TypeError` for arguments which are
+    not configurations, or a value missing or given where it does not belong.
+
+  Migration: catch the new exceptions instead of `AssertionError`.
+- **`Meta` refuses keys which are not strings** in `validate`, `of`, `from_mapping` and
+  `merged_with`, as `|` always did - a `TypeError`.
+- `ConfigurationRepository.volatile` lists the configurations which loading accepts as the given
+  class, compared by `isinstance` - it compared the names of the classes.
 
 #### Added
 
@@ -159,6 +178,36 @@ it enables the GIL. Supporting the free-threaded build is left for a later relea
 
 #### Fixed
 
+- **A generic `State` keeps the metadata of an annotated type parameter** - in
+  `value: Annotated[T, ...]` a `Sensitive` marker, an `Alias`, a `Description` and the validators
+  were ignored, so a `Sensitive` value was printed in `repr` and in logs. Present since generic
+  states were introduced.
+- **A type parameter of a generic `TypedDict` or class is validated** - bound to its argument
+  without resolving it, it was taken as is, and `Required[T]`, `NotRequired[T]` and `Final[T]`
+  around a parameter validated nothing.
+- `ctx.disposables` releases its disposables with the failure of a task spawned within it, or with
+  the cancellation of joining them - they were released as if the body succeeded, so a disposable
+  committing on success committed.
+- `cache` and `cache_externally` return a coroutine function - `retry` over a cached function
+  never retried, and `throttle` over one refused it.
+- `asynchronous` wraps a function annotated with names declared after it - the annotations were
+  read eagerly, raising `NameError`. The wrapper carries the attributes of the function through
+  `functools.update_wrapper`, so its `__annotations__` are those of the function - the return
+  annotation is no longer rewritten to a `Coroutine`.
+- A finished `AsyncQueue` or `AsyncStream` raises its finish reason with the same traceback on
+  every call - raising the same instance again extended its traceback each time.
+- `escape_controls`, and the formatting of logs with it, escapes the Unicode line and paragraph
+  separators (U+2028, U+2029), which split a record into lines as a line feed does.
+- `Alias`, `Description`, `Default`, `Sensitive` and `Specification` can be copied, returning
+  themselves as other immutable values do - `copy` and `deepcopy` raised `AttributeError`.
+- No private API of the standard library or CPython is used any more: the default cache key, the
+  resolution of generic aliases, callback protocols and forward references, and the lazy
+  compilation of aliases in the extension (`PyMutex` instead of CPython's internal atomics) use
+  public interfaces. A test guards against reintroducing them.
+- `State.updating`, `validate`, `__replace__` and `__deepcopy__` carry docstrings, and the
+  protocols used in public signatures of the helpers (`CacheClear`, `FileReading`, `FileWriting`,
+  `PathTraversing`, `MQMessageAcknowledging`, `MQMessageRejecting` and the `Configuration*ing`
+  protocols) are exported from `haiway.helpers`.
 - An event subscription made after its scope began closing - from a task spawned within it -
   completes at once instead of waiting forever.
 - The observability backend learns a scope ended when resetting its context fails, as for an async

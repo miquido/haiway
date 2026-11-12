@@ -66,8 +66,13 @@ _LOCK_RETRY_MAX: Final[float] = 0.25
 __all__ = (
     "Directory",
     "File",
+    "FileAccess",
+    "FileAccessing",
     "FileException",
+    "FileReading",
+    "FileWriting",
     "Files",
+    "PathTraversing",
     "Paths",
 )
 

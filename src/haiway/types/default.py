@@ -1,7 +1,8 @@
 from collections.abc import Callable
 from os import getenv as os_getenv
-from typing import Any, NoReturn, cast, final, overload
+from typing import Any, cast, final, overload
 
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 from haiway.types.missing import Missing
 
 __all__ = (
@@ -75,7 +76,9 @@ class DefaultValue:
             env if env is not Missing else None,
         )
         if default_factory is not Missing:
-            assert default is Missing and env is Missing and mapping is Missing  # nosec: B101
+            if default is not Missing or env is not Missing or mapping is not Missing:
+                raise ValueError("A default factory can't be combined with other sources")
+
             object.__setattr__(
                 self,
                 "_resolve",
@@ -117,7 +120,9 @@ class DefaultValue:
             )
 
         else:
-            assert mapping is Missing  # nosec: B101
+            if mapping is not Missing:
+                raise ValueError("A default mapping applies to an environment variable only")
+
             object.__setattr__(
                 self,
                 "_resolve",
@@ -138,18 +143,10 @@ class DefaultValue:
     def __call__(self) -> Any | Missing:
         return self._resolve()
 
-    def __setattr__(
-        self,
-        __name: str,
-        __value: Any,
-    ) -> NoReturn:
-        raise AttributeError("DefaultValue can't be modified")
-
-    def __delattr__(
-        self,
-        __name: str,
-    ) -> NoReturn:
-        raise AttributeError("DefaultValue can't be modified")
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
 
 
 @overload

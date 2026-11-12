@@ -34,6 +34,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
 
     __slots__ = (
         "_finish_reason",
+        "_finish_traceback",
         "_loop",
         "_pending",
         "_waiting",
@@ -73,6 +74,14 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         object.__setattr__(
             self,
             "_finish_reason",
+            None,
+        )
+        # the traceback the reason came with - it is raised again to every call after
+        # finishing, and raising the same instance would extend its traceback each time
+        self._finish_traceback: TracebackType | None
+        object.__setattr__(
+            self,
+            "_finish_traceback",
             None,
         )
 
@@ -135,7 +144,8 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         RuntimeError
             If the stream has already been finished
         """
-        assert get_running_loop() is self._loop  # nosec: B101
+        if get_running_loop() is not self._loop:
+            raise RuntimeError("AsyncStream can be sent to only within its own event loop")
 
         if self._finish_reason is not None:
             raise RuntimeError("AsyncStream is already finished")
@@ -176,6 +186,11 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             return  # already finished, ignore
 
         reason: BaseException = exception if exception is not None else StopAsyncIteration()
+        object.__setattr__(
+            self,
+            "_finish_traceback",
+            reason.__traceback__,
+        )
         object.__setattr__(
             self,
             "_finish_reason",
@@ -221,10 +236,11 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             The exception provided to finish(), or StopAsyncIteration if
             finish() was called without an exception
         """
-        assert self._waiting is None, "Only a single stream consumer is supported!"  # nosec: B101
+        if self._waiting is not None:
+            raise RuntimeError("Only a single stream consumer is supported!")
 
         if self._finish_reason is not None:
-            raise self._finish_reason
+            raise self._finish_reason.with_traceback(self._finish_traceback)
 
         while self._pending:
             consumed: Future[None]

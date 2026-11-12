@@ -269,3 +269,15 @@ class _PlainObject2:
     def __init__(self) -> None:
         self.items: list[int] = []
         self.mapping: dict[str, int] = {}
+
+
+@pytest.mark.parametrize("separator", [chr(0x2028), chr(0x2029)])
+@pytest.mark.parametrize("allow_newlines", [True, False])
+def test_escape_controls_escapes_unicode_line_separators(
+    separator: str,
+    allow_newlines: bool,
+) -> None:
+    # `str.splitlines` and many log viewers break lines at them - a forged record otherwise
+    escaped: str = escape_controls(f"value{separator}forged", allow_newlines=allow_newlines)
+    assert len(escaped.splitlines()) == 1
+    assert escaped == f"value\\u{ord(separator):04x}forged"

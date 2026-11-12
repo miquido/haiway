@@ -38,8 +38,18 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
     ----------
     *elements : Element
         Initial elements to populate the queue with
+    limit : int | None, default=None
+        Maximum number of buffered elements, the oldest dropped to make room for a new
+        one - initial elements beyond it included. None for an unbounded queue.
     loop : AbstractEventLoop | None, default=None
         Event loop to use for async operations. If None, the running loop is used.
+
+    Raises
+    ------
+    ValueError
+        If ``limit`` is not positive.
+    RuntimeError
+        From iteration, when a second consumer waits while another one already does.
 
     Notes
     -----
@@ -49,6 +59,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
 
     __slots__ = (
         "_finish_reason",
+        "_finish_traceback",
         "_loop",
         "_queue",
         "_waiting",
@@ -60,7 +71,10 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         limit: int | None = None,
         loop: AbstractEventLoop | None = None,
     ) -> None:
-        assert limit is None or limit > 0  # nosec: B101
+        # raised rather than asserted - an optimized build would make a queue dropping everything
+        if limit is not None and limit <= 0:
+            raise ValueError(f"AsyncQueue limit has to be positive, got {limit}")
+
         self._loop: AbstractEventLoop
         object.__setattr__(
             self,
@@ -83,6 +97,14 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         object.__setattr__(
             self,
             "_finish_reason",
+            None,
+        )
+        # the traceback the reason came with - it is raised again to every call after
+        # finishing, and raising the same instance would extend its traceback each time
+        self._finish_traceback: TracebackType | None
+        object.__setattr__(
+            self,
+            "_finish_traceback",
             None,
         )
 
@@ -187,10 +209,16 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         if self.is_finished:
             return  # already finished, ignore
 
+        reason: BaseException = StopAsyncIteration() if exception is None else exception
+        object.__setattr__(
+            self,
+            "_finish_traceback",
+            reason.__traceback__,
+        )
         object.__setattr__(
             self,
             "_finish_reason",
-            StopAsyncIteration() if exception is None else exception,
+            reason,
         )
 
         if self._waiting is not None and not self._waiting.done():
@@ -230,7 +258,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             return self._queue.popleft()
 
         if self._finish_reason is not None:  # check if is finished
-            raise self._finish_reason
+            raise self._finish_reason.with_traceback(self._finish_traceback)
 
         raise AsyncQueueEmpty()
 
@@ -254,13 +282,14 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         return await self.__anext__()
 
     async def __anext__(self) -> Element:
-        assert self._waiting is None, "Only a single queue consumer is supported!"  # nosec: B101
+        if self._waiting is not None:
+            raise RuntimeError("Only a single queue consumer is supported!")
 
         if self._queue:  # check the queue, let it finish
             return self._queue.popleft()
 
         if self._finish_reason is not None:  # check if is finished
-            raise self._finish_reason
+            raise self._finish_reason.with_traceback(self._finish_traceback)
 
         try:
             # create a new future to wait for next

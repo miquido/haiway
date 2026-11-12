@@ -2,12 +2,13 @@ from collections.abc import Mapping, Sequence
 from typing import (
     Any,
     Literal,
-    NoReturn,
     NotRequired,
     Required,
     TypedDict,
     final,
 )
+
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = (
     "Specification",
@@ -222,7 +223,8 @@ class Specification:
         specification: TypeSpecification,
         /,
     ) -> None:
-        assert specification  # nosec: B101
+        if not specification:
+            raise ValueError("Specification can't be empty")
 
         self.specification: TypeSpecification
         object.__setattr__(
@@ -231,15 +233,7 @@ class Specification:
             specification,
         )
 
-    def __setattr__(
-        self,
-        __name: str,
-        __value: Any,
-    ) -> NoReturn:
-        raise AttributeError("Specification can't be modified")
-
-    def __delattr__(
-        self,
-        __name: str,
-    ) -> NoReturn:
-        raise AttributeError("Specification can't be modified")
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy

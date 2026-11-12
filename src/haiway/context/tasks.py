@@ -3,7 +3,6 @@ from asyncio import (
     CancelledError,
     Task,
     TaskGroup,
-    gather,
     get_running_loop,
     wait,
 )
@@ -106,6 +105,8 @@ class BackgroundTaskGroup:
             return
 
         else:
+            # the failures of the tasks are retrieved by their done callbacks, nothing is
+            # left to wait for here - cancelling is all of it
 
             def cancel_tasks() -> None:
                 for task in loop_tasks:
@@ -113,25 +114,10 @@ class BackgroundTaskGroup:
                         task.cancel()
 
                     except RuntimeError:
-                        pass
+                        pass  # the loop closed meanwhile, it runs nothing anymore
 
-            async def drain_tasks() -> None:
-                await gather(
-                    *loop_tasks,
-                    return_exceptions=True,
-                )
-
-            def schedule_cleanup() -> None:
-                cancel_tasks()
-
-                try:
-                    loop.create_task(drain_tasks())  # noqa: RUF006
-
-                except RuntimeError:
-                    pass
-
-            try:
-                loop.call_soon_threadsafe(schedule_cleanup)
+            try:  # within the loop of the tasks - cancelling is not thread safe
+                loop.call_soon_threadsafe(cancel_tasks)
 
             except RuntimeError:
                 cancel_tasks()

@@ -1,10 +1,10 @@
 import json
-from collections.abc import Callable
-from typing import Annotated, Any, Concatenate, Generic, TypeVar
+from collections.abc import Callable, Sequence
+from typing import Annotated, Any, Concatenate, Generic, NotRequired, Required, TypedDict, TypeVar
 
 import pytest
 
-from haiway import State, Verifier
+from haiway import Alias, Description, Sensitive, State, Validator, Verifier
 from haiway.attributes import annotations
 from haiway.attributes.generics import argument_variances, bind_type_arguments, parameter_variances
 from haiway.attributes.validation import ValidationError
@@ -466,3 +466,108 @@ def test_recursion_keys_of_specializations_are_stable(monkeypatch: pytest.Monkey
     # equal records have to give equal keys - an address would differ between them
     assert specialized
     assert all("IntegerAttribute(" in key and "object at 0x" not in key for key in specialized)
+
+
+# metadata of an annotated type parameter
+
+
+def _positive(value: int) -> int:
+    if value <= 0:
+        raise ValueError("not positive")
+
+    return value
+
+
+class _Validated[T](State):
+    value: Annotated[T, Validator(_positive)]
+
+
+class _Secret[T](State):
+    secret: Annotated[T, Sensitive()]
+
+
+class _Aliased[T](State):
+    value: Annotated[T, Alias("v")]
+
+
+class _Described[T](State):
+    value: Annotated[T, Description("the value")]
+
+
+class _OptionalSecret[T](State):
+    secret: Annotated[T, Sensitive()] | None = None
+
+
+class _SecretItems[T](State):
+    secrets: Annotated[Sequence[T], Sensitive()]
+
+
+@pytest.mark.parametrize("validated", [_Validated[int], _Validated])
+def test_annotated_parameter_keeps_its_validator(validated: type[_Validated[int]]) -> None:
+    assert validated(value=1).value == 1
+    with pytest.raises(ValidationError):
+        validated(value=-1)
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        _Secret[str](secret="hunter2"),
+        _Secret(secret="hunter2"),
+        _OptionalSecret[str](secret="hunter2"),
+        _SecretItems[str](secrets=("hunter2",)),
+    ],
+)
+def test_annotated_parameter_stays_sensitive(secret: State) -> None:
+    assert "hunter2" not in repr(secret)
+    assert "hunter2" not in str(secret)
+
+
+@pytest.mark.parametrize("aliased", [_Aliased[int], _Aliased])
+def test_annotated_parameter_keeps_its_alias(aliased: type[_Aliased[int]]) -> None:
+    assert aliased.from_mapping({"v": 3}).value == 3
+    assert aliased(value=3).to_mapping() == {"v": 3}
+
+
+def test_annotated_parameter_keeps_its_description() -> None:
+    assert _Described[int].__SPECIFICATION__["properties"]["value"] == {
+        "type": "integer",
+        "description": "the value",
+    }
+
+
+class _Payload(TypedDict):
+    name: str
+
+
+def test_typed_dict_resolution_leaves_no_self_behind() -> None:
+    guard: dict[Any, Any] = {}
+    annotations.resolve_attribute(
+        _Payload,
+        module=__name__,
+        resolved_parameters={},
+        recursion_guard=guard,
+    )
+    assert "Self" not in guard
+
+
+class _Partial[T](TypedDict):
+    required: Required[T]
+    optional: NotRequired[T]
+
+
+class _HoldsPartial[T](State):
+    payload: _Partial[T]
+
+
+def test_special_forms_wrapping_a_parameter_resolve_it() -> None:
+    held = _HoldsPartial[int](payload={"required": 1})
+    assert held.payload == {"required": 1}
+    with pytest.raises(ValidationError):
+        _HoldsPartial[int](payload={"required": "one"})  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(ValidationError):
+        _HoldsPartial[int](payload={"required": 1, "optional": "one"})  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(ValidationError):
+        _HoldsPartial[int](payload={"optional": 1})  # pyright: ignore[reportArgumentType]

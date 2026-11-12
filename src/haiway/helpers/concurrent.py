@@ -197,7 +197,6 @@ async def execute_concurrently[Element, Result](  # noqa: C901
     are collected and returned in the same order as the input elements.
 
     Unlike `process_concurrently`, this function:
-    - Works with collections (known size) rather than async generators
     - Returns results from each handler invocation
     - Preserves the order of results to match input order
 

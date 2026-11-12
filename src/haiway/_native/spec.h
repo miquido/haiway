@@ -332,17 +332,27 @@ is_text_like(PyObject *value)
 static Spec *
 alias_target(ModuleState *state, Spec *spec)
 {
-    /* published once and never replaced - the acquire pairs with the exchange below, so
-     * a target seen here is seen whole */
-    Spec *target = _Py_atomic_load_ptr_acquire(&spec->children[0]);
+    /* published once and never replaced - read and published within a critical section
+     * of the alias, which a build with the GIL compiles to nothing, so a target seen here
+     * is seen whole */
+    Spec *target;
+    Py_BEGIN_CRITICAL_SECTION(spec->annotation);
+    target = spec->children[0];
+    Py_END_CRITICAL_SECTION();
     if (target != NULL) return target;
+    /* compiled outside of it - describing runs Python, which may validate the very same
+     * alias again, a recursive one */
     PyObject *description = PyObject_CallOneArg(state->describe, spec->annotation);
     if (description == NULL) return NULL;
     Spec *compiled = spec_compile(description);
     Py_DECREF(description);
     if (compiled == NULL) return NULL;
-    Spec *published = NULL;
-    if (_Py_atomic_compare_exchange_ptr(&spec->children[0], &published, compiled)) return compiled;
+    Spec *published;
+    Py_BEGIN_CRITICAL_SECTION(spec->annotation);
+    published = spec->children[0];
+    if (published == NULL) spec->children[0] = compiled;
+    Py_END_CRITICAL_SECTION();
+    if (published == NULL) return compiled;
     spec_free(compiled);  /* another thread was first, `published` holds its target */
     return published;
 }

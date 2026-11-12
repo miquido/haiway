@@ -1,4 +1,4 @@
-from asyncio import CancelledError, create_task, sleep, to_thread
+from asyncio import CancelledError, Task, create_task, sleep, to_thread
 
 from pytest import mark, raises
 
@@ -428,3 +428,48 @@ async def test_finish_without_running_loop_is_immediate():
     queue = AsyncQueue[int]()
     queue.finish()  # the loop of the queue is running, here - same thread
     assert queue.is_finished
+
+
+@mark.asyncio
+@mark.parametrize("limit", [0, -1])
+async def test_queue_rejects_limit_which_is_not_positive(limit: int) -> None:
+    # raised rather than asserted - an optimized build would make a queue dropping everything
+    with raises(ValueError):
+        AsyncQueue[int](limit=limit)
+
+
+@mark.asyncio
+async def test_queue_rejects_second_consumer() -> None:
+    queue: AsyncQueue[int] = AsyncQueue()
+    first: Task[int] = create_task(anext(queue))
+    await sleep(0)
+
+    with raises(RuntimeError):
+        await anext(queue)
+
+    queue.enqueue(1)
+    assert await first == 1
+
+
+def _traceback_depth(error: BaseException) -> int:
+    depth: int = 0
+    traceback = error.__traceback__
+    while traceback is not None:
+        depth += 1
+        traceback = traceback.tb_next
+
+    return depth
+
+
+@mark.asyncio
+async def test_finished_queue_raises_with_a_stable_traceback() -> None:
+    queue: AsyncQueue[int] = AsyncQueue()
+    queue.finish(ValueError("finished"))
+    depths: list[int] = []
+    for _ in range(3):
+        with raises(ValueError) as failure:
+            await anext(queue)
+
+        depths.append(_traceback_depth(failure.value))
+
+    assert len(set(depths)) == 1

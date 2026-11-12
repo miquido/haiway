@@ -1,4 +1,6 @@
-from typing import Any, NoReturn, final
+from typing import final
+
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = ("Sensitive",)
 
@@ -70,15 +72,7 @@ class Sensitive:
             redaction,
         )
 
-    def __setattr__(
-        self,
-        __name: str,
-        __value: Any,
-    ) -> NoReturn:
-        raise AttributeError("Sensitive can't be modified")
-
-    def __delattr__(
-        self,
-        __name: str,
-    ) -> NoReturn:
-        raise AttributeError("Sensitive can't be modified")
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy

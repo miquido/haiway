@@ -353,10 +353,6 @@ static int struct_init(PyObject *obj, PyObject *args, PyObject *kwargs);
 #define E_DEFAULT(e) PyTuple_GET_ITEM((e), 3)
 #define E_CONSTANT(e) PyTuple_GET_ITEM((e), 4)
 
-#ifndef Py_TPFLAGS_INLINE_VALUES
-#define Py_TPFLAGS_INLINE_VALUES 0
-#endif
-
 /*
  * The values of an instance live right after its header, sized by its plan - which holds
  * only when nothing else gives the instance a layout. CPython takes the layout of a class

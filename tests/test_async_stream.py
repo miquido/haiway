@@ -1,7 +1,7 @@
 from asyncio import CancelledError, Task, create_task, sleep, to_thread
 
 import pytest
-from pytest import raises
+from pytest import mark, raises
 
 from haiway import AsyncStream, ctx
 
@@ -338,3 +338,36 @@ async def test_finish_from_another_thread_releases_waiting_consumer_and_producer
         await consumer
 
     assert stream.finished
+
+
+@mark.asyncio
+async def test_stream_rejects_second_consumer() -> None:
+    stream: AsyncStream[int] = AsyncStream()
+    first: Task[int] = create_task(anext(stream))
+    await sleep(0)
+
+    with raises(RuntimeError):
+        await anext(stream)
+
+    await stream.send(1)
+    assert await first == 1
+
+
+@mark.asyncio
+async def test_finished_stream_raises_with_a_stable_traceback() -> None:
+    stream: AsyncStream[int] = AsyncStream()
+    stream.finish(ValueError("finished"))
+    depths: list[int] = []
+    for _ in range(3):
+        with raises(ValueError) as failure:
+            await anext(stream)
+
+        traceback = failure.value.__traceback__
+        depth: int = 0
+        while traceback is not None:
+            depth += 1
+            traceback = traceback.tb_next
+
+        depths.append(depth)
+
+    assert len(set(depths)) == 1

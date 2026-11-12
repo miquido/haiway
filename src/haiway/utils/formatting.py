@@ -23,6 +23,9 @@ _CONTROL_ESCAPES_KEEPING_NEWLINES: Final[Mapping[int, str]] = {
         for code in (*range(0x00, 0x09), *range(0x0B, 0x20), *range(0x7F, 0xA0))
     },
     _CARRIAGE_RETURN: "\\r",
+    # the line and paragraph separators - `str.splitlines` and many viewers break lines there
+    0x2028: "\\u2028",
+    0x2029: "\\u2029",
 }
 _CONTROL_ESCAPES: Final[Mapping[int, str]] = {
     **_CONTROL_ESCAPES_KEEPING_NEWLINES,
@@ -249,9 +252,6 @@ def _object_variables(
             for field in fields
             if hasattr(other, field.name)
         )
-
-    if attributes := getattr(type(other), "__ATTRIBUTES__", ()):
-        return ((name, None, getattr(other, name)) for name in attributes if hasattr(other, name))
 
     if hasattr(other, "__dict__"):
         return ((key, None, value) for key, value in vars(other).items())

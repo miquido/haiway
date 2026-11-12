@@ -268,14 +268,15 @@ def without_missing[T: Mapping[str, Any]](
     mapping : Mapping[str, Any]
         The input mapping to be filtered.
     typed : type[T] | None, default=None
-        Optional type to cast the result to. If provided, the result will be
-        cast to this type before returning.
+        Optional mapping type the result is typed as, a ``TypedDict`` for example. It
+        narrows the static type only - the result is a plain ``dict`` whatever it is.
 
     Returns
     -------
     T | Mapping[str, Any]
         A new mapping containing all items of the input mapping,
-        except items with Missing values. If typed is provided,
-        the result is cast to that type.
+        except items with Missing values, as a plain ``dict``.
     """
+    # `typed` narrows the static type only - a `TypedDict` or an abstract `Mapping` can't
+    # be built from the items, the result is the plain mapping either way
     return cast(T, {key: value for key, value in mapping.items() if value is not Missing})

@@ -346,13 +346,24 @@ class ContextDisposables:
                     exc_tb,
                 )
 
-            finally:  # released even when a task failed or the join was cancelled
+            except BaseException as exc:
+                # a failed task or a cancelled join ends the body as its own error - the
+                # disposables are released against it, as a scope releases them
                 with ScopeTaskGroup.forbidding():
                     await self._disposables.__aexit__(
-                        exc_type,
-                        exc_val,
-                        exc_tb,
+                        type(exc),
+                        exc,
+                        exc.__traceback__,
                     )
+
+                raise
+
+            with ScopeTaskGroup.forbidding():
+                await self._disposables.__aexit__(
+                    exc_type,
+                    exc_val,
+                    exc_tb,
+                )
 
         finally:
             self._context_state.__exit__(

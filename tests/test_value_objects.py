@@ -1,3 +1,5 @@
+import copy
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -73,3 +75,32 @@ def test_default_helper_with_factory_builds_default_value() -> None:
 
     assert isinstance(marker, DefaultValue)
     assert marker() == 3
+
+
+@pytest.mark.parametrize("instance", _objects(), ids=lambda value: type(value).__name__)
+def test_value_objects_are_their_own_copies(instance: Any) -> None:
+    assert copy.copy(instance) is instance
+    assert copy.deepcopy(instance) is instance
+
+
+@pytest.mark.parametrize(
+    "making",
+    [
+        lambda: Alias(""),
+        lambda: Specification({}),  # pyright: ignore[reportArgumentType]
+        lambda: DefaultValue(default=1, default_factory=list),
+        lambda: DefaultValue(default_factory=list, env="VARIABLE"),
+        lambda: DefaultValue(mapping=int),
+    ],
+    ids=[
+        "empty alias",
+        "empty specification",
+        "default and factory",
+        "factory and env",
+        "mapping without env",
+    ],
+)
+def test_value_objects_reject_invalid_arguments(making: Callable[[], Any]) -> None:
+    # raised rather than asserted - an optimized build would strip an assertion
+    with pytest.raises(ValueError):
+        making()

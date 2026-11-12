@@ -4,7 +4,6 @@ import datetime
 import enum
 import inspect
 import pathlib
-import sys
 import types
 import typing
 import uuid
@@ -3566,10 +3565,8 @@ def is_callback_protocol(
     bool
         ``True`` for a protocol whose only member is ``__call__``.
     """
-    return (
-        isinstance(annotation, type)
-        and getattr(annotation, "_is_protocol", False)
-        and getattr(annotation, "__protocol_attrs__", None) == {"__call__"}
+    return typing.is_protocol(annotation) and typing.get_protocol_members(annotation) == frozenset(
+        ("__call__",)
     )
 
 
@@ -4394,29 +4391,16 @@ def _evaluate_forward_ref(
     localns: Mapping[str, Any] | None,
     module: str,
 ) -> Any:
-    # ForwardRef._evaluate is deprecated; evaluate compiled expression directly.
-    if isinstance(annotation, str):
-        forward_ref = ForwardRef(
-            annotation,
-            module=module,
-        )
-    else:
-        forward_ref = annotation
-
-    module_name = forward_ref.__forward_module__ or module
-    namespace: dict[str, Any]
-    if module_name and module_name in sys.modules:
-        namespace = dict(sys.modules[module_name].__dict__)
-    else:
-        namespace = {}
-
-    if localns:
-        namespace.update(localns)
-
-    namespace.setdefault("__builtins__", builtins.__dict__)
-
     try:
-        return eval(forward_ref.__forward_code__, namespace, namespace)  # nosec: B307
+        if isinstance(annotation, ForwardRef):
+            try:  # within what the reference was made in, when it knows that
+                return annotation.evaluate(locals=localns)
+
+            except NameError:
+                # a reference made without its module - the module of the attribute
+                annotation = annotation.__forward_arg__
+
+        return ForwardRef(annotation, module=module).evaluate(locals=localns)
 
     except (NameError, AttributeError) as error:
         raise RuntimeError(f"Cannot resolve annotation of {annotation}") from error
@@ -4701,8 +4685,8 @@ def _resolve_generic_alias(  # noqa: PLR0911
 
     resolved_origin: Any = origin_type.__class_getitem__(tuple(resolved_arguments_of_alias))
 
-    # if we have resolved it use what we got
-    if not isinstance(resolved_origin, types.GenericAlias | typing._GenericAlias):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    # a specialized class is resolved as itself, an alias of the generic as an alias
+    if get_origin(resolved_origin) is None:
         if specialized_self := _declared_self_attribute(resolved_origin):
             return specialized_self
 
@@ -4719,10 +4703,17 @@ def _resolve_generic_alias(  # noqa: PLR0911
     generic_parameters: Sequence[Any] = getattr(annotation.__origin__, "__parameters__", ())
 
     if generic_parameters and resolved_arguments:
+        # bound as resolved attributes, as a parameter is read everywhere else
         resolved_parameters = {
             **resolved_parameters,
             **{
-                parameter.__name__: argument
+                parameter.__name__: resolve_attribute(
+                    argument,
+                    localns=localns,
+                    module=module,
+                    resolved_parameters=resolved_parameters,
+                    recursion_guard=recursion_guard,
+                )
                 for parameter, argument in zip(
                     generic_parameters,
                     resolved_arguments,
@@ -4807,35 +4798,39 @@ def _resolve_typeddict(
 
     recursion_guard[recursion_key] = resolved_attribute
 
-    # preserve current Self reference
+    # Self refers to the TypedDict within it - the reference of the enclosing
+    # resolution is brought back afterwards, or removed when there was none
     self_attribute: AttributeAnnotation | None = recursion_guard.get("Self", None)
-    # temporarily update Self reference to contextual
     recursion_guard["Self"] = resolved_attribute
+    try:
+        for key, element in get_type_hints(
+            annotation,
+            localns={annotation.__name__: annotation},
+            include_extras=True,
+        ).items():
+            attribute: AttributeAnnotation = resolve_attribute(
+                element,
+                localns=localns,
+                module=getattr(annotation, "__module__", module),
+                resolved_parameters=resolved_parameters,
+                recursion_guard=recursion_guard,
+            )
 
-    for key, element in get_type_hints(
-        annotation,
-        localns={annotation.__name__: annotation},
-        include_extras=True,
-    ).items():
-        attribute: AttributeAnnotation = resolve_attribute(
-            element,
-            localns=localns,
-            module=getattr(annotation, "__module__", module),
-            resolved_parameters=resolved_parameters,
-            recursion_guard=recursion_guard,
-        )
+            if not attribute.required:
+                attributes[key] = attribute
+                continue  # already annotated
 
-        if not attribute.required:
+            if key not in annotation.__required_keys__:
+                attribute = attribute.annotated((NOT_REQUIRED,))
+
             attributes[key] = attribute
-            continue  # already annotated
 
-        if key not in annotation.__required_keys__:
-            attribute = attribute.annotated((NOT_REQUIRED,))
+    finally:
+        if self_attribute is None:
+            del recursion_guard["Self"]
 
-        attributes[key] = attribute
-
-    if self_attribute is not None:  # bring Self back to previous attribute
-        recursion_guard["Self"] = self_attribute
+        else:
+            recursion_guard["Self"] = self_attribute
 
     return resolved_attribute
 
@@ -5110,22 +5105,48 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             )
 
 
+# the special forms which only wrap their arguments - resolved by their own cases, never
+# specialized as a generic is
+_PARAMETER_WRAPPING_FORMS: Final[frozenset[Any]] = frozenset(
+    (
+        typing.Annotated,
+        typing_extensions.Annotated,
+        typing.Union,
+        typing_extensions.Union,
+        types.UnionType,
+        typing.Required,
+        typing_extensions.Required,
+        typing.NotRequired,
+        typing_extensions.NotRequired,
+        typing.Final,
+        typing_extensions.Final,
+    )
+)
+
+
 def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
     annotation: Any,
     /,
     module: str,
-    resolved_parameters: Mapping[str, Any],
+    resolved_parameters: Mapping[str, AttributeAnnotation],
     recursion_guard: MutableMapping[Any, AttributeAnnotation],
     localns: Mapping[str, Any] | None = None,
 ) -> AttributeAnnotation:
     origin: Any | None = get_origin(annotation)
 
-    if isinstance(annotation, types.GenericAlias | typing._GenericAlias) and any(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-        isinstance(argument, TypeVar)
-        # a variadic parameter or a parameter specification is only given to a generic
-        # State - elsewhere it is part of what the annotation is made of
-        or (is_open_type_argument(argument) and hasattr(origin, "__ANNOTATED__"))
-        for argument in get_args(annotation)
+    # a generic given a type parameter is specialized once the parameter is known - a
+    # special form wrapping a parameter, `Annotated[T, ...]` among them, is resolved by
+    # its own case below instead, which resolves the parameter and keeps the form
+    if (
+        origin is not None
+        and origin not in _PARAMETER_WRAPPING_FORMS
+        and any(
+            isinstance(argument, TypeVar)
+            # a variadic parameter or a parameter specification is only given to a generic
+            # State - elsewhere it is part of what the annotation is made of
+            or (is_open_type_argument(argument) and hasattr(origin, "__ANNOTATED__"))
+            for argument in get_args(annotation)
+        )
     ):
         return _resolve_generic_alias(
             annotation,

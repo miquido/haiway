@@ -253,3 +253,57 @@ async def test_tasks_of_failing_disposables_body_are_cancelled_and_disposed() ->
                 raise RuntimeError("body")
 
     assert log == ["cancelled", "disposed"]
+
+
+class _Outcome:
+    def __init__(self, log: list[BaseException | None]) -> None:
+        self._log: list[BaseException | None] = log
+
+    async def __aenter__(self) -> State:
+        return _Ping()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        self._log.append(exc_val)
+
+
+@pytest.mark.asyncio
+async def test_disposables_are_released_with_the_failure_of_a_task() -> None:
+    seen: list[BaseException | None] = []
+
+    async def failing() -> None:
+        raise RuntimeError("task")
+
+    with pytest.raises(RuntimeError, match="task"):
+        async with ctx.scope("disposables"):
+            async with ctx.disposables(_Outcome(seen)):
+                ctx.spawn(failing)
+
+    assert len(seen) == 1
+    assert isinstance(seen[0], RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_disposables_are_released_with_the_cancellation_of_the_join() -> None:
+    seen: list[BaseException | None] = []
+    joining: asyncio.Event = asyncio.Event()
+
+    async def scope() -> None:
+        async with ctx.scope("disposables"):
+            async with ctx.disposables(_Outcome(seen)):
+                ctx.spawn(asyncio.sleep, 10)
+                joining.set()
+
+    task: asyncio.Task[None] = asyncio.create_task(scope())
+    await joining.wait()
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(seen) == 1
+    assert isinstance(seen[0], asyncio.CancelledError)
