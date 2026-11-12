@@ -190,6 +190,45 @@ async def test_unhandled_exception_is_answered_by_the_framework() -> None:
 
 
 @mark.asyncio
+async def test_trace_headers_a_response_can_not_hold_are_left_out() -> None:
+    encoded: Mapping[str, str] = {
+        "traceparent": f"00-{_TRACE_ID.hex}-1-01",
+        "trace parent": "spaced name",
+        "trace:state": "separator in name",
+        "tracestate": "line\r\nbreak",
+        "": "empty name",
+    }
+    observability = Observability(
+        trace_identifying=lambda scope, /: _TRACE_ID,
+        log_recording=lambda scope, /, level, message, *args, exception: None,
+        metric_recording=lambda scope, /, level, **kwargs: None,
+        event_recording=lambda scope, /, level, **kwargs: None,
+        attributes_recording=lambda scope, /, level, attributes: None,
+        scope_entering=lambda scope, /: _TRACE_ID.hex,
+        scope_exiting=lambda scope, /, *, exception: None,
+        trace_context_encoding=lambda scope, /: encoded,
+    )
+
+    async def endpoint(request: Request) -> Response:
+        return PlainTextResponse("done")
+
+    app: Starlette = application(
+        ServerContext(observability=observability),
+        routes=[Route("/example", endpoint)],
+    )
+    async with running(app):
+        result: Result = await send_request(app)
+
+    assert result.status == 200
+    # a header name is a token - one which is not would fail the whole response
+    assert result.headers.get("traceparent") == f"00-{_TRACE_ID.hex}-1-01"
+    assert "trace parent" not in result.headers
+    assert "trace:state" not in result.headers
+    assert "tracestate" not in result.headers
+    assert "" not in result.headers
+
+
+@mark.asyncio
 async def test_unhandled_exception_is_recorded_as_the_failure_of_its_request() -> None:
     failures: MutableSequence[BaseException | None] = []
     recorded: MutableMapping[str, Any] = {}
@@ -1665,6 +1704,18 @@ async def test_parameterized_mounts_are_reported_by_their_templates() -> None:
         assert '"http.route"]: "/tenants/{tenant}/teams/{team}/items/{identifier}"' in matched
         unmatched: str = await routes_of("/tenants/acme/teams/red/missing")
         assert '"http.route"]: "/tenants/{tenant}/teams/{team}/{path}"' in unmatched
+
+
+def test_mount_templates_use_normalized_placeholders() -> None:
+    async def endpoint(request: Request) -> Response:
+        return PlainTextResponse("done")
+
+    leaf = Route("/items/{identifier:int}", endpoint)
+    router = Router([Mount("/tenants/{tenant:int}", routes=[leaf])])
+    scope: dict[str, Any] = {"root_path": "/tenants/1", "app_root_path": "", "router": router}
+    # the same form as the template of the route itself - `{identifier}`
+    assert _MountTemplates().prefix(scope, route=leaf) == "/tenants/{tenant}"
+    assert leaf.path_format == "/items/{identifier}"
 
 
 @mark.asyncio

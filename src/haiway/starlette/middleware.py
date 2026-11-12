@@ -1,6 +1,7 @@
+import re
 from collections.abc import MutableMapping, MutableSequence, Sequence
 from time import monotonic
-from typing import Any, final
+from typing import Any, Final, final
 
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException, WebSocketException
@@ -212,7 +213,7 @@ class ContextMiddleware:
                             # an entry a header can not hold is left out - failing
                             # the response it was meant to accompany would be worse
                             # than a missing trace header
-                            if _header_safe(header) and _header_safe(value):
+                            if _header_name_safe(header) and _header_value_safe(value):
                                 headers[header] = value
 
                     await send(message)
@@ -393,7 +394,10 @@ def _found_prefix(
                 found.append(prefix)
 
             if isinstance(candidate, Mount):
-                pending.append((prefix + candidate.path, candidate.routes))
+                # the template routing normalized - `{tenant:int}` is `{tenant}`, as
+                # in the template of every route
+                template: str = candidate.path_format.removesuffix("/{path}")
+                pending.append((prefix + template, candidate.routes))
 
             elif isinstance(candidate, Host):  # chosen by the host, adds no path
                 pending.append((prefix, candidate.routes))
@@ -413,7 +417,18 @@ def _printable(
     return "".join(char if char.isprintable() else repr(char)[1:-1] for char in value)
 
 
-def _header_safe(
+# a token, the only form a header name takes (RFC 9110, section 5.1)
+_HEADER_NAME: Final[re.Pattern[str]] = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+
+
+def _header_name_safe(
+    name: str,
+    /,
+) -> bool:
+    return _HEADER_NAME.fullmatch(name) is not None
+
+
+def _header_value_safe(
     value: str,
     /,
 ) -> bool:
