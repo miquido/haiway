@@ -155,6 +155,9 @@ def _mkdir(path: Path) -> None:
 
 @asynchronous
 def _write_text(path: Path, content: str) -> None:
+    # owner-only access - a configuration may hold credentials
+    path.touch(mode=0o600, exist_ok=True)
+    path.chmod(0o600)
     path.write_text(content)
 
 

@@ -282,7 +282,10 @@ Anywhere else, iterating to exhaustion waits for the very exit it blocks:
 - In a task spawned in a nested scope, or within `ctx.disposables(...)` - those join the task before
   the creating scope begins closing.
 
-Consume the subscription with a bound there, or create it within the consuming task itself.
+Consume the subscription with a bound there. A task of a nested scope may instead create the
+subscription itself, which ties it to that scope - a task within `ctx.disposables(...)` may not, as
+`ctx.disposables(...)` enters no scope of its own and the subscription still belongs to the
+enclosing one.
 
 A subscription created after its bus already closed is not an error - it finishes immediately
 instead of waiting for an event which can never arrive.

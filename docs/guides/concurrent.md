@@ -36,7 +36,9 @@ Two shapes cannot:
   itself, or consume it with a bound.
 
 Tasks spawned within `ctx.disposables(...)` follow the same rule: they are joined when its body
-exits, before the disposables are released and before the enclosing scope begins closing.
+exits, before the disposables are released and before the enclosing scope begins closing. It enters
+no scope of its own, so a subscription created within such a task still belongs to the enclosing
+scope - consume it with a bound.
 
 ### Isolated scopes
 
