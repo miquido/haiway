@@ -43,7 +43,7 @@ struct_setattro(PyObject *self, PyObject *name, PyObject *value)
     return -1;
 }
 
-/* the MISSING marker, which the values of an instance are compared with by identity */
+/* the Missing sentinel, which the values of an instance are compared with by identity */
 static inline PyObject *
 missing_of(PyObject *self)
 {
@@ -62,7 +62,7 @@ struct_hash_unbounded(PyObject *self)
     Py_uhash_t acc = (Py_uhash_t)(uintptr_t)Py_TYPE(self) * 1000003UL;
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *value = items[i];
-        if (value == NULL || value == missing) continue;  /* MISSING never takes part */
+        if (value == NULL || value == missing) continue;  /* Missing never takes part */
         Py_hash_t h = PyObject_Hash(value);
         if (h == -1) {
             if (!PyErr_ExceptionMatches(PyExc_TypeError)) return -1;
