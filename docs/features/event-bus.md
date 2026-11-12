@@ -265,9 +265,9 @@ async with ctx.scope("server"):          # owns the bus
         # this subscription ends when "request" exits, whether or not "server" is still open
 ```
 
-That is what makes a subscription safe to consume unboundedly in any scope, including a task spawned
-in one. A scope completes its closing before joining its tasks, so the pending iteration ends first
-and the join never waits on it:
+That is what makes a subscription safe to consume unboundedly in the scope which created it,
+including a task spawned there or in an enclosing scope. A scope completes its closing before
+joining its tasks, so the pending iteration ends first and the join never waits on it:
 
 ```python
 async with ctx.scope("server"):

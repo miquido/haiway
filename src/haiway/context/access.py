@@ -303,6 +303,13 @@ class ctx:
             A context manager that manages the lifecycle of all provided disposables
             and propagates their state to the context, similar to ctx.scope()
 
+        Notes
+        -----
+        Tasks spawned within the body are joined when it exits, before the disposables
+        are released - they must finish on their own, without waiting for the closing
+        of an enclosing scope or for a subscription created outside of the body to end.
+        A failed task is passed to the disposables as the error of the body.
+
         Examples
         --------
         Using disposables with database connections:
