@@ -16,7 +16,7 @@ from haiway.context.closing import ContextClosing
 from haiway.context.identifier import ContextIdentifier
 from haiway.context.types import ContextMissing
 from haiway.utils.exceptions import thrown_exception
-from haiway.utils.loops import loop_safe
+from haiway.utils.loops import foreign_loop, loop_safe
 
 __all__ = (
     "ContextEvents",
@@ -226,6 +226,10 @@ class ContextEvents:
         scope_id: UUID,
         scope_closing: Future[UUID],
     ) -> EventsSubscription[Payload]:
+        # unlike sending, subscribing returns a future of the owner loop - it can't be
+        # handed over, and creating it elsewhere would race with the owner
+        assert not foreign_loop(self._loop), "Events can be subscribed only within their loop"  # nosec: B101
+
         if self._token is None:  # no more events can arrive after closing
             closed_future: Future[Event[Payload]] = self._loop.create_future()
             closed_future.set_exception(StopAsyncIteration)
