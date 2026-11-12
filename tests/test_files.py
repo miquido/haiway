@@ -202,12 +202,12 @@ async def test_file_handle_is_cleared_even_if_close_fails(
     )
 
     await context.__aenter__()
-    file_handle: int = context._file_handle  # pyright: ignore[reportAttributeAccessIssue]
+    file_handle: int = _open_handle(context)
     try:
         with pytest.raises(FileException, match="closing failed"):
             await context.__aexit__(None, None, None)
 
-        assert context._file_handle is None  # pyright: ignore[reportAttributeAccessIssue]
+        assert context._entry is None  # pyright: ignore[reportPrivateUsage]
 
     finally:
         # the patched close never ran, the descriptor is still ours to release
@@ -618,6 +618,22 @@ async def test_file_is_unusable_after_its_context_exits(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_file_of_earlier_entry_cannot_reach_a_later_one(tmp_path: Path) -> None:
+    access = files_module.FileAccessContext(tmp_path / "stale.bin", create=True, exclusive=False)
+    async with access as stale:
+        await stale.write(b"first")
+
+    async with access as current:
+        with pytest.raises(FileException, match="File is closed"):
+            await stale.write(b"overwritten")
+
+        with pytest.raises(FileException, match="File is closed"):
+            await stale.read()
+
+        assert await current.read() == b"first"
+
+
+@pytest.mark.asyncio
 async def test_file_access_is_bound_to_its_event_loop(tmp_path: Path) -> None:
     access = files_module.FileAccessContext(tmp_path / "bound.bin", create=True, exclusive=False)
     async with access as file:
@@ -710,6 +726,16 @@ async def test_file_access_roundtrips_large_and_shrinking_content(tmp_path: Path
         assert await file.read() == b"short"
 
 
+def _open_entry(access: files_module.FileAccessContext) -> Any:
+    entry = access._entry  # pyright: ignore[reportPrivateUsage]
+    assert entry is not None
+    return entry
+
+
+def _open_handle(access: files_module.FileAccessContext) -> int:
+    return _open_entry(access).file_handle
+
+
 def _descriptor_is_open(file_handle: int) -> bool:
     try:
         os.fstat(file_handle)
@@ -755,7 +781,7 @@ async def test_file_access_tracks_running_operations_until_done(tmp_path: Path) 
         await file.write(b"data")
         await file.read()
         # nothing stays referenced once the operations are done
-        assert access._running == set()  # pyright: ignore[reportPrivateUsage]
+        assert _open_entry(access).running == set()
 
 
 @pytest.mark.asyncio
@@ -763,7 +789,7 @@ async def test_file_access_closes_descriptor_when_body_raises(tmp_path: Path) ->
     access = files_module.FileAccessContext(tmp_path / "raising.bin", create=True, exclusive=False)
     with pytest.raises(RuntimeError, match="body failed"):
         async with access:
-            file_handle: int = access._file_handle  # pyright: ignore[reportPrivateUsage, reportAssignmentType]
+            file_handle: int = _open_handle(access)
             raise RuntimeError("body failed")
 
     assert not _descriptor_is_open(file_handle)
@@ -794,7 +820,7 @@ async def test_file_access_exit_from_different_loop_fails_and_keeps_descriptor(
 ) -> None:
     access = files_module.FileAccessContext(tmp_path / "foreign.bin", create=True, exclusive=False)
     await access.__aenter__()
-    file_handle: int = access._file_handle  # pyright: ignore[reportPrivateUsage, reportAssignmentType]
+    file_handle: int = _open_handle(access)
     failure: list[BaseException] = []
 
     def other_loop() -> None:
@@ -848,7 +874,7 @@ async def test_cancelled_exit_postpones_close_until_operation_completes(
         tmp_path / "postponed.bin", create=True, exclusive=False
     )
     file = await access.__aenter__()
-    file_handle: int = access._file_handle  # pyright: ignore[reportPrivateUsage, reportAssignmentType]
+    file_handle: int = _open_handle(access)
     writing = asyncio.create_task(file.write(b"payload"))
     await asyncio.to_thread(started.wait, 1)
     writing.cancel()
@@ -869,6 +895,52 @@ async def test_cancelled_exit_postpones_close_until_operation_completes(
             await asyncio.sleep(0.01)
 
     assert (tmp_path / "postponed.bin").read_bytes() == b"payload"
+
+
+@pytest.mark.asyncio
+async def test_reentry_does_not_wait_for_abandoned_operations_of_earlier_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    write = files_module._write_file_contents.__wrapped__  # pyright: ignore[reportFunctionMemberAccess, reportPrivateUsage]
+
+    def blocked_write(file_handle: int, *, content: bytes) -> None:
+        started.set()
+        release.wait(2)
+        write(file_handle, content=content)
+
+    monkeypatch.setattr(
+        files_module,
+        "_write_file_contents",
+        files_module.asynchronous(blocked_write),
+    )
+    access = files_module.FileAccessContext(tmp_path / "drained.bin", create=True, exclusive=False)
+    file = await access.__aenter__()
+    earlier_handle: int = _open_handle(access)
+    writing = asyncio.create_task(file.write(b"payload"))
+    await asyncio.to_thread(started.wait, 1)
+    exiting = asyncio.create_task(access.__aexit__(None, None, None))
+    await asyncio.sleep(0.05)
+    exiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await exiting
+
+    try:
+        async with asyncio.timeout(1):
+            async with access as again:
+                # a new entry of its own - nothing of the earlier one is awaited
+                assert _open_handle(access) != earlier_handle
+                assert await again.read() == b""
+
+    finally:
+        release.set()
+
+    await writing
+    async with asyncio.timeout(2):
+        while _descriptor_is_open(earlier_handle):
+            await asyncio.sleep(0.01)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="requires POSIX file locking")
@@ -922,27 +994,40 @@ async def test_abandoned_close_swallows_failures() -> None:
     files_module._close_abandoned_file_handle(read_end, exclusive=False)  # pyright: ignore[reportPrivateUsage]
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="positional IO is POSIX only")
+_POSITIONAL_MODES = (
+    pytest.param(
+        True,
+        id="positional",
+        marks=pytest.mark.skipif(sys.platform == "win32", reason="positional IO is POSIX only"),
+    ),
+    pytest.param(False, id="shared-offset"),
+)
+
+
+@pytest.mark.parametrize("positional", _POSITIONAL_MODES)
 @pytest.mark.asyncio
 async def test_write_continues_after_partial_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    positional: bool,
 ) -> None:
+    monkeypatch.setattr(files_module, "_POSITIONAL_IO", positional)
     content: bytes = bytes(range(256)) * 8
-    real_pwrite = os.pwrite
     real_write = os.write
-
-    def stingy_pwrite(fd: int, data: Any, offset: int, /) -> int:
-        return real_pwrite(fd, bytes(data[:7]), offset)
 
     def stingy_write(fd: int, data: Any, /) -> int:
         return real_write(fd, bytes(data[:7]))
 
-    monkeypatch.setattr(
-        files_module,
-        "os",
-        OSModuleStub(pwrite=stingy_pwrite, write=stingy_write),
-    )
+    overrides: dict[str, Any] = {"write": stingy_write}
+    if sys.platform != "win32":
+        real_pwrite = os.pwrite
+
+        def stingy_pwrite(fd: int, data: Any, offset: int, /) -> int:
+            return real_pwrite(fd, bytes(data[:7]), offset)
+
+        overrides["pwrite"] = stingy_pwrite
+
+    monkeypatch.setattr(files_module, "os", OSModuleStub(**overrides))
     async with files_module.FileAccessContext(
         tmp_path / "partial.bin", create=True, exclusive=False
     ) as file:
@@ -970,25 +1055,32 @@ async def test_write_fails_when_nothing_gets_written(
             await file.write(b"abc")
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="positional IO is POSIX only")
+@pytest.mark.parametrize("positional", _POSITIONAL_MODES)
 @pytest.mark.asyncio
 async def test_read_assembles_content_from_short_reads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    positional: bool,
 ) -> None:
+    monkeypatch.setattr(files_module, "_POSITIONAL_IO", positional)
     content: bytes = os.urandom(5000)
-    real_pread = os.pread
     real_read = os.read
-
-    def short_pread(fd: int, count: int, offset: int, /) -> bytes:
-        return real_pread(fd, min(count, 999), offset)
 
     def short_read(fd: int, count: int, /) -> bytes:
         return real_read(fd, min(count, 999))
 
+    overrides: dict[str, Any] = {"read": short_read}
+    if sys.platform != "win32":
+        real_pread = os.pread
+
+        def short_pread(fd: int, count: int, offset: int, /) -> bytes:
+            return real_pread(fd, min(count, 999), offset)
+
+        overrides["pread"] = short_pread
+
     path = tmp_path / "short.bin"
     path.write_bytes(content)
-    monkeypatch.setattr(files_module, "os", OSModuleStub(pread=short_pread, read=short_read))
+    monkeypatch.setattr(files_module, "os", OSModuleStub(**overrides))
     async with files_module.FileAccessContext(path, create=False, exclusive=False) as file:
         assert await file.read() == content
 

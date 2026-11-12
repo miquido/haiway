@@ -753,18 +753,46 @@ def _close_abandoned_file_handle(
 
 
 @final
+class _FileEntry:
+    # a single entry of a context - what a `File` returned by it may act on. Its
+    # identity tells the entry apart, a descriptor number can be reused by the next
+    __slots__ = (
+        "file_handle",
+        "loop",
+        "running",
+    )
+
+    def __init__(
+        self,
+        file_handle: int,
+        loop: AbstractEventLoop,
+    ) -> None:
+        self.file_handle: int = file_handle
+        self.loop: AbstractEventLoop = loop
+        self.running: set[Future[Any]] = set()
+
+    def finished(
+        self,
+        running: Future[Any],
+        /,
+    ) -> None:
+        self.running.discard(running)
+        if not running.cancelled():
+            running.exception()  # nobody may be left to retrieve it
+
+
+@final
 class FileAccessContext:
     # Bound to the event loop which entered it - the descriptor is shared with
     # executor jobs which that loop tracks, so it is never touched from another.
     # Operations carry their own positions and are not ordered against each
     # other, a caller needing an order awaits one before starting the next.
+    # Without positional IO they share the descriptor offset and run one by one.
     __slots__ = (
         "_create",
+        "_entry",
         "_exclusive",
-        "_file_handle",
-        "_loop",
         "_mode",
-        "_running",
         "path",
     )
 
@@ -779,12 +807,10 @@ class FileAccessContext:
         self._create: bool = create
         self._exclusive: bool = exclusive
         self._mode: int = mode
-        self._file_handle: int | None = None
-        self._loop: AbstractEventLoop | None = None
-        self._running: set[Future[Any]] = set()
+        self._entry: _FileEntry | None = None
 
     async def __aenter__(self) -> File:
-        if self._file_handle is not None:
+        if self._entry is not None:
             raise FileException(f"File is already open: {self.path}")
 
         loop: AbstractEventLoop = get_running_loop()
@@ -804,14 +830,15 @@ class FileAccessContext:
             _close_file_handle(file_handle, exclusive=False)
             raise
 
-        self._loop = loop
-        self._file_handle = file_handle
+        entry: _FileEntry = _FileEntry(file_handle, loop)
+        self._entry = entry
 
         async def read_file() -> bytes:
-            return await self._operation(_read_file_contents)
+            return await self._operation(entry, _read_file_contents)
 
         async def write_file(content: bytes) -> None:
             await self._operation(
+                entry,
                 lambda handle: _write_file_contents(handle, content=content),
             )
 
@@ -823,54 +850,28 @@ class FileAccessContext:
 
     async def _operation[Result](
         self,
+        entry: _FileEntry,
         start: Callable[[int], Coroutine[None, None, Result]],
         /,
     ) -> Result:
-        file_handle: int | None = self._file_handle
-        if file_handle is None:
+        # a `File` of an earlier entry must not reach the one opened after it
+        if self._entry is not entry:
             raise FileException(f"File is closed: {self.path}")
 
-        if get_running_loop() is not self._loop:
+        if get_running_loop() is not entry.loop:
             raise FileException(f"File used from a different event loop: {self.path}")
 
         # an operation which its caller stopped waiting for keeps running in its
         # executor thread - it stays tracked until it completes, so closing waits
         # for it rather than pulling the descriptor from under it
         running: Task[Result] = ensure_future(
-            self._after(tuple(self._running), start(file_handle))
+            _after_previous(tuple(entry.running), start(entry.file_handle))
             if not _POSITIONAL_IO
-            else start(file_handle)
+            else start(entry.file_handle)
         )
-        self._running.add(running)
-        running.add_done_callback(self._finished)
+        entry.running.add(running)
+        running.add_done_callback(entry.finished)
         return await shield(running)
-
-    async def _after[Result](
-        self,
-        previous: Sequence[Future[Any]],
-        operation: Coroutine[None, None, Result],
-        /,
-    ) -> Result:
-        # without positional IO operations share the descriptor offset, so each
-        # waits for the ones started before it instead of interleaving with them
-        try:
-            if previous:
-                await wait(previous)
-
-        except BaseException:
-            operation.close()
-            raise
-
-        return await operation
-
-    def _finished(
-        self,
-        running: Future[Any],
-        /,
-    ) -> None:
-        self._running.discard(running)
-        if not running.cancelled():
-            running.exception()  # nobody may be left to retrieve it
 
     async def __aexit__(
         self,
@@ -878,18 +879,18 @@ class FileAccessContext:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        file_handle: int | None = self._file_handle
-        if file_handle is None:
+        entry: _FileEntry | None = self._entry
+        if entry is None:
             raise FileException(f"File is closed: {self.path}")
 
-        if get_running_loop() is not self._loop:
+        if get_running_loop() is not entry.loop:
             raise FileException(f"File used from a different event loop: {self.path}")
 
-        # no new operation can start from here on
-        self._file_handle = None
-        self._loop = None
-        if self._running:
-            draining: Future[Any] = ensure_future(wait(tuple(self._running)))
+        # no new operation can start from here on - an entry made later has
+        # operations of its own, it does not wait for those of this one
+        self._entry = None
+        if entry.running:
+            draining: Future[Any] = ensure_future(wait(tuple(entry.running)))
             try:
                 await shield(draining)
 
@@ -898,16 +899,34 @@ class FileAccessContext:
                 # operations are done there is nothing left using the descriptor
                 draining.add_done_callback(
                     lambda _: _close_abandoned_file_handle(
-                        file_handle,
+                        entry.file_handle,
                         exclusive=self._exclusive,
                     )
                 )
                 raise
 
         _close_file_handle(
-            file_handle,
+            entry.file_handle,
             exclusive=self._exclusive,
         )
+
+
+async def _after_previous[Result](
+    previous: Sequence[Future[Any]],
+    operation: Coroutine[None, None, Result],
+    /,
+) -> Result:
+    # without positional IO operations share the descriptor offset, so each
+    # waits for the ones started before it instead of interleaving with them
+    try:
+        if previous:
+            await wait(previous)
+
+    except BaseException:
+        operation.close()
+        raise
+
+    return await operation
 
 
 @asynchronous
