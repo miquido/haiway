@@ -1,9 +1,12 @@
+from annotationlib import ForwardRef
 from collections.abc import Mapping
 from typing import Any, ClassVar
 
 from haiway.attributes.state import _attribute_annotations, _namespace_annotations  # pyright: ignore[reportPrivateUsage]
 
 _namespaces: dict[str, Mapping[str, Any]] = {}
+# resolved while the class is being created - as a metaclass sees them
+_created_annotations: dict[str, Mapping[str, Any] | None] = {}
 
 
 class _Recording(type):
@@ -14,6 +17,7 @@ class _Recording(type):
         namespace: dict[str, Any],
     ) -> type:
         _namespaces[name] = dict(namespace)
+        _created_annotations[name] = _namespace_annotations(namespace)
         return super().__new__(mcs, name, bases, namespace)
 
 
@@ -47,6 +51,15 @@ def test_namespace_annotations_resolves_declared_annotations() -> None:
         "forward",
     ]
     assert annotations["first"] is int
+
+
+def test_namespace_annotations_keep_names_undefined_at_creation_as_references() -> None:
+    annotations = _created_annotations[_Sample.__name__]
+
+    assert annotations is not None
+    assert annotations["first"] is int
+    # `_Later` did not exist yet - the annotation is a reference, not an error
+    assert isinstance(annotations["forward"], ForwardRef)
 
 
 def test_namespace_annotations_is_none_without_annotations() -> None:

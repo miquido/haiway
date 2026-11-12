@@ -1229,8 +1229,12 @@ async def test_file_access_exclusive_lock_released_on_exit(tmp_path: Path) -> No
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="requires POSIX entries")
+@pytest.mark.parametrize("recursive", [False, True])
 @pytest.mark.asyncio
-async def test_traversal_leaves_out_links_and_special_entries(tmp_path: Path) -> None:
+async def test_traversal_leaves_out_links_and_special_entries(
+    tmp_path: Path,
+    recursive: bool,
+) -> None:
     (tmp_path / "file.txt").write_bytes(b"x")
     (tmp_path / "dir").mkdir()
     (tmp_path / "dir" / "nested.txt").write_bytes(b"y")
@@ -1238,12 +1242,11 @@ async def test_traversal_leaves_out_links_and_special_entries(tmp_path: Path) ->
     (tmp_path / "dir-link").symlink_to(tmp_path / "dir")
     (tmp_path / "broken-link").symlink_to(tmp_path / "absent")
     os.mkfifo(tmp_path / "pipe")
-    for recursive in (False, True):
-        paths = await files_module._traverse_path_contents(tmp_path, recursive)  # pyright: ignore[reportPrivateUsage]
-        assert {path.name for path in paths.files} == (
-            {"file.txt", "nested.txt"} if recursive else {"file.txt"}
-        )
-        assert {path.name for path in paths.directories} == {"dir"}
+    paths = await files_module._traverse_path_contents(tmp_path, recursive)  # pyright: ignore[reportPrivateUsage]
+    assert {path.name for path in paths.files} == (
+        {"file.txt", "nested.txt"} if recursive else {"file.txt"}
+    )
+    assert {path.name for path in paths.directories} == {"dir"}
 
 
 @pytest.mark.asyncio
