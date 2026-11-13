@@ -21,10 +21,13 @@ class Attribute:
     default: DefaultValue
     spec: Any
     redaction: str | None
-    __slots__ = ("annotation", "default", "name", "redaction", "spec")
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
+    __slots__ = (
+        "annotation",
+        "default",
+        "name",
+        "redaction",
+        "spec",
+    )
 
     def __init__(
         self,
@@ -102,3 +105,6 @@ class Attribute:
 
     def _validated_default(self) -> Any:
         return self._validate(self.default())
+
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy

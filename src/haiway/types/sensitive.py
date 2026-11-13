@@ -66,7 +66,7 @@ class Sensitive:
             raise ValueError("Sensitive redaction can't be empty")
 
         self.redaction: str
-        self.redaction = redaction
+        object.__setattr__(self, "redaction", redaction)
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion

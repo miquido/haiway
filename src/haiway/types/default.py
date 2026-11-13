@@ -3,7 +3,7 @@ from functools import partial
 from os import getenv as os_getenv
 from typing import Any, Literal, cast, final, overload
 
-from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
+from haiway.types.frozen import same_copy, same_deepcopy
 from haiway.types.missing import Missing
 
 __all__ = (
@@ -53,8 +53,6 @@ class DefaultValue:
     def __call__(self) -> Any | Missing:
         return self._resolve()
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
 
