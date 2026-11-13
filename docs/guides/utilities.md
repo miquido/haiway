@@ -259,7 +259,8 @@ Key behavior:
   when the queue was already finished (the reason is kept).
 - `cancel()` is shorthand for finishing with `CancelledError`.
 - The finish reason is raised again, as the same exception instance, on every read after the queue
-  finished - so its traceback accumulates frames with each repeated read.
+  finished, each time with the traceback it had when the queue finished - repeated reads do not grow
+  it.
 - Thread safety: `enqueue()`, `finish()`, `cancel()` and `clear()` may be called from another thread
   \- they are handed over to the queue's loop and run there, so they return nothing and take effect
   asynchronously. Reading (`is_finished`, `pending_next()`, iteration) has to happen within the
@@ -335,7 +336,7 @@ Key behavior:
 - `finish()` and `cancel()` may be called from another thread and take effect on the stream's loop;
   `send()`, `is_finished`-style checks and iteration must run within that loop (asserted).
 - The finish reason is raised again, as the same exception instance, on every read after the stream
-  finished, as for `AsyncQueue`.
+  finished, with the traceback it had when finishing, as for `AsyncQueue`.
 - `send()` to a finished stream raises `RuntimeError` - a producer looping over a source has to end
   with the stream instead of spinning on discarded elements.
 - Pending producers are released when the stream finishes, their element dropped; they learn of the

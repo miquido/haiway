@@ -59,6 +59,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
 
     __slots__ = (
         "_finish_reason",
+        "_finish_traceback",
         "_loop",
         "_queue",
         "_waiting",
@@ -94,6 +95,12 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         object.__setattr__(
             self,
             "_finish_reason",
+            None,
+        )
+        self._finish_traceback: TracebackType | None
+        object.__setattr__(
+            self,
+            "_finish_traceback",
             None,
         )
 
@@ -213,6 +220,11 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         reason: BaseException = StopAsyncIteration() if exception is None else exception
         object.__setattr__(
             self,
+            "_finish_traceback",
+            reason.__traceback__,
+        )
+        object.__setattr__(
+            self,
             "_finish_reason",
             reason,
         )
@@ -221,7 +233,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             return
 
         if not self._waiting.done():
-            self._waiting.set_exception(reason.with_traceback(reason.__traceback__))
+            self._waiting.set_exception(reason.with_traceback(self._finish_traceback))
 
         if clear:
             # the consumer is released - an element already handed to it
@@ -266,7 +278,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             return self._queue.popleft()
 
         if self._finish_reason is not None:  # check if is finished
-            raise self._finish_reason.with_traceback(self._finish_reason.__traceback__)
+            raise self._finish_reason.with_traceback(self._finish_traceback)
 
         raise AsyncQueueEmpty()
 
@@ -298,7 +310,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             return self._queue.popleft()
 
         if self._finish_reason is not None:  # check if is finished
-            raise self._finish_reason.with_traceback(self._finish_reason.__traceback__)
+            raise self._finish_reason.with_traceback(self._finish_traceback)
 
         # create a new future to wait for next
         waiting: Future[Element] = self._loop.create_future()

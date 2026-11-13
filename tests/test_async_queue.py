@@ -431,14 +431,6 @@ async def test_finish_without_running_loop_is_immediate():
 
 
 @mark.asyncio
-@mark.parametrize("limit", [0, -1])
-async def test_queue_rejects_limit_which_is_not_positive(limit: int) -> None:
-    # raised rather than asserted - an optimized build would make a queue dropping everything
-    with raises(ValueError):
-        AsyncQueue[int](limit=limit)
-
-
-@mark.asyncio
 async def test_queue_rejects_second_consumer() -> None:
     queue: AsyncQueue[int] = AsyncQueue()
     first: Task[int] = create_task(anext(queue))

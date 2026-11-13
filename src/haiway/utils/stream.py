@@ -34,6 +34,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
 
     __slots__ = (
         "_finish_reason",
+        "_finish_traceback",
         "_loop",
         "_pending",
         "_waiting",
@@ -73,6 +74,12 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         object.__setattr__(
             self,
             "_finish_reason",
+            None,
+        )
+        self._finish_traceback: TracebackType | None
+        object.__setattr__(
+            self,
+            "_finish_traceback",
             None,
         )
 
@@ -179,6 +186,11 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         reason: BaseException = exception if exception is not None else StopAsyncIteration()
         object.__setattr__(
             self,
+            "_finish_traceback",
+            reason.__traceback__,
+        )
+        object.__setattr__(
+            self,
             "_finish_reason",
             reason,
         )
@@ -192,7 +204,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             consumed.set_result(None)
 
         if self._waiting is not None and not self._waiting.done():
-            self._waiting.set_exception(reason.with_traceback(reason.__traceback__))
+            self._waiting.set_exception(reason.with_traceback(self._finish_traceback))
 
     def cancel(self) -> None:
         """
@@ -228,7 +240,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             raise RuntimeError("Only a single stream consumer is supported!")
 
         if self._finish_reason is not None:
-            raise self._finish_reason.with_traceback(self._finish_reason.__traceback__)
+            raise self._finish_reason.with_traceback(self._finish_traceback)
 
         while self._pending:
             consumed: Future[None]
