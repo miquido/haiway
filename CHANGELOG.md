@@ -2,6 +2,31 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.62.0
+
+### Changed
+
+- A `Literal` attribute accepts a value of the type of one of its values, not one which is merely
+  equal to it: `Literal[1]` no longer takes `True` or `1.0`, and `Literal[True]` no longer takes
+  `1`. A plain `str` or `int` given for a literal `StrEnum` or `IntEnum` member - what JSON carries
+  of one - is accepted as that member instead of being kept as the plain value.
+
+### Fixed
+
+- `from_json` resolves a union the way `from_mapping` does. An object given to a union of a
+  `State` and an alternative accepting mappings (`Mapping[...]`, `Any`, a `TypedDict`, `Set[...]`)
+  was read as the `State` by `from_json` alone, and an object repeating a key could be read as a
+  later alternative than the one `json.loads` would have led to.
+- A `State` holding a `Meta` is left to reference counting like any other acyclic instance - it
+  used to stay tracked by the garbage collector.
+- A malformed spec description given to the extension is refused with a `TypeError` instead of
+  crashing the interpreter.
+
+### Performance
+
+- `validate` and `from_mapping` read a dictionary in one walk, without copying it first: 20-35%
+  faster for instances built from mappings, nested ones included.
+
 ## 0.61.1
 
 ### Added

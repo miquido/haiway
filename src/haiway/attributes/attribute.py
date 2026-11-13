@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from typing import Any, final
 
 from haiway._native import nstruct
@@ -81,20 +80,6 @@ class Attribute:
 
         else:
             return self._validate(value)
-
-    def validate_from(
-        self,
-        mapping: Mapping[str, Any],
-        /,
-    ) -> Any:
-        if self.alias is not None and self.alias in mapping:
-            return self._validate(mapping[self.alias])
-
-        elif self.name in mapping:
-            return self._validate(mapping[self.name])
-
-        else:
-            return self._validated_default()
 
     def _validate(
         self,
