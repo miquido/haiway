@@ -1,9 +1,11 @@
 from collections.abc import Iterable, Iterator, Sequence
-from typing import Any, NoReturn, Self, SupportsIndex, final, overload
+from typing import Self, final, overload
 from uuid import UUID
 
 from haiway.attributes import State
 from haiway.types import BasicObject, BasicValue
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
+from haiway.utils.collections import as_tuple
 
 __all__ = (
     "Paginated",
@@ -168,11 +170,11 @@ class Paginated[Element](Sequence[Element]):
         pagination : Pagination
             Pagination metadata associated with ``items``.
         """
-        self.items: tuple[Element, ...]
+        self.items: Sequence[Element]
         object.__setattr__(
             self,
             "items",
-            tuple(items),
+            as_tuple(items),
         )
         self.pagination: Pagination
         object.__setattr__(
@@ -212,19 +214,19 @@ class Paginated[Element](Sequence[Element]):
     @overload
     def __getitem__(
         self,
-        index: SupportsIndex,
+        index: int,
     ) -> Element: ...
 
     @overload
     def __getitem__(
         self,
-        index: slice,
+        index: slice[int | None],
     ) -> tuple[Element, ...]: ...
 
     def __getitem__(
         self,
-        index: SupportsIndex | slice,
-    ) -> Element | tuple[Element, ...]:
+        index: int | slice[int | None],
+    ) -> Element | Sequence[Element]:
         return self.items.__getitem__(index)
 
     def __iter__(self) -> Iterator[Element]:
@@ -233,25 +235,6 @@ class Paginated[Element](Sequence[Element]):
     def __len__(self) -> int:
         return self.items.__len__()
 
-    def __setattr__(
-        self,
-        name: str,
-        value: Any,
-    ) -> NoReturn:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__}"
-            f" attribute - '{name}' cannot be modified"
-        )
-
-    def __delattr__(
-        self,
-        name: str,
-    ) -> NoReturn:
-        raise AttributeError(
-            f"Can't modify immutable {self.__class__.__qualname__}"
-            f" attribute - '{name}' cannot be deleted"
-        )
-
     def __str__(self) -> str:
         attributes: str = ", ".join(f"{name}: {getattr(self, name)}" for name in self.__slots__)
         return f"{self.__class__.__name__}({attributes})"
@@ -259,11 +242,7 @@ class Paginated[Element](Sequence[Element]):
     def __repr__(self) -> str:
         return str(self)
 
-    def __copy__(self) -> Self:
-        return self  # Immutable, no need to provide an actual copy
-
-    def __deepcopy__(
-        self,
-        memo: dict[int, Any] | None,
-    ) -> Self:
-        return self  # Immutable, no need to provide an actual copy
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy

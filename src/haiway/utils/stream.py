@@ -76,8 +76,6 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             "_finish_reason",
             None,
         )
-        # the traceback the reason came with - it is raised again to every call after
-        # finishing, and raising the same instance would extend its traceback each time
         self._finish_traceback: TracebackType | None
         object.__setattr__(
             self,
@@ -114,6 +112,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         bool
             True if the stream has been finished, False otherwise
         """
+        assert get_running_loop() is self._loop  # nosec: B101
         return self._finish_reason is not None
 
     async def send(
@@ -144,8 +143,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
         RuntimeError
             If the stream has already been finished
         """
-        if get_running_loop() is not self._loop:
-            raise RuntimeError("AsyncStream can be sent to only within its own event loop")
+        assert get_running_loop() is self._loop  # nosec: B101
 
         if self._finish_reason is not None:
             raise RuntimeError("AsyncStream is already finished")
@@ -159,7 +157,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             self._pending.append((consumed, element))
             await consumed
 
-    @loop_safe()
+    @loop_safe
     def finish(
         self,
         exception: BaseException | None = None,
@@ -206,7 +204,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             consumed.set_result(None)
 
         if self._waiting is not None and not self._waiting.done():
-            self._waiting.set_exception(reason)
+            self._waiting.set_exception(reason.with_traceback(self._finish_traceback))
 
     def cancel(self) -> None:
         """
@@ -236,6 +234,8 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             The exception provided to finish(), or StopAsyncIteration if
             finish() was called without an exception
         """
+        assert get_running_loop() is self._loop  # nosec: B101
+
         if self._waiting is not None:
             raise RuntimeError("Only a single stream consumer is supported!")
 
@@ -297,6 +297,7 @@ class AsyncStream[Element](AsyncGenerator[Element]):
             The next element from the stream
         """
         assert value is None  # nosec: B101
+        assert get_running_loop() is self._loop  # nosec: B101
 
         return await self.__anext__()
 

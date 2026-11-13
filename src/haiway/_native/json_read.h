@@ -30,6 +30,7 @@ typedef struct {
     Py_ssize_t pending_capacity;
     int depth;
     int limit;  /* how deep a document goes, which is as far as Python recurses */
+    int repeated;  /* a key of an instance was repeated - json.loads keeps the last, so it reads the document */
 } Decoder;
 
 static int
@@ -456,7 +457,11 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
             int key_escaped;
             if (!string_span(d, &key_start, &key_length, &key_escaped)) goto fail;
             Py_ssize_t index = field_for_span(plan, key_start, key_length, key_escaped);
-            if (index < 0 || given[index]) goto fail;  /* not an attribute, or given twice */
+            if (index < 0) goto fail;  /* not an attribute */
+            if (given[index]) {
+                d->repeated = 1;
+                goto fail;
+            }
             given[index] = 1;
             skip_whitespace(d);
             if (d->p >= d->end || *d->p != ':') goto fail;
@@ -635,6 +640,50 @@ fail:
     return NULL;
 }
 
+/* whether a spec of the kind refuses every object - anything else may accept one its own
+ * way, which only validating the object read tells */
+static inline int
+refuses_objects(int kind)
+{
+    switch (kind) {
+    case SPEC_NONE:
+    case SPEC_MISSING:
+    case SPEC_LITERAL:
+    case SPEC_BOOL:
+    case SPEC_INT:
+    case SPEC_FLOAT:
+    case SPEC_STR:
+    case SPEC_BYTES:
+    case SPEC_UUID:
+    case SPEC_DATETIME:
+    case SPEC_DATE:
+    case SPEC_TIME:
+    case SPEC_TIMEDELTA:
+    case SPEC_PATH:
+    case SPEC_STR_ENUM:
+    case SPEC_INT_ENUM:
+    case SPEC_TUPLE:
+    case SPEC_SEQUENCE:
+    case SPEC_FUNCTION:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* whether an object can only be an instance of one of the classes of a union - validating
+ * it prefers an alternative accepting it as it is, a mapping, over a class listed before */
+static int
+objects_are_instances(Spec *spec)
+{
+    for (Py_ssize_t i = 0; i < spec->count; i++) {
+        Spec *alternative = spec->children[i];
+        if (alternative->validating != NULL || alternative->verifying != NULL) return 0;
+        if (alternative->kind != SPEC_STATE && !refuses_objects(alternative->kind)) return 0;
+    }
+    return 1;
+}
+
 /* whether a union has an alternative of the kind */
 static inline int
 union_has(Spec *spec, int kind)
@@ -664,15 +713,16 @@ decode_spec(Decoder *d, Spec *spec)
             if (*d->p == 'n' && union_has(spec, SPEC_NONE)) {
                 return match_word(d, "null", 4) ? Py_NewRef(Py_None) : NULL;
             }
-            if (*d->p == '{') {
+            if (*d->p == '{' && objects_are_instances(spec)) {
                 /* the first class the object fits - the alternatives are tried in order */
                 for (Py_ssize_t i = 0; i < spec->count; i++) {
                     Spec *alternative = spec->children[i];
-                    if (alternative->kind != SPEC_STATE || alternative->validating != NULL || alternative->verifying != NULL) continue;
+                    if (alternative->kind != SPEC_STATE) continue;
                     const char *start = d->p;
                     /* a failed alternative dropped what it kept pending itself */
                     PyObject *instance = decode_struct(d, (PyTypeObject *)alternative->base);
-                    if (instance != NULL || PyErr_Occurred()) return instance;
+                    if (instance != NULL || PyErr_Occurred() || d->repeated) return instance;
+                    if (d->p == start) break;  /* a class which is not read here */
                     d->p = start;
                 }
             }
@@ -772,7 +822,7 @@ from_json_native(PyObject *mod, PyObject *args)
         Py_RETURN_NONE;
     }
 
-    Decoder decoder = {state, data, data + length, NULL, 0, 0, 0, Py_GetRecursionLimit()};
+    Decoder decoder = {state, data, data + length, NULL, 0, 0, 0, Py_GetRecursionLimit(), 0};
     PyObject *result = NULL;
     skip_whitespace(&decoder);
     if (!array) {

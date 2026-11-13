@@ -255,7 +255,16 @@ Key behavior:
 - `pending_next()` raises `AsyncQueueEmpty` when the queue is open but currently empty.
 - `finish()` stops future `enqueue()` calls and ends iteration after buffered items are drained.
 - `finish(exception)` re-raises that exception on the consumer after buffered items are drained.
+- `finish(clear=True)` also drops the buffer - what `aclose()` and `athrow()` use. It applies even
+  when the queue was already finished (the reason is kept).
 - `cancel()` is shorthand for finishing with `CancelledError`.
+- The finish reason is raised again, as the same exception instance, on every read after the queue
+  finished, each time with the traceback it had when the queue finished - repeated reads do not grow
+  it.
+- Thread safety: `enqueue()`, `finish()`, `cancel()` and `clear()` may be called from another thread
+  \- they are handed over to the queue's loop and run there, so they return nothing and take effect
+  asynchronously. Reading (`is_finished`, `pending_next()`, iteration) has to happen within the
+  queue's loop, which is checked by an assertion.
 - `clear()` drops currently buffered items, and does nothing at all while a consumer is waiting, so
   a queued wake-up is never disrupted.
 - `aclose()` ends the iteration: it finishes the queue *and* drops what it still holds, so every
@@ -290,8 +299,9 @@ items = [item async for item in queue]  # [2, 3]
   when the queue is already finished.
 - Elements handed straight to a waiting consumer never enter the buffer, so they never count against
   the limit.
-- `limit` must be positive when provided, and the effective value is readable through the `.limit`
-  property (`None` when unbounded).
+- `limit` must be positive when provided - checked by an assertion, so a non-positive value is a
+  programming error rather than a `ValueError` - and the effective value is readable through the
+  `.limit` property (`None` when unbounded).
 - Reach for `AsyncStream` instead when producers must be slowed down rather than have their oldest
   items discarded.
 
@@ -323,6 +333,10 @@ Key behavior:
 - `finish()` ends the stream immediately for future reads.
 - `finish(exception)` re-raises that exception on the consumer.
 - `cancel()` is shorthand for finishing with `CancelledError`.
+- `finish()` and `cancel()` may be called from another thread and take effect on the stream's loop;
+  `send()`, `is_finished`-style checks and iteration must run within that loop (asserted).
+- The finish reason is raised again, as the same exception instance, on every read after the stream
+  finished, with the traceback it had when finishing, as for `AsyncQueue`.
 - `send()` to a finished stream raises `RuntimeError` - a producer looping over a source has to end
   with the stream instead of spinning on discarded elements.
 - Pending producers are released when the stream finishes, their element dropped; they learn of the

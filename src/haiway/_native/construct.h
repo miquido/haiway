@@ -305,16 +305,127 @@ struct_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf, PyOb
     return self;
 }
 
+/* how reading the entries of a dictionary as the values of an instance ended */
+typedef enum {
+    ENTRIES_FAILED = -1,  /* an error is set */
+    ENTRIES_UNUSUAL,      /* a key which is not a plain str, or an attribute given twice - nothing was read */
+    ENTRIES_READ,
+} Entries;
+
 /*
- * An instance built from the items of a mapping. A key which is not an attribute is
- * reported first, before any of the values is validated. A dictionary is read as it is,
- * locked while its keys are walked - any other mapping is copied into one first.
+ * The values of the attributes as a dictionary gives them, each a new reference in `values`,
+ * NULL for one which is not given - gathered in one walk, with the dictionary locked, so
+ * nothing read later is what another thread, or the code validating the values, could have
+ * changed. No code of the user runs here: only plain strings are looked up. A key which
+ * is not an attribute is reported, before any of the values is validated.
+ */
+static Entries
+given_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObject *entries, PyObject **values)
+{
+    Py_ssize_t n = plan->count;
+    memset(values, 0, (size_t)n * sizeof(PyObject *));
+    Entries result = ENTRIES_READ;
+    PyObject *unknown = NULL;
+    PyObject *key;
+    PyObject *value;
+    Py_ssize_t position = 0;
+    Py_ssize_t at = 0;  /* the keys usually come in the order of the attributes */
+    Py_BEGIN_CRITICAL_SECTION(entries);
+    for (; PyDict_Next(entries, &position, &key, &value); at++) {
+        if (!PyUnicode_CheckExact(key)) {
+            result = ENTRIES_UNUSUAL;
+            break;
+        }
+        Py_INCREF(key);  /* held while looked up, which may let go of the lock */
+        Py_INCREF(value);
+        Py_ssize_t index = at < n && (key == plan->fields[at].name || key == plan->fields[at].alias)
+            ? at : field_for_key(plan, key);
+        if (index < 0) {
+            unknown = key;
+            Py_DECREF(value);
+            break;
+        }
+        Py_DECREF(key);
+        if (values[index] != NULL) {
+            Py_DECREF(value);
+            result = ENTRIES_UNUSUAL;
+            break;
+        }
+        values[index] = value;
+    }
+    Py_END_CRITICAL_SECTION();
+    if (unknown != NULL) {
+        PyObject *r = PyObject_CallFunctionObjArgs(state->unexpected, (PyObject *)type, unknown, NULL);
+        Py_XDECREF(r);
+        Py_DECREF(unknown);
+        if (r != NULL) PyErr_SetString(PyExc_TypeError, "unexpected attributes");  /* it is documented to raise */
+        result = ENTRIES_FAILED;
+    }
+    if (result != ENTRIES_READ) {
+        for (Py_ssize_t i = 0; i < n; i++) Py_CLEAR(values[i]);
+    }
+    return result;
+}
+
+/* an instance of a class constructed here from the entries of a dictionary - NULL without
+ * an error for entries read the general way, which tells what is unusual about them */
+static PyObject *
+instance_from_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObject *entries)
+{
+    Py_ssize_t n = plan->count;
+    PyObject *stack[FAST_MAX_FIELDS];
+    PyObject **values = n <= FAST_MAX_FIELDS ? stack : PyMem_Malloc((size_t)n * sizeof(PyObject *));
+    if (values == NULL) return PyErr_NoMemory();
+    PyObject *self = NULL;
+    if (given_entries(state, type, plan, entries, values) != ENTRIES_READ) goto done;
+
+    for (Py_ssize_t i = 0; i < n; i++) {
+        FieldPlan *field = &plan->fields[i];
+        PyObject *validated = values[i] != NULL ? validate_field(field, plan, values[i]) : field_default(field);
+        if (validated == NULL) {
+            report_failure(state, type, NULL, field->name);
+            for (Py_ssize_t k = 0; k < n; k++) Py_XDECREF(values[k]);
+            goto done;
+        }
+        Py_XSETREF(values[i], validated);
+    }
+    self = type->tp_alloc(type, 0);
+    if (self == NULL) {
+        for (Py_ssize_t k = 0; k < n; k++) Py_DECREF(values[k]);
+        goto done;
+    }
+    memcpy(ITEMS(self), values, (size_t)n * sizeof(PyObject *));
+    finish_construction(self);
+
+done:
+    if (values != stack) PyMem_Free(values);
+    return self;
+}
+
+/* whether a mapping is a dictionary whose entries are what it gives - a subclass may give
+ * something else through what it overrides */
+static inline int
+reads_as_entries(ModuleState *state, PyObject *mapping)
+{
+    return PyDict_CheckExact(mapping) || PyFrozenDict_CheckExact(mapping) || Py_IS_TYPE(mapping, (PyTypeObject *)state->map);
+}
+
+/*
+ * An instance built from the items of a mapping. The entries of a dictionary are read as
+ * they are when the class is constructed here; anything else - another mapping, unusual
+ * keys, a class constructing itself - goes through a private copy of the mapping, with a
+ * key which is not an attribute reported first, before any of the values is validated.
  */
 static PyObject *
 instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
 {
     PyTypeObject *type = (PyTypeObject *)cls;
     CompiledPlan *plan = PLAN_OF(type);
+
+    if (plan != NULL && constructs_natively(type) && reads_as_entries(state, mapping)) {
+        PyObject *self = instance_from_entries(state, type, plan, mapping);
+        if (self != NULL || PyErr_Occurred()) return self;
+    }
 
     /* a snapshot - validators run user code, which could change the caller's dictionary
      * between the fields read from it. a frozendict too, the calls below read a dictionary */
@@ -336,7 +447,6 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
         PyObject *key;
         PyObject *value;
         Py_ssize_t position = 0;
-        Py_BEGIN_CRITICAL_SECTION(kwargs);
         while (PyDict_Next(kwargs, &position, &key, &value)) {
             PyObject *index;
             int known = PyDict_GetItemRef(plan->keys, key, &index);
@@ -350,7 +460,6 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
             }
             Py_DECREF(index);
         }
-        Py_END_CRITICAL_SECTION();
         if (failed) {
             Py_DECREF(kwargs);
             return NULL;

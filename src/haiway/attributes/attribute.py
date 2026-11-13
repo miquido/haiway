@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from typing import Any, final
 
 from haiway._native import nstruct
@@ -21,10 +20,13 @@ class Attribute:
     default: DefaultValue
     spec: Any
     redaction: str | None
-    __slots__ = ("annotation", "default", "name", "redaction", "spec")
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
+    __slots__ = (
+        "annotation",
+        "default",
+        "name",
+        "redaction",
+        "spec",
+    )
 
     def __init__(
         self,
@@ -79,20 +81,6 @@ class Attribute:
         else:
             return self._validate(value)
 
-    def validate_from(
-        self,
-        mapping: Mapping[str, Any],
-        /,
-    ) -> Any:
-        if self.alias is not None and self.alias in mapping:
-            return self._validate(mapping[self.alias])
-
-        elif self.name in mapping:
-            return self._validate(mapping[self.name])
-
-        else:
-            return self._validated_default()
-
     def _validate(
         self,
         value: Any,
@@ -102,3 +90,6 @@ class Attribute:
 
     def _validated_default(self) -> Any:
         return self._validate(self.default())
+
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy

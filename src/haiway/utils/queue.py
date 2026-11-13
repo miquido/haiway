@@ -71,9 +71,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         limit: int | None = None,
         loop: AbstractEventLoop | None = None,
     ) -> None:
-        # raised rather than asserted - an optimized build would make a queue dropping everything
-        if limit is not None and limit <= 0:
-            raise ValueError(f"AsyncQueue limit has to be positive, got {limit}")
+        assert limit is None or limit > 0  # nosec: B101
 
         self._loop: AbstractEventLoop
         object.__setattr__(
@@ -99,8 +97,6 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             "_finish_reason",
             None,
         )
-        # the traceback the reason came with - it is raised again to every call after
-        # finishing, and raising the same instance would extend its traceback each time
         self._finish_traceback: TracebackType | None
         object.__setattr__(
             self,
@@ -137,6 +133,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         bool
             True if the queue has been finished, False otherwise
         """
+        assert get_running_loop() is self._loop  # nosec: B101
         return self._finish_reason is not None
 
     @property
@@ -151,6 +148,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         """
         return self._queue.maxlen
 
+    @loop_safe
     def enqueue(
         self,
         element: Element,
@@ -170,7 +168,8 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         Raises
         ------
         RuntimeError
-            If the queue has already been finished
+            If the queue has already been finished. Called from another thread, the
+            element is handed over to the queue's loop and this is raised there.
         """
         if self.is_finished:
             raise RuntimeError("AsyncQueue is already finished")
@@ -181,10 +180,11 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         else:
             self._queue.append(element)
 
-    @loop_safe()
+    @loop_safe
     def finish(
         self,
         exception: BaseException | None = None,
+        clear: bool = False,
     ) -> None:
         """
         Mark the queue as finished, optionally with an exception.
@@ -193,21 +193,29 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         elements remain available to the consumer. Once the buffer is drained,
         the consumer receives the provided exception or ``StopAsyncIteration``.
         If the queue is already finished, this method does nothing. It may be
-        called from another thread (so may ``cancel()`` and ``clear()``), it takes effect on the
-        queue's loop then - the queue is not finished yet when it returns. Every other
-        operation has to run within the loop of the queue.
+        called from another thread (so may ``enqueue()``, ``cancel()`` and ``clear()``), it
+        takes effect on the queue's loop then - the queue is not finished yet when it
+        returns. Every other operation, including ``is_finished``, has to run within the
+        loop of the queue.
 
-        This is the producer side of ending a queue and it keeps the buffer - use
-        ``aclose()`` to end the iteration itself, which drops it.
+        This is the producer side of ending a queue and it keeps the buffer by default -
+        use ``aclose()`` to end the iteration itself, which drops it.
 
         Parameters
         ----------
         exception : BaseException | None, default=None
             Optional exception to raise in consumers. If None, StopAsyncIteration
             is used to signal normal completion.
+        clear : bool, default=False
+            Drop the buffered elements as well, applied even when the queue is already
+            finished (its reason is kept) and releasing a consumer which was handed
+            an element but did not resume yet, so that element is not put back.
         """
+        if clear:  # ensure cleanup even if finished
+            self._queue.clear()
+
         if self.is_finished:
-            return  # already finished, ignore
+            return  # already finished keeps its reason
 
         reason: BaseException = StopAsyncIteration() if exception is None else exception
         object.__setattr__(
@@ -221,10 +229,20 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             reason,
         )
 
-        if self._waiting is not None and not self._waiting.done():
-            finish_reason: BaseException | None = self._finish_reason
-            assert finish_reason is not None  # nosec: B101
-            self._waiting.set_exception(finish_reason)
+        if self._waiting is None:
+            return
+
+        if not self._waiting.done():
+            self._waiting.set_exception(reason.with_traceback(self._finish_traceback))
+
+        if clear:
+            # the consumer is released - an element already handed to it
+            # must not be put back after the buffer has been dropped
+            object.__setattr__(
+                self,
+                "_waiting",
+                None,
+            )
 
     def cancel(self) -> None:
         """
@@ -254,6 +272,8 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         BaseException
             Re-raises the finish reason when the queue has already been finished.
         """
+        assert get_running_loop() is self._loop  # nosec: B101
+
         if self._queue:  # check the queue, let it finish
             return self._queue.popleft()
 
@@ -282,6 +302,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         return await self.__anext__()
 
     async def __anext__(self) -> Element:
+        assert get_running_loop() is self._loop  # nosec: B101
         if self._waiting is not None:
             raise RuntimeError("Only a single queue consumer is supported!")
 
@@ -291,24 +312,24 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         if self._finish_reason is not None:  # check if is finished
             raise self._finish_reason.with_traceback(self._finish_traceback)
 
+        # create a new future to wait for next
+        waiting: Future[Element] = self._loop.create_future()
         try:
-            # create a new future to wait for next
             object.__setattr__(
                 self,
                 "_waiting",
-                self._loop.create_future(),
+                waiting,
             )
             # wait for the result
-            return await cast(Awaitable[Element], self._waiting)
+            return await cast(Awaitable[Element], waiting)
 
         except CancelledError:
             # an element delivered to the waiting consumer cancelled before it resumed
             # would be lost - it goes back to the front of the buffer instead, unless
             # the buffer has been refilled up to its limit, in which case the oldest
             # element is the one a bounded buffer drops anyway
-            waiting: Future[Element] | None = self._waiting
             if (
-                waiting is not None
+                self._waiting is waiting  # pyright: ignore[reportUnnecessaryComparison]
                 and waiting.done()
                 and not waiting.cancelled()
                 and waiting.exception() is None
@@ -354,6 +375,7 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             Re-raises the finish reason when the queue has been finished
         """
         assert value is None  # nosec: B101
+        assert get_running_loop() is self._loop  # nosec: B101
 
         return await self.__anext__()
 
@@ -388,10 +410,10 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             Always - the exception which was thrown in
         """
         exception: BaseException = thrown_exception(typ, val, tb)
-
-        self.finish(exception=exception)
-        self._release_consumer()
-        self._queue.clear()  # the consumer is gone - buffered elements have nowhere to go
+        self.finish(
+            exception=exception,
+            clear=True,
+        )
         raise exception
 
     async def aclose(self) -> None:
@@ -410,18 +432,9 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         asking the consumer to stop reading, and finishing that way costs no
         element which was already accepted.
         """
-        self.finish()
-        self._release_consumer()
-        # dropped after finishing - a waiting consumer was already released with the
-        # finish reason, so there is nobody left to deliver the buffer to
-        self._queue.clear()
+        self.finish(clear=True)
 
-    def _release_consumer(self) -> None:
-        # finishing has resolved what the consumer waits for - letting go of it
-        # leaves nothing an element handed out could be put back from
-        object.__setattr__(self, "_waiting", None)
-
-    @loop_safe()
+    @loop_safe
     def clear(self) -> None:
         """
         Clear all pending elements from the queue.

@@ -101,8 +101,50 @@ spec_traverse(Spec *spec, visitproc visit, void *arg)
 #define D_DATA(e) PyTuple_GET_ITEM((e), 5)
 #define D_CHILDREN(e) PyTuple_GET_ITEM((e), 6)
 
+/* whether a description holds what its kind reads - checked once, so nothing validating
+ * with the spec has to: the children it indexes, the data and the base it casts */
+static int
+spec_shaped(ModuleState *state, Spec *spec, Py_ssize_t children)
+{
+    switch (spec->kind) {
+    case SPEC_LITERAL:
+        return children == 0 && spec->data != NULL && PyTuple_Check(spec->data);
+    case SPEC_STR_ENUM:
+    case SPEC_INT_ENUM:
+    case SPEC_CUSTOM_STATE:
+    case SPEC_CUSTOM:
+        return children == 0 && spec->base != NULL;
+    case SPEC_STATE:  /* read through its plan, which only a class of the module has */
+        return children == 0 && spec->base != NULL && PyType_Check(spec->base)
+            && PyType_IsSubtype((PyTypeObject *)spec->base, state->struct_type);
+    case SPEC_SEQUENCE:
+    case SPEC_SET:
+    case SPEC_VALIDABLE:
+        return children == 1;
+    case SPEC_MAPPING:
+        return children == 2;
+    case SPEC_TYPED_DICT:
+        if (spec->base == NULL || spec->data == NULL || !PyTuple_Check(spec->data)
+            || PyTuple_GET_SIZE(spec->data) != children) {
+            return 0;
+        }
+        for (Py_ssize_t i = 0; i < children; i++) {
+            PyObject *entry = PyTuple_GET_ITEM(spec->data, i);
+            if (!PyTuple_Check(entry) || PyTuple_GET_SIZE(entry) != 2 || !PyUnicode_Check(PyTuple_GET_ITEM(entry, 0))) {
+                return 0;
+            }
+        }
+        return 1;
+    case SPEC_TUPLE:
+    case SPEC_UNION:
+        return 1;
+    default:
+        return children == 0;
+    }
+}
+
 static Spec *
-spec_compile(PyObject *description)
+spec_compile(ModuleState *state, PyObject *description)
 {
     if (!PyTuple_Check(description) || PyTuple_GET_SIZE(description) != 7 || !PyLong_Check(D_KIND(description))
         || !PyTuple_Check(D_CHILDREN(description))) {
@@ -126,6 +168,13 @@ spec_compile(PyObject *description)
     spec->validating = D_VALIDATING(description) == Py_None ? NULL : Py_NewRef(D_VALIDATING(description));
     spec->verifying = D_VERIFYING(description) == Py_None ? NULL : Py_NewRef(D_VERIFYING(description));
     spec->data = D_DATA(description) == Py_None ? NULL : Py_NewRef(D_DATA(description));
+    PyObject *children = D_CHILDREN(description);
+    Py_ssize_t n = PyTuple_GET_SIZE(children);
+    if (!spec_shaped(state, spec, n)) {
+        PyErr_Format(PyExc_TypeError, "a spec of kind %d is described by something else", spec->kind);
+        spec_free(spec);
+        return NULL;
+    }
     if ((spec->kind == SPEC_STR_ENUM || spec->kind == SPEC_INT_ENUM) && spec->data == NULL) {
         /* the members by value, what `EnumType.__call__` looks up first - held as it is, so
          * members added later are seen too */
@@ -144,8 +193,6 @@ spec_compile(PyObject *description)
             return NULL;
         }
     }
-    PyObject *children = D_CHILDREN(description);
-    Py_ssize_t n = PyTuple_GET_SIZE(children);
     /* an alias keeps room for its target, which is compiled when it is first used */
     Py_ssize_t room = spec->kind == SPEC_ALIAS ? 1 : n;
     if (room > 0) {
@@ -164,7 +211,7 @@ spec_compile(PyObject *description)
     spec->nested = n > 0 || spec->kind == SPEC_ALIAS || spec->kind == SPEC_STATE || spec->kind == SPEC_CUSTOM_STATE
         || spec->kind == SPEC_CUSTOM || spec->kind == SPEC_META;
     for (Py_ssize_t i = 0; i < n; i++) {
-        spec->children[i] = spec_compile(PyTuple_GET_ITEM(children, i));
+        spec->children[i] = spec_compile(state, PyTuple_GET_ITEM(children, i));
         if (spec->children[i] == NULL) {
             spec_free(spec);
             return NULL;
@@ -214,7 +261,7 @@ static PyObject *
 compile_spec(PyObject *mod, PyObject *description)
 {
     ModuleState *state = module_state(mod);
-    Spec *spec = spec_compile(description);
+    Spec *spec = spec_compile(state, description);
     if (spec == NULL) return NULL;
     PyObject *self = state->spec_type->tp_alloc(state->spec_type, 0);
     if (self == NULL) {
@@ -328,6 +375,32 @@ is_text_like(PyObject *value)
     return PyUnicode_Check(value) || PyBytes_Check(value) || PyByteArray_Check(value) || PyMemoryView_Check(value);
 }
 
+/*
+ * What a literal accepts for a value - 1 with it in `accepted`, a new reference, 0 for
+ * nothing, -1 with an error set. Being equal is not enough, as `True == 1 == 1.0` while
+ * neither is the other: a value matches a literal of its very type, and is accepted as it
+ * is. A plain str or int also matches the member of an enum it is the value of - what json
+ * carries of one - and the member is what is accepted.
+ */
+static int
+literal_match(PyObject *literals, PyObject *value, PyObject **accepted)
+{
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(literals); i++) {
+        PyObject *literal = PyTuple_GET_ITEM(literals, i);
+        int same = Py_TYPE(literal) == Py_TYPE(value);
+        int spelled = !same
+            && ((PyUnicode_CheckExact(value) && PyUnicode_Check(literal))
+                || (PyLong_CheckExact(value) && PyLong_Check(literal) && !PyBool_Check(literal)));
+        if (!same && !spelled) continue;
+        int equal = literal == value ? 1 : PyObject_RichCompareBool(literal, value, Py_EQ);
+        if (equal < 0) return -1;
+        if (!equal) continue;
+        *accepted = Py_NewRef(same ? value : literal);
+        return 1;
+    }
+    return 0;
+}
+
 /* the target of an alias, compiled on its first use - NULL with an error set on failure */
 static Spec *
 alias_target(ModuleState *state, Spec *spec)
@@ -344,7 +417,7 @@ alias_target(ModuleState *state, Spec *spec)
      * alias again, a recursive one */
     PyObject *description = PyObject_CallOneArg(state->describe, spec->annotation);
     if (description == NULL) return NULL;
-    Spec *compiled = spec_compile(description);
+    Spec *compiled = spec_compile(state, description);
     Py_DECREF(description);
     if (compiled == NULL) return NULL;
     Spec *published;
@@ -437,8 +510,13 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
         return value == Py_None;
     case SPEC_MISSING:
         return value == state->missing;
-    case SPEC_LITERAL:
-        return PySequence_Contains(spec->data, value);
+    case SPEC_LITERAL: {
+        PyObject *accepted;
+        int r = literal_match(spec->data, value, &accepted);
+        if (r <= 0) return r;
+        Py_DECREF(accepted);
+        return accepted == value;
+    }
     case SPEC_BOOL:
         return PyBool_Check(value);
     case SPEC_INT:
@@ -640,6 +718,28 @@ enum_member(Spec *spec, PyObject *value, PyObject **member)
     return found;
 }
 
+/* a value which is no member of an enum - raised from the lookup which failed, which is
+ * taken over. The members are spelled by their names when `named`, by their values otherwise */
+static PyObject *
+enum_error(ModuleState *state, Spec *spec, PyObject *value, int named, PyObject *cause)
+{
+    PyObject *allowed = PyObject_CallFunction(state->enum_values, "Oi", spec->base, named);
+    PyObject *name = allowed == NULL ? NULL : PyObject_GetAttrString(spec->base, "__name__");
+    PyObject *reported = name == NULL ? NULL : reported_type(value);
+    if (reported != NULL) {
+        PyErr_Format(PyExc_ValueError, "'%U' is not matching any of expected %U %s [%U]", reported, name,
+                     named ? "members" : "values", allowed);
+        PyObject *exc = PyErr_GetRaisedException();
+        PyException_SetCause(exc, Py_NewRef(cause));
+        PyErr_SetRaisedException(exc);
+    }
+    Py_XDECREF(reported);
+    Py_XDECREF(name);
+    Py_XDECREF(allowed);
+    Py_DECREF(cause);
+    return NULL;
+}
+
 static PyObject *
 validate_enum_str(ModuleState *state, Spec *spec, PyObject *value)
 {
@@ -651,27 +751,10 @@ validate_enum_str(ModuleState *state, Spec *spec, PyObject *value)
     if (converted != NULL) return converted;
     if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
     PyErr_Clear();
-    converted = PyObject_GetItem(spec->base, value);
+    converted = PyObject_GetItem(spec->base, value);  /* the name of a member */
     if (converted != NULL) return converted;
     if (!PyErr_ExceptionMatches(PyExc_KeyError)) return NULL;
-    PyObject *cause = PyErr_GetRaisedException();
-    PyObject *allowed = PyObject_CallFunction(state->enum_values, "Oi", spec->base, 0);
-    PyObject *name = allowed == NULL ? NULL : PyObject_GetAttrString(spec->base, "__name__");
-    if (name != NULL) {
-        PyObject *reported = reported_type(value);
-        if (reported != NULL) {
-            PyErr_Format(PyExc_ValueError, "'%U' is not matching any of expected %U values [%U]", reported, name, allowed);
-            Py_DECREF(reported);
-        }
-        PyObject *exc = PyErr_GetRaisedException();
-        PyException_SetCause(exc, cause);
-        PyErr_SetRaisedException(exc);
-    } else {
-        Py_DECREF(cause);
-    }
-    Py_XDECREF(allowed);
-    Py_XDECREF(name);
-    return NULL;
+    return enum_error(state, spec, value, 0, PyErr_GetRaisedException());
 }
 
 static PyObject *
@@ -685,24 +768,7 @@ validate_enum_int(ModuleState *state, Spec *spec, PyObject *value)
         PyObject *converted = PyObject_CallOneArg(spec->base, value);
         if (converted != NULL) return converted;
         if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
-        PyObject *cause = PyErr_GetRaisedException();
-        PyObject *allowed = PyObject_CallFunction(state->enum_values, "Oi", spec->base, 0);
-        PyObject *name = allowed == NULL ? NULL : PyObject_GetAttrString(spec->base, "__name__");
-        if (name != NULL) {
-            PyObject *reported = reported_type(value);
-        if (reported != NULL) {
-            PyErr_Format(PyExc_ValueError, "'%U' is not matching any of expected %U values [%U]", reported, name, allowed);
-            Py_DECREF(reported);
-        }
-            PyObject *exc = PyErr_GetRaisedException();
-            PyException_SetCause(exc, cause);
-            PyErr_SetRaisedException(exc);
-        } else {
-            Py_DECREF(cause);
-        }
-        Py_XDECREF(allowed);
-        Py_XDECREF(name);
-        return NULL;
+        return enum_error(state, spec, value, 0, PyErr_GetRaisedException());
     }
     /* a str - the name of a member, or the number of one */
     PyObject *converted = PyObject_GetItem(spec->base, value);
@@ -723,23 +789,7 @@ validate_enum_int(ModuleState *state, Spec *spec, PyObject *value)
         return NULL;
     }
     PyErr_Clear();
-    PyObject *allowed = PyObject_CallFunction(state->enum_values, "Oi", spec->base, 1);
-    PyObject *name = allowed == NULL ? NULL : PyObject_GetAttrString(spec->base, "__name__");
-    if (name != NULL) {
-        PyObject *reported = reported_type(value);
-        if (reported != NULL) {
-            PyErr_Format(PyExc_ValueError, "'%U' is not matching any of expected %U members [%U]", reported, name, allowed);
-            Py_DECREF(reported);
-        }
-        PyObject *exc = PyErr_GetRaisedException();
-        PyException_SetCause(exc, cause);
-        PyErr_SetRaisedException(exc);
-    } else {
-        Py_DECREF(cause);
-    }
-    Py_XDECREF(allowed);
-    Py_XDECREF(name);
-    return NULL;
+    return enum_error(state, spec, value, 1, cause);
 }
 
 static PyObject *struct_validate_value(ModuleState *state, PyObject *cls, PyObject *value);
@@ -881,6 +931,18 @@ fail:
     return NULL;
 }
 
+/* the error set, taken over into the list of what the alternatives of a union failed with -
+ * which is made for the first of them */
+static int
+gather_error(PyObject **errors)
+{
+    PyObject *exc = PyErr_GetRaisedException();
+    if (*errors == NULL) *errors = PyList_New(0);
+    int failed = *errors == NULL || PyList_Append(*errors, exc) < 0;
+    Py_DECREF(exc);
+    return failed ? -1 : 0;
+}
+
 /* the alternatives of a union a first pass attempted - as the bits of a word for as many as
  * it holds, which keeps the frame small: a union nested in itself recurses through it once
  * for every level, so its size is how deep a document can go on a small stack */
@@ -889,18 +951,14 @@ fail:
 static PyObject *
 validate_union(ModuleState *state, Spec *spec, PyObject *value)
 {
-    PyObject *errors = PyList_New(0);
-    if (errors == NULL) return NULL;
+    PyObject *errors = NULL;  /* made with the first one - most values are accepted without any */
     /* each alternative is attempted once - the second pass leaves out what the first one
      * attempted, so the code of the user runs once, and fails into one error, for each */
     uint64_t bits = 0;
     unsigned char *attempted = NULL;  /* only past the bits of a word */
     if (spec->count > UNION_BITS) {
         attempted = PyMem_Calloc((size_t)spec->count, 1);
-        if (attempted == NULL) {
-            Py_DECREF(errors);
-            return PyErr_NoMemory();
-        }
+        if (attempted == NULL) return PyErr_NoMemory();
     }
 #define ATTEMPTED(i) (attempted != NULL ? attempted[i] : (int)((bits >> (i)) & 1))
 #define ATTEMPT(i) \
@@ -919,10 +977,7 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
                 if (r < 0) {
                     if (!PyErr_ExceptionMatches(PyExc_Exception)) goto fail;
                     ATTEMPT(i);  /* refused already - its validation would refuse it too */
-                    PyObject *exc = PyErr_GetRaisedException();
-                    int failed = PyList_Append(errors, exc) < 0;
-                    Py_DECREF(exc);
-                    if (failed) goto fail;
+                    if (gather_error(&errors) < 0) goto fail;
                     continue;
                 }
                 if (!r) continue;
@@ -933,16 +988,13 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
             PyObject *validated = validate_spec(state, alternative, value);
             if (validated != NULL) {
                 PyMem_Free(attempted);
-                Py_DECREF(errors);
+                Py_XDECREF(errors);
                 return validated;
             }
-            if (!PyErr_ExceptionMatches(PyExc_Exception)) goto fail;
-            PyObject *exc = PyErr_GetRaisedException();
-            int failed = PyList_Append(errors, exc) < 0;
-            Py_DECREF(exc);
-            if (failed) goto fail;
+            if (!PyErr_ExceptionMatches(PyExc_Exception) || gather_error(&errors) < 0) goto fail;
         }
     }
+    if (errors == NULL && (errors = PyList_New(0)) == NULL) goto fail;  /* a union of nothing */
     PyObject *names = PyList_New(0);
     if (names == NULL) goto fail;
     for (Py_ssize_t i = 0; i < spec->count; i++) {
@@ -972,7 +1024,7 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
     }
 fail:
     PyMem_Free(attempted);
-    Py_DECREF(errors);
+    Py_XDECREF(errors);
     return NULL;
 }
 
@@ -991,9 +1043,10 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
     case SPEC_MISSING:
         return value == state->missing ? Py_NewRef(value) : type_error("Missing", value);
     case SPEC_LITERAL: {
-        int r = PySequence_Contains(spec->data, value);
+        PyObject *accepted;
+        int r = literal_match(spec->data, value, &accepted);
         if (r < 0) return NULL;
-        if (r) return Py_NewRef(value);
+        if (r) return accepted;
         PyObject *spelled = PyObject_CallOneArg(state->literal_values, spec->data);
         if (spelled == NULL) return NULL;
         PyObject *reported = reported_type(value);
