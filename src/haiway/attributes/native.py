@@ -54,7 +54,7 @@ from haiway.attributes.annotations import (
     _no_verify,  # pyright: ignore[reportPrivateUsage]
 )
 from haiway.attributes.attribute import Attribute
-from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
+from haiway.types.frozen import same_copy, same_deepcopy
 
 __all__ = (
     "ConversionHooks",
@@ -734,8 +734,6 @@ class ValidationHooks:
         "unexpected",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
 
@@ -754,17 +752,17 @@ class ValidationHooks:
         parse_duration: Callable[[str], Any],
         exception_group: type[Any],
     ) -> None:
-        object.__setattr__(self, "missing", missing)
-        object.__setattr__(self, "check", check)
-        object.__setattr__(self, "report", report)
-        object.__setattr__(self, "unexpected", unexpected)
-        object.__setattr__(self, "describe", describe)
-        object.__setattr__(self, "parameters", parameters)
-        object.__setattr__(self, "enum_values", enum_values)
-        object.__setattr__(self, "literal_values", literal_values)
-        object.__setattr__(self, "b64decode", b64decode)
-        object.__setattr__(self, "parse_duration", parse_duration)
-        object.__setattr__(self, "exception_group", exception_group)
+        self.missing = missing
+        self.check = check
+        self.report = report
+        self.unexpected = unexpected
+        self.describe = describe
+        self.parameters = parameters
+        self.enum_values = enum_values
+        self.literal_values = literal_values
+        self.b64decode = b64decode
+        self.parse_duration = parse_duration
+        self.exception_group = exception_group
 
 
 @final
@@ -777,8 +775,6 @@ class ConversionHooks:
     recursive: Callable[[Any], Any]
     __slots__ = ("basic_key", "basic_value", "map", "recursive")
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
 
@@ -790,10 +786,10 @@ class ConversionHooks:
         basic_key: Callable[[Any, bool, tuple[str, ...]], Any],
         recursive: Callable[[Any], Any],
     ) -> None:
-        object.__setattr__(self, "map", map)
-        object.__setattr__(self, "basic_value", basic_value)
-        object.__setattr__(self, "basic_key", basic_key)
-        object.__setattr__(self, "recursive", recursive)
+        self.map = map
+        self.basic_value = basic_value
+        self.basic_key = basic_key
+        self.recursive = recursive
 
 
 @final
@@ -833,8 +829,6 @@ class TypeHooks:
         "uuid",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
 
@@ -857,21 +851,21 @@ class TypeHooks:
         partial: type[Any],
         placeholder: Any,
     ) -> None:
-        object.__setattr__(self, "mapping", mapping)
-        object.__setattr__(self, "sequence", sequence)
-        object.__setattr__(self, "set", set)
-        object.__setattr__(self, "iterable", iterable)
-        object.__setattr__(self, "uuid", uuid)
-        object.__setattr__(self, "safe_uuid", safe_uuid)
-        object.__setattr__(self, "datetime", datetime)
-        object.__setattr__(self, "date", date)
-        object.__setattr__(self, "time", time)
-        object.__setattr__(self, "timedelta", timedelta)
-        object.__setattr__(self, "path", path)
-        object.__setattr__(self, "pathlike", pathlike)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "partial", partial)
-        object.__setattr__(self, "placeholder", placeholder)
+        self.mapping = mapping
+        self.sequence = sequence
+        self.set = set
+        self.iterable = iterable
+        self.uuid = uuid
+        self.safe_uuid = safe_uuid
+        self.datetime = datetime
+        self.date = date
+        self.time = time
+        self.timedelta = timedelta
+        self.path = path
+        self.pathlike = pathlike
+        self.meta = meta
+        self.partial = partial
+        self.placeholder = placeholder
 
 
 def configure(

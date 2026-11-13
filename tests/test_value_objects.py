@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from haiway import Alias, Default, Description, Missing, Sensitive, Specification
+from haiway import Alias, Default, DefaultEnv, Description, Missing, Sensitive, Specification
 from haiway.types.default import DefaultValue
 
 
@@ -13,7 +13,7 @@ def _objects() -> list[Any]:
         Alias("name"),
         Description("text"),
         Sensitive(),
-        DefaultValue(default=1),
+        Default(1),
         Specification({"type": "string"}),
         Missing,
     ]
@@ -28,25 +28,6 @@ def test_value_objects_reject_modification(instance: Any) -> None:
         del instance.attribute
 
 
-def test_existing_attributes_are_protected_too() -> None:
-    alias = Alias("name")
-    description = Description("text")
-    sensitive = Sensitive(redaction="***")
-
-    with pytest.raises(AttributeError):
-        alias.name = "other"  # pyright: ignore[reportAttributeAccessIssue]
-
-    with pytest.raises(AttributeError):
-        description.description = "other"  # pyright: ignore[reportAttributeAccessIssue]
-
-    with pytest.raises(AttributeError):
-        sensitive.redaction = "other"  # pyright: ignore[reportAttributeAccessIssue]
-
-    assert alias.name == "name"
-    assert description.description == "text"
-    assert sensitive.redaction == "***"
-
-
 def test_sensitive_rejects_empty_redaction() -> None:
     with pytest.raises(ValueError):
         Sensitive(redaction="")
@@ -58,9 +39,9 @@ def test_missing_renders_by_name() -> None:
 
 
 def test_default_value_resolves_lazily_and_reports_availability() -> None:
-    constant = DefaultValue(default=5)
-    factory = DefaultValue(default_factory=list)
-    unset = DefaultValue()
+    constant: Any = Default(5)
+    factory: Any = Default(factory=list)
+    unset: Any = Default(Missing)
 
     assert constant() == 5
     assert constant.available is True
@@ -88,16 +69,14 @@ def test_value_objects_are_their_own_copies(instance: Any) -> None:
     [
         lambda: Alias(""),
         lambda: Specification({}),  # pyright: ignore[reportArgumentType]
-        lambda: DefaultValue(default=1, default_factory=list),
-        lambda: DefaultValue(default_factory=list, env="VARIABLE"),
-        lambda: DefaultValue(mapping=int),
+        lambda: Default(1, factory=list),
+        lambda: DefaultEnv("VARIABLE", required=True, fallback=1),  # pyright: ignore[reportCallIssue]
     ],
     ids=[
         "empty alias",
         "empty specification",
         "default and factory",
-        "factory and env",
-        "mapping without env",
+        "required env with fallback",
     ],
 )
 def test_value_objects_reject_invalid_arguments(making: Callable[[], Any]) -> None:

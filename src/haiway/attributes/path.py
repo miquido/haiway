@@ -21,7 +21,7 @@ from typing import (
     runtime_checkable,
 )
 
-from haiway.attributes.annotations import ObjectAttribute
+from haiway.attributes.annotations import AttributeAnnotation, ObjectAttribute
 from haiway.types import Missing
 
 __all__ = ("AttributePath",)
@@ -55,6 +55,18 @@ class AttributePathComponent(Protocol):
         -------
         str
             String representation of the path including this component
+        """
+
+    @abstractmethod
+    def serialized(self) -> str | int:
+        """
+        Get the form of this component found in serialized data.
+
+        Returns
+        -------
+        str | int
+            The alias (or the name when there is none) of a property, the key of
+            a mapping item as a string, the index of a sequence item
         """
 
     @abstractmethod
@@ -116,6 +128,7 @@ class PropertyAttributePathComponent:
     __slots__ = (
         "_access",
         "_assigning",
+        "_key",
         "_name",
     )
 
@@ -125,6 +138,7 @@ class PropertyAttributePathComponent:
         *,
         attribute: type[Attribute],
         name: str,
+        key: str | None = None,
     ) -> None:
         root_origin: Any = _unaliased_origin(root)
         attribute_origin: Any = _unaliased_origin(attribute)
@@ -196,6 +210,12 @@ class PropertyAttributePathComponent:
             "_name",
             name,
         )
+        self._key: str
+        object.__setattr__(
+            self,
+            "_key",
+            name if key is None else key,
+        )
 
     def __setattr__(
         self,
@@ -239,6 +259,9 @@ class PropertyAttributePathComponent:
 
         else:
             return f"{current}.{self._name}"
+
+    def serialized(self) -> str:
+        return self._key
 
     def access(
         self,
@@ -407,6 +430,9 @@ class SequenceItemAttributePathComponent:
         """
         return f"{current or ''}[{self._index}]"
 
+    def serialized(self) -> int:
+        return self._index
+
     def access(
         self,
         subject: Any,
@@ -571,6 +597,9 @@ class MappingItemAttributePathComponent:
             String representation with the mapping key appended
         """
         return f"{current or ''}[{self._key}]"
+
+    def serialized(self) -> str:
+        return str(self._key)
 
     def access(
         self,
@@ -770,6 +799,24 @@ class AttributePath[Root, Attribute]:
         """
         return tuple(component.path_str() for component in self.__components__)
 
+    @property
+    def serialized_components(self) -> Sequence[str | int]:
+        """
+        Get the components of this path as they appear in serialized data.
+
+        Properties resolve to the alias declared for the field, falling back to
+        the attribute name when there is none. Mapping keys are returned as
+        strings and sequence indices as integers, so the result can be used to
+        build queries or filters against stored data, i.e. the output of
+        ``to_mapping``.
+
+        Returns
+        -------
+        Sequence[str | int]
+            Serialized form of each path component
+        """
+        return tuple(component.serialized() for component in self.__components__)
+
     def __str__(self) -> str:
         """
         Get a string representation of this path.
@@ -845,7 +892,9 @@ class AttributePath[Root, Attribute]:
         ), f"Accessing private/special attribute paths ({name}) is forbidden"
 
         try:
-            annotation: Any = _attribute_annotation(
+            annotation: Any
+            key: str
+            annotation, key = _attribute_annotation(
                 self.__attribute__,
                 name=name,
             )
@@ -864,6 +913,7 @@ class AttributePath[Root, Attribute]:
                     root=self.__attribute__,
                     attribute=annotation,
                     name=name,
+                    key=key,
                 ),
             ),
             attribute=annotation,
@@ -1115,7 +1165,7 @@ def _attribute_annotation(
     subject: Any,
     /,
     name: str,
-) -> Any:
+) -> tuple[Any, str]:
     # an optional attribute is traversed through the type it holds when present,
     # the same way an optional container is indexed through its element type
     required: Any = _unaliased_required(subject)
@@ -1126,11 +1176,12 @@ def _attribute_annotation(
     # declared with, `list[int]` being stored as a tuple above all
     self_attribute: ObjectAttribute | None = getattr(required, "__SELF_ATTRIBUTE__", None)
     if self_attribute is not None:
-        return self_attribute.attributes[name].base
+        annotation: AttributeAnnotation = self_attribute.attributes[name]
+        return annotation.base, name if annotation.alias is None else annotation.alias
 
     # anything else - a TypedDict or a plain class reached through a container -
     # is left to answer for its own annotations
-    return required.__annotations__[name]
+    return required.__annotations__[name], name
 
 
 def _unaliased_required(base: Any) -> Any:

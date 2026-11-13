@@ -2,6 +2,24 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.61.1
+
+### Added
+
+- `DefaultFactory(fn, *args, **kwargs)` creates a default produced by calling `fn` with the given
+  arguments, replacing `Default(factory=lambda: fn(...))`.
+- `DefaultEnv(name, ...)` reads a default from an environment variable and replaces
+  `Default(env=..., mapping=..., default=...)`, which is removed. What happens when the variable is
+  not set has to be stated: `fallback=` gives a value (`Missing` makes the value optional) and
+  `required=True` raises, naming the variable. `DefaultValue` no longer stores the variable name.
+- `AttributePath.serialized_components` returns the components of a path as found in serialized
+  data (the output of `to_mapping`): a field is named by its `Alias` when it has one, mapping keys
+  are strings and sequence or tuple indices are integers. `components` and `str(path)` keep
+  returning Python attribute names. Queries and filters against stored data no longer have to
+  resolve aliases on their own.
+- `AttributePathComponent` requires a new `serialized()` method - custom implementations of the
+  protocol have to add it.
+
 ## 0.61.0
 
 ### Native State

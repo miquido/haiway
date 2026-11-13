@@ -1,6 +1,6 @@
 from typing import final
 
-from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
+from haiway.types.frozen import same_copy, same_deepcopy
 
 __all__ = ("Sensitive",)
 
@@ -66,13 +66,7 @@ class Sensitive:
             raise ValueError("Sensitive redaction can't be empty")
 
         self.redaction: str
-        object.__setattr__(
-            self,
-            "redaction",
-            redaction,
-        )
+        self.redaction = redaction
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
