@@ -9,7 +9,7 @@ from haiway.types import (
     Missing,
     TypeSpecification,
 )
-from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
+from haiway.types.frozen import same_copy, same_deepcopy
 
 __all__ = ("Attribute",)
 
@@ -23,8 +23,6 @@ class Attribute:
     redaction: str | None
     __slots__ = ("annotation", "default", "name", "redaction", "spec")
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
 
@@ -37,11 +35,11 @@ class Attribute:
         spec: Any,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "name", name)
-        object.__setattr__(self, "annotation", annotation)
-        object.__setattr__(self, "default", default)
-        object.__setattr__(self, "spec", spec)
-        object.__setattr__(self, "redaction", redaction)
+        self.name = name
+        self.annotation = annotation
+        self.default = default
+        self.spec = spec
+        self.redaction = redaction
 
     @property
     def alias(self) -> str | None:
@@ -103,17 +101,4 @@ class Attribute:
         return nstruct.validate(self.spec, value)
 
     def _validated_default(self) -> Any:
-        value: Any = self.default()
-        try:
-            return self._validate(value)
-
-        except Exception as exc:
-            # an environment backed default resolves to Missing when the variable
-            # is not set - reporting the type mismatch would name the annotation
-            # instead of the variable which actually has to be provided
-            if value is Missing and self.default.env is not None:
-                raise ValueError(
-                    f"Required environment value `{self.default.env}` is missing!"
-                ) from exc
-
-            raise
+        return self._validate(self.default())

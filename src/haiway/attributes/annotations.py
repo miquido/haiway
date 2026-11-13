@@ -53,7 +53,7 @@ from haiway.types import (
     Specification,
     TypeSpecification,
 )
-from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
+from haiway.types.frozen import same_copy, same_deepcopy
 
 __all__ = (
     "AliasAttribute",
@@ -111,8 +111,6 @@ def _record_text(
 class NotRequired:
     __slots__ = ()
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -243,8 +241,6 @@ class AnyAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -262,14 +258,14 @@ class AnyAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> Any:
@@ -364,8 +360,6 @@ class AliasAttribute:
     _target: _AliasTarget
     __slots__ = ("_target", "annotations", "module", "type_alias")
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -379,10 +373,10 @@ class AliasAttribute:
         annotations: Sequence[Annotation] = (),
         _target: _AliasTarget | None = None,
     ) -> None:
-        object.__setattr__(self, "type_alias", type_alias)
-        object.__setattr__(self, "module", module)
-        object.__setattr__(self, "annotations", annotations)
-        object.__setattr__(self, "_target", _AliasTarget() if _target is None else _target)
+        self.type_alias = type_alias
+        self.module = module
+        self.annotations = annotations
+        self._target = _AliasTarget() if _target is None else _target
 
     @property
     def _resolved(self) -> AttributeAnnotation | None:
@@ -523,8 +517,6 @@ class MissingAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -542,14 +534,14 @@ class MissingAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> Any:  # the sentinel - it is its own type
@@ -645,8 +637,6 @@ class NoneAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -664,14 +654,14 @@ class NoneAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> None:
@@ -769,8 +759,6 @@ class LiteralAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -789,15 +777,15 @@ class LiteralAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "values", values)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.base = base
+        self.values = values
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def type_name(self) -> str:
@@ -897,8 +885,6 @@ class BoolAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -916,14 +902,14 @@ class BoolAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[bool]:
@@ -1019,8 +1005,6 @@ class IntegerAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -1038,14 +1022,14 @@ class IntegerAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[int]:
@@ -1141,8 +1125,6 @@ class FloatAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -1160,14 +1142,14 @@ class FloatAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[float]:
@@ -1263,8 +1245,6 @@ class BytesAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -1282,14 +1262,14 @@ class BytesAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[bytes]:
@@ -1385,8 +1365,6 @@ class UUIDAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -1404,14 +1382,14 @@ class UUIDAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[uuid.UUID]:
@@ -1507,8 +1485,6 @@ class StringAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -1526,14 +1502,14 @@ class StringAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[str]:
@@ -1629,8 +1605,6 @@ class DatetimeAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -1648,14 +1622,14 @@ class DatetimeAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[datetime.datetime]:
@@ -1751,8 +1725,6 @@ class DateAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -1770,14 +1742,14 @@ class DateAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[datetime.date]:
@@ -1873,8 +1845,6 @@ class TimedeltaAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -1892,14 +1862,14 @@ class TimedeltaAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[datetime.timedelta]:
@@ -1995,8 +1965,6 @@ class TimeAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -2014,14 +1982,14 @@ class TimeAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[datetime.time]:
@@ -2117,8 +2085,6 @@ class PathAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -2136,14 +2102,14 @@ class PathAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[pathlib.Path]:
@@ -2243,8 +2209,6 @@ class TupleAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -2264,16 +2228,16 @@ class TupleAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "values", values)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.base = base
+        self.values = values
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     def annotated(  # noqa: C901
         self,
@@ -2373,8 +2337,6 @@ class SequenceAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -2394,16 +2356,16 @@ class SequenceAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "values", values)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.base = base
+        self.values = values
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     def annotated(  # noqa: C901
         self,
@@ -2503,8 +2465,6 @@ class SetAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -2524,16 +2484,16 @@ class SetAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "values", values)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.base = base
+        self.values = values
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     def annotated(  # noqa: C901
         self,
@@ -2635,8 +2595,6 @@ class MappingAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -2657,17 +2615,17 @@ class MappingAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "keys", keys)
-        object.__setattr__(self, "values", values)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.base = base
+        self.keys = keys
+        self.values = values
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     def annotated(  # noqa: C901
         self,
@@ -2765,8 +2723,6 @@ class MetaAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -2784,14 +2740,14 @@ class MetaAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "type_name", type_name)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.type_name = type_name
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def base(self) -> type[haiway_types.Meta]:
@@ -2872,8 +2828,6 @@ class ValidableAttribute:
     validating: Validating[Any]
     __slots__ = ("attribute", "validating")
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -2885,8 +2839,8 @@ class ValidableAttribute:
         attribute: AttributeAnnotation,
         validating: Validating[Any],
     ) -> None:
-        object.__setattr__(self, "attribute", attribute)
-        object.__setattr__(self, "validating", validating)
+        self.attribute = attribute
+        self.validating = validating
 
     @property
     def type_name(self) -> str:
@@ -3042,8 +2996,6 @@ class ObjectAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -3063,16 +3015,16 @@ class ObjectAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "parameters", parameters)
-        object.__setattr__(self, "attributes", attributes)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.base = base
+        self.parameters = parameters
+        self.attributes = attributes
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def type_name(self) -> str:
@@ -3178,8 +3130,6 @@ class TypedDictAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -3199,16 +3149,16 @@ class TypedDictAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "parameters", parameters)
-        object.__setattr__(self, "attributes", attributes)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.base = base
+        self.parameters = parameters
+        self.attributes = attributes
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def type_name(self) -> str:
@@ -3310,8 +3260,6 @@ class FunctionAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -3329,14 +3277,14 @@ class FunctionAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.base = base
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def type_name(self) -> str:
@@ -3444,8 +3392,6 @@ class CallableSignature:
     extensible: bool
     __slots__ = ("arguments", "extensible")
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -3457,8 +3403,8 @@ class CallableSignature:
         arguments: int,
         extensible: bool,
     ) -> None:
-        object.__setattr__(self, "arguments", arguments)
-        object.__setattr__(self, "extensible", extensible)
+        self.arguments = arguments
+        self.extensible = extensible
 
 
 @final
@@ -3481,8 +3427,6 @@ class ProtocolSignature:
     extensible: bool
     __slots__ = ("extensible", "parameters", "protocol")
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -3495,9 +3439,9 @@ class ProtocolSignature:
         parameters: Sequence[inspect.Parameter],
         extensible: bool,
     ) -> None:
-        object.__setattr__(self, "protocol", protocol)
-        object.__setattr__(self, "parameters", parameters)
-        object.__setattr__(self, "extensible", extensible)
+        self.protocol = protocol
+        self.parameters = parameters
+        self.extensible = extensible
 
 
 type FunctionSignature = CallableSignature | ProtocolSignature
@@ -3629,8 +3573,6 @@ class UnionAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -3649,15 +3591,15 @@ class UnionAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "alternatives", alternatives)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.base = base
+        self.alternatives = alternatives
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def type_name(self) -> str:
@@ -3759,8 +3701,6 @@ class CustomAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -3779,15 +3719,15 @@ class CustomAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "parameters", parameters)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.base = base
+        self.parameters = parameters
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def type_name(self) -> str:
@@ -3887,8 +3827,6 @@ class StrEnumAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -3906,14 +3844,14 @@ class StrEnumAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.base = base
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def type_name(self) -> str:
@@ -4011,8 +3949,6 @@ class IntEnumAttribute:
         "verifying",
     )
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
@@ -4030,14 +3966,14 @@ class IntEnumAttribute:
         meta: Meta = Meta.empty,
         redaction: str | None = None,
     ) -> None:
-        object.__setattr__(self, "base", base)
-        object.__setattr__(self, "alias", alias)
-        object.__setattr__(self, "description", description)
-        object.__setattr__(self, "verifying", verifying)
-        object.__setattr__(self, "required", required)
-        object.__setattr__(self, "specification", specification)
-        object.__setattr__(self, "meta", meta)
-        object.__setattr__(self, "redaction", redaction)
+        self.base = base
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
 
     @property
     def type_name(self) -> str:

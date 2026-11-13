@@ -4,7 +4,7 @@ import pytest
 
 from haiway.attributes.function import Function
 from haiway.attributes.validation import ValidationError
-from haiway.types import Alias, Default
+from haiway.types import Alias, Default, DefaultEnv
 
 
 def test_validate_arguments_skip_consumed_kwargs_in_variadic() -> None:
@@ -212,7 +212,7 @@ def test_resolves_factory_default_marker() -> None:
 def test_resolves_env_default_marker(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HAIWAY_TEST_FUNCTION_DEFAULT", "from-env")
 
-    def foo(token: str = Default(env="HAIWAY_TEST_FUNCTION_DEFAULT")) -> str:
+    def foo(token: str = DefaultEnv("HAIWAY_TEST_FUNCTION_DEFAULT", required=True)) -> str:
         return token
 
     parametrized = Function(foo)

@@ -65,6 +65,7 @@ from haiway.attributes.specification import object_specification
 from haiway.attributes.validation import ValidationError
 from haiway.types import (
     BasicObject,
+    Default,
     DefaultValue,
     Map,
     Meta,
@@ -684,7 +685,7 @@ def _resolve_default(
     if isinstance(value, DefaultValue):
         return value
 
-    return DefaultValue(default=value)
+    return cast(DefaultValue, Default(value))
 
 
 def _compatible(

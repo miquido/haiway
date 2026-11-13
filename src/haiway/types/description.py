@@ -1,6 +1,6 @@
 from typing import final
 
-from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
+from haiway.types.frozen import same_copy, same_deepcopy
 
 __all__ = ("Description",)
 
@@ -28,13 +28,7 @@ class Description:
         /,
     ) -> None:
         self.description: str
-        object.__setattr__(
-            self,
-            "description",
-            description,
-        )
+        self.description = description
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy

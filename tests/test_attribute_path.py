@@ -1,9 +1,10 @@
 from collections.abc import Mapping, Sequence, Set
-from typing import Annotated, cast
+from typing import Annotated, Any, TypedDict, cast
 
+import pytest
 from pytest import raises
 
-from haiway import AttributePath, State
+from haiway import Alias, AttributePath, State
 
 
 class SequenceState(State):
@@ -346,3 +347,149 @@ def test_mutable_mapping_item_path_points_to_item():
 def test_missing_attribute_path_raises():
     with raises(AttributeError):
         _ = MutableContainerState._.missing  # pyright: ignore[reportAttributeAccessIssue]
+
+
+class _SerializedLeaf(State):
+    field: Annotated[str, Alias("f")]
+    plain: int = 0
+
+
+class _SerializedTyped(TypedDict):
+    value: int
+
+
+type _SerializedLeaves = Sequence[_SerializedLeaf]
+
+
+class _SerializedRoot(State):
+    leaf: Annotated[_SerializedLeaf, Alias("l")]
+    optional: _SerializedLeaf | None = None
+    items: Annotated[Sequence[_SerializedLeaf], Alias("its")] = ()
+    pair: tuple[_SerializedLeaf, ...] = ()
+    mapping: Mapping[str, _SerializedLeaf] = {}
+    typed: _SerializedTyped | None = None
+    aliased: _SerializedLeaves = ()
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    (
+        (_SerializedRoot._.leaf, ("l",)),
+        (_SerializedRoot._.leaf.field, ("l", "f")),
+        (_SerializedRoot._.leaf.plain, ("l", "plain")),
+        (_SerializedRoot._.optional.field, ("optional", "f")),
+        (_SerializedRoot._.items[0].field, ("its", 0, "f")),
+        (_SerializedRoot._.pair[2].field, ("pair", 2, "f")),
+        (_SerializedRoot._.mapping["key"].field, ("mapping", "key", "f")),
+        (_SerializedRoot._.typed.value, ("typed", "value")),
+        (_SerializedRoot._.aliased[1].field, ("aliased", 1, "f")),
+    ),
+    ids=(
+        "alias",
+        "nested-alias",
+        "no-alias",
+        "optional",
+        "sequence-index",
+        "tuple-index",
+        "mapping-key",
+        "typed-dict",
+        "type-alias",
+    ),
+)
+def test_serialized_components_resolve_aliases(
+    path: AttributePath[Any, Any],
+    expected: tuple[str | int, ...],
+) -> None:
+    assert path.serialized_components == expected
+
+
+def test_serialized_components_keep_python_components_untouched() -> None:
+    path = _SerializedRoot._.items[0].field
+    assert path.components == ("items", "[0]", "field")
+    assert str(path) == "items[0].field"
+    assert path.serialized_components == ("its", 0, "f")
+
+
+class _SerializedFixedTuple(State):
+    pair: tuple[_SerializedLeaf, Annotated[_SerializedLeaf, Alias("second")]]
+    by_int: Mapping[int, _SerializedLeaf] = {}
+
+
+def _resolved_in_mapping(
+    mapping: Any,
+    components: Sequence[str | int],
+) -> Any:
+    for component in components:
+        mapping = mapping[component]
+
+    return mapping
+
+
+def test_serialized_components_locate_values_in_to_mapping() -> None:
+    value = _SerializedRoot(
+        leaf=_SerializedLeaf(field="a", plain=1),
+        optional=_SerializedLeaf(field="b"),
+        items=(_SerializedLeaf(field="c"), _SerializedLeaf(field="d", plain=7)),
+        pair=(_SerializedLeaf(field="e"),),
+        mapping={"key": _SerializedLeaf(field="g")},
+        typed={"value": 5},
+        aliased=(_SerializedLeaf(field="h"), _SerializedLeaf(field="i")),
+    )
+    mapping = value.to_mapping()
+
+    for path in (
+        _SerializedRoot._.leaf.field,
+        _SerializedRoot._.leaf.plain,
+        _SerializedRoot._.optional.field,
+        _SerializedRoot._.items[1].field,
+        _SerializedRoot._.items[1].plain,
+        _SerializedRoot._.pair[0].field,
+        _SerializedRoot._.mapping["key"].field,
+        _SerializedRoot._.aliased[1].field,
+    ):
+        assert _resolved_in_mapping(mapping, path.serialized_components) == path(value), (
+            f"{path!r} not found under {path.serialized_components}"
+        )
+
+    # reading a value through a TypedDict is not supported by paths, locating it is
+    assert _resolved_in_mapping(mapping, _SerializedRoot._.typed.value.serialized_components) == 5
+
+
+def test_serialized_components_use_alias_not_python_name() -> None:
+    mapping = _SerializedRoot(leaf=_SerializedLeaf(field="a")).to_mapping()
+    assert "l" in mapping
+    assert "leaf" not in mapping
+    assert "leaf" not in _SerializedRoot._.leaf.serialized_components
+
+
+def test_serialized_components_of_fixed_tuple_element_alias() -> None:
+    path = _SerializedFixedTuple._.pair[1].field
+    assert path.serialized_components == ("pair", 1, "f")
+
+
+def test_serialized_components_stringify_mapping_keys() -> None:
+    path = _SerializedFixedTuple._.by_int[3].field
+    assert path.serialized_components == ("by_int", "3", "f")
+
+
+def test_serialized_components_are_stable_across_repeated_access() -> None:
+    first = _SerializedRoot._.items[0].field
+    second = _SerializedRoot._.items[0].field
+    assert first is second
+    assert first.serialized_components == second.serialized_components
+    # a different index of the same path does not leak into the cached one
+    assert _SerializedRoot._.items[5].field.serialized_components == ("its", 5, "f")
+    assert first.serialized_components == ("its", 0, "f")
+
+
+def test_serialized_components_of_root_path_are_empty() -> None:
+    assert _SerializedRoot._.serialized_components == ()
+
+
+def test_serialized_components_return_immutable_sequence() -> None:
+    assert isinstance(_SerializedRoot._.leaf.serialized_components, tuple)
+
+
+def test_serialized_components_align_with_components() -> None:
+    path = _SerializedRoot._.items[0].field
+    assert len(path.serialized_components) == len(path.components)

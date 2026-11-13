@@ -2,13 +2,13 @@ from collections.abc import Callable, Mapping, MutableSet, Sequence
 from functools import update_wrapper
 from inspect import Parameter as InspectParameter
 from inspect import signature
-from typing import Any, get_type_hints
+from typing import Any, cast, get_type_hints
 
 from haiway.attributes import native
 from haiway.attributes.annotations import AttributeAnnotation, resolve_attribute
 from haiway.attributes.attribute import Attribute
 from haiway.attributes.validation import ValidationError
-from haiway.types import DefaultValue, Missing
+from haiway.types import Default, DefaultValue, Missing
 
 __all__ = ("Function",)
 
@@ -274,8 +274,9 @@ def _resolve_parameter(
         return Attribute(
             name=parameter.name,
             annotation=attribute,
-            default=DefaultValue(
-                default=(
+            default=cast(
+                DefaultValue,
+                Default(
                     Missing if parameter.default is InspectParameter.empty else parameter.default
                 ),
             ),

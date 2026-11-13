@@ -10,7 +10,7 @@ standalone immutable containers.
 The package groups into four areas:
 
 - JSON-like value aliases: `RawValue`, `BasicValue`, `BasicObject`, `FlatObject`
-- Sentinel and defaults: `Missing`, `Default`, `DefaultValue`
+- Sentinel and defaults: `Missing`, `Default`, `DefaultFactory`, `DefaultEnv`, `DefaultValue`
 - Immutable containers: `Map`, `Meta`
 - Annotation metadata: `Alias`, `Description`, `Specification`, `TypeSpecification`
 
@@ -136,17 +136,29 @@ class RequestContext(State):
     retries: int = Default(3)
 ```
 
-Environment-backed defaults name the variable with `env`. `default` is the fallback used when the
-variable is not set, and `mapping` converts the raw string to the type of the field:
+`DefaultFactory(fn, *args, **kwargs)` calls `fn` with the given arguments for every new instance, so
+no lambda is needed:
 
 ```python
-from haiway import Default, State, parse_bool
+from datetime import UTC, datetime
+from haiway import DefaultFactory, State
+
+class Audit(State):
+    created_at: datetime = DefaultFactory(datetime.now, UTC)
+```
+
+`DefaultEnv` reads a default from an environment variable. What happens when it is not set has to be
+stated: `fallback` is the value used instead (`Missing` makes it optional) and `required=True`
+raises instead. `mapping` converts the raw string to the type of the field:
+
+```python
+from haiway import DefaultEnv, State, parse_bool
 
 class ServiceConfig(State):
-    host: str = Default(env="SERVICE_HOST", default="localhost")
-    port: int = Default(env="SERVICE_PORT", mapping=int, default=8080)
-    tracing: bool = Default(env="SERVICE_TRACING", mapping=parse_bool, default=False)
-    token: str = Default(env="SERVICE_TOKEN")  # required - no fallback
+    host: str = DefaultEnv("SERVICE_HOST", fallback="localhost")
+    port: int = DefaultEnv("SERVICE_PORT", mapping=int, fallback=8080)
+    tracing: bool = DefaultEnv("SERVICE_TRACING", mapping=parse_bool, fallback=False)
+    token: str = DefaultEnv("SERVICE_TOKEN", required=True)
 ```
 
 Important behavior:
@@ -155,8 +167,7 @@ Important behavior:
 - Factories are called for each new instance
 - Environment-backed defaults are read during instance construction, not at import time, so
   `load_env()` applies regardless of import order
-- Without a `default`, an unset variable makes the field required and construction reports the
-  variable by name
+- A `required=True` variable that is not set fails construction, naming the variable
 - `Default(...)` is a field specifier, not a runtime descriptor
 
 ## Frozen records

@@ -51,26 +51,31 @@ annotations. If a value fails validation, an exception will be raised.
 
 ### Default Values and Lazy Initialization
 
-Use the `Default` helper when a field needs to be computed lazily or resolved from the environment.
-`Default` returns a `DefaultValue` container that the State runtime resolves while creating each
-instance:
+Use the `Default` helpers when a field needs to be computed lazily or resolved from the environment:
+`Default` takes a literal or a `factory`, `DefaultFactory` calls a function with arguments and
+`DefaultEnv` reads an environment variable. Each returns a `DefaultValue` container that the State
+runtime resolves while creating each instance:
 
 ```python
+from datetime import UTC, datetime
 from uuid import uuid4
-from haiway import Default, State
+from haiway import Default, DefaultEnv, DefaultFactory, State
 
 class ServiceConfig(State):
     correlation_id: str = Default(factory=lambda: uuid4().hex)
     timeout_seconds: float = Default(1.5)  # literal defaults still work
+    started_at: datetime = DefaultFactory(datetime.now, UTC)  # factory with its arguments
+    region: str = DefaultEnv("SERVICE_REGION", fallback="local")  # environment variable
 
 config = ServiceConfig()
 assert isinstance(config.correlation_id, str)
 ```
 
 Factories are called every time a new instance is created, so each `ServiceConfig` receives its own
-identifier. Environment-backed defaults are also read during construction, so tests stay
-deterministic: set the environment variable before instantiating the state or pass an explicit value
-in the constructor.
+identifier. `DefaultEnv` defaults are also read during construction, so tests stay deterministic:
+set the environment variable before instantiating the state or pass an explicit value in the
+constructor. An unset variable needs either a `fallback` (`Missing` makes the value optional) or
+`required=True`, which fails construction naming the variable.
 
 ### Immutability and Updates
 
@@ -562,6 +567,43 @@ the segments that actually change.
 
 Paths support nested attribute traversal, indexing into sequences and tuples, mapping access for
 `str` and `int` keys, and optional container access for unions shaped like `T | None`.
+
+`path.components` and `str(path)` use Python attribute names. Fields declared with an `Alias` are
+stored under the alias by `to_mapping`, so queries and filters against stored data should use
+`serialized_components` instead. It resolves aliases at every level, keeps mapping keys as strings
+and sequence indices as integers:
+
+```python
+from collections.abc import Sequence
+from typing import Annotated
+
+from haiway import Alias, State
+
+class Item(State):
+    title: Annotated[str, Alias("t")]
+
+class Order(State):
+    items: Annotated[Sequence[Item], Alias("lines")]
+
+path = Order._.items[0].title
+assert path.components == ("items", "[0]", "title")
+assert path.serialized_components == ("lines", 0, "t")
+
+# the same components locate the value in the serialized form
+order = Order(items=(Item(title="Book"),))
+stored = order.to_mapping()
+assert stored["lines"][0]["t"] == "Book"
+
+located = stored
+for component in path.serialized_components:
+    located = located[component]
+assert located == "Book"
+```
+
+Resolution works through nested `State` fields, `T | None` unions, sequences, tuples, mappings,
+`Annotated` types, `TypedDict` and `type` aliases. A field without an alias keeps its Python name.
+Mapping keys are always returned as strings, so a `Mapping[int, T]` key `3` becomes `"3"`, matching
+the JSON object keys.
 
 ### Example: Complex State Management
 

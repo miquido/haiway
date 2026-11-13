@@ -1,6 +1,6 @@
 from typing import final
 
-from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
+from haiway.types.frozen import same_copy, same_deepcopy
 
 __all__ = ("Alias",)
 
@@ -31,13 +31,7 @@ class Alias:
             raise ValueError("Alias name can't be empty")
 
         self.name: str
-        object.__setattr__(
-            self,
-            "name",
-            name,
-        )
+        self.name = name
 
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
