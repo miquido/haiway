@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "haiway"
 description = "Framework for dependency injection and state management within structured concurrency model."
-version = "0.61.1"
+version = "0.62.0"
 readme = "README.md"
 maintainers = [
   { name = "Kacper Kaliński", email = "kacper.kalinski@miquido.com" },
@@ -37,7 +37,7 @@ opentelemetry = [
 ]
 httpx = ["httpx2~=2.16"]
 postgres = ["asyncpg~=0.32.0"]
-rabbitmq = ["pika~=1.4",]
+rabbitmq = ["pika~=1.4"]
 starlette = ["starlette~=1.10"]
 # starlette is constrained explicitly - the FastAPI requirement has no upper bound
 # and `haiway.fastapi` builds on top of `haiway.starlette`
@@ -69,7 +69,12 @@ docs = [
 # a range - cibuildwheel runs the uv of the build image (0.13.5), not the one pinned in CI
 required-version = ">=0.13.5,<0.14"
 default-groups = "all"
-cache-keys = [{ file = "pyproject.toml" }, { file = "setup.py" }, { file = "src/haiway/_native/**/*.c" }, { file = "src/haiway/_native/**/*.h" }]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "setup.py" },
+  { file = "src/haiway/_native/**/*.c" },
+  { file = "src/haiway/_native/**/*.h" },
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -109,10 +114,7 @@ reportUnnecessaryTypeIgnoreComment = "error"
 
 [tool.pyrefly]
 project_includes = ["./src"]
-project_excludes = [
-    "**/node_modules",
-    "**/__pycache__",
-]
+project_excludes = ["**/node_modules", "**/__pycache__"]
 python_version = "3.15"
 
 [tool.setuptools]

@@ -473,3 +473,53 @@ async def test_finished_queue_raises_with_a_stable_traceback() -> None:
         depths.append(_traceback_depth(failure.value))
 
     assert len(set(depths)) == 1
+
+
+class _MultiArgError(Exception):
+    def __init__(self, first: int, second: int) -> None:
+        super().__init__(f"{first}{second}")
+
+
+@mark.asyncio
+async def test_finish_reason_is_raised_unchanged_for_uncopyable_exception():
+    queue = AsyncQueue[int]()
+    queue.finish(_MultiArgError(1, 2))
+
+    for _ in range(2):
+        with raises(_MultiArgError):
+            await queue.next()
+
+
+@mark.asyncio
+async def test_finish_reason_keeps_cause_and_traceback_does_not_grow():
+    queue = AsyncQueue[int]()
+    cause = KeyError("cause")
+    error = ValueError("failed")
+    error.__cause__ = cause
+    queue.finish(error)
+
+    lengths: list[int] = []
+    for _ in range(3):
+        with raises(ValueError) as info:
+            await queue.next()
+
+        assert info.value.__cause__ is cause
+        tb = info.value.__traceback__
+        length = 0
+        while tb is not None:
+            length += 1
+            tb = tb.tb_next
+
+        lengths.append(length)
+
+    assert len(set(lengths)) == 1
+
+
+@mark.asyncio
+async def test_aclose_after_finish_drops_buffer():
+    queue = AsyncQueue[int](1, 2)
+    queue.finish()
+    await queue.aclose()
+
+    with raises(StopAsyncIteration):
+        queue.pending_next()
