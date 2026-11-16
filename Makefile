@@ -19,7 +19,7 @@ ifndef UV_VERSION
 	UV_VERSION := 0.13.7
 endif
 
-.PHONY: native uv_check venv sync update format lint test sanitize benchmark benchmark-server benchmark-otel benchmark-http benchmark-scope docs docs-server docs-format docs-lint release
+.PHONY: native uv_check venv sync update format lint test sanitize benchmark benchmark-server benchmark-otel benchmark-http benchmark-scope benchmark-uri docs docs-server docs-format docs-lint release
 
 
 # Check installed UV version and install the pinned one if needed
@@ -168,6 +168,10 @@ benchmark-scope:
 # Measure the HTTP client - facade, HTTPX backend and responses - same ARGS as benchmark.
 benchmark-http:
 	@uv run --frozen python -O benchmarks/http_benchmark.py $(ARGS)
+
+# Measure URITemplate - creation, expansion and matching - same ARGS as benchmark.
+benchmark-uri:
+	@uv run --frozen python -O benchmarks/uri_template_benchmark.py $(ARGS)
 
 # Build documentation for production
 docs:

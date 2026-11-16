@@ -1,0 +1,14 @@
+{
+  "create/cached": 149.94974444208293,
+  "create/parse": 5377.71495737566,
+  "variables": 52.408261315661925,
+  "expand/simple": 1053.6279279633377,
+  "expand/full": 6660.557657495411,
+  "match/simple": 1055.6459066935236,
+  "match/full": 5492.744771959065,
+  "match/miss": 311.6416771481999,
+  "matches/full": 5512.494753595516,
+  "reference/expand-simple": 303.68184526321085,
+  "reference/expand-full": 2906.734323723098,
+  "reference/match-full": 3522.2409742716563
+}
