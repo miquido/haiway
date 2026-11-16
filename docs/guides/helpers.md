@@ -104,25 +104,47 @@ context state.
 
 ## URI Templates
 
-`URITemplate` is an immutable RFC 6570 (level 3 subset) template that expands values into a URI and
-matches a URI back into its parameters. It supports `{name}`, `{/name}`, `{?a,b}` and `{#name}`.
+`URITemplate` is an immutable URI template following
+[RFC 6570](https://www.rfc-editor.org/rfc/rfc6570) that expands values into a URI and matches a URI
+back into its parameters.
 
 ```python
 from haiway import URITemplate
 
-template = URITemplate.of("https://{tenant}.example.com/files{/name}{?page}")
+template = URITemplate.of("https://{tenant}.example.com/files{/name}{?page,tag*}")
 
-template.expand({"tenant": "acme", "name": "a b.txt", "page": 2})
-# "https://acme.example.com/files/a%20b.txt?page=2"
+template.expand({"tenant": "acme", "name": "a b.txt", "page": 2, "tag": ["x", "y"]})
+# "https://acme.example.com/files/a%20b.txt?page=2&tag=x&tag=y"
 
 template.match("https://acme.example.com/files/a%20b.txt?page=2")
 # Map({"tenant": "acme", "name": "a b.txt", "page": "2"})
 ```
 
-Matching holds every decoded path or host parameter to the segment boundary declared by the
-template: values decoding to a path separator, `.`/`..` or user-info yield no match, so a template
-can safely guard resource lookups. Expansion refuses the same values, so whatever a template expands
-also matches it. Templates are verified when created and raise `ValidationError` when malformed.
+Supported are `{name}` (a path segment or host label), `{/name}`, `{?a,b*}` (`*` explodes a list
+into repeated keys) and `{#name}`, with dotted names (`{user.id}`). Expansion follows the RFC
+examples: unreserved characters only stay as they are (a fragment keeps the reserved ones too), a
+list expands comma separated, an empty query value is kept (`x=`) and `None` is omitted. The
+reserved, label, matrix and continuation operators (`+ . ; &`), prefix modifiers, several names
+within an expression other than a query and mappings are not supported and refused when the template
+is created.
+
+Matching is what makes the template usable to guard lookups, and where it differs from the RFC,
+which only defines expansion:
+
+- Every decoded path or host value is held to its segment: values decoding to a path separator,
+  `.`/`..`, a control character or invalid UTF-8 yield no match. A host value is held to the host
+  label too - no delimiter (`? # @`), whitespace or character normalizing to one (a fullwidth `／`).
+- Expansion refuses the same values (`ValueError`), so whatever a template expands also matches it.
+  Path and host variables are required, the RFC would expand an undefined one to nothing.
+- Only the declared query parameters are extracted, the first value of each.
+- A query and a fragment end a template, and an empty segment (`/{/host}`) is refused. A segment
+  holds at most one variable (`/{a}-{b}` is refused). Several of them, or anything following an
+  optional query, would match a URI in many ways, which makes matching take time polynomial in the
+  length of a URI an attacker controls.
+- A variable within a literal query (`?k={v}`) ends at the next `&`, so it never captures the
+  parameters a `{?q}` expands after it, and a slash expression (`{/name}`) is refused there.
+- Values of an unsupported type (bytes, mappings, sets, nested sequences) raise `TypeError` instead
+  of expanding their representation.
 
 ## Observability
 
