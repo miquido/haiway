@@ -58,8 +58,9 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
 ### Performance
 
-- `validate` and `from_mapping` read a dictionary in one walk, without copying it first: 20-35%
-  faster for instances built from mappings, nested ones included.
+- `validate` and `from_mapping` read a dictionary in one walk, without copying it first: up to
+  30% faster for instances built from mappings, nested ones included, and close to 20% for large
+  ones.
 
 ## 0.61.1
 

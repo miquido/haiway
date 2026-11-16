@@ -383,7 +383,10 @@ State classes perform thorough type validation for all supported Python types:
   - **tuple[T, ...]**: Fixed or variable-length tuples
 - **Special Types**: UUID, datetime, date, time, timedelta, timezone, Path, re.Pattern
 - **Union Types**: str | None, int | float
-- **Literal Types**: Literal["a", "b", "c"]
+- **Literal Types**: Literal["a", "b", "c"] - a value has to be of the type of the literal it is
+  equal to, so `Literal[1]` refuses `True` and `1.0`. A plain `str` or `int` and a `StrEnum` or
+  `IntEnum` member equal to it stand for each other, and the literal itself is what gets stored:
+  `Literal[Color.RED]` reads `"red"` as `Color.RED`, `Literal["red"]` reads `Color.RED` as `"red"`
 - **Enum Types**: Enum, StrEnum, and IntEnum
 - **Callable Types**: Function types and Protocol interfaces
 - **TypedDict**: Validates structure with Required/NotRequired fields
