@@ -385,20 +385,26 @@ is_text_like(PyObject *value)
 static int
 literal_match(PyObject *literals, PyObject *value, PyObject **accepted)
 {
+    PyObject *spelled_as = NULL;  /* the first enum member the value is the value of */
     for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(literals); i++) {
         PyObject *literal = PyTuple_GET_ITEM(literals, i);
         int same = Py_TYPE(literal) == Py_TYPE(value);
         int spelled = !same
             && ((PyUnicode_CheckExact(value) && PyUnicode_Check(literal))
                 || (PyLong_CheckExact(value) && PyLong_Check(literal) && !PyBool_Check(literal)));
-        if (!same && !spelled) continue;
+        if (!same && !(spelled && spelled_as == NULL)) continue;
         int equal = literal == value ? 1 : PyObject_RichCompareBool(literal, value, Py_EQ);
         if (equal < 0) return -1;
         if (!equal) continue;
-        *accepted = Py_NewRef(same ? value : literal);
-        return 1;
+        if (same) {  /* a literal of the very type wins, whatever the order of the literals */
+            *accepted = Py_NewRef(value);
+            return 1;
+        }
+        spelled_as = literal;
     }
-    return 0;
+    if (spelled_as == NULL) return 0;
+    *accepted = Py_NewRef(spelled_as);
+    return 1;
 }
 
 /* the target of an alias, compiled on its first use - NULL with an error set on failure */

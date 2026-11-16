@@ -5,7 +5,6 @@ from uuid import UUID
 from haiway.attributes import State
 from haiway.types import BasicObject, BasicValue
 from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
-from haiway.utils.collections import as_tuple
 
 __all__ = (
     "Paginated",
@@ -174,7 +173,8 @@ class Paginated[Element](Sequence[Element]):
         object.__setattr__(
             self,
             "items",
-            as_tuple(items),
+            # a tuple subclass may compute its elements - only a plain tuple is kept as is
+            items if type(items) is tuple else tuple(items),
         )
         self.pagination: Pagination
         object.__setattr__(

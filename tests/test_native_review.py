@@ -70,6 +70,28 @@ def test_literal_in_union_prefers_the_value_as_it_is() -> None:
     assert Either(value=Color.RED).value is Color.RED
 
 
+class Code(IntEnum):
+    ONE = 1
+
+
+class MemberFirst(State):
+    value: Literal[Code.ONE, 1]
+
+
+class PlainFirst(State):
+    value: Literal[1, Code.ONE]
+
+
+@mark.parametrize("cls", [MemberFirst, PlainFirst])
+def test_literal_prefers_a_literal_of_the_very_type_whatever_the_order(
+    cls: type[Any],
+) -> None:
+    assert type(cls(value=1).value) is int
+    assert cls(value=Code.ONE).value is Code.ONE
+    assert type(cls.from_json('{"value": 1}').value) is int
+    assert type(cls.from_mapping({"value": 1}).value) is int
+
+
 # --- unions read from json --------------------------------------------------
 
 
@@ -138,6 +160,24 @@ def test_json_union_with_a_repeated_key_reads_the_last_one() -> None:
     # json.loads keeps the last `a`, which the first alternative accepts - the repeated
     # key must not make the first alternative look like one the object does not fit
     document = '{"value": {"x": {"a": 1, "a": 2}}}'
+
+    assert Either.from_json(document) == Either.from_mapping(json.loads(document))
+    assert Either.from_json(document).value == First(x=Leaf(a=2))
+
+
+def test_json_union_with_a_repeated_key_after_a_failed_alternative_reads_the_document() -> None:
+    class First(State):
+        x: Leaf
+
+    class Second(State):
+        x: Mapping[str, Any]
+
+    class Either(State):
+        value: First | Second
+
+    # the first alternative fails on "bad" before it reaches the repeated key, while the
+    # second one would read the last value of it - the document says it is the first
+    document = '{"value": {"x": {"a": "bad", "a": 2}}}'
 
     assert Either.from_json(document) == Either.from_mapping(json.loads(document))
     assert Either.from_json(document).value == First(x=Leaf(a=2))

@@ -515,3 +515,22 @@ async def test_aclose_after_finish_drops_buffer():
 
     with raises(StopAsyncIteration):
         queue.pending_next()
+
+
+@mark.asyncio
+async def test_aclose_of_finished_queue_releases_the_consumer_handed_an_element():
+    queue = AsyncQueue[int]()
+    consumer: Task[int] = create_task(queue.next())
+    await sleep(0)  # the consumer is waiting
+
+    queue.enqueue(1)  # handed to the consumer, which did not resume yet
+    queue.finish()
+    await queue.aclose()
+    consumer.cancel()
+
+    with raises(CancelledError):
+        await consumer
+
+    # the element handed over is not put back after the queue was closed
+    with raises(StopAsyncIteration):
+        await queue.next()

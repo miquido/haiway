@@ -376,7 +376,7 @@ async def test_failing_stream_close_does_not_replace_the_error() -> None:
 
 
 @mark.asyncio
-async def test_send_failing_with_an_os_error_is_recorded_as_a_failure() -> None:
+async def test_disconnected_consumer_is_not_a_stream_failure() -> None:
     async def endpoint(request: Request) -> Response:
         async def content() -> AsyncGenerator[bytes]:
             yield b"partial"
@@ -392,19 +392,55 @@ async def test_send_failing_with_an_os_error_is_recorded_as_a_failure() -> None:
 
     async def failing_send(message: Message) -> None:
         if message["type"] == "http.response.body" and message.get("body") == b"partial":
-            raise OSError("connection gone")
+            raise OSError("connection gone")  # the consumer is not there anymore
 
     async with running(app):
-        # the framework turns an `OSError` reaching it into a `ClientDisconnect`
         with raises(ClientDisconnect):
             await app(http_scope(), receive_request, failing_send)
 
-    # an `OSError` is not told apart from a failure of the body - recorded as one
+    # a consumer which went away ends the response without failing it - recorded
+    # as what happened rather than as an error, and not as a failed request
+    assert (
+        ObservabilityLevel.DEBUG,
+        "Response streaming ended by a disconnected consumer",
+        None,
+    ) in records.logs
+    assert [message for _, message, _ in records.logs].count("Response streaming failed") == 0
+    assert records.failures == []
+
+
+@mark.asyncio
+async def test_body_failing_with_an_os_error_is_a_stream_failure() -> None:
+    async def endpoint(request: Request) -> Response:
+        async def content() -> AsyncGenerator[bytes]:
+            yield b"partial"
+            raise OSError("the resource behind the body died")
+
+        return StreamResponse(content())
+
+    records = _Records()
+    app: Starlette = application(
+        ServerContext(observability=records.observability()),
+        routes=[Route("/example", endpoint)],
+    )
+    result = Result()
+
+    async with running(app):
+        # the framework turns an `OSError` reaching it into a `ClientDisconnect`,
+        # which is what a gone consumer is reported with as well
+        with raises(ClientDisconnect):
+            await app(http_scope(), receive_request, result.collecting())
+
+    # a gone consumer is the send failing - a body failing with an error of the
+    # same type is the failure of the response it was producing
     assert (
         ObservabilityLevel.ERROR,
         "Response streaming failed",
-        "connection gone",
+        "the resource behind the body died",
     ) in records.logs
+    assert [message for _, message, _ in records.logs].count(
+        "Response streaming ended by a disconnected consumer"
+    ) == 0
 
 
 @mark.asyncio

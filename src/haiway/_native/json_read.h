@@ -612,11 +612,13 @@ decode_mapping(Decoder *d, Spec *spec)
             d->p++;
             skip_whitespace(d);
             PyObject *value = decode_spec(d, spec->children[1]);
+            Py_ssize_t before = PyDict_GET_SIZE(dict);
             if (value == NULL || PyDict_SetItem(dict, checked_key, value) < 0) {  /* the last of a repeated key stays */
                 Py_DECREF(checked_key);
                 Py_XDECREF(value);
                 goto fail;
             }
+            if (PyDict_GET_SIZE(dict) == before) d->repeated = 1;  /* replaced - which alternative fits may depend on it */
             Py_DECREF(checked_key);
             Py_DECREF(value);
             skip_whitespace(d);
@@ -721,7 +723,14 @@ decode_spec(Decoder *d, Spec *spec)
                     const char *start = d->p;
                     /* a failed alternative dropped what it kept pending itself */
                     PyObject *instance = decode_struct(d, (PyTypeObject *)alternative->base);
-                    if (instance != NULL || PyErr_Occurred() || d->repeated) return instance;
+                    if (d->repeated) {
+                        /* a repeated key makes what an alternative read differ from what
+                         * the document says - the document is what decides, the mapping
+                         * json.loads builds */
+                        Py_XDECREF(instance);
+                        return NULL;
+                    }
+                    if (instance != NULL || PyErr_Occurred()) return instance;
                     if (d->p == start) break;  /* a class which is not read here */
                     d->p = start;
                 }

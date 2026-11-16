@@ -325,35 +325,59 @@ given_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObje
     Py_ssize_t n = plan->count;
     memset(values, 0, (size_t)n * sizeof(PyObject *));
     Entries result = ENTRIES_READ;
-    PyObject *unknown = NULL;
+    /* what the dictionary holds is taken in one go, under its lock, and only then looked
+     * up - a lookup in the plan may need a lock of its own, which would let go of the one
+     * held, and the rest of the dictionary change under the loop. More entries than
+     * attributes can't each name one - the general way tells which is wrong */
+    PyObject *keys_stack[FAST_MAX_FIELDS];
+    PyObject *taken_stack[FAST_MAX_FIELDS];
+    PyObject **keys = n <= FAST_MAX_FIELDS ? keys_stack : PyMem_Malloc((size_t)n * 2 * sizeof(PyObject *));
+    if (keys == NULL) {
+        PyErr_NoMemory();
+        return ENTRIES_FAILED;
+    }
+    PyObject **taken = n <= FAST_MAX_FIELDS ? taken_stack : keys + n;
+    Py_ssize_t count = 0;
     PyObject *key;
     PyObject *value;
     Py_ssize_t position = 0;
-    Py_ssize_t at = 0;  /* the keys usually come in the order of the attributes */
     Py_BEGIN_CRITICAL_SECTION(entries);
-    for (; PyDict_Next(entries, &position, &key, &value); at++) {
-        if (!PyUnicode_CheckExact(key)) {
-            result = ENTRIES_UNUSUAL;
-            break;
+    if (PyDict_GET_SIZE(entries) > n) {
+        result = ENTRIES_UNUSUAL;
+    } else {
+        while (PyDict_Next(entries, &position, &key, &value)) {
+            if (!PyUnicode_CheckExact(key)) {
+                result = ENTRIES_UNUSUAL;
+                break;
+            }
+            keys[count] = Py_NewRef(key);
+            taken[count++] = Py_NewRef(value);
         }
-        Py_INCREF(key);  /* held while looked up, which may let go of the lock */
-        Py_INCREF(value);
-        Py_ssize_t index = at < n && (key == plan->fields[at].name || key == plan->fields[at].alias)
-            ? at : field_for_key(plan, key);
-        if (index < 0) {
-            unknown = key;
-            Py_DECREF(value);
-            break;
-        }
-        Py_DECREF(key);
-        if (values[index] != NULL) {
-            Py_DECREF(value);
-            result = ENTRIES_UNUSUAL;
-            break;
-        }
-        values[index] = value;
     }
     Py_END_CRITICAL_SECTION();
+
+    PyObject *unknown = NULL;
+    Py_ssize_t at = 0;  /* the keys usually come in the order of the attributes */
+    for (; at < count && result == ENTRIES_READ; at++) {
+        key = keys[at];
+        Py_ssize_t index = key == plan->fields[at].name || key == plan->fields[at].alias
+            ? at : field_for_key(plan, key);
+        if (index < 0) {
+            unknown = Py_NewRef(key);
+            break;
+        }
+        if (values[index] != NULL) {
+            result = ENTRIES_UNUSUAL;
+            break;
+        }
+        values[index] = taken[at];
+        taken[at] = NULL;
+    }
+    for (Py_ssize_t i = 0; i < count; i++) {
+        Py_DECREF(keys[i]);
+        Py_XDECREF(taken[i]);
+    }
+    if (keys != keys_stack) PyMem_Free(keys);
     if (unknown != NULL) {
         PyObject *r = PyObject_CallFunctionObjArgs(state->unexpected, (PyObject *)type, unknown, NULL);
         Py_XDECREF(r);

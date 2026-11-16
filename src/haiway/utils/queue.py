@@ -215,6 +215,15 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
             self._queue.clear()
 
         if self.is_finished:
+            if clear:
+                # the consumer is released here as well - an element already handed to
+                # it must not be put back after the buffer has been dropped
+                object.__setattr__(
+                    self,
+                    "_waiting",
+                    None,
+                )
+
             return  # already finished keeps its reason
 
         reason: BaseException = StopAsyncIteration() if exception is None else exception

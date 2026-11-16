@@ -21,6 +21,18 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   used to stay tracked by the garbage collector.
 - A malformed spec description given to the extension is refused with a `TypeError` instead of
   crashing the interpreter.
+- A `Literal` mixing an enum member with the plain value it carries (`Literal[Code.ONE, 1]`)
+  keeps a value of the very type whatever the order of the literals.
+- `from_json` reads the document when an object of a union repeats a key after an alternative
+  has already failed - which alternative fits is what `json.loads` leaves of it.
+- A response stream recorded a consumer which went away mid-stream as a failure again - it is
+  recorded as a disconnect, while a body failing with an `OSError` of its own stays a failure.
+- `AsyncQueue.finish(clear=True)` and `aclose()` release a consumer which was handed an element
+  also when the queue was finished already, so the element is not put back after the buffer was
+  dropped.
+- `Paginated` copies a tuple subclass into a plain tuple instead of keeping its behaviour.
+- Reading the entries of a dictionary into an instance no longer looks attributes up while
+  holding the lock of the dictionary, which a free-threaded build could let go of.
 
 ### Performance
 
