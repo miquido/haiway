@@ -4,6 +4,15 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
 ## 0.62.0
 
+### Added
+
+- `URITemplate` is an immutable URI template following [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570)
+  which expands values into a URI (`expand()`) and matches a URI back into its parameters
+  (`match()`, `matches()`). Matching holds every decoded value to the segment it was found in, so
+  the template can guard lookups. Only a subset of the RFC is supported - `{name}`, `{/name}`,
+  `{?a,b*}` and `{#name}` - anything else is refused when the template is created. See the
+  helpers guide.
+
 ### Changed
 
 - A `Literal` attribute accepts a value of the type of one of its values, not one which is merely
