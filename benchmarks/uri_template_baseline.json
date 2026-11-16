@@ -1,14 +1,14 @@
 {
-  "create/cached": 149.94974444208293,
-  "create/parse": 5377.71495737566,
-  "variables": 52.408261315661925,
-  "expand/simple": 1053.6279279633377,
-  "expand/full": 6660.557657495411,
-  "match/simple": 1055.6459066935236,
-  "match/full": 5492.744771959065,
-  "match/miss": 311.6416771481999,
-  "matches/full": 5512.494753595516,
-  "reference/expand-simple": 303.68184526321085,
-  "reference/expand-full": 2906.734323723098,
-  "reference/match-full": 3522.2409742716563
+  "create/cached": 151.23422190130321,
+  "create/parse": 6345.4775836288445,
+  "variables": 54.82612194520087,
+  "expand/simple": 1154.8866203084997,
+  "expand/full": 6352.408931373223,
+  "match/simple": 1122.5299160567452,
+  "match/full": 6592.383409756481,
+  "match/miss": 317.2418626621888,
+  "matches/full": 6484.976743959984,
+  "reference/expand-simple": 305.5613284296593,
+  "reference/expand-full": 2917.053740511468,
+  "reference/match-full": 3471.059050074517
 }
