@@ -319,7 +319,9 @@ typedef enum {
  * changed. No code of the user runs here: only plain strings are looked up. A key which
  * is not an attribute is reported, before any of the values is validated.
  */
-static Entries
+/* kept out of its caller - its frame is gone before the values are validated, which is
+ * where a deeply nested document recurses */
+static Py_NO_INLINE Entries
 given_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObject *entries, PyObject **values)
 {
     Py_ssize_t n = plan->count;
