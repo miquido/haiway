@@ -137,8 +137,10 @@ which only defines expansion:
 - Expansion refuses the same values (`ValueError`), so whatever a template expands also matches it.
   Path and host variables are required, the RFC would expand an undefined one to nothing.
 - Only the declared query parameters are extracted, the first value of each.
-- A segment holds at most one variable (`/{a}-{b}` is refused). Several of them would match a URI in
-  many ways, which makes matching take time polynomial in the length of a URI an attacker controls.
+- A query and a fragment end a template, and an empty segment (`/{/host}`) is refused. A segment
+  holds at most one variable (`/{a}-{b}` is refused). Several of them, or anything following an
+  optional query, would match a URI in many ways, which makes matching take time polynomial in the
+  length of a URI an attacker controls.
 - Values of an unsupported type (bytes, mappings, sets, nested sequences) raise `TypeError` instead
   of expanding their representation.
 

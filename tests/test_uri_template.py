@@ -231,7 +231,7 @@ def test_expand_ignores_unknown_values() -> None:
     assert URITemplate.of("/a/{x}").expand({"x": 1, "y": 2}) == "/a/1"
 
 
-@pytest.mark.parametrize("value", ["a", "a b", "a%2Fb", "é", "a@b", "a?b#c", "a&b=c", "a+b"])
+@pytest.mark.parametrize("value", ["a", "a b", "é", "a@b", "a?b#c", "a&b=c", "a+b", "5%"])
 @pytest.mark.parametrize("length", [1, 500])
 def test_expand_then_match_roundtrips_any_safe_value(value: str, length: int) -> None:
     template = URITemplate.of("https://{host}.example.com/files{/name}{?page}{#section}")
@@ -500,3 +500,86 @@ def test_template_caches_are_bounded() -> None:
 def test_expand_supports_scalars_and_sequences_of_any_kind(value: object, expected: str) -> None:
     assert URITemplate.of("/a/{x}").expand({"x": value}) == f"/a/{expected}"
     assert URITemplate.of("/a{?x}").expand({"x": value}) == f"/a?x={expected}"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("%41", "/a#%41"),
+        ("50%", "/a#50%25"),
+        ("%zz", "/a#%25zz"),
+        ("%4", "/a#%254"),
+        ("a%41%", "/a#a%41%25"),
+        (["%41", "%"], "/a#%41,%25"),
+    ],
+)
+def test_fragment_keeps_valid_percent_encoded_triplets(value: object, expected: str) -> None:
+    # RFC 6570, 3.2.1: a triplet passes as it is where reserved characters are allowed
+    assert URITemplate.of("/a{#x}").expand({"x": value}) == expected
+    # the other expansions encode the percent sign
+    assert URITemplate.of("/a/{x}").expand({"x": "%41"}) == "/a/%2541"
+    assert URITemplate.of("/a{?x}").expand({"x": "%41"}) == "/a?x=%2541"
+
+
+def test_fragment_triplet_matches_back_decoded() -> None:
+    template = URITemplate.of("/a{#x}")
+
+    assert template.match(template.expand({"x": "%41"})) == {"x": "A"}
+
+
+@pytest.mark.parametrize("value", ["%0a", "%00", "%0D%0A", "a\nb", "%ff", "%c0%af", ["ok", "%7f"]])
+def test_expand_refuses_fragment_values_match_would_refuse(value: object) -> None:
+    with pytest.raises(ValueError):
+        URITemplate.of("/a{#x}").expand({"x": value})
+
+
+@pytest.mark.parametrize("value", ["a\nb", "a\x00b", "a\rb", "a\x7fb", ["ok", "a\nb"]])
+@pytest.mark.parametrize("template", ["/a{?x}", "/a{?x*}"])
+def test_expand_refuses_control_characters_within_query_values(
+    template: str,
+    value: object,
+) -> None:
+    # quoting would encode them, matching refuses them - expansion has to as well
+    with pytest.raises(ValueError):
+        URITemplate.of(template).expand({"x": value})
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "/{/host}/x",
+        "/a/{/b}",
+        "//{/host}",
+        "https://{host}/{/name}",
+    ],
+)
+def test_empty_segments_are_rejected(template: str) -> None:
+    # `/{/host}` would form a `//` authority which no host rule is applied to
+    with pytest.raises(ValidationError):
+        URITemplate.of(template)
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "/{a}{?q}{b}/end",
+        "/{a}{?q}/end",
+        "/{a}{?q}x",
+        "/{a}{#f}x",
+        "/{a}{#f}{b}",
+        "/{a}{?q}{/b}",
+        "/{a}{#f}{?q}",
+        "/{a}{?q}{?r}",
+        "/{a}{#f}{#g}",
+    ],
+)
+def test_nothing_follows_a_query_or_a_fragment(template: str) -> None:
+    # the optional expression would not separate what follows from what precedes it, and
+    # overlapping captures take time polynomial in the length of the URI
+    with pytest.raises(ValidationError):
+        URITemplate.of(template)
+
+
+@pytest.mark.parametrize("template", ["/{a}{?q}", "/{a}{#f}", "/{a}{?q}{#f}", "/a{/b}{?q}{#f}"])
+def test_query_and_fragment_may_end_a_template(template: str) -> None:
+    URITemplate.of(template)

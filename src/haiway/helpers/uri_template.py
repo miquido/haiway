@@ -25,6 +25,7 @@ _AUTHORITY_SEGMENT: str = f"[^{_AUTHORITY_DELIMITERS}]+"
 _AUTHORITY_UNSAFE: Pattern[str] = re.compile(rf"[\s{re.escape(_AUTHORITY_DELIMITERS)}]")
 # RFC 6570 reserved set (gen-delims and sub-delims) a fragment expansion leaves as it is
 _RESERVED: str = ":/?#[]@!$&'()*+,;="
+_TRIPLET: Pattern[str] = re.compile(r"(%[0-9A-Fa-f]{2})")
 _CACHE_SIZE: int = 1024
 
 
@@ -92,8 +93,8 @@ class URITemplate(State):
     ------
     ValidationError
         If the template contains unbalanced braces, an unsupported or malformed
-        expression, a repeated variable, several variables within one segment or a query
-        expression misplaced after a fragment or another query.
+        expression, a repeated variable, several variables within one segment, an empty
+        segment (``/{/name}``) or a query or fragment which is not the end of the template.
 
     Examples
     --------
@@ -147,11 +148,12 @@ class URITemplate(State):
 
         Values are percent-encoded, only unreserved characters are left as they are,
         except in a fragment which keeps the reserved ones as well. A sequence expands
-        comma separated, or as repeated keys within a query when exploded. Query and
+        comma separated, or as repeated keys within a query when exploded. A fragment also
+        passes a valid percent-encoded triplet (``%41``) as it is. Query and
         fragment expressions are omitted when no value is provided, other variables are
-        required. A path or host value decoding to a path separator, a relative segment
-        (``.``, ``..``), a control character or, within a host, a delimiter or whitespace
-        is refused - the same values ``match`` refuses.
+        required. A value containing a control character, a path or host value decoding to a
+        path separator or a relative segment (``.``, ``..``) and a host one decoding to a
+        delimiter or whitespace is refused - the same values ``match`` refuses.
 
         Parameters
         ----------
@@ -190,7 +192,7 @@ class URITemplate(State):
                         queried = True
 
                 case fragment:
-                    if (joined := _joined(values.get(fragment.name), safe=_RESERVED)) is not None:
+                    if (joined := _fragment(values.get(fragment.name), fragment.name)) is not None:
                         expanded.append("#" + joined)
 
         return "".join(expanded)
@@ -376,18 +378,63 @@ def _authority_after(
     return authority and not delimited, pending and not delimited
 
 
+def _tail_after(part: _Part, /) -> str:
+    match part:
+        case _Query():
+            return "query"
+
+        case _Fragment():
+            return "fragment"
+
+        case _:
+            return ""
+
+
+def _verify_placement(
+    part: _Part,
+    parts: Sequence[_Part],
+    /,
+    *,
+    tail: str,
+    ended: bool,
+    template: str,
+) -> None:
+    # a query and a fragment end a URI, nothing but a fragment may follow a query - what
+    # followed would be matched along with them and overlap the captures before
+    if (
+        tail == "fragment"
+        or (tail == "query" and not isinstance(part, _Fragment))
+        or (isinstance(part, _Query | _Fragment) and ended)
+    ):
+        raise ValueError(f"Misplaced expression {part} in URI template: {template}")
+
+    # a slash expression following a slash makes an empty segment - `/{/host}` would
+    # begin a `//` authority that no host rule is applied to
+    if (
+        isinstance(part, _Segment)
+        and parts
+        and isinstance(parts[-1], _Literal)
+        and parts[-1].text.endswith("/")
+    ):
+        raise ValueError(f"Empty segment before {part} in URI template: {template}")
+
+
 @lru_cache(maxsize=_CACHE_SIZE)
 def _parse(template: str) -> tuple[_Part, ...]:
     parts: list[_Part] = []
     seen: set[str] = set()
     pending: bool = True  # no delimiter yet, the authority may still begin
     authority: bool = False
-    ended: bool = False  # a fragment precedes, literal or not
+    ended: bool = False  # a fragment precedes within a literal
+    tail: str = ""  # "query" or "fragment" once one of them has been expanded
     segmented: bool = False  # a variable within the current segment
     for index, token in enumerate(_EXPRESSION.split(template)):
         if index % 2 == 0:
             if "{" in token or "}" in token:
                 raise ValueError(f"Unbalanced braces in URI template: {template}")
+
+            if token and tail:
+                raise ValueError(f"Text after a query or a fragment in URI template: {template}")
 
             parts.extend(_Literal(token) for _ in (token,) if token)
             authority, pending = _authority_after(
@@ -401,10 +448,7 @@ def _parse(template: str) -> tuple[_Part, ...]:
             continue
 
         part: _Part = _expression(token, authority=authority, template=template)
-        if isinstance(part, _Query | _Fragment) and (
-            ended or (isinstance(part, _Query) and any(isinstance(it, _Query) for it in parts))
-        ):
-            raise ValueError(f"Misplaced expression {token} in URI template: {template}")
+        _verify_placement(part, parts, tail=tail, ended=ended, template=template)
 
         if not seen.isdisjoint(names := _names(part)):
             raise ValueError(f"Repeated variable in URI template: {template}")
@@ -424,7 +468,7 @@ def _parse(template: str) -> tuple[_Part, ...]:
             segmented = False
 
         seen.update(names)
-        ended = ended or isinstance(part, _Fragment)
+        tail = _tail_after(part)
         authority = authority and isinstance(part, _Variable)
         pending = pending and isinstance(part, _Variable)
         parts.append(part)
@@ -540,17 +584,33 @@ def _texts(value: Any) -> tuple[str, ...]:
     return tuple(_text(element) for element in elements if element is not None)
 
 
-def _joined(
+def _fragment(
     value: Any,
+    name: str,
     /,
-    *,
-    safe: str = "",
 ) -> str | None:
     # None stands for an undefined value - missing or an empty sequence
     if value is None or not (texts := _texts(value)):
         return None
 
-    return ",".join(quote(text, safe=safe) for text in texts)
+    # a fragment keeps the reserved characters and, as RFC 6570 allows there, a valid
+    # percent-encoded triplet; any other percent sign is encoded
+    encoded: str = ",".join(
+        "".join(
+            part if index % 2 else quote(part, safe=_RESERVED)
+            for index, part in enumerate(_TRIPLET.split(text))
+        )
+        for text in texts
+    )
+    # a triplet passes as it is, so what it decodes to has to be verified as matching does
+    try:
+        if _CONTROL.search(unquote(encoded, errors="strict")):
+            raise ValueError(f"Unsafe value of URI template variable '{name}'")
+
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Unsafe value of URI template variable '{name}'") from exc
+
+    return encoded
 
 
 def _required(
@@ -583,6 +643,9 @@ def _query_pairs(
         value: Any = values.get(name)
         if value is None or not (texts := _texts(value)):
             continue
+
+        if any(_CONTROL.search(text) for text in texts):
+            raise ValueError(f"Unsafe value of URI template variable '{name}'")
 
         if explode:
             pairs.extend(f"{name}={quote(text, safe='')}" for text in texts)

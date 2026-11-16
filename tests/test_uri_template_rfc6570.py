@@ -1,11 +1,11 @@
-from typing import Any
+from collections.abc import Sequence
 
 import pytest
 
 from haiway import URITemplate, ValidationError
 
 # the variables of RFC 6570, section 3.2 - undef stands for an undefined one
-VARIABLES: dict[str, Any] = {
+VARIABLES: dict[str, str | Sequence[str] | None] = {
     "count": ["one", "two", "three"],
     "dom": ["example", "com"],
     "dub": "me/too",
