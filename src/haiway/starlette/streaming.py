@@ -1,28 +1,14 @@
 from collections.abc import AsyncGenerator, Mapping
-from typing import Final, final
+from typing import final
 
 from starlette.background import BackgroundTask
 from starlette.requests import ClientDisconnect
 from starlette.responses import StreamingResponse
-from starlette.types import Message, Receive, Scope, Send
+from starlette.types import Message, Send
 
 from haiway.context import ctx
 
 __all__ = ("StreamResponse",)
-
-_REQUIRED_SPEC_VERSION: Final[tuple[int, ...]] = (2, 4)
-_spec_version_reported: bool = False
-
-
-def _spec_version(
-    scope: Scope,
-    /,
-) -> tuple[int, ...] | None:
-    try:
-        return tuple(int(part) for part in scope["asgi"]["spec_version"].split("."))
-
-    except KeyError, TypeError, ValueError, AttributeError:
-        return None
 
 
 @final
@@ -107,26 +93,6 @@ class StreamResponse(StreamingResponse):
         # allowed to be an async iterable with nothing to close
         self._stream: AsyncGenerator[bytes | str] = content
 
-    async def __call__(
-        self,
-        scope: Scope,
-        receive: Receive,
-        send: Send,
-    ) -> None:
-        global _spec_version_reported  # noqa: PLW0603
-        if not _spec_version_reported and scope["type"] == "http":
-            version: tuple[int, ...] | None = _spec_version(scope)
-            if version is None or version < _REQUIRED_SPEC_VERSION:
-                # reported once - it is a property of the server, not of a request
-                _spec_version_reported = True
-                ctx.log_warning(
-                    "Server advertises ASGI spec version below 2.4 -"
-                    " streamed responses can not be reliably closed"
-                    " when the consumer goes away"
-                )
-
-        await super().__call__(scope, receive, send)
-
     async def stream_response(
         self,
         send: Send,
@@ -151,18 +117,9 @@ class StreamResponse(StreamingResponse):
 
         except Exception as exc:
             if disconnected or isinstance(exc, ClientDisconnect):
-                # a consumer which went away is not a failure of the response it
-                # ended - recorded as what happened rather than as an error
                 ctx.log_debug("Response streaming ended by a disconnected consumer")
 
             else:
-                # recorded here, where the failure actually is. A response which
-                # already started can not be answered with an error, so this one
-                # travels out through the exception handling of the framework,
-                # which replaces it with a `RuntimeError` about a response
-                # already started whenever a handler matches its type - what the
-                # scope of the request would then record instead of the failure
-                # which happened
                 ctx.log_error(
                     "Response streaming failed",
                     exception=exc,

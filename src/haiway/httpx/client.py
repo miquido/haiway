@@ -393,7 +393,10 @@ class _ResponseStream(AsyncGenerator[bytes]):
     run on close, so the release within it would not happen either.
     """
 
-    __slots__ = ("_generator", "_response")
+    __slots__ = (
+        "_generator",
+        "_response",
+    )
 
     def __init__(
         self,

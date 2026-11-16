@@ -70,7 +70,7 @@ key_hash(const char *text, Py_ssize_t length)
     return hash;
 }
 
-static int
+static void
 key_slots_add(CompiledPlan *plan, const char *text, Py_ssize_t length, Py_ssize_t index)
 {
     size_t at = key_hash(text, length) & plan->key_mask;
@@ -78,7 +78,6 @@ key_slots_add(CompiledPlan *plan, const char *text, Py_ssize_t length, Py_ssize_
     plan->key_slots[at].text = text;
     plan->key_slots[at].length = length;
     plan->key_slots[at].index = index;
-    return 0;
 }
 
 /* the attribute a key spelled by these bytes names, -1 for none */
@@ -183,14 +182,14 @@ field_for_key(CompiledPlan *plan, PyObject *key)
  * What the garbage collector has to look at. A value can be part of a cycle when it is
  * tracked, or when it is untracked for now but can become tracked later - which only
  * the containers which can never change are safe of: an exact tuple, frozenset,
- * frozendict or Map, and an instance, each untracked only once nothing it
+ * frozendict, Map or Meta, and an instance, each untracked only once nothing it
  * holds can be part of a cycle. That is the rule of CPython itself, for its tuples.
  */
 static inline int
 is_frozen_container(ModuleState *state, PyObject *value)
 {
     return PyTuple_CheckExact(value) || PyFrozenSet_CheckExact(value) || PyFrozenDict_CheckExact(value)
-        || Py_IS_TYPE(value, (PyTypeObject *)state->map);
+        || Py_IS_TYPE(value, (PyTypeObject *)state->map) || Py_IS_TYPE(value, (PyTypeObject *)state->meta);
 }
 
 /* the rule for a value the collector tracks no longer, or never did */
@@ -286,7 +285,7 @@ settle_tracked(ModuleState *state, PyObject *value, int depth)
         }
         if (cyclic) return 1;
     } else {
-        /* a frozendict, or a Map - which is one, holding nothing else */
+        /* a frozendict, or a Map or a Meta - which are one, holding nothing else */
         PyObject *key;
         PyObject *item;
         Py_ssize_t position = 0;

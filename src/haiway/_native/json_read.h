@@ -30,6 +30,7 @@ typedef struct {
     Py_ssize_t pending_capacity;
     int depth;
     int limit;  /* how deep a document goes, which is as far as Python recurses */
+    int repeated;  /* a key of an object was repeated - json.loads keeps the last, so a union it is within reads the document */
 } Decoder;
 
 static int
@@ -351,11 +352,13 @@ decode_object(Decoder *d)
         d->p++;
         skip_whitespace(d);
         PyObject *value = decode_any(d);
+        Py_ssize_t before = PyDict_GET_SIZE(dict);
         if (value == NULL || PyDict_SetItem(dict, key, value) < 0) {  /* the last of a repeated key stays */
             Py_DECREF(key);
             Py_XDECREF(value);
             goto fail;
         }
+        if (PyDict_GET_SIZE(dict) == before) d->repeated = 1;  /* replaced - which alternative fits may depend on it */
         Py_DECREF(key);
         Py_DECREF(value);
         skip_whitespace(d);
@@ -456,7 +459,11 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
             int key_escaped;
             if (!string_span(d, &key_start, &key_length, &key_escaped)) goto fail;
             Py_ssize_t index = field_for_span(plan, key_start, key_length, key_escaped);
-            if (index < 0 || given[index]) goto fail;  /* not an attribute, or given twice */
+            if (index < 0) goto fail;  /* not an attribute */
+            if (given[index]) {
+                d->repeated = 1;
+                goto fail;
+            }
             given[index] = 1;
             skip_whitespace(d);
             if (d->p >= d->end || *d->p != ':') goto fail;
@@ -607,6 +614,7 @@ decode_mapping(Decoder *d, Spec *spec)
             d->p++;
             skip_whitespace(d);
             PyObject *value = decode_spec(d, spec->children[1]);
+            Py_ssize_t before = PyDict_GET_SIZE(dict);
             if (value == NULL || PyDict_SetItem(dict, checked_key, value) < 0) {  /* the last of a repeated key stays */
                 Py_DECREF(checked_key);
                 Py_XDECREF(value);
@@ -614,6 +622,13 @@ decode_mapping(Decoder *d, Spec *spec)
             }
             Py_DECREF(checked_key);
             Py_DECREF(value);
+            if (PyDict_GET_SIZE(dict) == before) {
+                /* replaced - what was kept pending for the value let go of would be applied
+                 * to an instance which is gone, and which alternative of a union fits may
+                 * depend on it: the document is read as json.loads leaves it instead */
+                d->repeated = 1;
+                goto fail;
+            }
             skip_whitespace(d);
             if (d->p < d->end && *d->p == ',') {
                 d->p++;
@@ -633,6 +648,50 @@ decode_mapping(Decoder *d, Spec *spec)
 fail:
     Py_DECREF(dict);
     return NULL;
+}
+
+/* whether a spec of the kind refuses every object - anything else may accept one its own
+ * way, which only validating the object read tells */
+static inline int
+refuses_objects(int kind)
+{
+    switch (kind) {
+    case SPEC_NONE:
+    case SPEC_MISSING:
+    case SPEC_LITERAL:
+    case SPEC_BOOL:
+    case SPEC_INT:
+    case SPEC_FLOAT:
+    case SPEC_STR:
+    case SPEC_BYTES:
+    case SPEC_UUID:
+    case SPEC_DATETIME:
+    case SPEC_DATE:
+    case SPEC_TIME:
+    case SPEC_TIMEDELTA:
+    case SPEC_PATH:
+    case SPEC_STR_ENUM:
+    case SPEC_INT_ENUM:
+    case SPEC_TUPLE:
+    case SPEC_SEQUENCE:
+    case SPEC_FUNCTION:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* whether an object can only be an instance of one of the classes of a union - validating
+ * it prefers an alternative accepting it as it is, a mapping, over a class listed before */
+static int
+objects_are_instances(Spec *spec)
+{
+    for (Py_ssize_t i = 0; i < spec->count; i++) {
+        Spec *alternative = spec->children[i];
+        if (alternative->validating != NULL || alternative->verifying != NULL) return 0;
+        if (alternative->kind != SPEC_STATE && !refuses_objects(alternative->kind)) return 0;
+    }
+    return 1;
 }
 
 /* whether a union has an alternative of the kind */
@@ -664,17 +723,33 @@ decode_spec(Decoder *d, Spec *spec)
             if (*d->p == 'n' && union_has(spec, SPEC_NONE)) {
                 return match_word(d, "null", 4) ? Py_NewRef(Py_None) : NULL;
             }
-            if (*d->p == '{') {
+            if (*d->p == '{' && objects_are_instances(spec)) {
+                /* a key repeated outside of this object changes nothing about which of
+                 * the alternatives it fits - only one repeated within it is looked for */
+                int outside = d->repeated;
+                d->repeated = 0;
                 /* the first class the object fits - the alternatives are tried in order */
                 for (Py_ssize_t i = 0; i < spec->count; i++) {
                     Spec *alternative = spec->children[i];
-                    if (alternative->kind != SPEC_STATE || alternative->validating != NULL || alternative->verifying != NULL) continue;
+                    if (alternative->kind != SPEC_STATE) continue;
                     const char *start = d->p;
                     /* a failed alternative dropped what it kept pending itself */
                     PyObject *instance = decode_struct(d, (PyTypeObject *)alternative->base);
-                    if (instance != NULL || PyErr_Occurred()) return instance;
+                    if (d->repeated) {
+                        /* a repeated key makes what an alternative read differ from what
+                         * the document says - the document is what decides, the mapping
+                         * json.loads builds */
+                        Py_XDECREF(instance);
+                        return NULL;
+                    }
+                    if (instance != NULL || PyErr_Occurred()) {
+                        d->repeated = outside;
+                        return instance;
+                    }
+                    if (d->p == start) break;  /* a class which is not read here */
                     d->p = start;
                 }
+                d->repeated = outside;
             }
             break;
         case SPEC_SEQUENCE:
@@ -772,7 +847,7 @@ from_json_native(PyObject *mod, PyObject *args)
         Py_RETURN_NONE;
     }
 
-    Decoder decoder = {state, data, data + length, NULL, 0, 0, 0, Py_GetRecursionLimit()};
+    Decoder decoder = {state, data, data + length, NULL, 0, 0, 0, Py_GetRecursionLimit(), 0};
     PyObject *result = NULL;
     skip_whitespace(&decoder);
     if (!array) {

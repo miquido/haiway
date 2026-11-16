@@ -197,3 +197,18 @@ def test_paginated_str_repr_and_copies() -> None:
     assert repr(page) == str(page)
     assert copy.copy(page) is page
     assert copy.deepcopy(page) is page
+
+
+def test_paginated_does_not_keep_a_tuple_subclass() -> None:
+    class Shifting(tuple[int, ...]):
+        offset: int = 0
+
+        def __iter__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+            return iter(tuple.__getitem__(self, slice(self.offset, None)))
+
+    source = Shifting((1, 2, 3))
+    page: Paginated[int] = Paginated(source, pagination=Pagination.of(limit=3))
+    source.offset = 1  # changing the source must not change the page
+
+    assert type(page.items) is tuple
+    assert page.items == (1, 2, 3)

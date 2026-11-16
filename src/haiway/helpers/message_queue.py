@@ -56,7 +56,11 @@ class MQMessageSource:
     system: str
     destination: str
     attributes: Mapping[str, ObservabilityAttribute]
-    __slots__ = ("attributes", "destination", "system")
+    __slots__ = (
+        "attributes",
+        "destination",
+        "system",
+    )
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion
@@ -137,7 +141,13 @@ class MQMessage[Content]:
     _acknowledge: MQMessageAcknowledging
     _reject: MQMessageRejecting
 
-    __slots__ = ("_acknowledge", "_reject", "content", "meta", "source")
+    __slots__ = (
+        "_acknowledge",
+        "_reject",
+        "content",
+        "meta",
+        "source",
+    )
 
     __setattr__ = refuse_assignment
     __delattr__ = refuse_deletion

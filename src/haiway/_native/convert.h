@@ -253,9 +253,7 @@ basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNod
         return result;
     }
 
-    PyObject *spelled = native_spelling(state, value);
-    if (spelled != NULL || PyErr_Occurred()) return spelled;
-
+    /* a dictionary first - it has no spelling of its own, which is told by five checks */
     PyObject *source = dict_source(value);
     if (source == NULL && PyErr_Occurred()) return NULL;
     if (source != NULL) {
@@ -300,6 +298,9 @@ items_fail:
         Py_DECREF(result);
         return NULL;
     }
+
+    PyObject *spelled = native_spelling(state, value);
+    if (spelled != NULL || PyErr_Occurred()) return spelled;
 
     /* everything else is for the leaf table and the less common containers of Python */
     PyObject *path = path_tuple(node, prefix);
@@ -398,10 +399,6 @@ recursive_convert_unbounded(ModuleState *state, PyObject *value)
         return result;
     }
 
-    int immutable = is_known_immutable(state, value);
-    if (immutable < 0) return NULL;
-    if (immutable) return Py_NewRef(value);
-
     PyObject *source = dict_source(value);
     if (source == NULL && PyErr_Occurred()) return NULL;
     if (source != NULL) {
@@ -426,6 +423,10 @@ recursive_convert_unbounded(ModuleState *state, PyObject *value)
         Py_DECREF(source);
         return result;
     }
+
+    int immutable = is_known_immutable(state, value);
+    if (immutable < 0) return NULL;
+    if (immutable) return Py_NewRef(value);
 
     return PyObject_CallOneArg(state->recursive, value);
 }
