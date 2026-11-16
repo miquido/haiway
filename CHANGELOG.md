@@ -36,6 +36,9 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   `State` and an alternative accepting mappings (`Mapping[...]`, `Any`, a `TypedDict`, `Set[...]`)
   was read as the `State` by `from_json` alone, and an object repeating a key could be read as a
   later alternative than the one `json.loads` would have led to.
+- `from_json` no longer writes into a freed instance when an object read as a `Mapping` of `State`
+  values repeats a key - such a document is read the way `json.loads` leaves it, the last value
+  of the key staying.
 - A `State` holding a `Meta` is left to reference counting like any other acyclic instance - it
   used to stay tracked by the garbage collector.
 - A malformed spec description given to the extension is refused with a `TypeError` instead of

@@ -209,6 +209,31 @@ def test_json_union_with_a_repeated_key_within_an_untyped_value_reads_the_docume
     assert type(decoded.value) is type(expected.value)
 
 
+@mark.parametrize(
+    "document",
+    [
+        '{"value": {"k": {}, "k": {"a": 1}}}',
+        '{"value": {"k": {"a": 2}, "k": {"a": 1}}}',
+        '{"value": {"k": {"a": 2}, "j": {}, "k": {"a": 1}, "j": {"a": 3}}}',
+    ],
+)
+def test_json_mapping_of_instances_with_a_repeated_key_keeps_the_last_one(
+    document: str,
+) -> None:
+    class Child(State):
+        a: int
+        b: str = "x"
+
+    class Root(State):
+        value: Mapping[str, Child]
+
+    # the instance replaced is gone - nothing kept pending for it may be applied to it
+    for _ in range(64):
+        assert Root.from_json(document) == Root.from_mapping(json.loads(document))
+
+    assert Root.from_json(document).value["k"] == Child(a=1)
+
+
 def test_json_union_with_a_repeated_key_after_a_failed_alternative_reads_the_document() -> None:
     class First(State):
         x: Leaf

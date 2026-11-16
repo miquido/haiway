@@ -620,9 +620,15 @@ decode_mapping(Decoder *d, Spec *spec)
                 Py_XDECREF(value);
                 goto fail;
             }
-            if (PyDict_GET_SIZE(dict) == before) d->repeated = 1;  /* replaced - which alternative fits may depend on it */
             Py_DECREF(checked_key);
             Py_DECREF(value);
+            if (PyDict_GET_SIZE(dict) == before) {
+                /* replaced - what was kept pending for the value let go of would be applied
+                 * to an instance which is gone, and which alternative of a union fits may
+                 * depend on it: the document is read as json.loads leaves it instead */
+                d->repeated = 1;
+                goto fail;
+            }
             skip_whitespace(d);
             if (d->p < d->end && *d->p == ',') {
                 d->p++;
