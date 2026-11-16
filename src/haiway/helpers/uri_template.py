@@ -2,7 +2,7 @@ import re
 from collections.abc import Mapping, Sequence, Set
 from functools import lru_cache
 from re import Pattern
-from typing import Annotated, Any, NamedTuple, Self, cast, final
+from typing import Annotated, Any, Literal, NamedTuple, Self, cast, final
 from unicodedata import normalize
 from urllib.parse import parse_qs, quote, unquote
 
@@ -22,20 +22,31 @@ _SEGMENT: str = r"[^/?#]+"
 # `https://{tenant}.example.com{/repo}` and hand over `evil.com@acme` as the host label
 _AUTHORITY_DELIMITERS: str = "/?#@"
 _AUTHORITY_SEGMENT: str = f"[^{_AUTHORITY_DELIMITERS}]+"
+# within a literal query a value ends where the next parameter begins, or - as the query
+# is expanded after it with `&` - the capture would swallow the parameters that follow
+_QUERY_SEGMENT: str = r"[^/?#&]+"
 _AUTHORITY_UNSAFE: Pattern[str] = re.compile(rf"[\s{re.escape(_AUTHORITY_DELIMITERS)}]")
 # RFC 6570 reserved set (gen-delims and sub-delims) a fragment expansion leaves as it is
 _RESERVED: str = ":/?#[]@!$&'()*+,;="
 _TRIPLET: Pattern[str] = re.compile(r"(%[0-9A-Fa-f]{2})")
 _CACHE_SIZE: int = 1024
+_SEGMENTS: Mapping[str, str] = {
+    "path": _SEGMENT,
+    "authority": _AUTHORITY_SEGMENT,
+    "query": _QUERY_SEGMENT,
+}
 
 
 class _Literal(NamedTuple):
     text: str
 
 
+type _Region = Literal["path", "authority", "query"]
+
+
 class _Variable(NamedTuple):
     name: str
-    authority: bool
+    region: _Region
 
 
 class _Segment(NamedTuple):
@@ -180,8 +191,8 @@ class URITemplate(State):
                     expanded.append(text)
                     queried = queried or "?" in text
 
-                case _Variable(name, authority):
-                    expanded.append(_required(values, name, authority=authority))
+                case _Variable(name, region):
+                    expanded.append(_required(values, name, authority=region == "authority"))
 
                 case _Segment(name):
                     expanded.append("/" + _required(values, name, authority=False))
@@ -281,8 +292,8 @@ def _bound(
 ) -> Mapping[str, str] | None:
     try:
         match part:
-            case _Variable(name, authority):
-                decoded: str | None = _decoded(captured, authority=authority)
+            case _Variable(name, region):
+                decoded: str | None = _decoded(captured, authority=region == "authority")
 
             case _Segment(name):
                 decoded = _decoded(captured, authority=False)
@@ -318,7 +329,7 @@ def _expression(
     token: str,
     /,
     *,
-    authority: bool,
+    region: _Region,
     template: str,
 ) -> _Part:
     operator: str = token[1] if token[1:2] in ("/", "?", "#") else ""
@@ -339,7 +350,7 @@ def _expression(
                 return _Fragment(names[0])
 
             case _:
-                return _Variable(names[0], authority)
+                return _Variable(names[0], region)
 
     raise ValueError(f"Unsupported expression {token} in URI template: {template}")
 
@@ -397,6 +408,7 @@ def _verify_placement(
     *,
     tail: str,
     ended: bool,
+    region: _Region,
     template: str,
 ) -> None:
     # a query and a fragment end a URI, nothing but a fragment may follow a query - what
@@ -407,6 +419,10 @@ def _verify_placement(
         or (isinstance(part, _Query | _Fragment) and ended)
     ):
         raise ValueError(f"Misplaced expression {part} in URI template: {template}")
+
+    # there are no segments within a query - the expression would capture past its parameters
+    if isinstance(part, _Segment) and region == "query":
+        raise ValueError(f"Slash expression within a query in URI template: {template}")
 
     # a slash expression following a slash makes an empty segment - `/{/host}` would
     # begin a `//` authority that no host rule is applied to
@@ -425,6 +441,7 @@ def _parse(template: str) -> tuple[_Part, ...]:
     seen: set[str] = set()
     pending: bool = True  # no delimiter yet, the authority may still begin
     authority: bool = False
+    queried: bool = False  # within a literal query
     ended: bool = False  # a fragment precedes within a literal
     tail: str = ""  # "query" or "fragment" once one of them has been expanded
     segmented: bool = False  # a variable within the current segment
@@ -444,11 +461,14 @@ def _parse(template: str) -> tuple[_Part, ...]:
                 first=index == 0,
             )
             ended = ended or "#" in token
+            # the last of `?` and `#` decides where a literal leaves off
+            queried = token.rfind("?") > token.rfind("#") or (queried and "#" not in token)
             segmented = segmented and _DELIMITER.search(token) is None
             continue
 
-        part: _Part = _expression(token, authority=authority, template=template)
-        _verify_placement(part, parts, tail=tail, ended=ended, template=template)
+        region: _Region = "authority" if authority else "query" if queried else "path"
+        part: _Part = _expression(token, region=region, template=template)
+        _verify_placement(part, parts, tail=tail, ended=ended, region=region, template=template)
 
         if not seen.isdisjoint(names := _names(part)):
             raise ValueError(f"Repeated variable in URI template: {template}")
@@ -496,8 +516,8 @@ def _pattern(template: str) -> Pattern[str]:
                 tokens.append(re.escape(text))
                 queried = queried or "?" in text
 
-            case _Variable(_, authority):
-                tokens.append(f"({_AUTHORITY_SEGMENT if authority else _SEGMENT})")
+            case _Variable(_, region):
+                tokens.append(f"({_SEGMENTS[region]})")
 
             case _Segment():
                 tokens.append(f"/({_SEGMENT})")

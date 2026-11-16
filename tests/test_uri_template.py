@@ -1,3 +1,4 @@
+import random
 from collections import deque
 from decimal import Decimal
 from pathlib import PurePosixPath
@@ -583,3 +584,66 @@ def test_nothing_follows_a_query_or_a_fragment(template: str) -> None:
 @pytest.mark.parametrize("template", ["/{a}{?q}", "/{a}{#f}", "/{a}{?q}{#f}", "/a{/b}{?q}{#f}"])
 def test_query_and_fragment_may_end_a_template(template: str) -> None:
     URITemplate.of(template)
+
+
+def test_value_within_a_literal_query_stops_at_the_next_parameter() -> None:
+    template = URITemplate.of("/x?k={v}{?q}")
+    uri = template.expand({"v": "a b", "q": "50%"})
+
+    assert uri == "/x?k=a%20b&q=50%25"
+    assert template.match(uri) == {"v": "a b", "q": "50%"}
+    assert template.match("/x?k=1&q=evil") == {"v": "1", "q": "evil"}
+    assert template.match("/x?k=1") == {"v": "1"}
+    # `&` is only ever data once encoded
+    assert template.match("/x?k=a%26q%3Devil") == {"v": "a&q=evil"}
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "?k=v{/a}",
+        ":8080.?k=v{/b}{/c}{?a}",
+        "/x?k={a}{/b}",
+        "/x?k=v/{/a}",
+    ],
+)
+def test_slash_expressions_within_a_query_are_rejected(template: str) -> None:
+    with pytest.raises(ValidationError):
+        URITemplate.of(template)
+
+
+def test_slash_expression_after_a_fragment_is_a_plain_one() -> None:
+    # `#` ends the query, what follows is a fragment, not a part of the query
+    assert URITemplate.of("/x?k=v#{a}").match("/x?k=v#1") == {"a": "1"}
+    assert URITemplate.of("/x?k=v#a/{b}").match("/x?k=v#a/1") == {"b": "1"}
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_random_templates_expand_into_what_matches_back(seed: int) -> None:
+    generator = random.Random(seed)
+    literals = ["/", "/a", "/files", "x", "-", ".", "https://", "//", ".example.com"]
+    literals += ["?k=v", "?k=", ":8080", "", "&", "#"]
+    expressions = ["{a}", "{b}", "{c}", "{/a}", "{/b}", "{/c}", "{?a}", "{?b,c}", "{#a}"]
+    values: list[object] = ["a", "a b", "é", "a@b", "a#b", "a?b", "%zz", chr(0xFF15), "a,b", "a+b"]
+    values += ["a&b=c", "5%", "x" * 40]
+
+    for _ in range(400):
+        text = "".join(
+            generator.choice(literals if generator.random() < 0.5 else expressions)
+            for _ in range(generator.randint(1, 6))
+        )
+        try:
+            template = URITemplate.of(text)
+
+        except ValidationError:
+            continue
+
+        given = {name: generator.choice(values) for name in template.variables}
+        try:
+            uri = template.expand(given)
+
+        except ValueError:
+            continue
+
+        # whatever expands matches back - to the very values it was given
+        assert template.match(uri) == given, (text, given, uri)

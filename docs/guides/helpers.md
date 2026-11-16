@@ -141,6 +141,8 @@ which only defines expansion:
   holds at most one variable (`/{a}-{b}` is refused). Several of them, or anything following an
   optional query, would match a URI in many ways, which makes matching take time polynomial in the
   length of a URI an attacker controls.
+- A variable within a literal query (`?k={v}`) ends at the next `&`, so it never captures the
+  parameters a `{?q}` expands after it, and a slash expression (`{/name}`) is refused there.
 - Values of an unsupported type (bytes, mappings, sets, nested sequences) raise `TypeError` instead
   of expanding their representation.
 
