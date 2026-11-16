@@ -131,3 +131,17 @@ it.
 Some of the improvements are made in Python: `read/path` (the paths of `State._`
 are kept once they are made), and the identifiers of scopes and traces (a random version 4 UUID
 without a system call) which the `haiway` cases of `server_benchmark.py` pay for twice a request.
+
+## URI templates
+
+`uri_template_benchmark.py` measures `URITemplate`: creation (a cached and a freshly parsed
+template), expansion and matching of a simple and of a full template, and a miss. The `reference/`
+cases do comparable work with `urllib.parse` alone - the floor to measure against; a template
+costs a few times that, in the order of a microsecond, which a request never notices. Parsing and
+the match pattern are cached per template text, so only the first use of a template pays for them.
+It takes the same `--json`, `--compare`, `--filter` and `--budget` options.
+
+```bash
+make benchmark-uri                                              # run with -O
+make benchmark-uri ARGS="--compare benchmarks/uri_template_baseline.json"
+```

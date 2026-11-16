@@ -102,6 +102,28 @@ See [Configuration](configuration.md) for the repository model and examples.
 These helpers keep boundary integrations typed while still allowing adapters to be swapped through
 context state.
 
+## URI Templates
+
+`URITemplate` is an immutable RFC 6570 (level 3 subset) template that expands values into a URI and
+matches a URI back into its parameters. It supports `{name}`, `{/name}`, `{?a,b}` and `{#name}`.
+
+```python
+from haiway import URITemplate
+
+template = URITemplate.of("https://{tenant}.example.com/files{/name}{?page}")
+
+template.expand({"tenant": "acme", "name": "a b.txt", "page": 2})
+# "https://acme.example.com/files/a%20b.txt?page=2"
+
+template.match("https://acme.example.com/files/a%20b.txt?page=2")
+# Map({"tenant": "acme", "name": "a b.txt", "page": "2"})
+```
+
+Matching holds every decoded path or host parameter to the segment boundary declared by the
+template: values decoding to a path separator, `.`/`..` or user-info yield no match, so a template
+can safely guard resource lookups. Expansion refuses the same values, so whatever a template expands
+also matches it. Templates are verified when created and raise `ValidationError` when malformed.
+
 ## Observability
 
 `LoggerObservability(...)` builds a Haiway `Observability` backend backed by the standard `logging`

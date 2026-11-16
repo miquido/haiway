@@ -63,6 +63,7 @@ from haiway.helpers.retries import retry
 from haiway.helpers.statemethods import statemethod
 from haiway.helpers.throttling import throttle
 from haiway.helpers.timeouting import timeout
+from haiway.helpers.uri_template import URITemplate
 
 __all__ = (
     "CacheClear",
@@ -104,6 +105,7 @@ __all__ = (
     "MQQueue",
     "PathTraversing",
     "Paths",
+    "URITemplate",
     "asynchronous",
     "cache",
     "cache_externally",
