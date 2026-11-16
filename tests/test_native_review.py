@@ -37,13 +37,29 @@ class Literals(State):
         ("number", False),  # False == 0
         ("number", 1.0),
         ("flag", 1),
-        ("text", Color.RED),
-        ("number", Level.LOW),  # equal to 1, but not the literal
+        ("text", Color.RED),  # a member, but equal to none of the literals
     ],
 )
 def test_literal_refuses_a_value_which_is_only_equal(name: str, value: Any) -> None:
     with raises(ValidationError):
         Literals(**{name: value})
+
+
+class Letter(StrEnum):
+    A = "a"
+
+
+def test_literal_of_plain_value_reads_an_enum_member_as_the_literal() -> None:
+    literals = Literals(number=Level.LOW, text=Letter.A)
+    assert type(literals.number) is int
+    assert literals.number == 1
+    assert type(literals.text) is str
+    assert literals.text == "a"
+
+
+def test_literal_of_enum_member_refuses_a_member_of_another_enum() -> None:
+    with raises(ValidationError):
+        Literals(color=StrEnum("Other", {"RED": "red"}).RED)
 
 
 def test_literal_keeps_a_value_of_its_type() -> None:
@@ -163,6 +179,34 @@ def test_json_union_with_a_repeated_key_reads_the_last_one() -> None:
 
     assert Either.from_json(document) == Either.from_mapping(json.loads(document))
     assert Either.from_json(document).value == First(x=Leaf(a=2))
+
+
+@mark.parametrize(
+    "document",
+    [
+        '{"pre": {}, "value": {"x": {"a": "bad", "a": 2}}}',
+        '{"pre": {}, "value": {"x": {"a": 2, "a": "bad"}}}',
+        '{"pre": {"a": 1, "a": 2}, "value": {"x": {"a": "bad"}}}',
+        '{"pre": {"a": 1, "a": 2}, "value": {"x": {"a": 3}}}',
+    ],
+)
+def test_json_union_with_a_repeated_key_within_an_untyped_value_reads_the_document(
+    document: str,
+) -> None:
+    class First(State):
+        x: Mapping[str, int]
+
+    class Second(State):
+        x: Any
+
+    class Either(State):
+        pre: Mapping[str, int]
+        value: First | Second
+
+    decoded = Either.from_json(document)
+    expected = Either.from_mapping(json.loads(document))
+    assert decoded == expected
+    assert type(decoded.value) is type(expected.value)
 
 
 def test_json_union_with_a_repeated_key_after_a_failed_alternative_reads_the_document() -> None:

@@ -9,7 +9,26 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 - A `Literal` attribute accepts a value of the type of one of its values, not one which is merely
   equal to it: `Literal[1]` no longer takes `True` or `1.0`, and `Literal[True]` no longer takes
   `1`. A plain `str` or `int` given for a literal `StrEnum` or `IntEnum` member - what JSON carries
-  of one - is accepted as that member instead of being kept as the plain value.
+  of one - is accepted as that member instead of being kept as the plain value, and such a member
+  given for the plain literal it is equal to (`Literal["a"]`, `Literal[1]`) is accepted as that
+  plain literal - the attribute holds one of its literals either way.
+- `AsyncQueue.enqueue()` may be called from another thread, like `finish()`, `cancel()` and
+  `clear()` - it is handed over to the loop of the queue and takes effect there.
+- A call handed over to the loop of an `AsyncQueue`, an `AsyncStream` or the events of a scope is
+  handed over whenever it is made outside of that running loop, also when the loop is not running:
+  it takes effect once the loop runs, and raises `RuntimeError` when the loop is closed. It used to
+  run in place for a loop which was not running.
+- Misuse of `AsyncQueue` and `AsyncStream` is a programming error checked by assertions instead of
+  raised exceptions: a non-positive `limit` of a queue (was `ValueError`), `AsyncStream.send()`
+  outside of the loop of the stream (was `RuntimeError`), and reading either of them
+  (`is_finished`/`finished`, `pending_next()`, iteration) outside of its loop.
+- `Paginated.items` is typed as `Sequence[Element]` - still a plain tuple - and indexing takes an
+  `int` or a slice of them.
+
+### Removed
+
+- `StreamResponse` no longer warns about a server advertising an ASGI spec version below 2.4.
+  The requirement stays, it is just not checked for each application.
 
 ### Fixed
 
@@ -24,13 +43,13 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 - A `Literal` mixing an enum member with the plain value it carries (`Literal[Code.ONE, 1]`)
   keeps a value of the very type whatever the order of the literals.
 - `from_json` reads the document when an object of a union repeats a key after an alternative
-  has already failed - which alternative fits is what `json.loads` leaves of it.
+  has already failed - which alternative fits is what `json.loads` leaves of it - also when the
+  key is repeated within a value read as `Any`.
 - A response stream recorded a consumer which went away mid-stream as a failure again - it is
   recorded as a disconnect, while a body failing with an `OSError` of its own stays a failure.
 - `AsyncQueue.finish(clear=True)` and `aclose()` release a consumer which was handed an element
   also when the queue was finished already, so the element is not put back after the buffer was
   dropped.
-- `Paginated` copies a tuple subclass into a plain tuple instead of keeping its behaviour.
 - Reading the entries of a dictionary into an instance no longer looks attributes up while
   holding the lock of the dictionary, which a free-threaded build could let go of.
 

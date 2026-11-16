@@ -40,14 +40,13 @@ class AsyncQueue[Element](AsyncGenerator[Element]):
         Initial elements to populate the queue with
     limit : int | None, default=None
         Maximum number of buffered elements, the oldest dropped to make room for a new
-        one - initial elements beyond it included. None for an unbounded queue.
+        one - initial elements beyond it included. None for an unbounded queue. Has to
+        be positive, which is checked by an assertion.
     loop : AbstractEventLoop | None, default=None
         Event loop to use for async operations. If None, the running loop is used.
 
     Raises
     ------
-    ValueError
-        If ``limit`` is not positive.
     RuntimeError
         From iteration, when a second consumer waits while another one already does.
 

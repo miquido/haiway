@@ -379,20 +379,24 @@ is_text_like(PyObject *value)
  * What a literal accepts for a value - 1 with it in `accepted`, a new reference, 0 for
  * nothing, -1 with an error set. Being equal is not enough, as `True == 1 == 1.0` while
  * neither is the other: a value matches a literal of its very type, and is accepted as it
- * is. A plain str or int also matches the member of an enum it is the value of - what json
- * carries of one - and the member is what is accepted.
+ * is. A str or an int also matches a literal it is equal to when one of the two is the
+ * plain type and the other a subclass of it - the value json carries of an enum member,
+ * or an enum member given for the plain value it carries - and the literal is what is
+ * accepted then, so the attribute holds one of its literals either way.
  */
 static int
 literal_match(PyObject *literals, PyObject *value, PyObject **accepted)
 {
-    PyObject *spelled_as = NULL;  /* the first enum member the value is the value of */
+    PyObject *spelled_as = NULL;  /* the first literal of the other spelling the value is equal to */
     for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(literals); i++) {
         PyObject *literal = PyTuple_GET_ITEM(literals, i);
         int same = Py_TYPE(literal) == Py_TYPE(value);
-        int spelled = !same
-            && ((PyUnicode_CheckExact(value) && PyUnicode_Check(literal))
-                || (PyLong_CheckExact(value) && PyLong_Check(literal) && !PyBool_Check(literal)));
-        if (!same && !(spelled && spelled_as == NULL)) continue;
+        int spelled = !same && spelled_as == NULL
+            && ((PyUnicode_Check(value) && PyUnicode_Check(literal)
+                 && (PyUnicode_CheckExact(value) || PyUnicode_CheckExact(literal)))
+                || (PyLong_Check(value) && PyLong_Check(literal) && !PyBool_Check(value) && !PyBool_Check(literal)
+                    && (PyLong_CheckExact(value) || PyLong_CheckExact(literal))));
+        if (!same && !spelled) continue;
         int equal = literal == value ? 1 : PyObject_RichCompareBool(literal, value, Py_EQ);
         if (equal < 0) return -1;
         if (!equal) continue;

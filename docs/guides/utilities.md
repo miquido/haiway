@@ -334,7 +334,7 @@ Key behavior:
 - `finish(exception)` re-raises that exception on the consumer.
 - `cancel()` is shorthand for finishing with `CancelledError`.
 - `finish()` and `cancel()` may be called from another thread and take effect on the stream's loop;
-  `send()`, `is_finished`-style checks and iteration must run within that loop (asserted).
+  `send()`, `finished` and iteration must run within that loop (asserted).
 - The finish reason is raised again, as the same exception instance, on every read after the stream
   finished, with the traceback it had when finishing, as for `AsyncQueue`.
 - `send()` to a finished stream raises `RuntimeError` - a producer looping over a source has to end

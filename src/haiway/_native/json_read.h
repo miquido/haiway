@@ -30,7 +30,7 @@ typedef struct {
     Py_ssize_t pending_capacity;
     int depth;
     int limit;  /* how deep a document goes, which is as far as Python recurses */
-    int repeated;  /* a key of an instance was repeated - json.loads keeps the last, so it reads the document */
+    int repeated;  /* a key of an object was repeated - json.loads keeps the last, so a union it is within reads the document */
 } Decoder;
 
 static int
@@ -352,11 +352,13 @@ decode_object(Decoder *d)
         d->p++;
         skip_whitespace(d);
         PyObject *value = decode_any(d);
+        Py_ssize_t before = PyDict_GET_SIZE(dict);
         if (value == NULL || PyDict_SetItem(dict, key, value) < 0) {  /* the last of a repeated key stays */
             Py_DECREF(key);
             Py_XDECREF(value);
             goto fail;
         }
+        if (PyDict_GET_SIZE(dict) == before) d->repeated = 1;  /* replaced - which alternative fits may depend on it */
         Py_DECREF(key);
         Py_DECREF(value);
         skip_whitespace(d);
@@ -716,6 +718,10 @@ decode_spec(Decoder *d, Spec *spec)
                 return match_word(d, "null", 4) ? Py_NewRef(Py_None) : NULL;
             }
             if (*d->p == '{' && objects_are_instances(spec)) {
+                /* a key repeated outside of this object changes nothing about which of
+                 * the alternatives it fits - only one repeated within it is looked for */
+                int outside = d->repeated;
+                d->repeated = 0;
                 /* the first class the object fits - the alternatives are tried in order */
                 for (Py_ssize_t i = 0; i < spec->count; i++) {
                     Spec *alternative = spec->children[i];
@@ -730,10 +736,14 @@ decode_spec(Decoder *d, Spec *spec)
                         Py_XDECREF(instance);
                         return NULL;
                     }
-                    if (instance != NULL || PyErr_Occurred()) return instance;
+                    if (instance != NULL || PyErr_Occurred()) {
+                        d->repeated = outside;
+                        return instance;
+                    }
                     if (d->p == start) break;  /* a class which is not read here */
                     d->p = start;
                 }
+                d->repeated = outside;
             }
             break;
         case SPEC_SEQUENCE:
