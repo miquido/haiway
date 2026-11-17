@@ -246,7 +246,8 @@ solution_or_feature/
 only export what is intended to be used outside the package. Anything not exported is considered
 internal and should not be accessed from outside the package. The `__init__.py` file should not
 import any internal or private elements of the package, especially direct implementations of
-underlying components. Typically it would export the state, and types contents.
+underlying components. Typically it would export the state, the types and the factory functions
+providing implementations of the state.
 
 `types.py`: This file contains definitions for data types, interfaces, and errors used within the
 package. It should not depend on any other file within the package and should not contain any
@@ -260,11 +261,14 @@ package.
 `state.py`: This file contains state declarations for the package, used for dependency and data
 injection. It can use types.py, config.py, and optionally default implementations from other
 modules. State types should be exported to allow defining and updating implementations and
-contextual data or configuration. The state should provide default values and/or factory methods for
-easy configuration.
+contextual data or configuration. The state should provide default values where a sensible default
+exists, which allows using it without an explicit definition.
 
-Other: Any additional files needed for internal implementation details. These files should be
-treated as internal and not exported.
+Other: Any additional files needed for internal implementation details, typically
+`implementation.py` holding the functions implementing the state's protocols along with a factory
+function building the state out of them - or a file per variant when there are several
+implementations. The functions are internal and not exported; the factory is what other packages use
+to pick an implementation.
 
 #### Structure of Commons Package
 
@@ -412,8 +416,9 @@ To make the most of Haiway's package organization strategy, consider the followi
   readability but also helps catch potential errors early in the development process. Strict type
   checking is strongly recommended for each project using the Haiway framework.
 
-- State Configuration: When defining states in state.py, provide default values and factory methods.
-  This makes it easier to configure and use your packages in different contexts.
+- State Configuration: When defining states in state.py, provide default values, and a factory
+  function next to each implementation. This makes it easier to configure and use your packages in
+  different contexts.
 
 - Consistent Naming: Use consistent naming conventions across your packages. This helps developers
   quickly understand the purpose and content of different files and modules.

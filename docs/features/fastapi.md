@@ -80,15 +80,15 @@ the application factory differs:
 - everything FastAPI accepts and Starlette does not - `title`, `version`, `description`,
   `openapi_url`, `docs_url`, global `dependencies`, `root_path` - is passed through as keyword
   arguments
-- `exception_handlers` accepts async and sync handlers alike - a sync one is called in a worker
-  thread - and the type `ExceptionHandling` names their signature. Every one of them - the
-  validation error handler of FastAPI and the `Exception` and `500` slots included - answers within
-  the scope of its request, so its response carries the trace headers
+- `exception_handler` answers an unhandled failure - the `500` - within the scope of its request, so
+  its response carries the trace headers. It is optional: the plain `500` of the framework answers
+  without it. Handlers of other exceptions are passed as `exception_handlers`, and also answer
+  within the scope; `Exception` and `500` do not belong there
 
-`middleware`, `lifespan` and `debug` work exactly as in the Starlette factory, and
-`ContextMiddleware` is installed around the whole middleware stack of the application. There is no
-`max_body_size` here - FastAPI does not accept one, so passing it through would fail; a body limit
-takes a middleware of its own.
+`middleware` and `debug` work exactly as in the Starlette factory - `debug` included its default of
+`__debug__`, see [Starlette](starlette.md#request-handling) - and `ContextMiddleware` is installed
+around the whole middleware stack of the application. There is no `max_body_size` here - FastAPI
+does not accept one, so passing it through would fail; a body limit takes a middleware of its own.
 
 ## Distributed Traces
 
@@ -190,10 +190,17 @@ app.add_middleware(ContextMiddleware, context=context)
 
 `add_middleware` puts the middleware in front of the ones added before it, so adding it last keeps
 it outermost - which is what makes the context available to the other middlewares as well. When the
-application already has a lifespan of its own, compose the two:
+application already has a lifespan of its own, enter the lifespan of the context within it:
 
 ```python
-app = FastAPI(lifespan=context.composed_lifespan(existing_lifespan))
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    async with context.lifespan(app):
+        ...  # startup work, with the disposables of the context prepared
+        yield  # suspend until shutdown
+
+
+app = FastAPI(lifespan=lifespan)
 ```
 
 A middleware of the application still sits below its server error handling, which Starlette keeps

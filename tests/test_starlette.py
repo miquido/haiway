@@ -6,7 +6,6 @@ from collections.abc import (
     MutableMapping,
     MutableSequence,
 )
-from contextlib import asynccontextmanager
 from logging import Logger, getLogger
 from typing import Any
 from uuid import UUID
@@ -174,7 +173,7 @@ async def test_unhandled_exception_is_answered_by_the_framework() -> None:
     async def endpoint(request: Request) -> Response:
         raise ValueError("broken")
 
-    app: Starlette = application(routes=[Route("/example", endpoint)])
+    app: Starlette = application(routes=[Route("/example", endpoint)], debug=False)
     result = Result()
 
     async with running(app):
@@ -187,45 +186,6 @@ async def test_unhandled_exception_is_answered_by_the_framework() -> None:
     assert result.status == 500
     assert result.body == b"Internal Server Error"
     assert result.headers[TRACE_ID_HEADER]
-
-
-@mark.asyncio
-async def test_trace_headers_a_response_can_not_hold_are_left_out() -> None:
-    encoded: Mapping[str, str] = {
-        "traceparent": f"00-{_TRACE_ID.hex}-1-01",
-        "trace parent": "spaced name",
-        "trace:state": "separator in name",
-        "tracestate": "line\r\nbreak",
-        "": "empty name",
-    }
-    observability = Observability(
-        trace_identifying=lambda scope, /: _TRACE_ID,
-        log_recording=lambda scope, /, level, message, *args, exception: None,
-        metric_recording=lambda scope, /, level, **kwargs: None,
-        event_recording=lambda scope, /, level, **kwargs: None,
-        attributes_recording=lambda scope, /, level, attributes: None,
-        scope_entering=lambda scope, /: _TRACE_ID.hex,
-        scope_exiting=lambda scope, /, *, exception: None,
-        trace_context_encoding=lambda scope, /: encoded,
-    )
-
-    async def endpoint(request: Request) -> Response:
-        return PlainTextResponse("done")
-
-    app: Starlette = application(
-        ServerContext(observability=observability),
-        routes=[Route("/example", endpoint)],
-    )
-    async with running(app):
-        result: Result = await send_request(app)
-
-    assert result.status == 200
-    # a header name is a token - one which is not would fail the whole response
-    assert result.headers.get("traceparent") == f"00-{_TRACE_ID.hex}-1-01"
-    assert "trace parent" not in result.headers
-    assert "trace:state" not in result.headers
-    assert "tracestate" not in result.headers
-    assert "" not in result.headers
 
 
 @mark.asyncio
@@ -389,30 +349,6 @@ async def test_failing_disposable_fails_startup() -> None:
         pass
 
     assert len(attempts) == 2
-
-
-@mark.asyncio
-async def test_additional_lifespan_runs_within_prepared_context() -> None:
-    log: MutableSequence[str] = []
-
-    @asynccontextmanager
-    async def lifespan(app: Starlette) -> AsyncGenerator[None]:
-        log.append("startup")
-        try:
-            yield
-
-        finally:
-            log.append("shutdown")
-
-    app: Starlette = application(
-        ServerContext(disposables=(ExampleDisposable(log),)),
-        lifespan=lifespan,
-    )
-
-    async with running(app):
-        pass
-
-    assert log == ["enter", "startup", "shutdown", "exit"]
 
 
 @mark.asyncio
@@ -737,10 +673,10 @@ async def test_registered_server_error_handler_answers_the_request() -> None:
 
     app: Starlette = application(
         routes=[Route("/example", endpoint)],
-        # a server error handler answers in place of the plain `500` the framework
-        # would produce - from below the request scope, which is where the factory
-        # installs it
-        exception_handlers={Exception: handle_server_error},
+        # answers in place of the plain `500` the framework would produce - from
+        # below the request scope, which is where the factory installs it
+        exception_handler=handle_server_error,
+        debug=False,
     )
     result = Result()
 
@@ -752,63 +688,6 @@ async def test_registered_server_error_handler_answers_the_request() -> None:
     # answered from within the scope of the request, so the response carries the
     # trace headers of the trace the failure was recorded in
     assert result.headers[TRACE_ID_HEADER] == result.body.decode()
-
-
-@mark.asyncio
-async def test_registered_server_error_handler_answers_only_once() -> None:
-    # the handler is installed below the request scope rather than in the slot of
-    # the framework above it - held in both, it would be called twice, the second
-    # response being discarded rather than sent
-    invocations: MutableSequence[Exception] = []
-
-    async def endpoint(request: Request) -> Response:
-        raise ValueError("broken")
-
-    async def handle_server_error(
-        request: Request,
-        exception: Exception,
-    ) -> Response:
-        invocations.append(exception)
-        return PlainTextResponse("handled", status_code=503)
-
-    app: Starlette = application(
-        routes=[Route("/example", endpoint)],
-        exception_handlers={Exception: handle_server_error},
-    )
-    result = Result()
-
-    async with running(app):
-        with raises(ValueError):
-            await app(http_scope(), receive_request, result.collecting())
-
-    assert len(invocations) == 1
-    assert result.status == 503
-
-
-@mark.asyncio
-async def test_registered_status_error_handler_answers_the_request() -> None:
-    async def endpoint(request: Request) -> Response:
-        raise ValueError("broken")
-
-    async def handle_server_error(
-        request: Request,
-        exception: Exception,
-    ) -> Response:
-        return PlainTextResponse("handled", status_code=503)
-
-    app: Starlette = application(
-        routes=[Route("/example", endpoint)],
-        # `500` resolves the same handler slot as `Exception` does
-        exception_handlers={500: handle_server_error},
-    )
-    result = Result()
-
-    async with running(app):
-        with raises(ValueError):
-            await app(http_scope(), receive_request, result.collecting())
-
-    assert result.status == 503
-    assert result.body == b"handled"
 
 
 @mark.asyncio
@@ -830,6 +709,7 @@ async def test_handler_of_another_exception_keeps_the_error_response() -> None:
         # not a server error handler - the plain `500` of the framework is what
         # answers the failure of the request
         exception_handlers={ExampleError: handle_example_error},
+        debug=False,
     )
     result = Result()
 
@@ -1235,55 +1115,6 @@ async def test_conditionally_provided_elements_are_ignored() -> None:
 
     assert result.body == b"declared"
     assert log == ["enter", "exit"]
-
-
-@mark.asyncio
-async def test_composed_lifespan_prepares_the_context_first() -> None:
-    log: MutableSequence[str] = []
-
-    async def endpoint(request: Request) -> Response:
-        return PlainTextResponse("done")
-
-    @asynccontextmanager
-    async def existing(app: Starlette) -> AsyncGenerator[None]:
-        log.append("startup")
-        try:
-            yield
-
-        finally:
-            log.append("shutdown")
-
-    context = ServerContext(disposables=(ExampleDisposable(log),))
-    # what an application which already has a lifespan of its own installs
-    app: Starlette = Starlette(
-        routes=[Route("/example", endpoint)],
-        lifespan=context.composed_lifespan(existing),
-        middleware=[Middleware(ContextMiddleware, context=context)],
-    )
-
-    async with running(app):
-        assert (await send_request(app)).status == 200
-
-    # the disposables of the context are prepared around the additional lifespan
-    assert log == ["enter", "startup", "shutdown", "exit"]
-
-
-@mark.asyncio
-async def test_startup_runs_outside_of_a_context_scope() -> None:
-    @asynccontextmanager
-    async def existing(app: Starlette) -> AsyncGenerator[None]:
-        # the disposables are prepared, but nothing entered a scope with their
-        # state - startup work which needs one enters it, and leaves it, itself
-        with raises(ContextMissing):
-            ctx.state(DisposableState)
-
-        yield
-
-    context = ServerContext(disposables=(ExampleDisposable([]),))
-    app: Starlette = application(context, lifespan=existing)
-
-    async with running(app):
-        pass
 
 
 @mark.asyncio
@@ -1712,9 +1543,14 @@ def test_mount_templates_use_normalized_placeholders() -> None:
 
     leaf = Route("/items/{identifier:int}", endpoint)
     router = Router([Mount("/tenants/{tenant:int}", routes=[leaf])])
-    scope: dict[str, Any] = {"root_path": "/tenants/1", "app_root_path": "", "router": router}
+    scope: dict[str, Any] = {
+        "root_path": "/tenants/1",
+        "app_root_path": "",
+        "router": router,
+        "route": leaf,
+    }
     # the same form as the template of the route itself - `{identifier}`
-    assert _MountTemplates().prefix(scope, route=leaf) == "/tenants/{tenant}"
+    assert _MountTemplates().route_path(scope) == "/tenants/{tenant}/items/{identifier}"
     assert leaf.path_format == "/items/{identifier}"
 
 
@@ -1753,14 +1589,19 @@ def test_mount_templates_are_found_once_per_route() -> None:
 
     leaf = Route("/items/{identifier}", endpoint)
     router = Router([Mount("/tenants/{tenant}", routes=[leaf])])
-    scope: dict[str, Any] = {"root_path": "/tenants/acme", "app_root_path": "", "router": router}
+    scope: dict[str, Any] = {
+        "root_path": "/tenants/acme",
+        "app_root_path": "",
+        "router": router,
+        "route": leaf,
+    }
     mounts = _MountTemplates()
-    assert mounts.prefix(scope, route=leaf) == "/tenants/{tenant}"
+    assert mounts.route_path(scope) == "/tenants/{tenant}/items/{identifier}"
     # found again from what is known - the route tree is not walked anymore
     router.routes.clear()
-    assert mounts.prefix(scope, route=leaf) == "/tenants/{tenant}"
+    assert mounts.route_path(scope) == "/tenants/{tenant}/items/{identifier}"
     # a route which is not the one known under its identity is looked up anew
-    assert _MountTemplates().prefix(scope, route=leaf) is None
+    assert _MountTemplates().route_path(scope) == "/items/{identifier}"
 
 
 @mark.asyncio
@@ -1824,45 +1665,3 @@ async def test_websocket_disconnect_is_not_recorded_as_a_failure() -> None:
             await app(websocket_scope(), receive_request, Result().collecting())
 
     assert recorded == [None]
-
-
-@mark.asyncio
-async def test_trace_header_which_can_not_be_held_is_left_out() -> None:
-    context = ServerContext(
-        observability=Observability(
-            trace_identifying=lambda scope, /: _TRACE_ID,
-            log_recording=lambda scope, /, level, message, *args, exception: None,
-            metric_recording=lambda scope, /, level, **kwargs: None,
-            event_recording=lambda scope, /, level, **kwargs: None,
-            attributes_recording=lambda scope, /, level, attributes: None,
-            scope_entering=lambda scope, /: _TRACE_ID.hex,
-            scope_exiting=lambda scope, /, *, exception: None,
-            trace_context_encoding=lambda scope, /: {
-                "traceparent": "00-valid-01",
-                "tracestate": "key=\u20acvalue",  # not representable in a header
-                "injected": "a\r\nset-cookie: forged=1",  # would split the response
-            },
-        )
-    )
-
-    async def responding(
-        scope: Scope,
-        receive: Receive,
-        send: Send,
-    ) -> None:
-        await send({"type": "http.response.start", "status": 200, "headers": []})
-        await send({"type": "http.response.body", "body": b"ok"})
-
-    app: ASGIApp = ContextMiddleware(responding, context=context)
-    result = Result()
-
-    async with context.lifespan():
-        await app(http_scope(), receive_request, result.collecting())
-
-    assert result.status == 200
-    assert result.body == b"ok"
-    assert result.headers[TRACE_ID_HEADER] == _TRACE_ID.hex
-    assert result.headers["traceparent"] == "00-valid-01"
-    assert "tracestate" not in result.headers
-    assert "injected" not in result.headers
-    assert "set-cookie" not in result.headers

@@ -36,13 +36,6 @@ class ContextPresetsDisposablePreparing(Protocol):
     def __call__(self) -> Disposable: ...
 
 
-def _only_state(
-    elements: tuple[ContextPresetsStatePreparing | State, ...],
-    /,
-) -> TypeIs[tuple[State, ...]]:
-    return all(isinstance(element, State) for element in elements)
-
-
 @final
 class ContextPresets:
     """
@@ -217,6 +210,11 @@ class ContextPresets:
         return (lambda: disposable_state,)
 
     @property
+    def preparing(self) -> bool:
+        """Whether entering a scope with this preset has anything to prepare."""
+        return len(self._disposables) > 0
+
+    @property
     def static_state(self) -> Sequence[State]:
         """State this preset carries which needs no preparation."""
         return self._static_state
@@ -312,3 +310,10 @@ class ContextPresetsRegistry:
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         ContextPresetsRegistry._context.reset(self._token)
         self._token = None
+
+
+def _only_state(
+    elements: tuple[ContextPresetsStatePreparing | State, ...],
+    /,
+) -> TypeIs[tuple[State, ...]]:
+    return all(isinstance(element, State) for element in elements)

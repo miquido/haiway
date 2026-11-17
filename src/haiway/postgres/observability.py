@@ -9,11 +9,13 @@ __all__ = (
     "CONNECTION_FAILED_EVENT",
     "CONNECTION_TIMEOUTS_METRIC",
     "CONNECTION_WAIT_TIME_METRIC",
+    "IDLE_CONNECTIONS_ATTRIBUTES",
     "OPERATION_DURATION_METRIC",
     "OPERATION_RETRIED_EVENT",
     "OPERATION_RETRIES_METRIC",
     "RETURNED_ROWS_METRIC",
     "TRANSACTION_DURATION_METRIC",
+    "USED_CONNECTIONS_ATTRIBUTES",
     "operation_attributes",
 )
 
@@ -32,6 +34,15 @@ __all__ = (
 # Events carry the level their severity deserves.
 
 DB_SYSTEM_NAME: Final[str] = "postgresql"
+
+IDLE_CONNECTIONS_ATTRIBUTES: Final[Mapping[str, ObservabilityAttribute]] = {
+    "db.system.name": DB_SYSTEM_NAME,
+    "db.client.connection.state": "idle",
+}
+USED_CONNECTIONS_ATTRIBUTES: Final[Mapping[str, ObservabilityAttribute]] = {
+    "db.system.name": DB_SYSTEM_NAME,
+    "db.client.connection.state": "used",
+}
 
 OPERATION_DURATION_METRIC: Final[str] = "db.client.operation.duration"
 """End to end duration seen by the caller, including connection acquisition and retry delays."""
@@ -78,14 +89,31 @@ def operation_attributes(
         Attributes holding the database system, the adapter operation and, for a
         failure, its SQLSTATE and exception type.
     """
-    attributes: dict[str, ObservabilityAttribute] = {
+    if error is None:
+        # the common path hands out a shared mapping instead of building one per call -
+        # the backends only read it
+        return _OPERATION_ATTRIBUTES.get(operation) or _attributes(operation)
+
+    return {
+        **_attributes(operation),
+        "db.response.status_code": error.sqlstate,
+        "error.type": type(error).__qualname__,
+    }
+
+
+def _attributes(
+    operation: str,
+    /,
+) -> Mapping[str, ObservabilityAttribute]:
+    return {
         "db.system.name": DB_SYSTEM_NAME,
         # the adapter method - `db.operation.name` is reserved for what the database
         # was asked to do, which is not known without parsing the statement
         "haiway.postgres.operation": operation,
     }
-    if error is not None:
-        attributes["db.response.status_code"] = error.sqlstate
-        attributes["error.type"] = type(error).__qualname__
 
-    return attributes
+
+_OPERATION_ATTRIBUTES: Final[Mapping[str, Mapping[str, ObservabilityAttribute]]] = {
+    operation: _attributes(operation)
+    for operation in ("fetch", "fetch_one", "execute", "acquire_connection")
+}

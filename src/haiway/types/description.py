@@ -1,14 +1,12 @@
 from typing import final
 
-from haiway.types.frozen import same_copy, same_deepcopy
-
 __all__ = ("Description",)
 
 
 @final
 class Description:
     """
-    Immutable value object representing a description annotation.
+    Value object representing a description annotation.
 
     Parameters
     ----------
@@ -29,6 +27,3 @@ class Description:
     ) -> None:
         self.description: str
         self.description = description
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy

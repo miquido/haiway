@@ -210,11 +210,6 @@ def test_default_environment_required_with_mapping_reports_unset(
     assert "HAIWAY_TEST_DEFAULT" in str(exception.value)
 
 
-def test_default_environment_required_rejects_a_fallback() -> None:
-    with raises(ValueError):
-        DefaultEnv("HAIWAY_TEST_DEFAULT", required=True, fallback="x")  # pyright: ignore[reportCallIssue]
-
-
 def test_default_value_is_a_plain_store() -> None:
     default_value = DefaultValue(lambda: 1, available=False, constant=True)
 

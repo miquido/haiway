@@ -25,6 +25,7 @@ from haiway.utils.stream import AsyncStream
 __all__ = (
     "concurrently",
     "execute_concurrently",
+    "gather",
     "process_concurrently",
     "stream2_concurrently",
     "stream3_concurrently",
@@ -511,6 +512,67 @@ async def concurrently[Result](  # noqa: C901, PLR0912
 
     # task group joins all tasks so at this point it will be all completed
     return tuple(result.result() for result in results)
+
+
+async def gather[Result](
+    *coroutines: Coroutine[None, None, Result],
+) -> Sequence[Result]:
+    """Execute all given coroutines concurrently, cancelling the rest when one fails.
+
+    Runs every coroutine at once, without a limit of concurrent tasks, and returns their
+    results in the order of the arguments. Unlike `asyncio.gather` no coroutine keeps
+    running in the background after a failure - the remaining ones are cancelled and awaited
+    before the failure is raised. Tasks inherit a copy of the current context.
+
+    Use `concurrently` instead when the number of running tasks has to be limited or when
+    failures should be returned instead of raised.
+
+    Parameters
+    ----------
+    *coroutines : Coroutine[None, None, Result]
+        Coroutines to run concurrently. All of them share a single result type.
+
+    Returns
+    -------
+    Sequence[Result]
+        Results in the order of the given coroutines, empty when none was given.
+
+    Raises
+    ------
+    CancelledError
+        If the function is cancelled, propagated after cancelling all running tasks.
+    Exception
+        The exception raised by a coroutine. Multiple coroutines failing together raise
+        their errors as an `ExceptionGroup`.
+
+    Examples
+    --------
+    >>> user, account = await gather(
+    ...     fetch_user("u1"),
+    ...     fetch_account("u1"),
+    ... )
+    """
+    tasks: MutableSequence[Task[Result]] = []
+
+    def spawn(
+        coro: Callable[[], Coroutine[None, None, Result]] | Coroutine[None, None, Result],
+        /,
+    ) -> Task[Result]:
+        return ContextTaskGroup.run(coro)
+
+    try:
+        async with ContextTaskGroup():
+            for coroutine in coroutines:
+                tasks.append(spawn(coroutine))
+
+    finally:
+        # the coroutines which never got a task, because the group failed while the tasks
+        # were created, are closed to avoid warnings about coroutines never awaited
+        for coroutine in coroutines[len(tasks) :]:
+            coroutine.close()
+
+    # task group joins all tasks so at this point it will be all completed
+    return tuple(task.result() for task in tasks)
 
 
 @final

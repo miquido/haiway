@@ -24,7 +24,9 @@ from haiway.postgres.observability import (
     CONNECTION_TIMEOUTS_METRIC,
     CONNECTION_WAIT_TIME_METRIC,
     DB_SYSTEM_NAME,
+    IDLE_CONNECTIONS_ATTRIBUTES,
     TRANSACTION_DURATION_METRIC,
+    USED_CONNECTIONS_ATTRIBUTES,
     operation_attributes,
 )
 from haiway.postgres.state import (
@@ -562,32 +564,26 @@ class _ConnectionContext:
             kind="histogram",
             attributes=operation_attributes("acquire_connection"),
         )
-        idle: int
-        used: int
         try:
-            idle = self._pool.get_idle_size()
-            used = self._pool.get_size() - idle
+            idle: int = self._pool.get_idle_size()
+            used: int = self._pool.get_size() - idle
 
         except Exception:
             # occupancy is introspection, not part of acquiring a connection, so a
-            # pool which cannot answer loses the gauge rather than the connection.
-            # `ctx.record_*` swallows its own failures the same way
+            # pool which cannot answer loses the gauge rather than the connection
             return
 
-        ctx.record_info(
-            metric=CONNECTION_COUNT_METRIC,
-            value=idle,
-            unit="{connection}",
-            kind="gauge",
-            attributes={"db.system.name": DB_SYSTEM_NAME, "db.client.connection.state": "idle"},
-        )
-        ctx.record_info(
-            metric=CONNECTION_COUNT_METRIC,
-            value=used,
-            unit="{connection}",
-            kind="gauge",
-            attributes={"db.system.name": DB_SYSTEM_NAME, "db.client.connection.state": "used"},
-        )
+        for value, attributes in (
+            (idle, IDLE_CONNECTIONS_ATTRIBUTES),
+            (used, USED_CONNECTIONS_ATTRIBUTES),
+        ):
+            ctx.record_info(
+                metric=CONNECTION_COUNT_METRIC,
+                value=value,
+                unit="{connection}",
+                kind="gauge",
+                attributes=attributes,
+            )
 
     async def _acquire(self) -> PoolConnectionProxy:
         """Take a connection from the pool and hand it over as is.

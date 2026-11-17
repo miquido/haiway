@@ -80,7 +80,7 @@ class Invoice(State):
     total_cents: Annotated[int, Verifier(positive)]
     customer: Annotated[str, Alias("customer_id"), Description("External ID")]
     lines: Sequence[str] = ()
-    api_key: Annotated[str, Sensitive()] = Default(env="API_KEY")
+    api_key: Annotated[str, Sensitive()] = DefaultEnv("API_KEY")
     meta: Meta = Meta.of(kind="invoice")
 ```
 
@@ -88,7 +88,7 @@ class Invoice(State):
   `list`/`dict`/`set`; use `X | None`, never `Optional[X]`.
 - Values are validated against annotations at construction. Sequences/sets become
   `tuple`/`frozenset`; mappings become the immutable `Map`.
-- Defaults: `Default(value)`, `Default(factory=...)`, `Default(env="VAR")`.
+- Defaults: `Default(value)`, `DefaultFactory(fn, *args)`, `DefaultEnv("VAR", fallback=..., mapping=..., required=...)`.
 - `Annotated` metadata: `Alias`, `Description`, `Specification`, `Validator` (pre-validation, may
   coerce), `Verifier` (post-validation, enforces invariants), `Sensitive` (renders as `<redacted>` in
   `str`/`repr`/`format_str`, value kept for serialization - use it for every secret).
@@ -178,7 +178,12 @@ the iteration is left early.
   against it, with the consuming scope restored once the generator is exhausted or closed.
 - `ctx.check_cancellation()` for cooperative cancellation points.
 - `process_concurrently(source, handler, concurrent_tasks=...)` — fire-and-forget, no results.
+- `gather(*coroutines)` — runs coroutines at once with no task limit, returns ordered results and
+  cancels the rest (awaited) when one fails; use `concurrently` to limit tasks or collect failures.
 - `execute_concurrently(handler, elements, concurrent_tasks=...)` — ordered results.
+- `URITemplate.of("https://{tenant}.example.com/files{/name}{?page,tag*}")` — immutable RFC 6570
+  template (subset: `{name}`, `{/name}`, `{?a,b*}`, `{#name}`); `expand(...)` builds a URI, `match(uri)` /
+  `matches(uri)` read its parameters back, each decoded value held to its segment.
 - `concurrently(coroutines, ...)` takes an iterable of coroutines (not varargs);
   `stream_concurrently(*sources)` interleaves async generators, with
   `stream2_concurrently`/`stream3_concurrently`/`stream4_concurrently` keeping each source's type
@@ -255,8 +260,9 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
   carrying `retryable` to tell a transient broker failure from one a retry cannot fix.
 - **Starlette** (`haiway.starlette`): `ServerContext(*state, disposables=(...), presets=...,
   observability=...)` declares the request context, and `application(...)` builds a `Starlette` app
-  installing its `lifespan` plus `ContextMiddleware`. An existing app (FastAPI) instead takes
-  `lifespan=context.lifespan` - or `context.composed_lifespan(existing)` - and
+  installing its `lifespan` plus `ContextMiddleware`. An existing app instead takes
+  `lifespan=context.lifespan` - entering `context.lifespan(app)` within a lifespan of its own when
+  it has one - and
   `add_middleware(ContextMiddleware, context=context)` added last, to stay outermost - with a
   `ServerErrorMiddleware` holding the server error handler below it to have its `500` traced too.
   The declared state and `disposables` take the instances themselves and ignore `None` entries; the
@@ -266,12 +272,14 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
   incomplete scope. Every request runs in its own `kind="server"` scope named `"{method} {path}"` (`"WS {path}"`) -
   the requested path, since the middleware runs before routing; the OpenTelemetry span is renamed
   `"{method} {route}"` (just `"{method}"` unrouted) once the route is known. Responses carry the `trace-id`
-  header, plus `traceparent`/`tracestate` when the backend provides them, dropping any entry a
-  header can not hold. An unhandled exception is recorded as the failure of its request, its stack
+  header, plus `traceparent`/`tracestate` when the backend provides them. An unhandled exception is recorded as the failure of its request, its stack
   trace included, and reraised - answering it is left to the framework's server error handling,
   which `application(...)` nests below the request scope instead of leaving above every middleware,
-  so the `500` it produces (plain, `debug` traceback page, or a registered `Exception`/`500`
-  handler) carries the trace headers as well. `HTTPException`,
+  so the `500` it produces (plain, `debug` traceback page - `debug` defaults to `__debug__` - or the
+  `exception_handler` given to `application(...)`) carries the trace headers as well. Handlers of
+  other exceptions go in `exception_handlers` among the extra arguments, never `Exception`/`500`.
+  `application(...)` takes no `lifespan` of its own - startup work is a disposable, or an
+  application built by hand. `HTTPException`,
   `WebSocketException` and `ClientDisconnect` are withheld while the scope is left, so they are
   not recorded as request failures. Request derived state is added by a nested middleware through
   `ctx.updating(...)`. Startup and shutdown are outside every context scope, so what the lifespan
@@ -304,9 +312,8 @@ async with ctx.scope("app", disposables=(HTTPXClient(base_url=...), PostgresConn
   `application(context, routers=(APIRouter(prefix="/api/v1"),), title=..., **fastapi_kwargs)`
   returns a `FastAPI`. `ServerContext` / `ContextMiddleware` are re-exported from here.
   Endpoints, dependencies, sync endpoints (context copied into the worker thread) and
-  `BackgroundTasks` all run within the request scope. `exception_handlers` may be async or sync
-  (a sync one runs in a worker thread), typed as `ExceptionHandling`. No `max_body_size` - FastAPI
-  does not accept one.
+  `BackgroundTasks` all run within the request scope. `exception_handler` answers the `500` as in the
+  Starlette factory. No `max_body_size` - FastAPI does not accept one.
 
 ## Rules
 

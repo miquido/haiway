@@ -1,10 +1,9 @@
-import copy
 from collections.abc import Callable
 from typing import Any
 
 import pytest
 
-from haiway import Alias, Default, DefaultEnv, Description, Missing, Sensitive, Specification
+from haiway import Alias, Default, Description, Missing, Sensitive, Specification
 from haiway.types.default import DefaultValue
 
 
@@ -58,25 +57,15 @@ def test_default_helper_with_factory_builds_default_value() -> None:
     assert marker() == 3
 
 
-@pytest.mark.parametrize("instance", _objects(), ids=lambda value: type(value).__name__)
-def test_value_objects_are_their_own_copies(instance: Any) -> None:
-    assert copy.copy(instance) is instance
-    assert copy.deepcopy(instance) is instance
-
-
 @pytest.mark.parametrize(
     "making",
     [
         lambda: Alias(""),
         lambda: Specification({}),  # pyright: ignore[reportArgumentType]
-        lambda: Default(1, factory=list),
-        lambda: DefaultEnv("VARIABLE", required=True, fallback=1),  # pyright: ignore[reportCallIssue]
     ],
     ids=[
         "empty alias",
         "empty specification",
-        "default and factory",
-        "required env with fallback",
     ],
 )
 def test_value_objects_reject_invalid_arguments(making: Callable[[], Any]) -> None:

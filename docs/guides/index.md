@@ -66,7 +66,7 @@ Master concurrent and parallel processing patterns:
 
 - Structured concurrency with task spawning
 - Context preservation across tasks
-- Concurrent processing helpers
+- Concurrent processing helpers - `concurrently`, `gather`, `execute_concurrently`
 - Streaming multiple sources
 - Performance optimization strategies
 

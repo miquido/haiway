@@ -1,13 +1,11 @@
 from typing import final
 
-from haiway.types.frozen import same_copy, same_deepcopy
-
 __all__ = ("Alias",)
 
 
 @final
 class Alias:
-    """Immutable annotation that records an alternate name for a bound value.
+    """Annotation that records an alternate name for a bound value.
 
     Parameters
     ----------
@@ -32,6 +30,3 @@ class Alias:
 
         self.name: str
         self.name = name
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy

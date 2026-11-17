@@ -34,6 +34,7 @@ __all__ = (
     "ObservabilityAttributesRecording",
     "ObservabilityEventRecording",
     "ObservabilityLevel",
+    "ObservabilityLevelChecking",
     "ObservabilityLogRecording",
     "ObservabilityMetricKind",
     "ObservabilityMetricRecording",

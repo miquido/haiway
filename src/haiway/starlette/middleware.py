@@ -163,7 +163,7 @@ class ContextMiddleware:
                     duration_metric=CONNECTION_DURATION_METRIC,
                 )
 
-            case _:
+            case _:  # leave other unchanged
                 await self._app(scope, receive, send)
 
     async def _handle(
@@ -184,7 +184,7 @@ class ContextMiddleware:
         with ctx.presets(*self._context.presets):
             async with ctx.scope(
                 name,
-                *self._context.request_state(),
+                *self._context.request_state,
                 observability=self._context.request_observability(scope),
                 kind="server",
             ) as trace_id:
@@ -202,19 +202,13 @@ class ContextMiddleware:
                         # still started the response
                         response_started_at = monotonic()
                         status = message["status"]
-                        # headers are optional in the message - a response without
-                        # any is what an application sending raw messages can do
-                        message.setdefault("headers", [])
+                        message.setdefault("headers", [])  # headers are optional in the message
                         headers: MutableHeaders = MutableHeaders(scope=message)
-                        for header, value in {
-                            "trace-id": trace_id,
-                            **ctx.trace_context(),
-                        }.items():
-                            # an entry a header can not hold is left out - failing
-                            # the response it was meant to accompany would be worse
-                            # than a missing trace header
-                            if _header_name_safe(header) and _header_value_safe(value):
-                                headers[header] = value
+                        headers["trace-id"] = trace_id
+                        for header, value in ctx.trace_context().items():
+                            assert _HEADER_NAME.fullmatch(header) is not None  # nosec: B101
+                            assert value.isascii() and value.isprintable()  # nosec: B101
+                            headers[header] = value
 
                     await send(message)
 
@@ -317,26 +311,13 @@ def _request_attributes(
             attributes["http.request.method"] = OTHER_METHOD
             attributes["http.request.method_original"] = method
 
-    scheme: Any | None = scope.get("scheme")
-    if scheme:
+    if scheme := scope.get("scheme"):
         attributes["url.scheme"] = scheme
 
-    # `path_format` is the template of the path a route matched, which both a
-    # Starlette `Route` and a FastAPI `APIRoute` carry. Read defensively - the scope
-    # of a request which matched nothing holds no route at all
-    route: Any | None = scope.get("route")
-    route_path: Any | None = getattr(route, "path_format", None)
-    if isinstance(route_path, str):
-        # the template of a route is relative to the mount it is served from, so
-        # the templates of the mounts are put in front of it - otherwise the routes
-        # of different mounts would be reported as one. The root path can't serve
-        # as the prefix, it holds the values a parameterized mount matched
-        prefix: str | None = mounts.prefix(scope, route=route)
-        if prefix is not None:
-            attributes["http.route"] = prefix + route_path
+    if route_path := mounts.route_path(scope):
+        attributes["http.route"] = route_path
 
-    protocol_version: Any | None = scope.get("http_version")
-    if protocol_version:
+    if protocol_version := scope.get("http_version"):
         attributes["network.protocol.version"] = protocol_version
 
     if status is not None:
@@ -356,24 +337,38 @@ class _MountTemplates:
     def __init__(self) -> None:
         self._known: MutableMapping[int, tuple[object, str | None]] = {}
 
-    def prefix(
+    def route_path(
         self,
         scope: Scope,
         /,
-        *,
-        route: object,
     ) -> str | None:
-        root_path: str = scope.get("root_path") or ""
+        route: Any | None = scope.get("route")
+        if route is None:
+            return None
+
+        route_path: Any | None = getattr(route, "path_format", None)
+        if not isinstance(route_path, str):
+            return None
+
+        root_path: str = scope.get("root_path", "")
         if root_path == scope.get("app_root_path", root_path):
-            return ""  # served by no mount
+            return route_path  # served by no mount
+
+        prefix: str | None
 
         known: tuple[object, str | None] | None = self._known.get(id(route))
         if known is not None and known[0] is route:
-            return known[1]
+            prefix = known[1]
 
-        prefix: str | None = _found_prefix(scope.get("router"), route=route)
-        self._known[id(route)] = (route, prefix)
-        return prefix
+        else:
+            prefix = _found_prefix(scope.get("router"), route=route)
+            self._known[id(route)] = (route, prefix)
+
+        if prefix is None:
+            return route_path
+
+        else:
+            return prefix + route_path
 
 
 def _found_prefix(
@@ -419,17 +414,3 @@ def _printable(
 
 # a token, the only form a header name takes (RFC 9110, section 5.1)
 _HEADER_NAME: Final[re.Pattern[str]] = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
-
-
-def _header_name_safe(
-    name: str,
-    /,
-) -> bool:
-    return _HEADER_NAME.fullmatch(name) is not None
-
-
-def _header_value_safe(
-    value: str,
-    /,
-) -> bool:
-    return value.isascii() and value.isprintable()

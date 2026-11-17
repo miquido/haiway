@@ -115,8 +115,15 @@ app.add_middleware(ContextMiddleware, context=context)
 
 `add_middleware` puts the middleware in front of the ones added before it, so adding it last keeps
 it outermost - which is what makes the context available to the other middlewares as well. When the
-application already has a lifespan of its own, compose the two with
-`context.composed_lifespan(existing_lifespan)`.
+application already has a lifespan of its own, enter the lifespan of the context within it:
+
+```python
+@asynccontextmanager
+async def lifespan(app: Starlette) -> AsyncGenerator[None]:
+    async with context.lifespan(app):
+        ...  # startup work, with the disposables of the context prepared
+        yield  # suspend until shutdown
+```
 
 A middleware of the application still sits below its server error handling, which Starlette keeps
 above every middleware it is given - so the `500` of an unhandled failure is produced outside the
@@ -165,7 +172,7 @@ included - through untouched. For each request it:
 
   | attribute                   | value                                                              |
   | --------------------------- | ------------------------------------------------------------------ |
-  | `http.request.method`       | the method as received, for an `http` request only                 |
+  | `http.request.method`       | the method as received if standard, else `_OTHER`, for `http` only |
   | `http.route`                | the route template, when the routing left one in the request scope |
   | `url.path`                  | the requested path                                                 |
   | `url.scheme`                | the scheme of the request                                          |
@@ -206,10 +213,10 @@ included - through untouched. For each request it:
 
 - adds the trace headers to the response: `trace-id` holding the trace identifier of the request
   scope, accompanied by `traceparent` and `tracestate` when the observability backend provides them.
-  An entry which a header cannot hold - a line break, a character outside latin-1 - is left out
-  rather than written, since the trace context is partly continued from the request. For a websocket
-  request the response is the one denying its handshake - an accepted connection switches the
-  protocol rather than answering, so it carries no headers of its own
+  The values are those of the observability backend and are expected to be valid header values -
+  printable ASCII - which is asserted. For a websocket request the response is the one denying its
+  handshake - an accepted connection switches the protocol rather than answering, so it carries no
+  headers of its own
 
 - lets an exception no handler answered propagate through the scope of its request, which is what
   records it as the failure of that request - the exception among the details, so the trace carries
@@ -219,6 +226,18 @@ included - through untouched. For each request it:
   registered for `Exception` or `500`. The factory nests that error handling within the scope of the
   request, so what it answers with carries the trace headers as well, which is what correlates a
   failed request with the trace recording why it failed
+
+The factory takes that handler as `exception_handler` - optional, the plain `500` of the framework
+answers without it. Handlers of other exceptions and status codes are passed as `exception_handlers`
+among the extra arguments and answer within the scope as well; `Exception` and `500` do not belong
+there, since the framework would install them above the scope, where `exception_handler` shadows
+them.
+
+`debug` is passed through to the application and decides whether the server error handling answers
+with the traceback page. It defaults to `__debug__`, so an unoptimized run serves the traceback page
+while `python -O` - what production deployments should run - serves the plain `500`. Pass `debug`
+explicitly to pin it regardless of how the interpreter was started. The traceback page exposes the
+failure to the client, which is the reason to keep it out of production.
 
 `HTTPException`, `WebSocketException` and `ClientDisconnect` are not a failure of the request they
 end - the first two are how an application asks for a specific response, the third is a consumer
@@ -279,7 +298,7 @@ from haiway.starlette import StreamResponse
 
 async def export(request: Request) -> Response:
     async def rows() -> AsyncGenerator[bytes]:
-        async for row in Postgres.fetch_rows(QUERY):  # state of the request
+        for row in await Postgres.fetch(QUERY):  # state of the request
             yield row.get_str("payload").encode() + b"\n"
 
     return StreamResponse(rows(), media_type="application/x-ndjson")
@@ -518,7 +537,7 @@ Startup and shutdown are outside of every request scope, so what the lifespan re
 being prepared and released, and a disposable which failed to prepare - goes to the root logger
 rather than through this backend. There is no span for the startup of an application, and a failing
 disposable is reported where the logging of the application goes. Startup work which has to be
-traced belongs in a scope of its own, entered within an additional lifespan - see
+traced belongs in a scope of its own, entered within a lifespan of the application - see
 [Startup Work](#startup-work).
 
 When no observability is provided at all, request scopes are recorded through the root logger, so
@@ -550,9 +569,11 @@ See [Context Presets](context-presets.md) for how presets are composed.
 
 ## Startup Work
 
-Startup work owning a resource is best expressed as one of the disposables. Anything else - running
-migrations, warming a cache - can be passed to `application(...)` as an additional lifespan, entered
-within the lifespan of the context, so the disposables are already prepared when it runs:
+Startup work owning a resource is best expressed as one of the disposables. The factory installs the
+lifespan of the context alone and does not accept an additional one. Anything else - running
+migrations, warming a cache - belongs in an application built by hand, which enters the lifespan of
+the context within a lifespan of its own, as shown in
+[Existing Applications](#existing-applications):
 
 ```python
 from collections.abc import AsyncGenerator
@@ -564,13 +585,18 @@ from starlette.applications import Starlette
 
 @asynccontextmanager
 async def lifespan(app: Starlette) -> AsyncGenerator[None]:
-    async with ctx.scope("migrations", disposables=(PostgresConnectionPool(),)):
-        await Postgres.execute_migrations("example.migrations")
+    async with context.lifespan(app):
+        async with ctx.scope("migrations", disposables=(PostgresConnectionPool(),)):
+            await Postgres.execute_migrations("example.migrations")
 
-    yield  # suspend until shutdown
+        yield  # suspend until shutdown
 
 
-app = application(context, routes=[...], lifespan=lifespan)
+app = Starlette(
+    routes=[...],
+    middleware=[Middleware(ContextMiddleware, context=context)],
+    lifespan=lifespan,
+)
 ```
 
 Note the scope entered and exited before the `yield`. A scope held open across it would leak its

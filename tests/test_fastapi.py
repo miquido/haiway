@@ -1,5 +1,4 @@
 from collections.abc import AsyncGenerator, Iterable, MutableSequence
-from contextlib import asynccontextmanager
 from logging import Logger, getLogger
 from typing import Annotated, Any
 
@@ -149,7 +148,7 @@ async def test_unhandled_exception_is_answered_by_the_framework() -> None:
     async def example() -> dict[str, str]:
         raise ValueError("broken")
 
-    app: FastAPI = application(routers=(router,))
+    app: FastAPI = application(routers=(router,), debug=False)
     result = Result()
 
     async with running(app):
@@ -182,30 +181,6 @@ async def test_request_without_lifespan_is_refused() -> None:
     # nothing to serve a request with before it ran
     with raises(ContextMissing):
         await app(http_scope(), receive_request, result.collecting())
-
-
-@mark.asyncio
-async def test_additional_lifespan_runs_within_prepared_context() -> None:
-    log: MutableSequence[str] = []
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        log.append("startup")
-        try:
-            yield
-
-        finally:
-            log.append("shutdown")
-
-    app: FastAPI = application(
-        ServerContext(disposables=(ExampleDisposable(log),)),
-        lifespan=lifespan,
-    )
-
-    async with running(app):
-        pass
-
-    assert log == ["enter", "startup", "shutdown", "exit"]
 
 
 @mark.asyncio
@@ -319,9 +294,9 @@ async def test_registered_server_error_handler_answers_the_request() -> None:
 
     app: FastAPI = application(
         routers=(router,),
-        # a server error handler answers above the middleware, in place of the
-        # plain `500` the framework would produce
-        exception_handlers={Exception: handle_server_error},
+        # answers in place of the plain `500` the framework would produce
+        exception_handler=handle_server_error,
+        debug=False,
     )
     result = Result()
 

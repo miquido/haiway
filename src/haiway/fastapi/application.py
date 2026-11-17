@@ -1,16 +1,13 @@
-from collections.abc import Callable, Coroutine, Iterable, Mapping, Sequence
-from typing import Any, cast
+from collections.abc import Iterable
+from typing import Any
 
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, FastAPI
 from starlette.middleware import Middleware
-from starlette.types import StatelessLifespan
+from starlette.middleware.errors import ServerErrorMiddleware
+from starlette.types import ExceptionHandler
 
-from haiway.fastapi.types import ExceptionHandling
 from haiway.starlette import ServerContext
-
-# the arrangement of the request scope and the error handling below it is the one
-# of the Starlette factory - shared rather than repeated, so the two stay aligned
-from haiway.starlette.application import scoped_middleware_stack
+from haiway.starlette.middleware import ContextMiddleware
 
 __all__ = ("application",)
 
@@ -21,8 +18,7 @@ def application(
     *,
     routers: Iterable[APIRouter] = (),
     middleware: Iterable[Middleware] = (),
-    exception_handlers: Mapping[int | type[Exception], ExceptionHandling] | None = None,
-    lifespan: StatelessLifespan[FastAPI] | None = None,
+    exception_handler: ExceptionHandler | None = None,
     **extra: Any,
 ) -> FastAPI:
     """Prepare a FastAPI application handling requests within Haiway contexts.
@@ -54,21 +50,17 @@ def application(
         Additional middlewares, nested below ``ContextMiddleware`` - each one
         runs within the context scope of the request and can extend its state
         through ``ctx.updating(...)``.
-    exception_handlers : Mapping[int | type[Exception], ExceptionHandling] | None
-        Handlers producing responses for exceptions and status codes,
-        asynchronous or synchronous - a synchronous one is called in a worker
-        thread. Each one answers within the scope of its request, so its response
-        carries the trace headers - the validation error handler of FastAPI and
-        the ``500`` and ``Exception`` slots included, the latter two resolving
-        one handler installed below that scope rather than above every
-        middleware. Registering one afterwards through
-        ``add_exception_handler(Exception, ...)`` installs it above instead,
-        where the framework keeps that slot, so its response carries none.
-    lifespan : StatelessLifespan[FastAPI] | None
-        Additional startup and shutdown steps, entered within the lifespan of
-        the context, so the application state is prepared before they run.
-        Startup work which owns a resource is better expressed as one of the
-        context disposables.
+    exception_handler : ExceptionHandler | None
+        Handler producing the response of an unhandled failure - the ``500`` of the
+        application. It is nested below ``ContextMiddleware``, so it answers within
+        the scope of its request and the response carries the trace headers. The
+        plain ``500`` of the framework answers when none is given, and ``debug``
+        keeps the debugging response in place of either. ``debug`` defaults to
+        ``__debug__`` - on unless the interpreter runs optimized (``python -O``). Handlers of other
+        exceptions and status codes are given as ``exception_handlers`` among the
+        extra arguments and already answer within the scope. Do not register
+        ``Exception`` or ``500`` there - the framework would install it above the
+        scope, shadowed by this handler.
     **extra : Any
         Additional keyword arguments passed directly to ``FastAPI`` - the
         OpenAPI metadata (``title``, ``version``, ``description``), the
@@ -95,40 +87,27 @@ def application(
 
     Notes
     -----
-    A provided ``lifespan`` must not hold a context scope open across its
-    ``yield`` - a scope entered on startup and left open would leak its state
-    into the context the server creates its request tasks in. Preparing state
-    for requests is what ``ServerContext`` is for, while startup work which
-    needs a context of its own - running migrations, for instance - belongs in a
-    scope entered and exited before the ``yield``.
-
     A failure of the request scope itself - an observability backend refusing to
     prepare one, for instance - is answered with the plain ``500`` of the
-    framework, from the server error slot the handler was taken out of: the
-    error handling below the scope is only reached once that scope was entered.
+    framework, not by ``exception_handler``: the error handling below the scope
+    is only reached once that scope was entered.
     """
-    resolved_context: ServerContext = context if context is not None else ServerContext()
-
-    middleware_stack: Sequence[Middleware]
-    remaining_handlers: dict[Any, ExceptionHandling]
-    middleware_stack, remaining_handlers = scoped_middleware_stack(
-        resolved_context,
-        middleware=middleware,
-        exception_handlers=exception_handlers,
-        # read here rather than from the application, which is only built below -
-        # so a `debug` assigned to it afterwards reaches the error handling of the
-        # framework alone, and not the one within the request scope
-        debug=extra.get("debug", False),
-    )
+    server_context: ServerContext = context if context is not None else ServerContext()
 
     app: FastAPI = FastAPI(
-        middleware=middleware_stack,
-        exception_handlers=cast(
-            dict[int | type[Exception], Callable[[Request, Any], Coroutine[Any, Any, Response]]]
-            | None,
-            remaining_handlers or None,
+        middleware=(
+            Middleware(
+                ContextMiddleware,
+                context=server_context,
+            ),
+            Middleware(
+                ServerErrorMiddleware,
+                handler=exception_handler,
+                debug=extra.get("debug", __debug__),
+            ),
+            *middleware,
         ),
-        lifespan=resolved_context.composed_lifespan(lifespan),
+        lifespan=server_context.lifespan,
         **extra,
     )
 

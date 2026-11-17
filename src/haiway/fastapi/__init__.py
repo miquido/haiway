@@ -7,7 +7,6 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 from haiway.fastapi.application import application
-from haiway.fastapi.types import ExceptionHandling
 
 # the request context declaration and the middleware are shared with the
 # Starlette integration - FastAPI applications are Starlette applications
@@ -21,7 +20,6 @@ from haiway.starlette import (
 
 __all__ = (
     "ContextMiddleware",
-    "ExceptionHandling",
     "ObservabilityPreparing",
     "ServerContext",
     "StreamResponse",
