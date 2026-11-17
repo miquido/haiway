@@ -16,7 +16,7 @@ export UV_PYTHON
 endif
 
 ifndef UV_VERSION
-	UV_VERSION := 0.13.7
+	UV_VERSION := 0.13.9
 endif
 
 .PHONY: native uv_check venv sync update format lint test sanitize benchmark benchmark-server benchmark-otel benchmark-http benchmark-scope benchmark-uri docs docs-server docs-format docs-lint release
