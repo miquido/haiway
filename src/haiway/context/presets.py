@@ -217,6 +217,11 @@ class ContextPresets:
         return (lambda: disposable_state,)
 
     @property
+    def preparing(self) -> bool:
+        """Whether entering a scope with this preset has anything to prepare."""
+        return len(self._disposables) > 0
+
+    @property
     def static_state(self) -> Sequence[State]:
         """State this preset carries which needs no preparation."""
         return self._static_state

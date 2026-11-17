@@ -91,8 +91,10 @@ class ContextScope:
             # resolve combined state and ensure it is used - without anything to
             # prepare, which is what most scopes are, without a coroutine either
             state: ContextState
-            if presets is None and not self._disposables:
-                state = ContextState.updating(self._state)
+            if not self._disposables and (presets is None or not presets.preparing):
+                state = ContextState.updating(
+                    (*presets.static_state, *self._state) if presets is not None else self._state
+                )
 
             else:
                 state = await self._resolve_state(presets, unwinds)
