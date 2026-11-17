@@ -91,9 +91,10 @@ RabbitMQClient(
 ```
 
 `mandatory` requires `publisher_confirms`; with both enabled the adapter correlates an unroutable
-return back to its publish through an `x-haiway-publish-id` header, since a `Basic.Return` carries
-no delivery tag. That header is an adapter detail: it is stripped before `meta` reaches your code,
-but it does travel on the wire, so consumers outside Haiway will see it.
+return back to its publish through the AMQP `message_id` property, since a `Basic.Return` carries no
+delivery tag but echoes the properties of the returned message. That is an adapter detail: the
+attributes you publish travel as headers and `meta` holds only those, but the property does travel
+on the wire, so consumers outside Haiway will see a `message_id` holding the publish tag.
 
 ### Prefetch
 

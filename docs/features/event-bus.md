@@ -62,14 +62,23 @@ async def handle_login(user_id: str, ip: str):
 
 ### Subscribing to Events
 
-Use `ctx.subscribe()` to receive events of a specific type:
+Use `ctx.subscribe()` to receive events of a specific type. The subscription exists from that call
+and is iterated by the consumer it is handed to:
 
 ```python
-async def monitor_logins():
-    async for event in ctx.subscribe(UserLoggedIn):
+from collections.abc import AsyncIterator
+
+async def monitor_logins(events: AsyncIterator[UserLoggedIn]):
+    async for event in events:
         print(f"User {event.user_id} logged in from {event.ip_address}")
         await log_to_database(event)
+
+ctx.spawn(monitor_logins, ctx.subscribe(UserLoggedIn))
 ```
+
+Subscribe where the consumer is spawned rather than within its body: a spawned task does not run
+until the spawning one yields, so a subscription it creates itself misses every event sent before
+that.
 
 ## Common Patterns
 
@@ -81,8 +90,8 @@ Start event processors as scoped tasks:
 async def main():
     async with ctx.scope("app"):
         # Start event processors in background
-        login_monitor = ctx.spawn(monitor_logins)
-        order_processor = ctx.spawn(process_orders)
+        login_monitor = ctx.spawn(monitor_logins, ctx.subscribe(UserLoggedIn))
+        order_processor = ctx.spawn(process_orders, ctx.subscribe(OrderCreated))
 
         # Run main application logic
         await run_application()
@@ -102,20 +111,20 @@ scope - its error is raised when the scope exits.
 Multiple subscribers can listen to the same event type independently:
 
 ```python
-async def alert_security_team():
-    async for event in ctx.subscribe(UserLoggedIn):
+async def alert_security_team(events: AsyncIterator[UserLoggedIn]):
+    async for event in events:
         if is_suspicious_ip(event.ip_address):
             await send_security_alert(event)
 
-async def update_user_stats():
-    async for event in ctx.subscribe(UserLoggedIn):
+async def update_user_stats(events: AsyncIterator[UserLoggedIn]):
+    async for event in events:
         await increment_login_count(event.user_id)
 
 async def main():
     async with ctx.scope("app"):
         # Both subscribers receive all events independently
-        ctx.spawn(alert_security_team)
-        ctx.spawn(update_user_stats)
+        ctx.spawn(alert_security_team, ctx.subscribe(UserLoggedIn))
+        ctx.spawn(update_user_stats, ctx.subscribe(UserLoggedIn))
 
         await run_application()
 ```
@@ -272,7 +281,7 @@ pending iteration ends first and the join never waits on it:
 ```python
 async with ctx.scope("server"):
     async with ctx.scope("request"):
-        ctx.spawn(consumer)   # async for ... in ctx.subscribe(OrderCreated)
+        ctx.spawn(consumer, ctx.subscribe(OrderCreated))   # async for ... in the subscription
     # "request" exits, ending the subscription and then joining the consumer
 ```
 

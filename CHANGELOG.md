@@ -8,6 +8,10 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
 - `gather()` runs the given coroutines concurrently, without a limit of running tasks, returns their
   results in order and cancels the rest when one fails. See the concurrency guide.
+- `skills/haiway` is an agent skill for users of Haiway - principles, rules and review checklist,
+  style and immutability notes, a guide to easily overlooked helpers and extras, recipes for common
+  problems, building blocks from state to features, integration usage and gotchas, project structure
+  and tooling. Copy it into `~/.claude/skills/` or the `.claude/skills/` of a project.
 - `ObservabilityLevelChecking` is exported from `haiway.context.observability`.
 - `ContextPresets.preparing` tells whether entering a scope with the preset has anything to prepare.
 - `haiway.postgres.observability` exports `IDLE_CONNECTIONS_ATTRIBUTES` and
