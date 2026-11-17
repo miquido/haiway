@@ -131,7 +131,7 @@ class Map[Key, Element](MapBase[Key, Element]):
             f"Can't modify immutable {self.__class__.__qualname__} item - '{key}' cannot be deleted"
         )
 
-    def clear(self) -> None:
+    def clear(self) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, clear is not supported"
         )

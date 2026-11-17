@@ -8,8 +8,6 @@ from typing import (
     final,
 )
 
-from haiway.types.frozen import same_copy, same_deepcopy
-
 __all__ = (
     "Specification",
     "TypeSpecification",
@@ -193,7 +191,7 @@ type TypeSpecification = (
 @final
 class Specification:
     """
-    Immutable wrapper for a JSON-schema-like ``TypeSpecification`` fragment.
+    Wrapper for a JSON-schema-like ``TypeSpecification`` fragment.
 
     Haiway consumes ``Specification`` most commonly through
     ``typing.Annotated[...]`` on ``State`` fields. The wrapper keeps the schema
@@ -228,6 +226,3 @@ class Specification:
 
         self.specification: TypeSpecification
         self.specification = specification
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy

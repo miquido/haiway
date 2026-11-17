@@ -223,7 +223,7 @@ async def test_server_context_releases_the_states_it_prepared() -> None:
     with _collector_held_off():
         server = ServerContext(Other(value=1), disposables=(_Releasing("prepared", released),))
         async with server.lifespan():
-            states: Sequence[State] = server.request_state()
+            states: Sequence[State] = server.request_state
             assert [type(state) for state in states] == [Payload, Other]
             del states
 

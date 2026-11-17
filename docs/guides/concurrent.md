@@ -152,6 +152,28 @@ results = await concurrently(
 This is similar to `execute_concurrently(...)`, but it consumes ready-made coroutines instead of
 applying a single handler over elements.
 
+## `gather`
+
+Use `gather(...)` when a few coroutines should all run at once and the first failure should end the
+rest. It takes the coroutines as arguments, runs every one of them without a limit and returns their
+results in the order of the arguments.
+
+```python
+from haiway import gather
+
+user, account = await gather(
+    fetch_user("u1"),
+    fetch_account("u1"),
+)
+```
+
+- The remaining coroutines are cancelled and awaited when one fails, none is left running in the
+  background, unlike with `asyncio.gather(...)`.
+- A single failure is raised as it is, with its cause intact. Several failures raised together
+  become an `ExceptionGroup`.
+- All coroutines share one result type. Use `concurrently(...)` to limit the number of running tasks
+  or to collect failures instead of raising them.
+
 ## `stream_concurrently`
 
 `stream_concurrently(...)` merges any number of async generators and yields items as soon as any
@@ -332,6 +354,7 @@ That gives them predictable behavior:
 - `process_concurrently(...)`: side effects only
 - `execute_concurrently(...)`: apply one handler and collect ordered results
 - `concurrently(...)`: run pre-created coroutines and collect ordered results
+- `gather(...)`: run a few coroutines at once, cancelling the rest on the first failure
 - `stream_concurrently(...)`: merge any number of async generators into one stream
 - `stream2_concurrently(...)` / `stream3_concurrently(...)` / `stream4_concurrently(...)`: the same
   merge keeping each source's type in the element union

@@ -36,13 +36,6 @@ class ContextPresetsDisposablePreparing(Protocol):
     def __call__(self) -> Disposable: ...
 
 
-def _only_state(
-    elements: tuple[ContextPresetsStatePreparing | State, ...],
-    /,
-) -> TypeIs[tuple[State, ...]]:
-    return all(isinstance(element, State) for element in elements)
-
-
 @final
 class ContextPresets:
     """
@@ -317,3 +310,10 @@ class ContextPresetsRegistry:
         assert self._token is not None, "Unbalanced context enter/exit"  # nosec: B101
         ContextPresetsRegistry._context.reset(self._token)
         self._token = None
+
+
+def _only_state(
+    elements: tuple[ContextPresetsStatePreparing | State, ...],
+    /,
+) -> TypeIs[tuple[State, ...]]:
+    return all(isinstance(element, State) for element in elements)

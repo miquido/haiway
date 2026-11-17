@@ -131,7 +131,6 @@ class Meta(MapBase[str, BasicValue]):
             else:
                 return cls.empty
 
-        # raised rather than asserted - an optimized build would drop the values silently
         elif values:
             raise ValueError("Meta values can't be given together with metadata")
 
@@ -714,7 +713,7 @@ class Meta(MapBase[str, BasicValue]):
             f"Can't modify immutable {self.__class__.__qualname__} item - '{key}' cannot be deleted"
         )
 
-    def clear(self) -> None:
+    def clear(self) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, clear is not supported"
         )
@@ -724,12 +723,12 @@ class Meta(MapBase[str, BasicValue]):
         key: str,
         default: Any | None = None,
         /,
-    ) -> BasicValue:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, pop is not supported"
         )
 
-    def popitem(self) -> tuple[str, BasicValue]:
+    def popitem(self) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, popitem is not supported"
         )
@@ -748,7 +747,7 @@ class Meta(MapBase[str, BasicValue]):
         self,
         *updates: Any,
         **kwargs: Any,
-    ) -> None:
+    ) -> NoReturn:
         raise AttributeError(
             f"Can't modify immutable {self.__class__.__qualname__}, update is not supported"
         )

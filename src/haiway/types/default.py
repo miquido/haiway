@@ -3,7 +3,6 @@ from functools import partial
 from os import getenv as os_getenv
 from typing import Any, Literal, cast, final, overload
 
-from haiway.types.frozen import same_copy, same_deepcopy
 from haiway.types.missing import Missing
 
 __all__ = (
@@ -17,7 +16,7 @@ __all__ = (
 @final
 class DefaultValue:
     """
-    Immutable resolver for field default values.
+    Resolver for field default values.
 
     ``DefaultValue`` stores a prepared default resolver. The owning ``State`` type
     calls the instance during object construction to resolve the effective value
@@ -52,9 +51,6 @@ class DefaultValue:
 
     def __call__(self) -> Any | Missing:
         return self._resolve()
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
 
 
 @overload
@@ -101,16 +97,27 @@ def Default[Value](
     ValueError
         If both a literal and a factory are provided.
     """
-    if factory is not Missing:
-        if default is not Missing:
-            raise ValueError("A default factory can't be combined with a literal default")
+    if factory is Missing:
+        return cast(
+            Value,
+            DefaultValue(
+                lambda: default,
+                available=default is not Missing,
+                constant=True,
+            ),
+        )
 
-        return cast(Value, DefaultValue(factory, available=True, constant=False))
+    else:
+        assert default is Missing  # nosec: B101
 
-    return cast(
-        Value,
-        DefaultValue(lambda: default, available=default is not Missing, constant=True),
-    )
+        return cast(
+            Value,
+            DefaultValue(
+                factory,
+                available=True,
+                constant=False,
+            ),
+        )
 
 
 def DefaultFactory[**Args, Value](
@@ -191,16 +198,14 @@ def DefaultEnv[Value, Fallback](
 ) -> Value | Fallback: ...
 
 
-def DefaultEnv(
+def DefaultEnv[Value = str, Fallback = None](
     name: str,
     /,
     *,
-    fallback: Any | Missing = Missing,
+    fallback: Fallback | Missing = Missing,
     required: bool = False,
     mapping: Callable[[str], Any] | Missing = Missing,
-    # the overloads resolve the field type, a fallback resolves to the union of
-    # the two and cannot be stated here
-) -> Any:
+) -> Value | Fallback:
     """Create a default read from an environment variable.
 
     The variable is read when the owning object is constructed, not when the
@@ -238,8 +243,7 @@ def DefaultEnv(
     >>> host: str = DefaultEnv("SERVICE_HOST", fallback="localhost")
     >>> port: int = DefaultEnv("SERVICE_PORT", mapping=int, required=True)
     """
-    if required and fallback is not Missing:
-        raise ValueError("A required environment default can't have a fallback")
+    assert not required or fallback is Missing  # nosec: B101
 
     def resolve() -> Any | Missing:
         value: str | None = os_getenv(name)
@@ -258,8 +262,11 @@ def DefaultEnv(
 
         return value
 
-    return DefaultValue(
-        resolve,
-        available=True,
-        constant=False,
+    return cast(
+        Value | Fallback,
+        DefaultValue(
+            resolve,
+            available=True,
+            constant=False,
+        ),
     )

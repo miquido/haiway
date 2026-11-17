@@ -7,7 +7,7 @@ from logging import Logger, getLogger
 from typing import Final, final
 
 from starlette.applications import Starlette
-from starlette.types import Scope, StatelessLifespan
+from starlette.types import Scope
 
 from haiway.attributes import State
 from haiway.context import (
@@ -179,49 +179,6 @@ class ServerContext:
         """
         return self._lifespan()
 
-    def composed_lifespan[Application: Starlette](
-        self,
-        lifespan: StatelessLifespan[Application] | None,
-        /,
-    ) -> StatelessLifespan[Application]:
-        """Compose the lifespan of the context with an additional one.
-
-        The additional lifespan is entered within the one of the context, so the
-        application state is already prepared when its startup runs and is
-        released only after its shutdown completed.
-
-        Parameters
-        ----------
-        lifespan : StatelessLifespan[Application] | None
-            The additional lifespan. ``None`` results in the lifespan of the
-            context alone.
-
-        Returns
-        -------
-        StatelessLifespan[Application]
-            Lifespan to install in the application.
-
-        Notes
-        -----
-        The additional lifespan must not hold a context scope open across its
-        ``yield`` - a scope entered on startup and left open would leak its
-        state into the context the server creates its request tasks in.
-        """
-        if lifespan is None:
-            return self.lifespan
-
-        additional: StatelessLifespan[Application] = lifespan
-
-        @asynccontextmanager
-        async def composed(
-            application: Application,
-            /,
-        ) -> AsyncGenerator[None]:
-            async with self.lifespan(application), additional(application):
-                yield  # suspend until shutdown
-
-        return composed
-
     @asynccontextmanager
     async def _lifespan(self) -> AsyncGenerator[None]:
         assert not hasattr(self, "state"), "Server context reentrance is not allowed"  # nosec: B101
@@ -249,6 +206,7 @@ class ServerContext:
         finally:
             DEFAULT_LOGGER.info("...server closed!")
 
+    @property
     def request_state(self) -> Sequence[State]:
         """Resolve the state propagated into a request scope.
 
@@ -308,7 +266,6 @@ class ServerContext:
         # the trace context of every request is resolved here, so a backend which
         # continues the trace of its caller needs no wiring of its own
         trace_context: Mapping[str, str] = request_trace_context(request_scope)
-
         return self._observability_preparing(
             traceparent=trace_context.get("traceparent"),
             tracestate=trace_context.get("tracestate"),

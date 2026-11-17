@@ -1,14 +1,12 @@
 from typing import final
 
-from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
-
 __all__ = ("Sensitive",)
 
 
 @final
 class Sensitive:
     """
-    Immutable annotation marking a value as sensitive.
+    Annotation marking a value as sensitive.
 
     An attribute annotated with ``Sensitive`` keeps its value fully available
     through attribute access and serialization, while every human-readable
@@ -65,10 +63,4 @@ class Sensitive:
         if not redaction:
             raise ValueError("Sensitive redaction can't be empty")
 
-        self.redaction: str
-        object.__setattr__(self, "redaction", redaction)
-
-    __setattr__ = refuse_assignment
-    __delattr__ = refuse_deletion
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
+        self.redaction: str = redaction

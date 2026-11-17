@@ -11,6 +11,7 @@ from haiway.helpers.caching import (
 from haiway.helpers.concurrent import (
     concurrently,
     execute_concurrently,
+    gather,
     process_concurrently,
     stream2_concurrently,
     stream3_concurrently,
@@ -111,6 +112,7 @@ __all__ = (
     "cache_externally",
     "concurrently",
     "execute_concurrently",
+    "gather",
     "process_concurrently",
     "retry",
     "statemethod",

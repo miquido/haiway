@@ -13,21 +13,36 @@ __all__ = (
 # narrow a value of unknown type to the class over `Any`, what it is checked as
 
 
-def is_mapping(value: object, /) -> TypeIs[Mapping[Any, Any]]:
+def is_mapping(
+    value: object,
+    /,
+) -> TypeIs[Mapping[Any, Any]]:
     return isinstance(value, Mapping)
 
 
-def is_iterable(value: object, /) -> TypeIs[Iterable[Any]]:
+def is_iterable(
+    value: object,
+    /,
+) -> TypeIs[Iterable[Any]]:
     return isinstance(value, Iterable)
 
 
-def is_sequence(value: object, /) -> TypeIs[Sequence[Any]]:
+def is_sequence(
+    value: object,
+    /,
+) -> TypeIs[Sequence[Any]]:
     return isinstance(value, Sequence)
 
 
-def is_set(value: object, /) -> TypeIs[Set[Any]]:
+def is_set(
+    value: object,
+    /,
+) -> TypeIs[Set[Any]]:
     return isinstance(value, Set)
 
 
-def is_bytes_like(value: object, /) -> TypeIs[bytes | bytearray | memoryview[Any]]:
+def is_bytes_like(
+    value: object,
+    /,
+) -> TypeIs[bytes | bytearray | memoryview[Any]]:
     return isinstance(value, bytes | bytearray | memoryview)

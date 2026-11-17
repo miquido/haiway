@@ -49,7 +49,6 @@ def request_trace_context(
     """
     traceparent: str | None = None
     tracestate: str | None = None
-    conflicting: bool = False
 
     # read from the raw headers rather than through `Headers`, which reads the
     # scope of a request without any and rewrites the one it is given
@@ -57,20 +56,20 @@ def request_trace_context(
         name: bytes = raw_name.lower()
         if name == b"traceparent":
             if traceparent is not None:
-                conflicting = True  # no single position to continue
+                return {}  # no single position to continue
 
             traceparent = raw_value.decode("latin-1").strip()
 
         elif name == b"tracestate" and tracestate is None:
             tracestate = raw_value.decode("latin-1").strip()
 
-    if conflicting or not traceparent:
+    if not traceparent:
         return {}
 
-    if tracestate:
-        return {
-            "traceparent": traceparent,
-            "tracestate": tracestate,
-        }
+    if not tracestate:
+        return {"traceparent": traceparent}
 
-    return {"traceparent": traceparent}
+    return {
+        "traceparent": traceparent,
+        "tracestate": tracestate,
+    }

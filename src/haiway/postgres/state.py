@@ -83,17 +83,61 @@ async def _executed[Result](
     before reaching here, and that wait is recorded separately by the driver as
     `db.client.connection.wait_time`. Adding the two gives what the caller waited
     for, while keeping a contended pool distinguishable from a slow statement.
+
+    Only a serialization failure or a detected deadlock is repeated - see
+    :attr:`PostgresException.retriable`. Anything else is raised on the first
+    attempt, because running it again would fail the same way.
+
+    This repeats one statement, which is the whole unit of work only when the
+    statement is its own transaction. Inside an explicit transaction the abort
+    doomed the entire transaction, so no retry can succeed - the server rejects
+    the next statement with ``in_failed_sql_transaction``, which explains
+    nothing, so the failure that actually caused the abort is raised instead.
     """
     started: float = monotonic()
     error: PostgresException | None = None
+    failure: PostgresException | None = None
+    attempt: int = 0
+    allowed: int = max(0, retries)
     try:
-        return await _attempted(
-            statement_calling,
-            statement,
-            args,
-            retries,
-            operation,
-        )
+        while True:
+            try:
+                return await statement_calling(statement, *args)
+
+            except PostgresException as exc:
+                if (
+                    failure is not None
+                    and exc.sqlstate == PostgresErrorCode.in_failed_sql_transaction
+                ):
+                    # the statement runs inside a transaction which the previous
+                    # failure already doomed, so retrying was never going to work
+                    raise failure from exc
+
+                if attempt >= allowed or not exc.retriable:
+                    raise
+
+                failure = exc
+
+            attempt += 1
+            # retries are invisible without this - a workload silently repeating a
+            # third of its statements looks healthy from latency alone
+            ctx.record_info(
+                metric=OPERATION_RETRIES_METRIC,
+                value=1,
+                unit="{retry}",
+                kind="counter",
+                attributes=operation_attributes(operation, failure),
+            )
+            ctx.record_debug(
+                event=OPERATION_RETRIED_EVENT,
+                attributes={
+                    **operation_attributes(operation, failure),
+                    "db.client.operation.attempt": attempt,
+                    "db.client.operation.retries_allowed": allowed,
+                },
+            )
+            # full jitter, so concurrent retries spread out instead of realigning
+            await sleep(uniform(0, min(RETRY_BACKOFF_BASE * (2**attempt), RETRY_BACKOFF_LIMIT)))  # nosec: B311
 
     except PostgresException as exc:
         error = exc
@@ -109,65 +153,6 @@ async def _executed[Result](
             kind="histogram",
             attributes=operation_attributes(operation, error),
         )
-
-
-async def _attempted[Result](
-    statement_calling: Callable[..., Coroutine[None, None, Result]],
-    statement: str,
-    args: tuple[PostgresValue, ...],
-    retries: int,
-    operation: str,
-) -> Result:
-    """Execute the statement, repeating it while the failure is transient.
-
-    Only a serialization failure or a detected deadlock is repeated - see
-    :attr:`PostgresException.retriable`. Anything else is raised on the first
-    attempt, because running it again would fail the same way.
-
-    This repeats one statement, which is the whole unit of work only when the
-    statement is its own transaction. Inside an explicit transaction the abort
-    doomed the entire transaction, so no retry can succeed - the server rejects
-    the next statement with ``in_failed_sql_transaction``, which explains
-    nothing, so the failure that actually caused the abort is raised instead.
-    """
-    failure: PostgresException | None = None
-    attempt: int = 0
-    allowed: int = max(0, retries)
-    while True:
-        try:
-            return await statement_calling(statement, *args)
-
-        except PostgresException as exc:
-            if failure is not None and exc.sqlstate == PostgresErrorCode.in_failed_sql_transaction:
-                # the statement runs inside a transaction which the previous
-                # failure already doomed, so retrying was never going to work
-                raise failure from exc
-
-            if attempt >= allowed or not exc.retriable:
-                raise
-
-            failure = exc
-
-        attempt += 1
-        # retries are invisible without this - a workload silently repeating a
-        # third of its statements looks healthy from latency alone
-        ctx.record_info(
-            metric=OPERATION_RETRIES_METRIC,
-            value=1,
-            unit="{retry}",
-            kind="counter",
-            attributes=operation_attributes(operation, failure),
-        )
-        ctx.record_debug(
-            event=OPERATION_RETRIED_EVENT,
-            attributes={
-                **operation_attributes(operation, failure),
-                "db.client.operation.attempt": attempt,
-                "db.client.operation.retries_allowed": allowed,
-            },
-        )
-        # full jitter, so concurrent retries spread out instead of realigning
-        await sleep(uniform(0, min(RETRY_BACKOFF_BASE * (2**attempt), RETRY_BACKOFF_LIMIT)))  # nosec: B311
 
 
 class PostgresConnection(State):

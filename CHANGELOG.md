@@ -6,6 +6,8 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
 ### Added
 
+- `gather()` runs the given coroutines concurrently, without a limit of running tasks, returns their
+  results in order and cancels the rest when one fails. See the concurrency guide.
 - `URITemplate` is an immutable URI template following [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570)
   which expands values into a URI (`expand()`) and matches a URI back into its parameters
   (`match()`, `matches()`). Matching holds every decoded value to the segment it was found in, so

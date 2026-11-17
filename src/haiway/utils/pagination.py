@@ -221,7 +221,7 @@ class Paginated[Element](Sequence[Element]):
     def __getitem__(
         self,
         index: slice[int | None],
-    ) -> tuple[Element, ...]: ...
+    ) -> Sequence[Element]: ...
 
     def __getitem__(
         self,
