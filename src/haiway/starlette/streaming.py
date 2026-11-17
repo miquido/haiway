@@ -45,7 +45,7 @@ class StreamResponse(StreamingResponse):
     --------
     >>> async def endpoint(request: Request) -> Response:
     ...     async def content() -> AsyncGenerator[bytes]:
-    ...         async for row in Postgres.fetch_rows(QUERY):  # request state
+    ...         for row in await Postgres.fetch(QUERY):  # request state
     ...             yield row.get_str("payload").encode()
     ...
     ...     return StreamResponse(content(), media_type="application/x-ndjson")

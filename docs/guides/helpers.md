@@ -119,6 +119,8 @@ template.expand({"tenant": "acme", "name": "a b.txt", "page": 2, "tag": ["x", "y
 
 template.match("https://acme.example.com/files/a%20b.txt?page=2")
 # Map({"tenant": "acme", "name": "a b.txt", "page": "2"})
+
+template.match("https://acme.example.com/other")  # None - `matches()` returns a bool
 ```
 
 Supported are `{name}` (a path segment or host label), `{/name}`, `{?a,b*}` (`*` explodes a list

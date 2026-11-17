@@ -195,7 +195,7 @@ class Specification:
 
     Haiway consumes ``Specification`` most commonly through
     ``typing.Annotated[...]`` on ``State`` fields. The wrapper keeps the schema
-    fragment immutable and typed, but it does not deeply validate every schema
+    fragment typed, but it does not deeply validate every schema
     keyword beyond requiring a non-empty specification object.
 
     Parameters
@@ -205,7 +205,7 @@ class Specification:
 
     Raises
     ------
-    AssertionError
+    ValueError
         If an empty specification is provided.
 
 

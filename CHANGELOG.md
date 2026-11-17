@@ -2,12 +2,52 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
-## 0.62.0
+## 0.62.1
 
 ### Added
 
 - `gather()` runs the given coroutines concurrently, without a limit of running tasks, returns their
   results in order and cancels the rest when one fails. See the concurrency guide.
+- `ObservabilityLevelChecking` is exported from `haiway.context.observability`.
+- `ContextPresets.preparing` tells whether entering a scope with the preset has anything to prepare.
+- `haiway.postgres.observability` exports `IDLE_CONNECTIONS_ATTRIBUTES` and
+  `USED_CONNECTIONS_ATTRIBUTES`, the attributes of the connection count gauge.
+
+### Changed
+
+- The Starlette and FastAPI `application(...)` factories take `exception_handler` - the handler of
+  the `500` of an unhandled failure, nested below `ContextMiddleware` so its response carries the
+  trace headers - in place of `exception_handlers` and `lifespan`. Handlers of other exceptions and
+  status codes go in `exception_handlers` among the extra arguments, as in the framework itself, and
+  already answer within the request scope; `Exception` and `500` do not belong there. The factories
+  install the lifespan of the context alone - startup work is a disposable or belongs in an
+  application built by hand, entering `context.lifespan(app)` within a lifespan of its own.
+- `debug` of those factories defaults to `__debug__` instead of `False`.
+- `ServerContext.request_state` is a property, not a method.
+- `ContextMiddleware` writes the trace headers as the backend provides them, asserting they are valid
+  header values, instead of leaving out an entry a header can not hold.
+- `DefaultEnv(..., required=True)` with a fallback, and `Default` combining a factory with a value,
+  are programming errors checked by assertions instead of `ValueError`.
+- `Alias`, `Description`, `Default`, `Sensitive` and `Specification` are plain annotation objects
+  again - copying one creates a new instance, and `Sensitive` can be assigned to.
+- A scope entered with presets which carry static state only takes the synchronous path, like a
+  scope without presets.
+- `Map`, `Meta` mutators which always raise are typed `NoReturn`.
+- `Paginated.__getitem__` with a slice is typed as `Sequence[Element]`.
+
+### Removed
+
+- `ExceptionHandling` of `haiway.fastapi` and `ServerContext.composed_lifespan()`.
+
+### Performance
+
+- The `operation_attributes` of Postgres operations without an error are shared instead of built for
+  each call.
+
+## 0.62.0
+
+### Added
+
 - `URITemplate` is an immutable URI template following [RFC 6570](https://www.rfc-editor.org/rfc/rfc6570)
   which expands values into a URI (`expand()`) and matches a URI back into its parameters
   (`match()`, `matches()`). Matching holds every decoded value to the segment it was found in, so

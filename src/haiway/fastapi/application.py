@@ -87,13 +87,6 @@ def application(
 
     Notes
     -----
-    A provided ``lifespan`` must not hold a context scope open across its
-    ``yield`` - a scope entered on startup and left open would leak its state
-    into the context the server creates its request tasks in. Preparing state
-    for requests is what ``ServerContext`` is for, while startup work which
-    needs a context of its own - running migrations, for instance - belongs in a
-    scope entered and exited before the ``yield``.
-
     A failure of the request scope itself - an observability backend refusing to
     prepare one, for instance - is answered with the plain ``500`` of the
     framework, not by ``exception_handler``: the error handling below the scope

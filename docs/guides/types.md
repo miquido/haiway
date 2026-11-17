@@ -318,8 +318,7 @@ These annotations feed both runtime validation metadata and generated state sche
 ## Type Specifications
 
 `TypeSpecification` is a typed union of JSON-schema-like `TypedDict` shapes. `Specification` is a
-small immutable wrapper around one of those shapes so it can be attached inside
-`typing.Annotated[...]`.
+thin typed wrapper around one of those shapes so it can be attached inside `typing.Annotated[...]`.
 
 This is intentionally lightweight:
 

@@ -172,7 +172,7 @@ included - through untouched. For each request it:
 
   | attribute                   | value                                                              |
   | --------------------------- | ------------------------------------------------------------------ |
-  | `http.request.method`       | the method as received, for an `http` request only                 |
+  | `http.request.method`       | the method as received if standard, else `_OTHER`, for `http` only |
   | `http.route`                | the route template, when the routing left one in the request scope |
   | `url.path`                  | the requested path                                                 |
   | `url.scheme`                | the scheme of the request                                          |
@@ -213,10 +213,10 @@ included - through untouched. For each request it:
 
 - adds the trace headers to the response: `trace-id` holding the trace identifier of the request
   scope, accompanied by `traceparent` and `tracestate` when the observability backend provides them.
-  An entry which a header cannot hold - a line break, a character outside latin-1 - is left out
-  rather than written, since the trace context is partly continued from the request. For a websocket
-  request the response is the one denying its handshake - an accepted connection switches the
-  protocol rather than answering, so it carries no headers of its own
+  The values are those of the observability backend and are expected to be valid header values -
+  printable ASCII - which is asserted. For a websocket request the response is the one denying its
+  handshake - an accepted connection switches the protocol rather than answering, so it carries no
+  headers of its own
 
 - lets an exception no handler answered propagate through the scope of its request, which is what
   records it as the failure of that request - the exception among the details, so the trace carries
@@ -298,7 +298,7 @@ from haiway.starlette import StreamResponse
 
 async def export(request: Request) -> Response:
     async def rows() -> AsyncGenerator[bytes]:
-        async for row in Postgres.fetch_rows(QUERY):  # state of the request
+        for row in await Postgres.fetch(QUERY):  # state of the request
             yield row.get_str("payload").encode() + b"\n"
 
     return StreamResponse(rows(), media_type="application/x-ndjson")

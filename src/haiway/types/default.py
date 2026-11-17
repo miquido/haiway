@@ -94,7 +94,7 @@ def Default[Value](
 
     Raises
     ------
-    ValueError
+    AssertionError
         If both a literal and a factory are provided.
     """
     if factory is Missing:
@@ -234,9 +234,11 @@ def DefaultEnv[Value = str, Fallback = None](
 
     Raises
     ------
+    AssertionError
+        If ``required`` is combined with a fallback.
     ValueError
-        If ``required`` is combined with a fallback. When resolving, if a
-        required variable is not set or ``mapping`` rejects its value.
+        When resolving, if a required variable is not set or ``mapping`` rejects
+        its value.
 
     Examples
     --------
