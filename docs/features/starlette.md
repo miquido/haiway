@@ -282,6 +282,30 @@ app = application(
 )
 ```
 
+## State Responses
+
+`StateResponse` answers with a `State`, or a sequence of them, as the JSON body. The body is written
+by `State.to_json`, so the types, redaction and custom encoding of the State apply, and a sequence
+becomes a JSON array:
+
+```python
+from haiway.starlette import StateResponse
+
+
+async def profile(request: Request) -> Response:
+    return StateResponse(await Profiles.load(request.path_params["id"]))
+
+
+async def profiles(request: Request) -> Response:
+    return StateResponse(await Profiles.list(), status_code=200)
+```
+
+`to_json` writes the actual values - `Sensitive` marks what is redacted in logs and observability,
+not what is left out of a body. Answer with a State holding only what the caller may see.
+
+The State is encoded where the response is built, so a value which fails to encode raises a
+`ValueError` from the handler instead of breaking the response half way through.
+
 ## Streaming Responses
 
 The scope of a request stays entered until its response is finished, so a response streamed from an

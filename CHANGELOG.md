@@ -2,6 +2,17 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.64.0
+
+### Added
+
+- `StateResponse` of `haiway.starlette` and `haiway.fastapi` answers with a `State`, or a sequence
+  of them, written as the JSON body by `State.to_json`, with `application/json` as the media type
+  unless given. The State is encoded where the response is built, so a value which fails to encode
+  raises `ValueError` from the handler. The body carries the actual values, `Sensitive` attributes
+  included. In FastAPI annotate the endpoint with `StateResponse`, as the return of a `Response` skips
+  its serialization.
+
 ## 0.63.0
 
 ### Added

@@ -137,7 +137,8 @@ async with ctx.closing(rows()) as stream:       # always close early-left genera
 ```
 
 A generator that needs a scope keeps it inside its body. Merge sources with `stream_concurrently`.
-For HTTP responses use `StreamResponse` so the request scope stays open until the last chunk.
+For HTTP responses use `StreamResponse` so the request scope stays open until the last chunk. To
+answer with a State as JSON use `StateResponse(state)`, not `JSONResponse(state.to_mapping())`.
 Bridge a callback-style producer with `AsyncQueue` (`enqueue(...)`, `finish()` ends it, buffered
 items are still delivered).
 
