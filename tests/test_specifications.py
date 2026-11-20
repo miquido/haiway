@@ -516,3 +516,55 @@ def test_declared_specification_keeps_its_own_description() -> None:
         "type": "integer",
         "description": "of the specification",
     }
+
+
+class _Described(State, description="Settings of the assistant"):
+    model: str = "claude"
+
+
+class _DescribedHolder(State):
+    plain: _Described
+    own: Annotated[_Described, Description("Own description")]
+
+
+class _DescribedGeneric[T](State, description="Generic box"):
+    value: T
+
+
+def test_state_description_is_stored_and_in_schema() -> None:
+    assert _Described.__DESCRIPTION__ == "Settings of the assistant"
+    assert specification_of(_Described)["description"] == "Settings of the assistant"
+
+
+def test_state_without_description_has_none() -> None:
+    class Plain(State):
+        value: int
+
+    assert Plain.__DESCRIPTION__ is None
+    assert "description" not in specification_of(Plain)
+
+
+def test_nested_state_describes_itself_and_attribute_description_wins() -> None:
+    properties = specification_of(_DescribedHolder)["properties"]
+    assert properties["plain"]["description"] == "Settings of the assistant"
+    assert properties["own"]["description"] == "Own description"
+    assert _Described.__SPECIFICATION__["description"] == "Settings of the assistant"
+
+
+def test_specialization_keeps_description() -> None:
+    assert _DescribedGeneric[int].__DESCRIPTION__ == "Generic box"
+    assert specification_of(_DescribedGeneric[int])["description"] == "Generic box"
+
+
+class _DescribedContainers(State):
+    items: Sequence[Annotated[_Described, Description("Item description")]]
+    plain: Sequence[_Described]
+    values: Mapping[str, Annotated[_Described, Description("Value description")]]
+
+
+def test_element_description_replaces_the_one_of_its_type() -> None:
+    properties = properties_of(_DescribedContainers)
+    assert properties["items"]["items"]["description"] == "Item description"
+    assert properties["plain"]["items"]["description"] == "Settings of the assistant"
+    assert properties["values"]["additionalProperties"]["description"] == "Value description"
+    assert _Described.__SPECIFICATION__["description"] == "Settings of the assistant"
