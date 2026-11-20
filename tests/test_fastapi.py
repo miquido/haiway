@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, Iterable, MutableSequence
+from json import loads
 from logging import Logger, getLogger
 from typing import Annotated, Any
 
@@ -15,6 +16,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from haiway import ContextMissing, State, ctx
 from haiway.fastapi import (
     ServerContext,
+    StateResponse,
     StreamResponse,
     application,
 )
@@ -460,3 +462,30 @@ async def test_request_is_recorded_with_its_route() -> None:
     assert '"url.path"]: "/users/12345/orders/7"' in recorded
     assert '"http.request.method"]: "GET"' in recorded
     assert '"http.response.status_code"]: 200' in recorded
+
+
+@mark.asyncio
+async def test_state_endpoint_answers_with_state_as_json() -> None:
+    router = APIRouter()
+
+    @router.get("/state")
+    async def single() -> StateResponse:
+        return StateResponse(ExampleState(value=ctx.state(ExampleState).value))
+
+    @router.get("/states")
+    async def many() -> StateResponse:
+        return StateResponse((ExampleState(value="a"), ExampleState(value="b")), status_code=202)
+
+    app: FastAPI = application(
+        ServerContext(ExampleState(value="from-context")),
+        routers=(router,),
+    )
+
+    async with running(app):
+        single_result: Result = await send_request(app, path="/state")
+        many_result: Result = await send_request(app, path="/states")
+
+    assert single_result.headers["content-type"] == "application/json"
+    assert loads(single_result.body) == {"value": "from-context"}
+    assert many_result.status == 202
+    assert loads(many_result.body) == [{"value": "a"}, {"value": "b"}]

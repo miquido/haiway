@@ -10,6 +10,7 @@ except ImportError as exc:  # pragma: no cover
 from haiway.starlette.application import application
 from haiway.starlette.context import ServerContext
 from haiway.starlette.middleware import ContextMiddleware
+from haiway.starlette.state import StateResponse
 from haiway.starlette.streaming import StreamResponse
 from haiway.starlette.trace import request_trace_context
 from haiway.starlette.types import ObservabilityPreparing
@@ -18,6 +19,7 @@ __all__ = (
     "ContextMiddleware",
     "ObservabilityPreparing",
     "ServerContext",
+    "StateResponse",
     "StreamResponse",
     "application",
     "request_trace_context",

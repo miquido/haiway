@@ -148,6 +148,24 @@ a worker thread with the context of the request copied into it, so `ctx.state(..
 too. Long blocking work still belongs off the event loop path: prefer async endpoints and Haiway's
 `@asynchronous` helper for the calls which cannot be.
 
+## State Responses
+
+`StateResponse` is re-exported here as well. It writes a `State`, or a sequence of them, as the JSON
+body through `State.to_json`. Annotate the endpoint with the response itself, since returning a
+`Response` skips the serialization of FastAPI:
+
+```python
+from haiway.fastapi import StateResponse
+
+
+@router.get("/profile")
+async def profile() -> StateResponse:
+    return StateResponse(await Profiles.load())
+```
+
+The body carries the actual values of the State, `Sensitive` attributes included. See
+[State Responses](starlette.md#state-responses) for details.
+
 ## Streaming Responses
 
 `StreamResponse` is re-exported here and returned from an endpoint like any other response. The
