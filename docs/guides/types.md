@@ -292,7 +292,8 @@ objects.
 Haiway consumes several types through `typing.Annotated[...]` when resolving `State` fields:
 
 - `Alias("external_name")` changes the externally exposed field name
-- `Description("...")` adds human-readable schema/documentation text
+- `Description("...")` adds human-readable schema/documentation text to an attribute; the
+  `description="..."` class keyword of `State` does the same for the type itself
 - `Specification({...})` provides a manual JSON-schema-like override
 - `Meta.of(...)` attaches structured metadata to the resolved attribute definition
 - `Validator(callable)` applies an additional validation or coercion step before the base type

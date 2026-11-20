@@ -177,6 +177,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
     __ALLOWED_FIELDS__: Set[str]
     __ALIASES__: Mapping[str, str]
     __SERIALIZABLE__: bool
+    __DESCRIPTION__: str | None
     __DEFAULTED__: Set[str]
     __ANNOTATED__: Mapping[str, Any]
     # held by a generic class alone, filled in place when first asked for
@@ -197,6 +198,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         namespace: dict[str, Any],
         type_parameters: dict[str, Any] | None = None,
         serializable: bool = False,
+        description: str | None = None,
         **kwargs: Any,
     ) -> Any:
         # a class which declares attributes is final. the only thing which
@@ -245,7 +247,17 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         )
         # the values live inline in the instance, behind descriptors installed with
         # the plan below - there are no slots to declare, and no `__dict__` either
-        namespace["__slots__"] = ()
+        # a specialization declares nothing, so it carries the description of its
+        # origin - any other class describes itself, a description of a base would
+        # not hold for it
+        namespace.update(
+            __slots__=(),
+            __DESCRIPTION__=_resolve_description(
+                description,
+                bases=bases,
+                specialized=bool(type_parameters),
+            ),
+        )
 
         cls = type.__new__(
             mcs,
@@ -352,6 +364,7 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         specification: TypeSpecification | None = object_specification(
             self_attribute,
             attributes=tuple((field.key, field.annotation, field.required) for field in fields),
+            description=cls.__DESCRIPTION__,
         )
 
         if specification is not None:  # it is technically not serializable otherwise
@@ -512,6 +525,26 @@ def _specialize(
 ) -> Any:
     with _SPECIALIZING:
         return _specialize_locked(cls, type_arguments)
+
+
+def _resolve_description(
+    description: str | None,
+    /,
+    *,
+    bases: tuple[type, ...],
+    specialized: bool,
+) -> str | None:
+    if description is not None or not specialized:
+        return description
+
+    return next(
+        (
+            inherited
+            for base in bases
+            if (inherited := getattr(base, "__DESCRIPTION__", None)) is not None
+        ),
+        None,
+    )
 
 
 def _specialize_locked(

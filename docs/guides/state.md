@@ -122,7 +122,9 @@ Supported annotations include:
 - `Alias("external_name")` — maps the attribute to an alternate key when using `to_mapping`,
   `from_mapping`, JSON helpers, and `updating`. Both the name and the alias are accepted as input,
   but giving the same attribute under both of them is refused with a `TypeError`.
-- `Description("text")` — surfaces in generated JSON schemas and downstream documentation.
+- `Description("text")` — surfaces in generated JSON schemas and downstream documentation. To
+  describe the State type itself use the `description="..."` class keyword (see JSON Schema
+  Generation).
 - `Meta.of({...})` — attaches structured metadata that you can later inspect from field definitions.
 - `Specification({...})` — overrides the JSON Schema fragment when the inferred schema is
   insufficient.
@@ -507,6 +509,19 @@ calendar date. Aliases and descriptions propagate into the schema automatically,
 `Specification` overrides are respected. If a State cannot be represented as JSON Schema (for
 example, when it holds callables), `json_schema(required=True)` raises a `TypeError` so you can
 detect unsupported shapes early.
+
+A State can describe itself with the `description` class keyword. It is kept on the type as
+`__DESCRIPTION__` and written into its schema, so it survives `python -OO` (which strips docstrings)
+and a State nested in another one describes itself there as well. A `Description` on the attribute
+holding it takes precedence, and a specialization of a generic keeps the description of its origin:
+
+```python
+class AssistantConfig(State, description="Settings of the assistant"):
+    model: str = "claude-sonnet-5-5"
+
+
+AssistantConfig.__DESCRIPTION__  # "Settings of the assistant"
+```
 
 When serialization must be guaranteed, mark the class as serializable to enforce schema generation
 at definition time:

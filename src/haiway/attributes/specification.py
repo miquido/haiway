@@ -65,6 +65,7 @@ def object_specification(
     annotation: AttributeAnnotation,
     /,
     attributes: Sequence[tuple[str, AttributeAnnotation, bool]],
+    description: str | None = None,
 ) -> TypeSpecification | None:
     """Specification of an object made of the given attributes.
 
@@ -75,6 +76,8 @@ def object_specification(
     attributes : Sequence[tuple[str, AttributeAnnotation, bool]]
         Key to render the attribute under, its annotation, and whether it is
         required - in the order they should be rendered.
+    description : str | None
+        Description of the object itself, rendered when given.
 
     Returns
     -------
@@ -119,6 +122,9 @@ def object_specification(
         "required": required,
         "additionalProperties": False,
     }
+
+    if description:
+        specification["description"] = description
 
     if guard.referenced:
         return _with_anchor(
@@ -175,7 +181,7 @@ def _specification(
     elif getattr(annotation.base, "__SERIALIZABLE__", False):
         # the class resolved its own specification when it was created, including
         # the anchor of a reference to itself - there is nothing to resolve here
-        return cast(TypeSpecification | None, annotation.base.__SPECIFICATION__)
+        return _state_specification(annotation)
 
     elif specification_factory := SPECIFICATIONS.get(type(annotation)):
         return _guarded_specification(
@@ -632,6 +638,20 @@ def _prepare_specification_of_typed_dict(
         "additionalProperties": False,
         "required": required,
     }
+
+
+def _state_specification(
+    annotation: AttributeAnnotation,
+) -> TypeSpecification | None:
+    specification = cast(TypeSpecification | None, annotation.base.__SPECIFICATION__)
+    if specification is not None and annotation.description and "description" in specification:
+        # the description of the attribute is more specific than the one of its type
+        return cast(
+            TypeSpecification,
+            {key: value for key, value in specification.items() if key != "description"},
+        )
+
+    return specification
 
 
 def _with_description(

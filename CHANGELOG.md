@@ -2,6 +2,16 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.63.0
+
+### Added
+
+- `State` types take a `description` class keyword, as in
+  `class AssistantConfig(Configuration, description="Settings of the assistant")`. It is kept as
+  `__DESCRIPTION__` and written into the type's JSON schema, so it survives `python -OO` and a State
+  nested in another one describes itself there. A `Description` on the attribute holding the State
+  takes precedence, and a specialization of a generic keeps the description of its origin.
+
 ## 0.62.1
 
 ### Added
