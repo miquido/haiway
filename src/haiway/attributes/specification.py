@@ -648,7 +648,7 @@ def _state_specification(
         # the description of the attribute is more specific than the one of its type
         return cast(
             TypeSpecification,
-            {key: value for key, value in specification.items() if key != "description"},
+            {**specification, "description": annotation.description},
         )
 
     return specification

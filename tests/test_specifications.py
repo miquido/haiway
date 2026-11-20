@@ -554,3 +554,17 @@ def test_nested_state_describes_itself_and_attribute_description_wins() -> None:
 def test_specialization_keeps_description() -> None:
     assert _DescribedGeneric[int].__DESCRIPTION__ == "Generic box"
     assert specification_of(_DescribedGeneric[int])["description"] == "Generic box"
+
+
+class _DescribedContainers(State):
+    items: Sequence[Annotated[_Described, Description("Item description")]]
+    plain: Sequence[_Described]
+    values: Mapping[str, Annotated[_Described, Description("Value description")]]
+
+
+def test_element_description_replaces_the_one_of_its_type() -> None:
+    properties = properties_of(_DescribedContainers)
+    assert properties["items"]["items"]["description"] == "Item description"
+    assert properties["plain"]["items"]["description"] == "Settings of the assistant"
+    assert properties["values"]["additionalProperties"]["description"] == "Value description"
+    assert _Described.__SPECIFICATION__["description"] == "Settings of the assistant"
