@@ -4829,9 +4829,14 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
         )
 
 
-def _holds_type_parameters(key: Any, /) -> bool:
-    # a class is a key of itself, however many parameters it declares
-    return not isinstance(key, type) and bool(getattr(key, "__parameters__", ()))
+def _terminates_recursion(key: Any, value: AttributeAnnotation, /) -> bool:
+    # what a resolution still going on within the scope of an alias needs to be found
+    # there: an alias being resolved, and a class by its name or itself. a completed result
+    # was resolved for the class being what it is referred to by outside of the alias
+    if isinstance(value, AliasAttribute):
+        return not value.is_resolved
+
+    return isinstance(key, str | type) and isinstance(value, ObjectAttribute | TypedDictAttribute)
 
 
 def _alias_references(
@@ -4979,12 +4984,12 @@ def _resolve_generic_type_alias(
 
     # within the alias its own parameters stand where the type parameters of the class
     # would, the class is referred to by them only - and by nothing else resolved on the
-    # way is any of it to be taken for what the alias is not given: what still holds a
-    # type parameter was resolved for the class being what it is referred to by there
+    # way is any of it to be taken for what the alias is not given - only what is still
+    # being resolved is carried, the results are not
     scope: MutableMapping[Any, AttributeAnnotation] = {
         key: value
         for key, value in recursion_guard.items()
-        if not isinstance(key, _OwnReference) and not _holds_type_parameters(key)
+        if not isinstance(key, _OwnReference) and _terminates_recursion(key, value)
     }
     scope.update(
         {

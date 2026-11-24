@@ -119,6 +119,7 @@ type Closed[X] = Sequence[ClosedNode[int]]
 type Two[X, Y] = Sequence[Repeated[X]]
 
 GENERIC: Any = Generic
+SEQUENCE: Any = Sequence
 
 # an alias of the old style, sharing its type parameters with the class it refers to
 OldA = TypeVar("OldA")
@@ -379,9 +380,33 @@ def _declare_old_pair_after(direct: tuple[str, Any], rest: str) -> Any:
     )
 
 
+# plain aliases of the old style referring to the class by its own parameters - made by a
+# function, a type checker has no form for what they say
+def _old_alias(
+    name: str,
+    value: Any,
+    *parameters: Any,
+    constructor: Any = TypeAliasType,
+) -> Any:
+    return constructor(name, value, type_params=parameters)
+
+
+OldPlain: Any = _old_alias("OldPlain", SEQUENCE["OldPair[OldA, OldB]"])
+OldChain: Any = _old_alias("OldChain", SEQUENCE[OldPlain])
+OldThroughPlain: Any = _old_alias("OldThroughPlain", SEQUENCE[OldPlain], OldA, OldB)
+
+# a field preceding the use of the alias, as its annotation and its default
+PRECEDING_REFERENCES: Sequence[tuple[str, Any]] = (
+    ("Sequence[OldPair[OldA, OldB]]", ()),
+    ("OldPlain", ()),
+    ("OldChain", ()),
+    ("OldKids[OldA, OldB]", ()),
+)
+
+
 @pytest.mark.parametrize(
     "direct",
-    [("OldPair[OldA, OldB]", None), ("Sequence[OldPair[OldA, OldB]]", ())],
+    [("OldPair[OldA, OldB]", None), *PRECEDING_REFERENCES],
 )
 def test_an_alias_given_the_own_parameters_swapped_is_refused_after_a_reference_in_order(
     direct: tuple[str, Any],
@@ -390,11 +415,16 @@ def test_an_alias_given_the_own_parameters_swapped_is_refused_after_a_reference_
         _declare_old_pair_after(direct, "OldKids[OldB, OldA]")
 
 
-def test_an_alias_given_the_own_parameters_in_order_works_after_a_reference_in_order() -> None:
-    specialized: Any = _declare_old_pair_after(
-        ("Sequence[OldPair[OldA, OldB]]", ()),
-        "OldKids[OldA, OldB]",
-    )[int, str]
+def test_an_alias_of_a_plain_alias_given_the_own_parameters_swapped_is_refused_after_it() -> None:
+    with pytest.raises(TypeError, match="can't be specialized within its own declaration"):
+        _declare_old_pair_after(("OldPlain", ()), "OldThroughPlain[OldB, OldA]")
+
+
+@pytest.mark.parametrize("direct", PRECEDING_REFERENCES)
+def test_an_alias_given_the_own_parameters_in_order_works_after_a_reference_in_order(
+    direct: tuple[str, Any],
+) -> None:
+    specialized: Any = _declare_old_pair_after(direct, "OldKids[OldA, OldB]")[int, str]
 
     state: Any = specialized(a=1, b="s", rest=({"a": 2, "b": "t"},))
 
