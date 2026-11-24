@@ -132,6 +132,14 @@ class TupleSpecification(AnchoredSpecification, total=False):
 
 
 @final
+class OpenTupleSpecification(AnchoredSpecification, total=False):
+    type: Required[Literal["array"]]
+    prefixItems: Required[Sequence[TypeSpecification]]
+    items: Required[TypeSpecification]
+    description: NotRequired[str]
+
+
+@final
 class DictSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["object"]]
     additionalProperties: Required[TypeSpecification]
@@ -180,6 +188,7 @@ type TypeSpecification = (
     | BoolSpecification
     | EnumSpecification
     | TupleSpecification
+    | OpenTupleSpecification
     | ArraySpecification
     | ObjectSpecification
     | DictSpecification

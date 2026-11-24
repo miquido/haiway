@@ -44,6 +44,7 @@ typedef struct CompiledPlan {
     PyObject *cached; /* the cached defaults, as a list */
     KeySlot *key_slots;  /* every name and alias by the hash of its bytes, open addressing */
     size_t key_mask;
+    int validates_itself;  /* whether the class declares a `validate` of its own - a document is not read around it */
     int native_copy;  /* whether `__deepcopy__` is the native one - a class overriding it is copied through it */
     Py_ssize_t count;
     FieldPlan fields[];
@@ -106,9 +107,9 @@ plan_or_error(PyTypeObject *type)
 }
 
 static inline PyObject *
-validate_field(FieldPlan *field, CompiledPlan *plan, PyObject *value)
+validate_field(FieldPlan *field, CompiledPlan *plan, PyObject *value, int ignore_extra)
 {
-    return validate_spec(plan->state, field->spec, value);
+    return validate_spec(plan->state, field->spec, value, ignore_extra);
 }
 
 /* the default of an attribute which was not given, validated */
@@ -415,6 +416,32 @@ remove_descriptors(PyObject *cls, CompiledPlan *plan, PyObject *owned, Py_ssize_
 }
 
 /*
+ * Whether a class declares a `validate` of its own, which is then what makes an instance of
+ * a document - the usual one of a State is what the reader does. Told as `is_plain_state` of
+ * Python tells it: by what the classes before `Struct` declare. A class nested in another
+ * is told by its spec instead. Told once, when the class is given its plan.
+ */
+static int
+validates_itself(ModuleState *state, PyTypeObject *type)
+{
+    PyObject *mro = Py_NewRef(type->tp_mro);
+    int own = 0;
+    for (Py_ssize_t i = 0; !own && i < PyTuple_GET_SIZE(mro); i++) {
+        PyObject *base = PyTuple_GET_ITEM(mro, i);
+        if (base == (PyObject *)state->struct_type) break;
+        PyObject *declared = PyType_GetDict((PyTypeObject *)base);
+        if (declared == NULL) {
+            own = -1;
+            break;
+        }
+        own = PyDict_Contains(declared, state->str_validate);
+        Py_DECREF(declared);
+    }
+    Py_DECREF(mro);
+    return own;
+}
+
+/*
  * compile_plan(cls, plan, owned) - the plan of the class as C data, kept on
  * the class, and a read-only descriptor on the class for each of the attributes it
  * declares itself (`owned`, a tuple of their names - the others read theirs through the
@@ -471,6 +498,7 @@ compile_plan(PyObject *mod, PyObject *args)
     plan->cached = NULL;
     plan->key_slots = NULL;
     plan->native_copy = 1;
+    plan->validates_itself = 0;
     plan->count = n;
     plan->names = PyTuple_New(2 * n);
     plan->json_keys = PyTuple_New(n);
@@ -543,6 +571,9 @@ compile_plan(PyObject *mod, PyObject *args)
             }
         }
     }
+
+    plan->validates_itself = validates_itself(state, type);
+    if (plan->validates_itself < 0) goto fail;
 
     /* a class with a `__deepcopy__` of its own - one returning itself, say - is copied
      * by it, also where it is held by another instance. looked up before the descriptors

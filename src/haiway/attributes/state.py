@@ -1,5 +1,6 @@
 import annotationlib
 import base64
+import builtins
 import inspect
 import json
 import os
@@ -578,9 +579,7 @@ def _specialize_locked(
 
     _check_type_arguments(cls, bindings)
 
-    parameter_names: str = ",".join(
-        getattr(argument, "__name__", str(argument)) for argument in bound_arguments
-    )
+    parameter_names: str = ",".join(_argument_name(argument) for argument in bound_arguments)
     parametrized_type: Any = StateMeta.__new__(
         cls.__class__,
         name=f"{cls.__name__}[{parameter_names}]",
@@ -789,6 +788,13 @@ def _check_type_arguments(
     for parameter, argument in bindings:
         if isinstance(parameter, TypeVarTuple):
             for element in argument:
+                if element is Ellipsis:
+                    raise TypeError(
+                        f"{cls.__name__} can't be specialized with '...' - '{parameter.__name__}'"
+                        " is a TypeVarTuple taking types, an unbounded tuple of them is"
+                        " spelled `*tuple[X, ...]`"
+                    )
+
                 _check_type_argument(cls, parameter, element)
 
         elif isinstance(parameter, ParamSpec):
@@ -843,6 +849,82 @@ def _check_type_argument(
             f" '{parameter.__name__}' is constrained to"
             f" {', '.join(repr(_type_name(constraint)) for constraint in constraints)}"
         )
+
+
+def _argument_name(
+    argument: Any,
+    /,
+) -> str:
+    # an argument as it is spelled - a class or a type parameter by its name, anything
+    # parametrized by its origin and arguments, as the name alone would leave them out
+    if isinstance(argument, list | tuple):
+        elements: Sequence[Any] = cast(Sequence[Any], argument)
+        if not elements:
+            return "()"
+
+        return f"[{', '.join(_argument_name(element) for element in elements)}]"
+
+    if (spelled := _plain_name(argument)) is not None:
+        return spelled
+
+    origin: Any = get_origin(argument)
+    if origin is not None:
+        return _parametrized_name(argument, origin, get_args(argument))
+
+    if isinstance(argument, type | TypeVar | TypeVarTuple | ParamSpec):
+        return argument.__name__
+
+    return repr(argument)
+
+
+def _plain_name(
+    argument: Any,
+    /,
+) -> str | None:
+    match argument:
+        case None | types.NoneType:
+            return "None"
+
+        case builtins.Ellipsis:
+            return "..."
+
+        case str():
+            return argument  # a forward reference, as it is written
+
+        case typing.ForwardRef():
+            return argument.__forward_arg__
+
+        case _:
+            return None
+
+
+def _parametrized_name(
+    argument: Any,
+    origin: Any,
+    arguments: tuple[Any, ...],
+    /,
+) -> str:
+    if origin is typing.Unpack:
+        return f"*{_argument_name(arguments[0])}"
+
+    if origin is typing.Union or origin is types.UnionType:
+        return " | ".join(_argument_name(member) for member in arguments)
+
+    if origin is typing.Literal:
+        return f"Literal[{', '.join(repr(value) for value in arguments)}]"
+
+    if origin is typing.Annotated:
+        metadata: str = ", ".join(repr(value) for value in arguments[1:])
+        return f"Annotated[{_argument_name(arguments[0])}, {metadata}]"
+
+    unpacking: str = "*" if getattr(argument, "__unpacked__", False) else ""
+    if not arguments:
+        # only a parametrized empty tuple names no arguments - the bare one is any tuple
+        empty: str = "[()]" if origin is tuple and argument is not tuple else ""
+        return f"{unpacking}{_argument_name(origin)}{empty}"
+
+    parameters: str = ", ".join(_argument_name(element) for element in arguments)
+    return f"{unpacking}{_argument_name(origin)}[{parameters}]"
 
 
 def _type_name(
@@ -1061,6 +1143,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
         cls,
         value: Mapping[str, Any],
         /,
+        *,
+        ignore_extra: bool = False,
     ) -> Self:
         """
         Build an instance from a mapping of attribute values.
@@ -1069,13 +1153,30 @@ class State(nstruct.Struct, metaclass=StateMeta):
         ----------
         value : Mapping[str, Any]
             Mapping containing attribute names or aliases and their values.
+        ignore_extra : bool, default=False
+            When ``True``, keys which are neither an attribute name nor an alias are
+            skipped instead of refused, in every nested State, sequence, mapping, tuple,
+            union and TypedDict reached - but not below a class with its own ``__init__``
+            or ``validate``, which decide for themselves and validate what they nest
+            without the flag. Values of known keys are validated as usual. A class with a
+            ``validate`` of its own is handed the value unchanged.
 
         Returns
         -------
         Self
             New instance constructed from the provided mapping.
+
+        Raises
+        ------
+        TypeError
+            If the mapping holds a key which is not an attribute at the top level (unless
+            ``ignore_extra`` is set), or is not a mapping. A class with a ``validate`` of
+            its own may raise it for extra keys even with ``ignore_extra``.
+        ValidationError
+            If a nested value fails validation or holds a key which is not an attribute
+            (or a key a TypedDict does not declare), naming the path of the failure.
         """
-        return cls.validate(value)
+        return _validated(cls, value, ignore_extra)
 
     @overload
     @classmethod
@@ -1140,6 +1241,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
         value: str | bytes,
         /,
         decoder: type[json.JSONDecoder] = json.JSONDecoder,
+        *,
+        ignore_extra: bool = False,
     ) -> Self:
         """
         Deserialize an instance from a JSON object payload.
@@ -1150,6 +1253,13 @@ class State(nstruct.Struct, metaclass=StateMeta):
             JSON payload representing a single instance.
         decoder : type[json.JSONDecoder], default=json.JSONDecoder
             Decoder class used by ``json.loads``.
+        ignore_extra : bool, default=False
+            When ``True``, keys which are neither an attribute name nor an alias are
+            skipped instead of refused, in every nested State, sequence, mapping, tuple,
+            union and TypedDict reached - but not below a class with its own ``__init__``
+            or ``validate``, which decide for themselves and validate what they nest
+            without the flag. A class with a ``validate`` of its own is handed the decoded
+            value unchanged.
 
         Returns
         -------
@@ -1165,15 +1275,17 @@ class State(nstruct.Struct, metaclass=StateMeta):
             if decoder is json.JSONDecoder:
                 # read natively when it is the usual document - anything else is read
                 # below, which is also what says what is wrong with it
-                decoded: Any = nstruct.from_json(cls, value, False)
+                decoded: Any = nstruct.from_json(cls, value, False, ignore_extra)
                 if decoded is not None:
                     return decoded
 
-            return cls.validate(
+            return _validated(
+                cls,
                 json.loads(
                     value,
                     cls=decoder,
-                )
+                ),
+                ignore_extra,
             )
 
         except Exception as exc:
@@ -1185,6 +1297,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
         value: str | bytes,
         /,
         decoder: type[json.JSONDecoder] = json.JSONDecoder,
+        *,
+        ignore_extra: bool = False,
     ) -> Sequence[Self]:
         """
         Deserialize a sequence of instances from a JSON array payload.
@@ -1195,6 +1309,13 @@ class State(nstruct.Struct, metaclass=StateMeta):
             JSON payload representing an array of objects.
         decoder : type[json.JSONDecoder], default=json.JSONDecoder
             Decoder class used by ``json.loads``.
+        ignore_extra : bool, default=False
+            When ``True``, keys which are neither an attribute name nor an alias are
+            skipped instead of refused, in every nested State, sequence, mapping, tuple,
+            union and TypedDict reached - but not below a class with its own ``__init__``
+            or ``validate``, which decide for themselves and validate what they nest
+            without the flag. A class with a ``validate`` of its own is handed the decoded
+            value unchanged.
 
         Returns
         -------
@@ -1209,7 +1330,7 @@ class State(nstruct.Struct, metaclass=StateMeta):
         payload: Any
         try:
             if decoder is json.JSONDecoder:
-                decoded: Any = nstruct.from_json(cls, value, True)
+                decoded: Any = nstruct.from_json(cls, value, True, ignore_extra)
                 if decoded is not None:
                     return decoded
 
@@ -1224,7 +1345,7 @@ class State(nstruct.Struct, metaclass=StateMeta):
         match payload:
             case [*elements]:
                 try:
-                    return tuple(cls.validate(element) for element in elements)
+                    return tuple(_validated(cls, element, ignore_extra) for element in elements)
 
                 except Exception as exc:
                     raise ValueError(
@@ -1577,6 +1698,15 @@ def _recursive_mapping(  # noqa: PLR0911
 
     else:
         return deepcopy(value)
+
+
+def _validated[Instance: State](cls: type[Instance], value: Any, ignore_extra: bool) -> Instance:
+    # a class validating itself is handed the value as it is - only the usual validation
+    # leaves out what is not an attribute
+    if ignore_extra and native.is_plain_state(cls):
+        return nstruct.validate_instance(cls, value, True)
+
+    return cls.validate(value)
 
 
 def _unexpected_key(cls: Any, key: Any) -> NoReturn:

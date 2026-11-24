@@ -176,6 +176,7 @@ add_kinds(PyObject *module)
     ADD_KIND(SPEC_STR_ENUM);
     ADD_KIND(SPEC_INT_ENUM);
     ADD_KIND(SPEC_TUPLE);
+    ADD_KIND(SPEC_OPEN_TUPLE);
     ADD_KIND(SPEC_SEQUENCE);
     ADD_KIND(SPEC_SET);
     ADD_KIND(SPEC_MAPPING);
@@ -197,9 +198,11 @@ static PyMethodDef module_methods[] = {
     {"signature_fits", (PyCFunction)(void (*)(void))signature_fits_native, METH_FASTCALL, NULL},
     {"validate", (PyCFunction)(void (*)(void))validate_native, METH_FASTCALL, NULL},
     {"check", (PyCFunction)(void (*)(void))check_native, METH_FASTCALL, NULL},
+    {"validate_instance", (PyCFunction)(void (*)(void))validate_instance_native, METH_FASTCALL, NULL},
     {"compile_plan", compile_plan, METH_VARARGS, NULL},
     {"to_json", to_json_native, METH_O, NULL},
-    {"from_json", from_json_native, METH_VARARGS, NULL},
+    {"from_json", (PyCFunction)(void (*)(void))from_json_native, METH_FASTCALL, NULL},
+    {"validates_itself", validates_itself_native, METH_O, NULL},
     {"basic_object", basic_object, METH_VARARGS, NULL},
     {"to_mapping", to_mapping, METH_VARARGS, NULL},
     {"configure", configure, METH_VARARGS, NULL},

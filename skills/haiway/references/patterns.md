@@ -56,6 +56,9 @@ class Invoice(State):
   (`Validation of .total_cents failed: ...`); it is not a `ValueError`.
 - Change with `invoice.updating(total_cents=...)`, which returns a new instance.
 - Serialize with `to_mapping()`/`to_json()`, read with `from_mapping()`/`from_json()`/`validate()`.
+  Keys which are not attributes are refused, nested and in a `TypedDict` too; `from_mapping`,
+  `from_json` and `from_json_array` take `ignore_extra=True` to skip them (not below a class with its
+  own `__init__` or `validate`).
   An `Alias` is the name on the wire (`customer_id`) and is accepted by the constructor too;
   `Missing` values are left out of the output. `Sensitive` only redacts `repr`/`str`.
 - Describe a type for schemas (LLM tools, structured output) with the class keyword

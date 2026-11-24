@@ -13,7 +13,7 @@ use.
 | `field(default_factory=...)`, `__post_init__` defaults | `Default(value)`, `Default(factory=fn)`, `DefaultFactory(fn, *args)`, `DefaultEnv(...)` |
 | hand-written validation in `__init__` | `Annotated[T, Validator(fn)]` (before the built-in validation, coerces raw input) and `Verifier(fn)` (after it, on the typed value); both return the value and raise to reject |
 | nested `dataclasses.replace(...)` | `state.updating(...)`; for deep paths `AttributePath`: `User._.profile.name(user)` reads, `User._.profile.name(user, updated="new")` returns an updated copy, `User._.roles[0]` for items |
-| JSON/dict (de)serialization, schema | `to_json`, `to_mapping`, `from_json`, `from_json_array`, `from_mapping`, `State.validate(value)`, `State.json_schema()` |
+| JSON/dict (de)serialization, schema | `to_json`, `to_mapping`, `from_json`, `from_json_array`, `from_mapping`, `State.validate(value)`, `State.json_schema()`; `ignore_extra=True` on the `from_*` helpers skips keys which are not attributes |
 | renaming/describing fields for APIs and LLM tools | `Alias`, `Description`, `Specification`, `Meta.of(...)` annotations; describe the type itself with `class X(State, description="...")` |
 | masking secrets in repr/logs | `Annotated[str, Sensitive()]` |
 | `Optional` sentinels, `None` meaning "unset" | `Missing` (`is Missing`), `without_missing(mapping)` to drop unset values |

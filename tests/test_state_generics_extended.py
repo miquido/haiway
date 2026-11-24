@@ -1,6 +1,16 @@
 import json
 from collections.abc import Callable, Mapping, Sequence, Set
-from typing import Annotated, Any, Concatenate, Generic, NotRequired, Required, TypedDict, TypeVar
+from typing import (
+    Annotated,
+    Any,
+    Concatenate,
+    Generic,
+    NotRequired,
+    Required,
+    TypedDict,
+    TypeVar,
+    Unpack,
+)
 
 import pytest
 
@@ -364,6 +374,179 @@ def test_unspecialized_variadic_parameter_keeps_the_elements_around_it() -> None
         Framed(cells=(1,))  # pyright: ignore[reportArgumentType]
 
     assert Framed[bytes](cells=(1, b"x", "z")).cells == (1, b"x", "z")
+
+
+class Leaf(State):
+    value: int
+
+
+class Leading[*Ts](State):
+    cells: tuple[Leaf, *Ts]
+
+
+class Trailing[*Ts](State):
+    cells: tuple[*Ts, Leaf]
+
+
+def test_unspecialized_variadic_parameter_keeps_a_state_element_around_it() -> None:
+    leading: Any = Leading
+    trailing: Any = Trailing
+    assert leading.from_mapping({"cells": [{"value": 1}, "a", None]}).cells == (
+        Leaf(value=1),
+        "a",
+        None,
+    )
+    assert leading.from_mapping({"cells": [{"value": 1}]}).cells == (Leaf(value=1),)
+    assert trailing.from_mapping({"cells": [1, "a", {"value": 1}]}).cells == (
+        1,
+        "a",
+        Leaf(value=1),
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        leading.from_mapping({"cells": []})
+    assert exc.value.path == (".cells",)
+
+    with pytest.raises(ValidationError) as exc:
+        trailing.from_mapping({"cells": [1, "a", 2]})
+    assert exc.value.path == (".cells", "[2]")
+
+
+def test_variadic_parameter_specialized_with_an_unbounded_tuple() -> None:
+    open_leading: Any = Leading[*tuple[int, ...]]
+    assert open_leading.from_mapping({"cells": [{"value": 1}]}).cells == (Leaf(value=1),)
+    assert open_leading.from_mapping({"cells": [{"value": 1}, 2, 3]}).cells == (
+        Leaf(value=1),
+        2,
+        3,
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        open_leading.from_mapping({"cells": [{"value": 1}, 2, "x"]})
+    assert exc.value.path == (".cells", "[2]")
+
+    framed: Any = Leading[str, *tuple[int, ...]]
+    assert framed.from_mapping({"cells": [{"value": 1}, "a", 2]}).cells == (Leaf(value=1), "a", 2)
+
+    with pytest.raises(ValidationError) as exc:
+        framed.from_mapping({"cells": [{"value": 1}, 1, 2]})
+    assert exc.value.path == (".cells", "[1]")
+
+    trailed: Any = Trailing[*tuple[int, ...]]
+    assert trailed.from_mapping({"cells": [1, 2, {"value": 1}]}).cells == (1, 2, Leaf(value=1))
+
+    both: Any = Trailing[str, *tuple[int, ...]]
+    assert both.from_mapping({"cells": ["a", 1, {"value": 1}]}).cells == ("a", 1, Leaf(value=1))
+
+
+def test_variadic_parameter_specialized_with_a_fixed_tuple_is_spliced() -> None:
+    fixed: Any = Leading[int, str]
+    assert fixed.from_mapping({"cells": [{"value": 1}, 1, "a"]}).cells == (Leaf(value=1), 1, "a")
+
+    with pytest.raises(ValidationError):
+        fixed.from_mapping({"cells": [{"value": 1}, 1]})
+
+    spliced: Any = Leading[*tuple[int, str]]
+    assert spliced.from_mapping({"cells": [{"value": 1}, 1, "a"]}).cells == (Leaf(value=1), 1, "a")
+
+
+def test_open_tuple_of_variadic_parameter_round_trips_and_describes_itself() -> None:
+    leading: Any = Leading
+    value: Any = leading.from_mapping({"cells": [{"value": 1}, 2]})
+    assert leading.from_json(value.to_json()) == value
+
+    schema: Any = json.loads(leading.json_schema())["properties"]["cells"]
+    assert len(schema["prefixItems"]) == 1
+    assert "items" in schema
+
+
+@pytest.mark.parametrize("arguments", [(int, ...), (...,), (..., int)])
+def test_variadic_parameter_refuses_an_ellipsis(arguments: tuple[Any, ...]) -> None:
+    leading: Any = Leading
+    with pytest.raises(TypeError, match=r"Ellipsis|\.\.\."):
+        leading[arguments]
+
+
+class Defaulted[*Ts = *tuple[int, ...]](State):
+    cells: tuple[str, *Ts]
+
+
+class DefaultedPair[*Ts = *tuple[int, str]](State):
+    cells: tuple[*Ts]
+
+
+def test_variadic_parameter_default_of_an_unbounded_tuple_is_bound() -> None:
+    defaulted: Any = Defaulted
+    assert defaulted(cells=("a",)).cells == ("a",)
+    assert defaulted(cells=("a", 1, 2)).cells == ("a", 1, 2)
+
+    with pytest.raises(ValidationError) as exc:
+        defaulted(cells=("a", 1, "x"))
+    assert exc.value.path == (".cells", "[2]")
+
+    # as it is when it is given
+    with pytest.raises(ValidationError):
+        cells: dict[str, Any] = {"cells": ("a", 1, "x")}
+        Defaulted[*tuple[int, ...]](**cells)
+
+    assert DefaultedPair(cells=(1, "a")).cells == (1, "a")
+
+
+def test_unpack_and_star_spell_the_same_variant() -> None:
+    leading: Any = Leading
+    starred: Any = leading[*tuple[int, ...]]
+    unpacked: Any = leading[Unpack[tuple[int, ...]]]  # noqa: UP044 - the spelling under test
+
+    assert starred is unpacked
+    assert starred.__name__ == unpacked.__name__
+    cells: dict[str, Any] = {"cells": [{"value": 1}, 2]}
+    assert starred.from_mapping(cells) == unpacked.from_mapping(cells)
+
+    mixed: Any = leading[str, Unpack[tuple[int, ...]]]  # noqa: UP044 - the spelling under test
+    assert mixed is leading[str, *tuple[int, ...]]
+
+
+class SequenceForm(State):
+    cells: tuple[int, ...]
+
+
+class UnpackedForm(State):
+    cells: tuple[*tuple[int, ...]]
+
+
+class Unbound[*Ts](State):
+    cells: tuple[*Ts]
+
+
+def test_unbounded_tuple_has_one_representation() -> None:
+    unbound: Any = Unbound
+    schemas: list[Any] = [
+        json.loads(cls.json_schema())["properties"]["cells"] for cls in (SequenceForm, UnpackedForm)
+    ]
+    assert schemas[0] == schemas[1] == {"type": "array", "items": {"type": "integer"}}
+    assert json.loads(unbound.json_schema())["properties"]["cells"]["type"] == "array"
+
+    forms: list[Any] = [
+        annotations.resolve_attribute(
+            annotation,
+            localns=None,
+            module=__name__,
+            resolved_parameters={},
+            recursion_guard={},
+        )
+        for annotation in (tuple[int, ...], tuple[*tuple[int, ...]], tuple[*tuple[Any, ...]])
+    ]
+    assert all(isinstance(form, annotations.SequenceAttribute) for form in forms)
+
+    for cls in (SequenceForm, UnpackedForm):
+        assert cls.from_mapping({"cells": [1, 2]}).cells == (1, 2)
+        assert cls.from_json('{"cells": [1, 2]}').cells == (1, 2)
+        with pytest.raises(ValidationError) as exc:
+            cls.from_mapping({"cells": [1, "x"]})
+        assert exc.value.path == (".cells", "[1]")
+
+    assert unbound.from_mapping({"cells": [1, "a"]}).cells == (1, "a")
+    assert Unbound[*tuple[int, ...]].from_mapping({"cells": [1, 2]}).cells == (1, 2)
 
 
 def test_signature_parameter_of_a_callable_is_contravariant() -> None:
