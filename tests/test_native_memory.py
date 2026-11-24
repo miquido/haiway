@@ -87,6 +87,7 @@ class Rich(State):
     unique: Set[int] = frozenset()
     scores: Mapping[str, int] = Map()
     pair: tuple[int, str] = (0, "")
+    framed: tuple[str, *tuple[int, ...], Leaf] = ("", Leaf(number=0, text=""))
     data: bytes = b""
     either: Leaf | Other | None = None
     retry: Checked | Plain | None = None
@@ -113,6 +114,11 @@ def _rich(rng: random.Random) -> Rich:
             {f"k{index}": rng.randint(-(2**70), 2**70) for index in range(rng.randint(0, 3))}
         ),
         pair=(rng.randint(-5, 5), text),
+        framed=(
+            text,
+            *(rng.randint(-5, 5) for _ in range(rng.randint(0, 3))),
+            Leaf(number=rng.randint(0, 9), text=text),
+        ),
         data=bytes(rng.getrandbits(8) for _ in range(rng.randint(0, 8))),
         either=rng.choice(
             [
@@ -239,6 +245,8 @@ def test_validation_does_not_leak() -> None:
         Rich.validate(raw)
         _swallow(lambda: Rich.validate({**raw, "tags": [1, 2]}))
         _swallow(lambda: Rich.validate({**raw, "either": {"kind": "nope"}}))
+        _swallow(lambda: Rich.validate({**raw, "framed": ["a", "x", {"number": 1}]}))
+        _swallow(lambda: Rich.validate({**raw, "framed": ["a"]}))
 
     _assert_no_leak(operation)
 
@@ -851,7 +859,7 @@ def test_native_json_reads_what_the_standard_library_reads(seed: int) -> None:
         documents.append(mutated.encode("utf-8", "surrogatepass") if encoded else mutated)
 
     for document in documents:
-        native: Any = nstruct.from_json(Rich, document, False)
+        native: Any = nstruct.from_json(Rich, document, False, False)
         expected: State | None = _oracle(Rich, document)
         if native is not None:  # read natively - exactly what the standard library reads
             assert _same(native, expected), document
@@ -865,9 +873,51 @@ def test_native_json_reads_what_the_standard_library_reads(seed: int) -> None:
         assert _same(read, expected), document
 
 
+@pytest.mark.parametrize("seed", range(4))
+def test_native_json_skips_what_the_standard_library_reads(seed: int) -> None:
+    rng = random.Random(seed)
+    extras: Sequence[str] = (
+        '[1, {"a": null}]',
+        '"x\\"\\u00e9{"',
+        "-1.5e3",
+        "{}",
+        "NaN",
+    )
+    documents: list[str | bytes] = []
+    for _ in range(max(FUZZ_ROUNDS // 4, 100)):
+        original: str = _rich(rng).to_json()
+        document: str = "{" + f'"extra": {rng.choice(extras)}, ' + original[1:]
+        if len(original) > 2:
+            document = document[:-1] + f', "tail": {rng.choice(extras)}' + "}"
+
+        mutated: str = _mutated(rng, document) if rng.random() < 0.5 else document
+        encoded: bool = rng.random() < 0.2
+        documents.append(mutated.encode("utf-8", "surrogatepass") if encoded else mutated)
+
+    for document in documents:
+        expected: State | None
+        try:
+            expected = Rich.from_mapping(json.loads(document), ignore_extra=True)
+
+        except Exception:
+            expected = None
+
+        native: Any = nstruct.from_json(Rich, document, False, True)
+        if native is not None:  # read natively - exactly what the standard library reads
+            assert _same(native, expected), document
+
+        try:
+            read: State | None = Rich.from_json(document, ignore_extra=True)
+
+        except ValueError:
+            read = None
+
+        assert _same(read, expected), document
+
+
 def test_values_read_natively_are_not_nan_sensitive() -> None:
     # a float read natively compares the way one read by the standard library does
-    other: Any = nstruct.from_json(Other, '{"kind": "other", "ratio": NaN}', False)
+    other: Any = nstruct.from_json(Other, '{"kind": "other", "ratio": NaN}', False, False)
     assert other is not None
     assert math.isnan(other.ratio)
 

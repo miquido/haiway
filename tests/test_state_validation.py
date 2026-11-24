@@ -1,3 +1,4 @@
+import json
 import re
 import typing
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
@@ -19,6 +20,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from haiway import BasicObject, Missing, State, ValidationError
+from haiway._native import nstruct
 
 
 class Color(Enum):
@@ -87,6 +89,30 @@ class NestedCollections(State):
 class TupleState(State):
     fixed: tuple[str, int, bool]
     variable: tuple[int, ...]
+
+
+class UnpackedLeaf(State):
+    value: int
+
+
+class UnpackedLeading(State):
+    elements: tuple[UnpackedLeaf, *tuple[int, ...]]
+
+
+class UnpackedTrailing(State):
+    elements: tuple[*tuple[int, ...], str]
+
+
+class UnpackedAround(State):
+    elements: tuple[str, *tuple[int, ...], str]
+
+
+class UnpackedFixed(State):
+    elements: tuple[str, *tuple[int, bool], str]
+
+
+class UnpackedOnly(State):
+    elements: tuple[*tuple[int, ...]]
 
 
 class UnionState(State):
@@ -456,6 +482,178 @@ def test_tuple_validation() -> None:
     with pytest.raises(ValidationError) as exc:
         TupleState(fixed=["ok", 3, True], variable=[1, "bad"])
     assert exc.value.path == (".variable", "[1]")
+
+
+_UNPACKED_TUPLES = pytest.mark.parametrize(
+    ("cls", "given", "expected"),
+    [
+        pytest.param(UnpackedLeading, [{"value": 1}], (UnpackedLeaf(value=1),), id="leading-0"),
+        pytest.param(
+            UnpackedLeading,
+            [{"value": 1}, 3],
+            (UnpackedLeaf(value=1), 3),
+            id="leading-1",
+        ),
+        pytest.param(
+            UnpackedLeading,
+            [{"value": 1}, 3, 4, 5],
+            (UnpackedLeaf(value=1), 3, 4, 5),
+            id="leading-many",
+        ),
+        pytest.param(UnpackedTrailing, ["z"], ("z",), id="trailing-0"),
+        pytest.param(UnpackedTrailing, [1, "z"], (1, "z"), id="trailing-1"),
+        pytest.param(UnpackedTrailing, [1, 2, 3, "z"], (1, 2, 3, "z"), id="trailing-many"),
+        pytest.param(UnpackedAround, ["a", "z"], ("a", "z"), id="around-0"),
+        pytest.param(UnpackedAround, ["a", 1, "z"], ("a", 1, "z"), id="around-1"),
+        pytest.param(UnpackedAround, ["a", 1, 2, 3, "z"], ("a", 1, 2, 3, "z"), id="around-many"),
+        pytest.param(UnpackedOnly, [], (), id="only-0"),
+        pytest.param(UnpackedOnly, [1, 2], (1, 2), id="only-many"),
+        pytest.param(UnpackedFixed, ["a", 1, True, "z"], ("a", 1, True, "z"), id="fixed"),
+    ],
+)
+
+
+@_UNPACKED_TUPLES
+def test_unpacked_tuple_validation(cls: Any, given: Any, expected: Any) -> None:
+    instance: Any = cls.from_mapping({"elements": given})
+    assert instance.elements == expected
+    assert cls(elements=tuple(given) if cls is not UnpackedLeading else expected) == instance
+
+    document: str = json.dumps({"elements": given})
+    assert nstruct.from_json(cls, document, False, False) == instance  # read natively
+    assert cls.from_json(document) == instance
+    assert cls.from_json(instance.to_json()) == instance
+
+
+@pytest.mark.parametrize(
+    ("cls", "given", "path"),
+    [
+        pytest.param(UnpackedLeading, [], (".elements",), id="leading-empty"),
+        pytest.param(UnpackedTrailing, [], (".elements",), id="trailing-empty"),
+        pytest.param(UnpackedAround, ["a"], (".elements",), id="around-short"),
+        pytest.param(UnpackedFixed, ["a", 1, True], (".elements",), id="fixed-short"),
+        pytest.param(UnpackedFixed, ["a", 1, True, "z", "y"], (".elements",), id="fixed-long"),
+        pytest.param(UnpackedLeading, [1, 2], (".elements", "[0]"), id="leading-wrong-head"),
+        pytest.param(UnpackedLeading, [{"value": 1}, 2, "x"], (".elements", "[2]"), id="middle"),
+        pytest.param(UnpackedTrailing, [1, "x", 3, "z"], (".elements", "[1]"), id="middle-of-end"),
+        pytest.param(UnpackedTrailing, [1, 2, 3], (".elements", "[2]"), id="wrong-last"),
+        pytest.param(UnpackedAround, ["a", 1, "x", 2, "z"], (".elements", "[2]"), id="around"),
+        pytest.param(UnpackedAround, [1, 2, "z"], (".elements", "[0]"), id="around-first"),
+        pytest.param(UnpackedFixed, ["a", 1, "x", "z"], (".elements", "[2]"), id="fixed-wrong"),
+        pytest.param(UnpackedLeading, "ab", (".elements",), id="text"),
+        pytest.param(UnpackedLeading, 1, (".elements",), id="not-a-sequence"),
+    ],
+)
+def test_unpacked_tuple_validation_failures(cls: Any, given: Any, path: Any) -> None:
+    with pytest.raises(ValidationError) as exc:
+        cls.from_mapping({"elements": given})
+    assert exc.value.path == path
+
+    with pytest.raises(ValidationError) as exc:
+        cls(elements=given)
+    assert exc.value.path == path
+
+
+def test_unpacked_tuple_too_short_message() -> None:
+    with pytest.raises(ValidationError, match="shorter than the 2 elements"):
+        UnpackedAround.from_mapping({"elements": ["a"]})
+
+
+def test_unpacked_tuple_json_schema() -> None:
+    def schema_of(cls: Any) -> Any:
+        return json.loads(cls.json_schema())["properties"]["elements"]
+
+    assert schema_of(UnpackedOnly) == {"type": "array", "items": {"type": "integer"}}
+    assert schema_of(UnpackedFixed) == {
+        "type": "array",
+        "prefixItems": [
+            {"type": "string"},
+            {"type": "integer"},
+            {"type": "boolean"},
+            {"type": "string"},
+        ],
+        "items": False,
+    }
+    leading: Any = schema_of(UnpackedLeading)
+    assert len(leading["prefixItems"]) == 1
+    assert leading["items"] == {"type": "integer"}
+    # what follows the unbounded part can't be told from it by a schema - it is allowed to be any
+    assert schema_of(UnpackedTrailing) == {
+        "type": "array",
+        "items": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
+    }
+    assert schema_of(UnpackedAround) == {
+        "type": "array",
+        "prefixItems": [{"type": "string"}],
+        "items": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
+    }
+
+
+# declared through its annotations - a bare `tuple` is refused by the type checker
+BareTuples: Any = type(
+    "BareTuples",
+    (State,),
+    {"__annotations__": {"plain": tuple, "typed": tuple, "empty": tuple[()]}},
+)
+
+
+def test_bare_tuple_takes_any_elements_and_an_empty_tuple_none() -> None:
+    value: Any = BareTuples.from_mapping({"plain": [1, "a"], "typed": (None,), "empty": []})
+    assert value.plain == (1, "a")
+    assert value.typed == (None,)
+    assert value.empty == ()
+    empty: Any = BareTuples.from_mapping({"plain": [], "typed": [], "empty": ()})
+    assert empty.plain == ()
+
+    with pytest.raises(ValidationError) as exc:
+        BareTuples.from_mapping({"plain": [], "typed": [], "empty": [1]})
+    assert exc.value.path == (".empty",)
+
+    with pytest.raises(ValidationError) as exc:
+        BareTuples.from_mapping({"plain": "ab", "typed": [], "empty": []})
+    assert exc.value.path == (".plain",)
+
+
+type IntTuple = tuple[int, ...]
+type PairTuple = tuple[int, str]
+
+
+class AliasedUnpacking(State):
+    open_alias: tuple[str, *IntTuple]
+    fixed_alias: tuple[str, *PairTuple, str]
+    unpacked: tuple[str, typing.Unpack[IntTuple]]  # noqa: UP044 - the spelling under test
+
+
+def test_unpacked_type_alias_is_looked_through() -> None:
+    value: Any = AliasedUnpacking.from_mapping(
+        {"open_alias": ["a", 1, 2], "fixed_alias": ["a", 1, "b", "c"], "unpacked": ["a"]}
+    )
+    assert value.open_alias == ("a", 1, 2)
+    assert value.fixed_alias == ("a", 1, "b", "c")
+    assert value.unpacked == ("a",)
+
+    with pytest.raises(ValidationError) as exc:
+        AliasedUnpacking.from_mapping(
+            {"open_alias": ["a", 1, "x"], "fixed_alias": ["a", 1, "b", "c"], "unpacked": ["a"]}
+        )
+    assert exc.value.path == (".open_alias", "[2]")
+
+    with pytest.raises(ValidationError) as exc:
+        AliasedUnpacking.from_mapping(
+            {"open_alias": ["a"], "fixed_alias": ["a", 1, "b"], "unpacked": ["a"]}
+        )
+    assert exc.value.path == (".fixed_alias",)
+
+
+def test_tuple_with_two_unbounded_parts_is_refused() -> None:
+    # spelled through its parts - written directly it is refused by the type checker too
+    integers: Any = tuple[int, ...]
+    texts: Any = tuple[str, ...]
+    parts: tuple[Any, ...] = (*integers, *texts)
+    doubled: Any = tuple.__class_getitem__(parts)
+
+    with pytest.raises(TypeError, match="more than one unbounded part"):
+        type("Doubled", (State,), {"__annotations__": {"elements": doubled}})
 
 
 def test_union_validation() -> None:

@@ -9,6 +9,7 @@ import typing
 import uuid
 from collections import abc as collections_abc
 from collections.abc import (
+    Callable,
     Hashable,
     Iterable,
     Mapping,
@@ -40,7 +41,6 @@ from haiway import types as haiway_types
 from haiway.attributes.generics import is_open_type_argument
 from haiway.attributes.validation import (
     Validating,
-    ValidationError,
     Validator,
     Verifier,
     Verifying,
@@ -77,6 +77,7 @@ __all__ = (
     "NoneAttribute",
     "NotRequired",
     "ObjectAttribute",
+    "OpenTupleAttribute",
     "PathAttribute",
     "ProtocolSignature",
     "SequenceAttribute",
@@ -2313,6 +2314,146 @@ class TupleAttribute:
 
 
 @final
+class OpenTupleAttribute:
+    type_name: Literal["tuple"]
+    base: type[Sequence[Any]]
+    leading: Sequence[AttributeAnnotation]
+    variadic: AttributeAnnotation
+    trailing: Sequence[AttributeAnnotation]
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any]
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "base",
+        "description",
+        "leading",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "trailing",
+        "type_name",
+        "variadic",
+        "verifying",
+    )
+
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
+    __repr__ = _record_text
+    __str__ = _record_text
+
+    def __init__(
+        self,
+        *,
+        type_name: Literal["tuple"] = "tuple",
+        base: type[Sequence[Any]],
+        leading: Sequence[AttributeAnnotation],
+        variadic: AttributeAnnotation,
+        trailing: Sequence[AttributeAnnotation],
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] = _no_verify,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        self.type_name = type_name
+        self.base = base
+        self.leading = leading
+        self.variadic = variadic
+        self.trailing = trailing
+        self.alias = alias
+        self.description = description
+        self.verifying = verifying
+        self.required = required
+        self.specification = specification
+        self.meta = meta
+        self.redaction = redaction
+
+    def annotated(  # noqa: C901
+        self,
+        annotations: Sequence[Any],
+    ) -> AttributeAnnotation:
+        if annotations:
+            alias: str | None = self.alias
+            description: str | None = self.description
+            verifying: Verifying[Any] = self.verifying
+            required: bool = self.required
+            specification: TypeSpecification | None = self.specification
+            validating: Validating[Any] | None = None
+            meta: Meta = self.meta
+            redaction: str | None = self.redaction
+
+            for annotation in annotations:
+                if isinstance(annotation, str):
+                    description = annotation
+
+                elif isinstance(annotation, Description):
+                    description = annotation.description
+
+                elif isinstance(annotation, Alias):
+                    alias = annotation.name
+
+                elif isinstance(annotation, Specification):
+                    specification = annotation.specification
+
+                elif isinstance(annotation, NotRequired):
+                    required = False
+
+                elif isinstance(annotation, Verifier):
+                    verifying = cast(Verifier[Any], annotation).verifier
+
+                elif isinstance(annotation, Validator):
+                    validating = cast(Validator[Any], annotation).validator
+
+                elif isinstance(annotation, Meta):
+                    meta = annotation
+
+                elif isinstance(annotation, Sensitive):
+                    redaction = annotation.redaction
+
+            if validating is None:
+                return self.__class__(
+                    base=self.base,
+                    leading=self.leading,
+                    variadic=self.variadic,
+                    trailing=self.trailing,
+                    alias=alias,
+                    description=description,
+                    verifying=verifying,
+                    required=required,
+                    specification=specification,
+                    meta=meta,
+                    redaction=redaction,
+                )
+
+            return ValidableAttribute(
+                validating=validating,
+                attribute=self.__class__(
+                    base=self.base,
+                    leading=self.leading,
+                    variadic=self.variadic,
+                    trailing=self.trailing,
+                    alias=alias,
+                    description=description,
+                    verifying=verifying,
+                    required=required,
+                    specification=specification,
+                    meta=meta,
+                    redaction=redaction,
+                ),
+            )
+
+        return self
+
+
+@final
 class SequenceAttribute:
     type_name: Literal["Sequence"]
     base: type[Sequence[Any]]
@@ -2943,8 +3084,8 @@ def _attribute_redaction(  # noqa: PLR0911
         case UnionAttribute() as union:
             return _any_redaction(union.alternatives, visited_aliases)
 
-        case TupleAttribute() as elements:
-            return _any_redaction(elements.values, visited_aliases)
+        case TupleAttribute() | OpenTupleAttribute() as elements:
+            return _any_redaction(_tuple_elements(elements), visited_aliases)
 
         case SequenceAttribute() | SetAttribute() as collection:
             return _attribute_redaction(collection.values, visited_aliases)
@@ -2954,6 +3095,16 @@ def _attribute_redaction(  # noqa: PLR0911
 
         case _:
             return None
+
+
+def _tuple_elements(
+    attribute: TupleAttribute | OpenTupleAttribute,
+    /,
+) -> Sequence[AttributeAnnotation]:
+    if isinstance(attribute, TupleAttribute):
+        return attribute.values
+
+    return (*attribute.leading, attribute.variadic, *attribute.trailing)
 
 
 def _any_redaction(
@@ -4188,7 +4339,34 @@ def _variadic_parameter(argument: Any, /) -> str | None:
     return None
 
 
-def _resolve_tuple(
+def _unpacked_tuple(argument: Any, /) -> Sequence[Any] | None:
+    # the arguments of an unpacked tuple, `*tuple[int, str]` or `*tuple[int, ...]` - also
+    # as a type alias of one, `*IntTuple`
+    unpacked: Any = argument
+    if get_origin(argument) is typing.Unpack:
+        unpacked = get_args(argument)[0]
+        visited: set[int] = set()
+        while isinstance(unpacked, typing.TypeAliasType | typing_extensions.TypeAliasType):
+            if id(unpacked) in visited:
+                return None  # an alias of itself stands for nothing
+
+            visited.add(id(unpacked))
+            unpacked = unpacked.__value__
+
+    elif not (isinstance(argument, GenericAlias) and argument.__unpacked__):
+        return None
+
+    if unpacked is builtins.tuple or unpacked is typing.Tuple:  # noqa: UP006
+        # not parametrized at all, which is any number of anything - `tuple[()]` is the empty one
+        return (Any, builtins.Ellipsis)
+
+    if get_origin(unpacked) is builtins.tuple:
+        return get_args(unpacked)
+
+    return None
+
+
+def _resolve_tuple(  # noqa: C901
     annotation: Any,
     *,
     localns: Mapping[str, Any] | None,
@@ -4196,109 +4374,151 @@ def _resolve_tuple(
     resolved_parameters: Mapping[str, AttributeAnnotation],
     recursion_guard: MutableMapping[Any, AttributeAnnotation],
 ) -> AttributeAnnotation:
-    values: MutableSequence[AttributeAnnotation] = []
-    open_at: int | None = None
-    for argument in get_args(annotation):
-        if (name := _variadic_parameter(argument)) is None:
-            values.append(
-                resolve_attribute(
-                    argument,
-                    localns=localns,
-                    module=module,
-                    resolved_parameters=resolved_parameters,
-                    recursion_guard=recursion_guard,
-                )
-            )
-            continue
+    leading: MutableSequence[AttributeAnnotation] = []
+    variadic: AttributeAnnotation | None = None
+    variadic_base: Callable[[], Any] | None = None
+    trailing: MutableSequence[AttributeAnnotation] = []
 
+    def append(attribute: AttributeAnnotation) -> None:
+        # what follows the unbounded part is counted from the end
+        if variadic is None:
+            leading.append(attribute)
+
+        else:
+            trailing.append(attribute)
+
+    def open_at(attribute: AttributeAnnotation, base: Callable[[], Any]) -> None:
+        # the base is asked for only when it is needed - an alias which stands for
+        # the tuple itself is not bound until the tuple is resolved
+        nonlocal variadic, variadic_base
+        if variadic is not None:
+            raise TypeError(
+                f"'{annotation}' has more than one unbounded part, a tuple can have only one"
+            )
+
+        variadic = attribute
+        variadic_base = base
+
+    def splice_parameter(name: str) -> None:
         # a variadic parameter stands for the arguments it was given, which is
         # a tuple of them - and for any number of anything when it was not
         resolved: AttributeAnnotation | None = resolved_parameters.get(name)
         if isinstance(resolved, TupleAttribute):
-            values.extend(resolved.values)
-            continue
+            for value in resolved.values:
+                append(value)
 
-        open_at = len(values)
+        elif isinstance(resolved, OpenTupleAttribute):
+            for value in resolved.leading:
+                append(value)
 
-    if open_at is None:
-        return TupleAttribute(
-            base=annotation,
-            values=tuple(values),
-        )
+            open_variadic: AttributeAnnotation = resolved.variadic
+            open_at(open_variadic, lambda: open_variadic.base)
+            trailing.extend(resolved.trailing)
 
-    # a variadic parameter with no arguments given stands for any number of anything -
-    # the elements around it are still what they are declared to be
-    return _open_tuple(values, open_at)
+        elif isinstance(resolved, SequenceAttribute):
+            open_values: AttributeAnnotation = resolved.values
+            open_at(open_values, lambda: open_values.base)
 
+        elif resolved is None:
+            open_at(ANY_ATTRIBUTE, lambda: Any)
 
-def _compile_once(
-    compiled: list[Any],
-    attributes: Sequence[AttributeAnnotation],
-    /,
-) -> None:
-    if compiled:
-        return
-
-    from haiway.attributes import native  # noqa: PLC0415 - it describes this module
-
-    # compiled in full before it is published - compiling runs Python code, and a thread
-    # validating at the same time must never see a part of the list
-    specs: list[Any] = [native.compile(attribute) for attribute in attributes]
-    if not compiled:
-        compiled.extend(specs)
-
-
-def _open_tuple(
-    values: Sequence[AttributeAnnotation],
-    open_at: int,
-    /,
-) -> AttributeAnnotation:
-    leading: Sequence[AttributeAnnotation] = values[:open_at]
-    trailing: Sequence[AttributeAnnotation] = values[open_at:]
-    anything: AttributeAnnotation = SequenceAttribute(
-        base=Sequence[Any],
-        values=ANY_ATTRIBUTE,
-    )
-    if not leading and not trailing:
-        return anything
-
-    # the specs of the elements around the open part, compiled when first needed - the
-    # native description of an annotation is resolved late, as it describes this one too
-    compiled: list[Any] = []
-
-    def validate_fixed(value: Any) -> Any:
-        if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-            return value  # reported as what it is by the validation which follows
-
-        elements: Sequence[Any] = cast(Sequence[Any], value)
-        if len(elements) < len(leading) + len(trailing):
-            raise ValueError(
-                f"'tuple' of length {len(elements)} is shorter than the"
-                f" {len(leading) + len(trailing)} elements it has to start and end with"
+        else:
+            raise TypeError(
+                f"'{name}' of '{annotation}' can't stand for '{resolved}',"
+                " only for the types of a tuple"
             )
 
-        from haiway.attributes import native  # noqa: PLC0415 - it describes this module
+    def splice(arguments: Sequence[Any]) -> None:
+        match arguments:
+            case [element, builtins.Ellipsis]:
+                open_at(
+                    resolve_attribute(
+                        element,
+                        localns=localns,
+                        module=module,
+                        resolved_parameters=resolved_parameters,
+                        recursion_guard=recursion_guard,
+                    ),
+                    lambda: element,
+                )
+                return
 
-        _compile_once(compiled, (*leading, *trailing))
-        checked: list[Any] = list(elements)
-        for index in range(len(leading)):
-            try:
-                checked[index] = native.validate(compiled[index], elements[index])
+            case _:
+                pass
 
-            except Exception as exc:
-                ValidationError.report(f"[{index}]", exc)
+        for argument in arguments:
+            if (name := _variadic_parameter(argument)) is not None:
+                splice_parameter(name)
 
-        for offset in range(len(trailing)):
-            index = len(elements) - len(trailing) + offset
-            try:
-                checked[index] = native.validate(compiled[len(leading) + offset], elements[index])
+            elif (unpacked := _unpacked_tuple(argument)) is not None:
+                splice(unpacked)
 
-            except Exception as exc:
-                ValidationError.report(f"[{index}]", exc)
+            else:
+                append(
+                    resolve_attribute(
+                        argument,
+                        localns=localns,
+                        module=module,
+                        resolved_parameters=resolved_parameters,
+                        recursion_guard=recursion_guard,
+                    )
+                )
 
-        return tuple(checked)
+    splice(get_args(annotation))
+    if variadic is None:
+        return TupleAttribute(
+            base=annotation,
+            values=tuple(leading),
+        )
 
-    return anything.annotated((Validator(validate_fixed),))
+    if not leading and not trailing:
+        # any number of the one type is what `tuple[X, ...]` is
+        assert variadic_base is not None  # nosec: B101
+        return SequenceAttribute(
+            base=Sequence[variadic_base()],
+            values=variadic,
+        )
+
+    # the elements around the unbounded part are still what they are declared to be
+    return OpenTupleAttribute(
+        base=annotation,
+        leading=tuple(leading),
+        variadic=variadic,
+        trailing=tuple(trailing),
+    )
+
+
+def _resolve_forward_reference(
+    resolved: Any,
+    *,
+    localns: Mapping[str, Any] | None,
+    module: str,
+    resolved_parameters: Mapping[str, AttributeAnnotation],
+    recursion_guard: MutableMapping[Any, AttributeAnnotation],
+) -> AttributeAnnotation:
+    hashable: bool = isinstance(resolved, Hashable)
+    if hashable and (guard := recursion_guard.get(resolved)):
+        return guard
+
+    # a class being resolved is guarded by its name, which another class can have as
+    # well - the guard found by it is the one of this class only when it describes it
+    recursion_key: str = _recursion_key(origin=resolved)
+    if (guard := recursion_guard.get(recursion_key)) and getattr(guard, "base", None) is resolved:
+        return guard
+
+    attribute: AttributeAnnotation = resolve_attribute(
+        resolved,
+        localns=localns,
+        module=module,
+        resolved_parameters=resolved_parameters,
+        recursion_guard=recursion_guard,
+    )
+    if hashable:
+        recursion_guard[resolved] = attribute
+
+    recursion_guard.setdefault(recursion_key, attribute)
+
+    return attribute
 
 
 def _resolve_parameters(
@@ -4451,6 +4671,16 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
 
     elif isinstance(attribute, TupleAttribute):
         for value in attribute.values:
+            _finalize_alias_resolution(
+                value,
+                alias_name=alias_name,
+                alias_module=alias_module,
+                alias_target=alias_target,
+                visited=visited,
+            )
+
+    elif isinstance(attribute, OpenTupleAttribute):
+        for value in _tuple_elements(attribute):
             _finalize_alias_resolution(
                 value,
                 alias_name=alias_name,
@@ -4930,6 +5160,13 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
         case builtins.tuple | typing.Tuple | typing_extensions.Tuple:  # noqa: UP006
             match get_args(annotation):
+                case () if annotation in (builtins.tuple, typing.Tuple):  # noqa: UP006
+                    # not parametrized at all, which is any tuple - `tuple[()]` is the empty one
+                    return SequenceAttribute(
+                        base=Sequence[Any],
+                        values=ANY_ATTRIBUTE,
+                    )
+
                 case (values_annotation, builtins.Ellipsis):
                     return SequenceAttribute(
                         base=Sequence[values_annotation],
@@ -5209,56 +5446,34 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
             )
 
         case typing.ForwardRef | typing_extensions.ForwardRef:
-            resolved: Any = _evaluate_forward_ref(
-                annotation,
-                localns=localns,
-                module=module,
-            )
-            if isinstance(resolved, Hashable):
-                if guard := recursion_guard.get(resolved):
-                    return guard
-            recursion_key: str = _recursion_key(origin=resolved)
-            if guard := recursion_guard.get(recursion_key):
-                return guard
-
-            attrbute: AttributeAnnotation = resolve_attribute(
-                resolved,
+            return _resolve_forward_reference(
+                _evaluate_forward_ref(
+                    annotation,
+                    localns=localns,
+                    module=module,
+                ),
                 localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
             )
-            recursion_guard[recursion_key] = attrbute
-
-            return attrbute
 
         # a value pattern, not a class pattern - the subject is the type of the
         # annotation, so `builtins.str()` would ask whether the `str` class is an
         # instance of `str` and never match, leaving string annotations resolved
         # as an opaque custom type which fails on the first validation
         case builtins.str:
-            resolved: Any = _evaluate_forward_ref(
-                annotation,
-                localns=localns,
-                module=module,
-            )
-            if isinstance(resolved, Hashable):
-                if guard := recursion_guard.get(resolved):
-                    return guard
-            recursion_key: str = _recursion_key(origin=resolved)
-            if guard := recursion_guard.get(recursion_key):
-                return guard
-
-            attrbute: AttributeAnnotation = resolve_attribute(
-                resolved,
+            return _resolve_forward_reference(
+                _evaluate_forward_ref(
+                    annotation,
+                    localns=localns,
+                    module=module,
+                ),
                 localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
             )
-            recursion_guard[recursion_key] = attrbute
-
-            return attrbute
 
         case type():
             return _resolve_type(

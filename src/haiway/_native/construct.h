@@ -46,7 +46,7 @@ given_value(PyObject *kwargs, FieldPlan *field, Py_ssize_t *consumed, CompiledPl
 
 /* the values of every attribute, validated, in `values` - 0 with an error set on failure */
 static int
-bind_values(CompiledPlan *plan, PyTypeObject *type, PyObject *kwargs, PyObject **values)
+bind_values(CompiledPlan *plan, PyTypeObject *type, PyObject *kwargs, PyObject **values, int ignore_extra)
 {
     Py_ssize_t n = plan->count;
     Py_ssize_t consumed = 0;
@@ -60,7 +60,7 @@ bind_values(CompiledPlan *plan, PyTypeObject *type, PyObject *kwargs, PyObject *
 
         PyObject *validated;
         if (value != NULL) {
-            validated = validate_field(field, plan, value);
+            validated = validate_field(field, plan, value, ignore_extra);
             Py_DECREF(value);
         } else {
             validated = field_default(field);
@@ -93,8 +93,10 @@ any_bound(PyObject **items, Py_ssize_t n)
     return 0;
 }
 
+/* binds the values of an instance - nested ones are validated leaving out the keys which are
+ * not attributes when `ignore_extra`, which keys of `kwargs` have been left out of already */
 static int
-struct_init(PyObject *obj, PyObject *args, PyObject *kwargs)
+init_instance(PyObject *obj, PyObject *args, PyObject *kwargs, int ignore_extra)
 {
     PyTypeObject *type = Py_TYPE(obj);
     if (PyTuple_GET_SIZE(args) != 0) {
@@ -118,7 +120,7 @@ struct_init(PyObject *obj, PyObject *args, PyObject *kwargs)
         return -1;
     }
     int bound = 0;
-    if (bind_values(plan, type, kwargs, values)) {
+    if (bind_values(plan, type, kwargs, values, ignore_extra)) {
         Py_BEGIN_CRITICAL_SECTION(obj);
         if (!any_bound(items, n)) {
             for (Py_ssize_t i = 0; i < n; i++) items[i] = values[i];
@@ -134,6 +136,12 @@ struct_init(PyObject *obj, PyObject *args, PyObject *kwargs)
     if (!bound) return -1;
     finish_construction(obj);
     return 0;
+}
+
+static int
+struct_init(PyObject *obj, PyObject *args, PyObject *kwargs)
+{
+    return init_instance(obj, args, kwargs, 0);
 }
 
 /* the value an update carries over, a new reference - an instance which was never
@@ -182,7 +190,7 @@ struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
             continue;
         }
 
-        PyObject *validated = validate_field(field, plan, value);
+        PyObject *validated = validate_field(field, plan, value, 0);
         Py_DECREF(value);
         if (validated == NULL) {
             report_failure(plan->state, type, kwargs, field->name);
@@ -293,7 +301,7 @@ struct_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf, PyOb
     PyObject **items = ITEMS(self);
     for (Py_ssize_t i = 0; i < plan->count; i++) {
         FieldPlan *field = &plan->fields[i];
-        PyObject *validated = given[i] >= 0 ? validate_field(field, plan, args[nargs + given[i]]) : field_default(field);
+        PyObject *validated = given[i] >= 0 ? validate_field(field, plan, args[nargs + given[i]], 0) : field_default(field);
         if (validated == NULL) {
             report_failure(plan->state, type, NULL, field->name);
             Py_DECREF(self);
@@ -317,12 +325,14 @@ typedef enum {
  * NULL for one which is not given - gathered in one walk, with the dictionary locked, so
  * nothing read later is what another thread, or the code validating the values, could have
  * changed. No code of the user runs here: only plain strings are looked up. A key which
- * is not an attribute is reported, before any of the values is validated.
+ * is not an attribute is reported, before any of the values is validated - or left out
+ * when `ignore_extra`.
  */
 /* kept out of its caller - its frame is gone before the values are validated, which is
  * where a deeply nested document recurses */
 static Py_NO_INLINE Entries
-given_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObject *entries, PyObject **values)
+given_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObject *entries, PyObject **values,
+              int ignore_extra)
 {
     Py_ssize_t n = plan->count;
     memset(values, 0, (size_t)n * sizeof(PyObject *));
@@ -330,21 +340,24 @@ given_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObje
     /* what the dictionary holds is taken in one go, under its lock, and only then looked
      * up - a lookup in the plan may need a lock of its own, which would let go of the one
      * held, and the rest of the dictionary change under the loop. More entries than
-     * attributes can't each name one - the general way tells which is wrong */
+     * attributes can't each name one - the general way tells which is wrong, unless the
+     * ones which name none are left out, and room is made for all of them */
+    Py_ssize_t capacity = n;
+    if (ignore_extra && PyDict_GET_SIZE(entries) > n) capacity = PyDict_GET_SIZE(entries);
     PyObject *keys_stack[FAST_MAX_FIELDS];
     PyObject *taken_stack[FAST_MAX_FIELDS];
-    PyObject **keys = n <= FAST_MAX_FIELDS ? keys_stack : PyMem_Malloc((size_t)n * 2 * sizeof(PyObject *));
+    PyObject **keys = capacity <= FAST_MAX_FIELDS ? keys_stack : PyMem_Malloc((size_t)capacity * 2 * sizeof(PyObject *));
     if (keys == NULL) {
         PyErr_NoMemory();
         return ENTRIES_FAILED;
     }
-    PyObject **taken = n <= FAST_MAX_FIELDS ? taken_stack : keys + n;
+    PyObject **taken = capacity <= FAST_MAX_FIELDS ? taken_stack : keys + capacity;
     Py_ssize_t count = 0;
     PyObject *key;
     PyObject *value;
     Py_ssize_t position = 0;
     Py_BEGIN_CRITICAL_SECTION(entries);
-    if (PyDict_GET_SIZE(entries) > n) {
+    if (PyDict_GET_SIZE(entries) > capacity) {  /* it grew since - or has more than the attributes */
         result = ENTRIES_UNUSUAL;
     } else {
         while (PyDict_Next(entries, &position, &key, &value)) {
@@ -362,9 +375,10 @@ given_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObje
     Py_ssize_t at = 0;  /* the keys usually come in the order of the attributes */
     for (; at < count && result == ENTRIES_READ; at++) {
         key = keys[at];
-        Py_ssize_t index = key == plan->fields[at].name || key == plan->fields[at].alias
+        Py_ssize_t index = at < n && (key == plan->fields[at].name || key == plan->fields[at].alias)
             ? at : field_for_key(plan, key);
         if (index < 0) {
+            if (ignore_extra) continue;
             unknown = Py_NewRef(key);
             break;
         }
@@ -396,18 +410,18 @@ given_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObje
 /* an instance of a class constructed here from the entries of a dictionary - NULL without
  * an error for entries read the general way, which tells what is unusual about them */
 static PyObject *
-instance_from_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObject *entries)
+instance_from_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan, PyObject *entries, int ignore_extra)
 {
     Py_ssize_t n = plan->count;
     PyObject *stack[FAST_MAX_FIELDS];
     PyObject **values = n <= FAST_MAX_FIELDS ? stack : PyMem_Malloc((size_t)n * sizeof(PyObject *));
     if (values == NULL) return PyErr_NoMemory();
     PyObject *self = NULL;
-    if (given_entries(state, type, plan, entries, values) != ENTRIES_READ) goto done;
+    if (given_entries(state, type, plan, entries, values, ignore_extra) != ENTRIES_READ) goto done;
 
     for (Py_ssize_t i = 0; i < n; i++) {
         FieldPlan *field = &plan->fields[i];
-        PyObject *validated = values[i] != NULL ? validate_field(field, plan, values[i]) : field_default(field);
+        PyObject *validated = values[i] != NULL ? validate_field(field, plan, values[i], ignore_extra) : field_default(field);
         if (validated == NULL) {
             report_failure(state, type, NULL, field->name);
             for (Py_ssize_t k = 0; k < n; k++) Py_XDECREF(values[k]);
@@ -441,15 +455,17 @@ reads_as_entries(ModuleState *state, PyObject *mapping)
  * they are when the class is constructed here; anything else - another mapping, unusual
  * keys, a class constructing itself - goes through a private copy of the mapping, with a
  * key which is not an attribute reported first, before any of the values is validated.
+ * With `ignore_extra` such keys are left out of the copy instead, so a class constructing
+ * itself is not given them either.
  */
 static PyObject *
-instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
+instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping, int ignore_extra)
 {
     PyTypeObject *type = (PyTypeObject *)cls;
     CompiledPlan *plan = PLAN_OF(type);
 
     if (plan != NULL && constructs_natively(type) && reads_as_entries(state, mapping)) {
-        PyObject *self = instance_from_entries(state, type, plan, mapping);
+        PyObject *self = instance_from_entries(state, type, plan, mapping, ignore_extra);
         if (self != NULL || PyErr_Occurred()) return self;
     }
 
@@ -469,11 +485,12 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
 
     if (plan != NULL) {
         PyObject *unknown = NULL;  /* the first key which is not an attribute */
-        int failed = 0;
+        PyObject *kept = ignore_extra ? PyDict_New() : NULL;  /* the entries which are attributes */
+        int failed = ignore_extra && kept == NULL;
         PyObject *key;
         PyObject *value;
         Py_ssize_t position = 0;
-        while (PyDict_Next(kwargs, &position, &key, &value)) {
+        while (!failed && PyDict_Next(kwargs, &position, &key, &value)) {
             PyObject *index;
             int known = PyDict_GetItemRef(plan->keys, key, &index);
             if (known < 0) {
@@ -481,15 +498,19 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
                 break;
             }
             if (!known) {
+                if (ignore_extra) continue;
                 unknown = Py_NewRef(key);
                 break;
             }
             Py_DECREF(index);
+            if (kept != NULL && PyDict_SetItem(kept, key, value) < 0) failed = 1;
         }
         if (failed) {
+            Py_XDECREF(kept);
             Py_DECREF(kwargs);
             return NULL;
         }
+        if (kept != NULL) Py_SETREF(kwargs, kept);
         if (unknown != NULL) {
             PyObject *r = PyObject_CallFunctionObjArgs(state->unexpected, cls, unknown, NULL);
             Py_XDECREF(r);
@@ -508,7 +529,7 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
         self = PyObject_Call(cls, empty, kwargs);
     } else {
         self = struct_new(type, empty, kwargs);
-        if (self != NULL && struct_init(self, empty, kwargs) < 0) Py_CLEAR(self);
+        if (self != NULL && init_instance(self, empty, kwargs, ignore_extra) < 0) Py_CLEAR(self);
     }
     Py_XDECREF(empty);
     Py_DECREF(kwargs);
@@ -517,12 +538,12 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping)
 
 /* the instance of a class as it is, an instance built from a mapping, or an error */
 static PyObject *
-struct_validate_value(ModuleState *state, PyObject *cls, PyObject *value)
+struct_validate_value(ModuleState *state, PyObject *cls, PyObject *value, int ignore_extra)
 {
     if (Py_IS_TYPE(value, (PyTypeObject *)cls)) return Py_NewRef(value);  /* what isinstance tells first */
     /* a dictionary is never an instance - the layout check refuses a dictionary base - and
      * it is the usual input, so the check of the class, a call into Python, is skipped */
-    if (PyAnyDict_Check(value)) return instance_from_mapping(state, cls, value);
+    if (PyAnyDict_Check(value)) return instance_from_mapping(state, cls, value, ignore_extra);
 
     int matching = PyObject_IsInstance(value, cls);
     if (matching < 0) return NULL;
@@ -530,7 +551,7 @@ struct_validate_value(ModuleState *state, PyObject *cls, PyObject *value)
 
     int mapping = PyObject_IsInstance(value, state->mapping);
     if (mapping < 0) return NULL;
-    if (mapping) return instance_from_mapping(state, cls, value);
+    if (mapping) return instance_from_mapping(state, cls, value, ignore_extra);
 
     return type_error_of(cls, value);
 }
@@ -541,7 +562,28 @@ struct_validate(PyObject *cls, PyObject *value)
 {
     CompiledPlan *plan = plan_or_error((PyTypeObject *)cls);
     if (plan == NULL) return NULL;
-    return struct_validate_value(plan->state, cls, value);
+    return struct_validate_value(plan->state, cls, value, 0);
+}
+
+/* validate_instance(cls, value, ignore_extra) - cls.validate(value) of a class validating the usual way,
+ * leaving out the keys which are not attributes where it is told to */
+static PyObject *
+validate_instance_native(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
+{
+    if (nargs != 3) {
+        PyErr_SetString(PyExc_TypeError, "validate_instance expects a class, a value and ignore_extra");
+        return NULL;
+    }
+    ModuleState *state = module_state(mod);
+    PyObject *cls = args[0];
+    if (!PyType_Check(cls) || !PyType_IsSubtype((PyTypeObject *)cls, state->struct_type)) {
+        PyErr_SetString(PyExc_TypeError, "validate_instance expects a Struct class");
+        return NULL;
+    }
+    if (plan_or_error((PyTypeObject *)cls) == NULL) return NULL;
+    int ignore_extra = PyObject_IsTrue(args[2]);
+    if (ignore_extra < 0) return NULL;
+    return struct_validate_value(state, cls, args[1], ignore_extra);
 }
 
 /* __replace__(**values) without a dictionary of the values for the usual call */
@@ -584,7 +626,7 @@ struct_replace_fast(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyO
             }
             continue;
         }
-        PyObject *validated = validate_field(field, plan, args[nargs + given[i]]);
+        PyObject *validated = validate_field(field, plan, args[nargs + given[i]], 0);
         if (validated == NULL) {
             report_failure(plan->state, type, NULL, field->name);
             Py_DECREF(copy);

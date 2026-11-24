@@ -307,6 +307,13 @@ _ANY: Any = (native.Kind.ANY, None, None, None, None, None, ())
         (native.Kind.TYPED_DICT, None, dict, None, None, None, ()),
         (native.Kind.TYPED_DICT, None, dict, None, None, ((1, True),), (_ANY,)),
         (native.Kind.INT, None, None, None, None, None, (_ANY,)),
+        (native.Kind.OPEN_TUPLE, None, None, None, None, 0, ()),  # no repeated element
+        (native.Kind.OPEN_TUPLE, None, None, None, None, None, (_ANY,)),  # no leading count
+        (native.Kind.OPEN_TUPLE, None, None, None, None, "0", (_ANY,)),
+        (native.Kind.OPEN_TUPLE, None, None, None, None, True, (_ANY,)),
+        (native.Kind.OPEN_TUPLE, None, None, None, None, -1, (_ANY,)),
+        (native.Kind.OPEN_TUPLE, None, None, None, None, 1, (_ANY,)),  # leading past the children
+        (native.Kind.OPEN_TUPLE, None, None, None, None, 1 << 70, (_ANY,)),
     ],
 )
 def test_malformed_description_is_refused(description: Any) -> None:

@@ -18,6 +18,7 @@ SPEC_PATH: int
 SPEC_STR_ENUM: int
 SPEC_INT_ENUM: int
 SPEC_TUPLE: int
+SPEC_OPEN_TUPLE: int
 SPEC_SEQUENCE: int
 SPEC_SET: int
 SPEC_MAPPING: int
@@ -53,6 +54,12 @@ def signature_fits(
 ) -> bool: ...
 def validate(spec: Spec, value: Any, /) -> Any: ...
 def check(spec: Spec, value: Any, /) -> bool: ...
+def validate_instance[Instance: Struct](
+    cls: type[Instance],
+    value: Any,
+    ignore_extra: bool,
+    /,
+) -> Instance: ...
 def compile_plan(
     cls: type[Any],
     plan: tuple[Any, ...],
@@ -60,7 +67,14 @@ def compile_plan(
     /,
 ) -> None: ...
 def to_json(instance: Struct, /) -> str | None: ...
-def from_json(cls: type[Struct], text: str | bytes, array: bool, /) -> Any: ...
+def from_json(
+    cls: type[Struct],
+    text: str | bytes,
+    array: bool,
+    ignore_extra: bool,
+    /,
+) -> Any: ...
+def validates_itself(cls: type[Any], /) -> bool: ...
 def basic_object(instance: Struct, strict: bool, path: tuple[str, ...], /) -> Any: ...
 def to_mapping(instance: Struct, recursive: bool, /) -> dict[str, Any]: ...
 

@@ -2,6 +2,74 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.65.0
+
+### Added
+
+- `State.from_mapping`, `State.from_json` and `State.from_json_array` take a keyword-only
+  `ignore_extra` flag. When set, keys which are neither an attribute name nor an alias are skipped
+  instead of refused, in every nested plain State, sequence, mapping, tuple, union and TypedDict the
+  decode reaches - but not below a class with its own `__init__` or `validate`, which decide for
+  themselves and validate what they nest without the flag. JSON values of unknown keys of plain
+  States read natively are walked over without being built. The constructor, `updating()`,
+  `__replace__` and `validate` keep refusing unknown keys, a class with a `validate` of its own is
+  handed the value unchanged, and a validator which decodes on its own does not inherit the flag.
+  In a union an alternative which takes the value as it is wins first, flag or not; among the rest
+  the first which validates wins, and with the flag that can drop data - list the most specific
+  alternative first, or tell them apart with a `Literal` attribute. An object which repeats a key
+  after an alternative of a union has failed is left to the standard library with the flag as it is
+  without, so the last value of the key decides, and a skipped integer of more than 640 digits is
+  left to it too, which applies the limit of the interpreter.
+
+### Changed
+
+- A `TypedDict` attribute refuses a key it does not declare, with `Unexpected key 'x' for Name`,
+  where it used to drop it silently - in every way a State is built: the constructor, `validate`,
+  `updating()` and the decoding helpers. Only the decoding helpers can opt out with
+  `ignore_extra=True`, which gives the previous behaviour; elsewhere the caller has to drop the keys
+  itself. `closed` and `extra_items` of PEP 728 are not honoured: undeclared keys are refused, or
+  dropped with the flag, never kept or validated against `extra_items`.
+- Without the flag, `TypedDict | Mapping[...]` given undeclared keys selects the mapping, which
+  keeps every key, where it used to pick the TypedDict and drop them.
+- A TypedDict reads a dict subclass from a copy, as a State does, so a `__getitem__` or `__missing__`
+  override - a `defaultdict`, say - no longer supplies values: a missing required key is reported.
+- The stricter TypedDict applies wherever one is validated, not only when building a State:
+  `Attribute.validate`, argument validation of functions and `isinstance` against specialized States.
+
+### Fixed
+
+- `State.from_json` and `State.from_json_array` call the `validate` of a class which declares its
+  own, as `from_mapping` and a nested State do, instead of reading the document natively around it.
+- A tuple with an unpacked `*tuple[X, ...]` such as `tuple[Leaf, *tuple[int, ...]]` validates its
+  elements, where it took the unpacked part for one more element. An unpacked fixed tuple such as
+  `*tuple[int, str]` is spliced into the tuple likewise, and a tuple with more than one unbounded
+  part is refused when the class is declared.
+- A tuple with an unbounded part, such as `tuple[Leaf, *Ts]` of a generic State which is not
+  specialized or one specialized with `*tuple[int, ...]`, is validated natively: its elements are
+  validated like those of any other tuple, and its JSON schema lists the elements which lead it.
+- The name of a specialized generic State spells its arguments in full, as they are written:
+  `Box[list[int]]`, `Box[int | None]`, `Box[Literal['a']]` and `Box[*tuple[int, ...]]` where it read
+  `Box[list]`, `Box[Union]`, `Box[Literal]` and `Box[tuple]`, and the signature of a `ParamSpec` as
+  `Handler[[int, str]]`.
+- A `TypeVarTuple` specialized with `...`, as in `Row[int, ...]`, is refused with a `TypeError`
+  instead of being accepted and validating anything - an unbounded tuple is `*tuple[int, ...]`.
+- A `TypeVarTuple` with an unbounded default, `class Box[*Ts = *tuple[int, ...]]`, binds it as it
+  does when it is given, where it stood for anything.
+- `Box[Unpack[tuple[int, ...]]]` and `Box[*tuple[int, ...]]` are one and the same specialization.
+- `tuple[*tuple[int, ...]]` and `tuple[*Ts]` are read as `tuple[int, ...]` and `tuple[Any, ...]`
+  are, and a bare `tuple` or `typing.Tuple` takes any elements where it took none - only
+  `tuple[()]` is the empty tuple.
+- A bare `Unpack[tuple]` or `Unpack[typing.Tuple]` within a tuple, as in
+  `tuple[int, Unpack[tuple], str]`, is an unbounded part of anything, where it was refused or taken
+  for an empty one - `Unpack[tuple[()]]` stays the empty one.
+- `tuple[*tuple[Tree, ...]]` of a recursive `type Tree = int | tuple[*tuple[Tree, ...]]` resolves,
+  where it failed with an `AssertionError`.
+- An unpacked type alias, `*IntTuple` of `type IntTuple = tuple[int, ...]`, is accepted within a
+  tuple, fixed or unbounded.
+- A forward reference to a generic specialized with a class of the same name as another one,
+  `"Box[Item]"` next to `"Box[Item]"` of a different `Item`, resolves to its own class instead of the
+  first one resolved.
+
 ## 0.64.0
 
 ### Added

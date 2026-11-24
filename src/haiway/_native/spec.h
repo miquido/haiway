@@ -31,6 +31,7 @@ enum {
     SPEC_STR_ENUM,     /* base: the enum */
     SPEC_INT_ENUM,     /* base: the enum */
     SPEC_TUPLE,        /* children: one per position */
+    SPEC_OPEN_TUPLE,   /* data: how many positions lead, children: those, the repeated element, the positions which trail */
     SPEC_SEQUENCE,     /* children: the element */
     SPEC_SET,          /* children: the element */
     SPEC_MAPPING,      /* children: the key, the value */
@@ -55,6 +56,7 @@ typedef struct Spec {
     PyObject *verifying;    /* NULL for none */
     PyObject *data;
     Py_ssize_t count;
+    Py_ssize_t leading;     /* an open tuple: how many of the children come before the repeated one */
     struct Spec **children;
     Signature *signature;   /* a function: the calls it has to accept, NULL for any */
 } Spec;
@@ -135,6 +137,15 @@ spec_shaped(ModuleState *state, Spec *spec, Py_ssize_t children)
             }
         }
         return 1;
+    case SPEC_OPEN_TUPLE: {
+        if (spec->data == NULL || !PyLong_CheckExact(spec->data) || children < 1) return 0;
+        Py_ssize_t leading = PyLong_AsSsize_t(spec->data);
+        if (leading == -1 && PyErr_Occurred()) {
+            PyErr_Clear();
+            return 0;
+        }
+        return leading >= 0 && leading < children;
+    }
     case SPEC_TUPLE:
     case SPEC_UNION:
         return 1;
@@ -175,6 +186,7 @@ spec_compile(ModuleState *state, PyObject *description)
         spec_free(spec);
         return NULL;
     }
+    if (spec->kind == SPEC_OPEN_TUPLE) spec->leading = PyLong_AsSsize_t(spec->data);  /* shaped above */
     if ((spec->kind == SPEC_STR_ENUM || spec->kind == SPEC_INT_ENUM) && spec->data == NULL) {
         /* the members by value, what `EnumType.__call__` looks up first - held as it is, so
          * members added later are seen too */
@@ -367,7 +379,8 @@ report_at_key(ModuleState *state, PyObject *key, int quoted)
 /* ---------------------------------------------------------- checks */
 
 static int spec_check(ModuleState *state, Spec *spec, PyObject *value);
-static PyObject *validate_spec(ModuleState *state, Spec *spec, PyObject *value);
+static PyObject *validate_spec(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra);
+static PyObject *undeclared_key(Spec *spec, PyObject *entries);
 
 static inline int
 is_text_like(PyObject *value)
@@ -491,6 +504,17 @@ mapping_snapshot(ModuleState *state, PyObject *value)
     return copy;
 }
 
+/* the spec of the element at an index of an open tuple of `n` elements - the ones leading
+ * by position, the ones trailing by position from the end, any other the repeated one */
+static inline Spec *
+open_tuple_element(Spec *spec, Py_ssize_t index, Py_ssize_t n)
+{
+    Py_ssize_t trailing = spec->count - spec->leading - 1;
+    if (index < spec->leading) return spec->children[index];
+    if (index >= n - trailing) return spec->children[spec->leading + 1 + index - (n - trailing)];
+    return spec->children[spec->leading];
+}
+
 static int
 check_elements(ModuleState *state, Spec *element, PyObject *items)
 {
@@ -573,6 +597,17 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
         Py_DECREF(items);
         return r;
     }
+    case SPEC_OPEN_TUPLE: {
+        if (is_text_like(value)) return 0;
+        int owned;
+        PyObject *items = sequence_snapshot(state, value, &owned);
+        if (items == NULL) return PyErr_Occurred() ? -1 : 0;
+        Py_ssize_t n = PyTuple_GET_SIZE(items);
+        int r = n >= spec->count - 1;
+        for (Py_ssize_t i = 0; r > 0 && i < n; i++) r = spec_check(state, open_tuple_element(spec, i, n), PyTuple_GET_ITEM(items, i));
+        Py_DECREF(items);
+        return r;
+    }
     case SPEC_SEQUENCE: {
         if (is_text_like(value)) return 0;
         int owned;
@@ -610,22 +645,43 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
             int r = PyObject_IsInstance(value, state->mapping);
             if (r <= 0) return r;
         }
-        for (Py_ssize_t i = 0; i < spec->count; i++) {
+        /* a key which is not declared is refused, as validating refuses it */
+        PyObject *entries = mapping_snapshot(state, value);  /* read from, as validating reads it */
+        if (entries == NULL) return PyErr_Occurred() ? -1 : 0;
+        PyObject *unknown = undeclared_key(spec, entries);
+        if (unknown != NULL) {
+            Py_DECREF(unknown);
+            Py_DECREF(entries);
+            return 0;
+        }
+        if (PyErr_Occurred()) {
+            Py_DECREF(entries);
+            return -1;
+        }
+        int accepted = 1;
+        for (Py_ssize_t i = 0; accepted > 0 && i < spec->count; i++) {
             PyObject *entry = PyTuple_GET_ITEM(spec->data, i);
             PyObject *key = PyTuple_GET_ITEM(entry, 0);
             int required = PyTuple_GET_ITEM(entry, 1) == Py_True;
             PyObject *item = NULL;
-            int present = PyMapping_GetOptionalItem(value, key, &item);
-            if (present < 0) return -1;
+            int present = PyMapping_GetOptionalItem(entries, key, &item);
+            if (present < 0) {
+                accepted = -1;
+                break;
+            }
             int ok = 0;
             if (present) {
                 ok = spec_check(state, spec->children[i], item);
                 Py_DECREF(item);
-                if (ok < 0) return -1;
+                if (ok < 0) {
+                    accepted = -1;
+                    break;
+                }
             }
-            if (!ok && required) return 0;
+            if (!ok && required) accepted = 0;
         }
-        return 1;
+        Py_DECREF(entries);
+        return accepted;
     }
     case SPEC_UNION:
         for (Py_ssize_t i = 0; i < spec->count; i++) {
@@ -657,21 +713,29 @@ spec_check(ModuleState *state, Spec *spec, PyObject *value)
 
 /* -------------------------------------------------------- validation */
 
+enum {
+    ELEMENTS_SAME,       /* one spec for every element */
+    ELEMENTS_POSITIONAL, /* one spec for each position */
+    ELEMENTS_OPEN,       /* see `open_tuple_element` */
+};
+
 /*
- * The elements of a tuple validated with a spec each - the one of the sequence, or the
- * one of the position when `positional`. The result is a new reference: the tuple itself
+ * The elements of a tuple validated with a spec each - the one of the sequence, the one
+ * of the position, or the one an open tuple has for it, as the `layout` tells. The result is a new reference: the tuple itself
  * when no element changes, a new tuple otherwise - or, when the tuple is `owned` (made
  * here, seen by nothing else), the tuple changed in place.
  */
 static PyObject *
-validate_elements(ModuleState *state, Spec *spec, int positional, PyObject *tuple, int owned)
+validate_elements(ModuleState *state, Spec *spec, int layout, PyObject *tuple, int owned, int ignore_extra)
 {
     Py_ssize_t n = PyTuple_GET_SIZE(tuple);
     PyObject *result = NULL;
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *element = PyTuple_GET_ITEM(tuple, i);
-        Spec *element_spec = positional ? spec->children[i] : spec->children[0];
-        PyObject *checked = validate_spec(state, element_spec, element);
+        Spec *element_spec = layout == ELEMENTS_POSITIONAL ? spec->children[i]
+            : layout == ELEMENTS_OPEN                      ? open_tuple_element(spec, i, n)
+                                                           : spec->children[0];
+        PyObject *checked = validate_spec(state, element_spec, element, ignore_extra);
         if (checked == NULL) {
             if (result != NULL && result != tuple) Py_DECREF(result);
             return report_at_index(state, i);
@@ -802,7 +866,7 @@ validate_enum_int(ModuleState *state, Spec *spec, PyObject *value)
     return enum_error(state, spec, value, 1, cause);
 }
 
-static PyObject *struct_validate_value(ModuleState *state, PyObject *cls, PyObject *value);
+static PyObject *struct_validate_value(ModuleState *state, PyObject *cls, PyObject *value, int ignore_extra);
 
 /* the entries of a dictionary before a key, copied into another */
 static int
@@ -826,7 +890,7 @@ copy_entries_before(PyObject *source, PyObject *key, PyObject *target)
  * already. Any other mapping is copied into a dictionary first.
  */
 static PyObject *
-validate_mapping(ModuleState *state, Spec *spec, PyObject *value)
+validate_mapping(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
 {
     PyObject *source;  /* what is iterated */
     int owned;         /* whether the source is private, and so the result to be */
@@ -852,8 +916,8 @@ validate_mapping(ModuleState *state, Spec *spec, PyObject *value)
     PyObject *item;
     Py_ssize_t position = 0;
     while (PyDict_Next(source, &position, &key, &item)) {
-        PyObject *checked_key = validate_spec(state, spec->children[0], key);
-        PyObject *checked_item = checked_key == NULL ? NULL : validate_spec(state, spec->children[1], item);
+        PyObject *checked_key = validate_spec(state, spec->children[0], key, ignore_extra);
+        PyObject *checked_item = checked_key == NULL ? NULL : validate_spec(state, spec->children[1], item, ignore_extra);
         if (checked_item == NULL) {
             Py_XDECREF(checked_key);
             report_at_key(state, key, 0);
@@ -899,21 +963,65 @@ fail:
     return NULL;
 }
 
+/* the first key of a dictionary which the TypedDict does not declare, a new reference - NULL
+ * without an error when there is none */
 static PyObject *
-validate_typed_dict(ModuleState *state, Spec *spec, PyObject *value)
+undeclared_key(Spec *spec, PyObject *entries)
+{
+    PyObject *key;
+    PyObject *item;
+    Py_ssize_t position = 0;
+    while (PyDict_Next(entries, &position, &key, &item)) {
+        int declared = 0;
+        for (Py_ssize_t i = 0; !declared && i < spec->count; i++) {
+            declared = PyObject_RichCompareBool(key, PyTuple_GET_ITEM(PyTuple_GET_ITEM(spec->data, i), 0), Py_EQ);
+            if (declared < 0) return NULL;
+        }
+        if (!declared) return Py_NewRef(key);
+    }
+    return NULL;
+}
+
+/*
+ * A TypedDict refuses a key it does not declare, before any of the values is validated,
+ * the way a State does - or leaves it out when `ignore_extra`.
+ */
+static PyObject *
+validate_typed_dict(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
 {
     if (!PyAnyDict_Check(value)) {
         int r = PyObject_IsInstance(value, state->mapping);
         if (r < 0) return NULL;
         if (!r) return type_error_of(spec->base, value);
     }
+    /* what the declared keys are read from - a snapshot, which the code validating the
+     * values can't change, whether the undeclared keys are refused or not */
+    PyObject *source = mapping_snapshot(state, value);
+    if (source == NULL) return PyErr_Occurred() ? NULL : type_error_of(spec->base, value);
+    if (!ignore_extra) {
+        PyObject *unknown = undeclared_key(spec, source);
+        if (unknown != NULL) {
+            PyErr_Format(PyExc_TypeError, "Unexpected key '%S' for %s", unknown,
+                         PyType_Check(spec->base) ? ((PyTypeObject *)spec->base)->tp_name : "TypedDict");
+            Py_DECREF(unknown);
+            Py_DECREF(source);
+            return NULL;
+        }
+        if (PyErr_Occurred()) {
+            Py_DECREF(source);
+            return NULL;
+        }
+    }
     PyObject *result = PyDict_New();
-    if (result == NULL) return NULL;
+    if (result == NULL) {
+        Py_DECREF(source);
+        return NULL;
+    }
     for (Py_ssize_t i = 0; i < spec->count; i++) {
         PyObject *entry = PyTuple_GET_ITEM(spec->data, i);
         PyObject *key = PyTuple_GET_ITEM(entry, 0);
         PyObject *item = NULL;
-        int present = PyMapping_GetOptionalItem(value, key, &item);
+        int present = PyMapping_GetOptionalItem(source, key, &item);
         if (present < 0) goto fail;
         if (!present) {
             if (PyTuple_GET_ITEM(entry, 1) == Py_True) {
@@ -923,7 +1031,7 @@ validate_typed_dict(ModuleState *state, Spec *spec, PyObject *value)
             }
             continue;  /* an optional key which was not provided */
         }
-        PyObject *checked = validate_spec(state, spec->children[i], item);
+        PyObject *checked = validate_spec(state, spec->children[i], item, ignore_extra);
         Py_DECREF(item);
         if (checked == NULL) {
             report_at_key(state, key, 1);
@@ -935,9 +1043,11 @@ validate_typed_dict(ModuleState *state, Spec *spec, PyObject *value)
     }
     PyObject *mapped = PyObject_CallOneArg(state->map, result);
     Py_DECREF(result);
+    Py_DECREF(source);
     return mapped;
 fail:
     Py_DECREF(result);
+    Py_DECREF(source);
     return NULL;
 }
 
@@ -959,7 +1069,7 @@ gather_error(PyObject **errors)
 #define UNION_BITS 64
 
 static PyObject *
-validate_union(ModuleState *state, Spec *spec, PyObject *value)
+validate_union(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
 {
     PyObject *errors = NULL;  /* made with the first one - most values are accepted without any */
     /* each alternative is attempted once - the second pass leaves out what the first one
@@ -995,7 +1105,7 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value)
             } else if (ATTEMPTED(i)) {
                 continue;
             }
-            PyObject *validated = validate_spec(state, alternative, value);
+            PyObject *validated = validate_spec(state, alternative, value, ignore_extra);
             if (validated != NULL) {
                 PyMem_Free(attempted);
                 Py_XDECREF(errors);
@@ -1043,7 +1153,7 @@ fail:
 #undef UNION_BITS
 
 static PyObject *
-validate_kind(ModuleState *state, Spec *spec, PyObject *value)
+validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
 {
     switch (spec->kind) {
     case SPEC_ANY:
@@ -1225,7 +1335,22 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
             Py_DECREF(items);
             return NULL;
         }
-        PyObject *result = validate_elements(state, spec, 1, items, owned);
+        PyObject *result = validate_elements(state, spec, ELEMENTS_POSITIONAL, items, owned, ignore_extra);
+        Py_DECREF(items);
+        return result;
+    }
+    case SPEC_OPEN_TUPLE: {
+        if (is_text_like(value)) return type_error("tuple", value);
+        int owned;
+        PyObject *items = sequence_snapshot(state, value, &owned);
+        if (items == NULL) return PyErr_Occurred() ? NULL : type_error("tuple", value);
+        if (PyTuple_GET_SIZE(items) < spec->count - 1) {
+            PyErr_Format(PyExc_ValueError, "'%s' of length %zd is shorter than the %zd elements the tuple has to start and end with",
+                         Py_TYPE(value)->tp_name, PyTuple_GET_SIZE(items), spec->count - 1);
+            Py_DECREF(items);
+            return NULL;
+        }
+        PyObject *result = validate_elements(state, spec, ELEMENTS_OPEN, items, owned, ignore_extra);
         Py_DECREF(items);
         return result;
     }
@@ -1234,7 +1359,7 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
         int owned;
         PyObject *items = sequence_snapshot(state, value, &owned);
         if (items == NULL) return PyErr_Occurred() ? NULL : type_error("Sequence", value);
-        PyObject *result = validate_elements(state, spec, 0, items, owned);
+        PyObject *result = validate_elements(state, spec, ELEMENTS_SAME, items, owned, ignore_extra);
         Py_DECREF(items);
         return result;
     }
@@ -1246,7 +1371,7 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
         /* the snapshot of a frozenset is not changed in place - it would hide a converted
          * element, and the frozenset itself would be returned with it unconverted */
         int given_frozen = PyFrozenSet_CheckExact(value);
-        PyObject *checked = validate_elements(state, spec, 0, items, owned && !given_frozen);
+        PyObject *checked = validate_elements(state, spec, ELEMENTS_SAME, items, owned && !given_frozen, ignore_extra);
         int unchanged = checked == items;
         Py_DECREF(items);
         if (checked == NULL) return NULL;
@@ -1259,7 +1384,7 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
         return frozen;
     }
     case SPEC_MAPPING:
-        return validate_mapping(state, spec, value);
+        return validate_mapping(state, spec, value, ignore_extra);
     case SPEC_META: {
         int r = PyObject_IsInstance(value, state->meta);
         if (r < 0) return NULL;
@@ -1270,9 +1395,9 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
         return type_error("Meta", value);
     }
     case SPEC_TYPED_DICT:
-        return validate_typed_dict(state, spec, value);
+        return validate_typed_dict(state, spec, value, ignore_extra);
     case SPEC_STATE:
-        return struct_validate_value(state, spec->base, value);
+        return struct_validate_value(state, spec->base, value, ignore_extra);
     case SPEC_CUSTOM_STATE:
         return PyObject_CallMethodOneArg(spec->base, state->str_validate, value);
     case SPEC_CUSTOM: {
@@ -1310,12 +1435,12 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
         return NULL;
     }
     case SPEC_UNION:
-        return validate_union(state, spec, value);
+        return validate_union(state, spec, value, ignore_extra);
     case SPEC_VALIDABLE:
-        return validate_spec(state, spec->children[0], value);  /* `validating` ran already */
+        return validate_spec(state, spec->children[0], value, ignore_extra);  /* `validating` ran already */
     case SPEC_ALIAS: {
         Spec *target = alias_target(state, spec);
-        return target == NULL ? NULL : validate_spec(state, target, value);
+        return target == NULL ? NULL : validate_spec(state, target, value, ignore_extra);
     }
     default:
         PyErr_Format(PyExc_TypeError, "unknown spec kind %d", spec->kind);
@@ -1324,14 +1449,14 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value)
 }
 
 static PyObject *
-validate_spec_unbounded(ModuleState *state, Spec *spec, PyObject *value)
+validate_spec_unbounded(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
 {
     PyObject *raw = value;
     if (spec->validating != NULL) {
         raw = PyObject_CallOneArg(spec->validating, value);
         if (raw == NULL) return NULL;
     }
-    PyObject *result = validate_kind(state, spec, raw);
+    PyObject *result = validate_kind(state, spec, raw, ignore_extra);
     if (raw != value) Py_DECREF(raw);
     if (result != NULL && spec->verifying != NULL) {
         PyObject *verified = PyObject_CallOneArg(spec->verifying, result);
@@ -1343,11 +1468,11 @@ validate_spec_unbounded(ModuleState *state, Spec *spec, PyObject *value)
 
 /* the value a spec accepts for the one given - a new reference, NULL with the error set */
 static PyObject *
-validate_spec(ModuleState *state, Spec *spec, PyObject *value)
+validate_spec(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
 {
-    if (!spec->nested) return validate_spec_unbounded(state, spec, value);  /* a leaf recurses into nothing */
+    if (!spec->nested) return validate_spec_unbounded(state, spec, value, ignore_extra);  /* a leaf recurses into nothing */
     if (Py_EnterRecursiveCall(" while validating a value")) return NULL;
-    PyObject *result = validate_spec_unbounded(state, spec, value);
+    PyObject *result = validate_spec_unbounded(state, spec, value, ignore_extra);
     Py_LeaveRecursiveCall();
     return result;
 }
@@ -1363,7 +1488,7 @@ validate_native(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
     ModuleState *state = module_state(mod);
     Spec *spec = spec_of(state, args[0]);
     if (spec == NULL) return NULL;
-    return validate_spec(state, spec, args[1]);
+    return validate_spec(state, spec, args[1], 0);
 }
 
 /* check(spec, value) - whether the value is accepted as it is */

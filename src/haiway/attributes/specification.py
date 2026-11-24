@@ -22,6 +22,7 @@ from haiway.attributes.annotations import (
     MetaAttribute,
     MissingAttribute,
     NoneAttribute,
+    OpenTupleAttribute,
     PathAttribute,
     SequenceAttribute,
     SetAttribute,
@@ -391,6 +392,55 @@ def _prepare_specification_of_tuple(
     }
 
 
+def _prepare_specification_of_open_tuple(
+    annotation: AttributeAnnotation,
+    recursion_guard: MutableMapping[int, _RecursionGuard],
+) -> TypeSpecification | None:
+    open_tuple = cast(OpenTupleAttribute, annotation)
+    leading_specification: MutableSequence[TypeSpecification] = []
+    for element in open_tuple.leading:
+        element_specification: TypeSpecification | None = _specification(
+            element,
+            recursion_guard=recursion_guard,
+        )
+
+        if element_specification is None:
+            return None
+
+        leading_specification.append(element_specification)
+
+    # the elements at the end can't be told from the ones in the middle by a schema, so
+    # everything after the leading ones is allowed to be any of them
+    rest_specification: MutableSequence[TypeSpecification] = []
+    for element in (open_tuple.variadic, *open_tuple.trailing):
+        element_specification = _specification(
+            element,
+            recursion_guard=recursion_guard,
+        )
+
+        if element_specification is None:
+            return None
+
+        if element_specification not in rest_specification:
+            rest_specification.append(element_specification)
+
+    items_specification: TypeSpecification = (
+        rest_specification[0] if len(rest_specification) == 1 else {"anyOf": rest_specification}
+    )
+
+    if not leading_specification:
+        return {
+            "type": "array",
+            "items": items_specification,
+        }
+
+    return {
+        "type": "array",
+        "prefixItems": leading_specification,
+        "items": items_specification,
+    }
+
+
 _COMPRESSIBLE_TYPES: frozenset[str] = frozenset(
     (
         "null",
@@ -722,6 +772,7 @@ SPECIFICATIONS: Mapping[
     SequenceAttribute: _prepare_specification_of_sequence,
     SetAttribute: _prepare_specification_of_set,
     TupleAttribute: _prepare_specification_of_tuple,
+    OpenTupleAttribute: _prepare_specification_of_open_tuple,
     MappingAttribute: _prepare_specification_of_mapping,
     TypedDictAttribute: _prepare_specification_of_typed_dict,
     UnionAttribute: _prepare_specification_of_union,

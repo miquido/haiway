@@ -259,6 +259,15 @@ class Handler[**P, R](State):
 Handler[[int], bool](call=lambda value: value > 0)
 ```
 
+A tuple may hold one unbounded part, written `*tuple[X, ...]` or as an unspecialized or
+open-specialized `*Ts`, with elements before and after it - `tuple[Leaf, *tuple[int, ...], str]`
+takes a `Leaf`, any number of integers and a `str`. The elements around it are validated by
+position, counting from the end for those which follow it, and the ones in between against `X` (any
+value for an unspecialized `*Ts`). An unpacked fixed tuple such as `*tuple[int, str]`, or a type
+alias of one, is spliced in. A second unbounded part is refused, and so is `...` as an argument of a
+`TypeVarTuple`: `Row[int, ...]` is spelled `Row[*tuple[int, ...]]`. A default such as
+`*Ts = *tuple[int, ...]` binds as an argument does.
+
 #### Variance
 
 Whether `Box[Dog]` is a subclass of `Box[Animal]` follows the variance of the parameter. A declared
@@ -356,7 +365,8 @@ This is useful for serialization or when you need to work with plain dictionarie
 
 When working with external payloads, use the complementary helpers:
 
-- `State.from_mapping(mapping)` — accepts both attribute names and aliases.
+- `State.from_mapping(mapping)` — accepts both attribute names and aliases. A key which is neither
+  is refused, in nested States and TypedDicts as well; see `ignore_extra` below.
 - `State.from_json(payload)` / `State.from_json_array(payload)` — decode JSON strings into State
   instances (or tuples of instances). Validation errors are converted into informative exceptions.
 - `state.to_json(indent=2)` — encode a State instance to JSON using the same alias behaviour as
@@ -368,6 +378,49 @@ When working with external payloads, use the complementary helpers:
   path and the type. See [Converting to Basic Values](types.md#converting-to-basic-values).
 - `State.validate(value)` — coerce an instance or compatible mapping into the target State type.
   This is handy when accepting heterogeneous inputs.
+
+By default the decoding helpers refuse a key which is not an attribute: `TypeError` at the top level
+of `from_mapping` and `validate`, and `ValueError` from `from_json`. For a key within a nested State
+or TypedDict `from_mapping` and `validate` raise a `ValidationError` naming the path, while
+`from_json` and `from_json_array` raise a `ValueError` with that `ValidationError` as its
+`__cause__`. When the payload comes from a producer you do not control, `from_mapping`, `from_json`
+and `from_json_array` take a keyword-only `ignore_extra` flag which skips such keys instead:
+
+```python
+from haiway import State
+
+
+class Account(State):
+    id: int
+    name: str
+
+
+payload = '{"id": 42, "name": "Alice", "plan": "pro", "profile": {"theme": "dark"}}'
+
+account = Account.from_json(payload, ignore_extra=True)  # `plan` and `profile` are skipped
+account = Account.from_mapping(
+    {"id": 42, "name": "Alice", "plan": "pro"},
+    ignore_extra=True,
+)
+```
+
+The flag applies to that one decode and reaches every nested plain State, sequence, mapping, tuple,
+union and TypedDict of it. It stops below a class with its own `__init__` or `validate`: those
+decide for themselves, and what they nest is validated without the flag. A State with a `validate`
+of its own is handed the value as it is, so what it does with extra keys is up to it - it may still
+raise `TypeError` for them - and one with an `__init__` of its own is called without the skipped
+keys. Missing required attributes and invalid values of known keys still fail. The constructor,
+`updating()` and `validate` keep refusing unknown keys, and a validator which decodes on its own
+does not inherit the flag. TypedDicts refuse keys they do not declare unless the flag is set, which
+drops them.
+
+In a union an alternative which takes the value exactly as it is wins first, flag or not:
+`TypedDict | Mapping[str, Any]` given `{"a": 1, "x": 2}` is read as the mapping, with every key.
+Among the rest the first alternative which validates wins, and with the flag an alternative which
+fits only because its unknown keys are skipped can drop data - one with nothing but defaults, listed
+first, matches an object holding nothing but unknown keys and discards them all, though it still
+refuses an invalid value of a key it knows. List the most specific alternative first, or tell them
+apart with a `Literal` attribute.
 
 Aliases apply consistently across these helpers. For example, the `Invoice.customer` field above
 accepts `customer` or `customer_id` when instantiating, and `invoice.to_mapping()` emits
@@ -391,7 +444,10 @@ State classes perform thorough type validation for all supported Python types:
   `Literal[Color.RED]` reads `"red"` as `Color.RED`, `Literal["red"]` reads `Color.RED` as `"red"`
 - **Enum Types**: Enum, StrEnum, and IntEnum
 - **Callable Types**: Function types and Protocol interfaces
-- **TypedDict**: Validates structure with Required/NotRequired fields
+- **TypedDict**: Validates structure with Required/NotRequired fields. A key the TypedDict does not
+  declare is refused (`Unexpected key 'x' for Name`), unless decoding with `ignore_extra=True`,
+  which drops it. `closed` and `extra_items` of PEP 728 are not honoured: undeclared keys are
+  refused or dropped, never kept or validated against `extra_items`
 - **Nested State Classes**: Validates recursively including generic State types
 - **Any Type**: Accepts any value without validation
 
@@ -708,6 +764,11 @@ intermediate Python objects - for the default `json.JSONEncoder` and `json.JSOND
 `indent`. A document which is not the usual case, or a value with no native spelling, is read or
 written through the standard library instead, which is also what reports an error of the document
 itself. Passing an `encoder_class`, a `decoder` or an `indent` uses the standard library directly.
+With `ignore_extra=True` the native reader walks over the values of keys which are not attributes
+without building them, and the same document is refused for the same reasons as without it - a
+malformed value of a skipped key is an error too. A custom `decoder`, or a document the native
+reader declines, goes through `json.loads`, which builds every value before validation drops those
+of unknown keys.
 
 Calling a class with keyword arguments, `Point(x=1, y=2)`, and updating, `point.updating(x=3)`, are
 the fastest ways to build and change an instance. To build an instance from a mapping use

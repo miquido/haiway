@@ -68,6 +68,30 @@ WIDE: Any = reduce(_either, (Literal[f"value-{i}"] for i in range(70)))
 Wide: type[Holder[Any]] = Holder[WIDE]
 
 
+class OpenAlternative(State):
+    value: tuple[Point, *tuple[int, ...]] | int | str
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    (
+        ((Point(x=1, y=2),), (Point(x=1, y=2),)),
+        ([Point(x=1, y=2), 3, 4], (Point(x=1, y=2), 3, 4)),  # accepted as it is
+        (({"x": 1, "y": 2}, 3), (Point(x=1, y=2), 3)),  # no alternative accepts it as it is
+        (3, 3),  # not a sequence
+        ("ab", "ab"),  # text, which is no tuple
+    ),
+)
+def test_open_tuple_among_the_alternatives_of_a_union(given: Any, expected: Any) -> None:
+    assert OpenAlternative(value=given).value == expected
+
+
+@pytest.mark.parametrize("given", ((), (Point(x=1, y=2), "x"), [{"x": 1}]))
+def test_open_tuple_among_the_alternatives_of_a_union_refused(given: Any) -> None:
+    with pytest.raises(ValidationError):
+        OpenAlternative(value=given)
+
+
 @pytest.mark.parametrize("index", (0, 63, 64, 69))
 def test_union_past_a_word_of_alternatives(index: int) -> None:
     assert Wide(value=f"value-{index}").value == f"value-{index}"
@@ -121,7 +145,7 @@ def test_configure_only_once() -> None:
         lambda: nstruct.to_json(object()),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.basic_object(object(), True, ()),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.to_mapping(object(), False),  # pyright: ignore[reportArgumentType]
-        lambda: nstruct.from_json(int, "{}", False),  # pyright: ignore[reportArgumentType]
+        lambda: nstruct.from_json(int, "{}", False, False),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.compile_plan(int, (), ()),
         lambda: nstruct.validate(object(), 1),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.check(object(), 1),  # pyright: ignore[reportArgumentType]
@@ -131,3 +155,76 @@ def test_configure_only_once() -> None:
 def test_internal_entry_points_refuse_what_they_are_not_given(call: Any) -> None:
     with pytest.raises(TypeError):
         call()
+
+
+def test_validating_ignoring_extra_refuses_what_it_is_not_given() -> None:
+    not_a_class: Any = int
+    missing: tuple[Any, ...] = (Point,)
+    with pytest.raises(TypeError, match="Struct class"):
+        nstruct.validate_instance(not_a_class, {}, True)
+
+    with pytest.raises(TypeError, match="expects a class, a value and ignore_extra"):
+        nstruct.validate_instance(*missing)
+
+
+def test_validate_instance_leaves_out_keys_which_are_not_attributes_when_told_to() -> None:
+    assert nstruct.validate_instance(Point, {"x": 1, "y": 2, "z": 3}, True) == Point(x=1, y=2)
+    assert nstruct.validate_instance(Point, {"x": 1, "y": 2}, False) == Point(x=1, y=2)
+    with pytest.raises(TypeError, match="Unexpected attribute 'z' for Point"):
+        nstruct.validate_instance(Point, {"x": 1, "y": 2, "z": 3}, False)
+
+
+class ValidatingItself(State):
+    @classmethod
+    def validate(cls, value: Any, /) -> ValidatingItself:
+        return cls()
+
+
+class InheritingValidation(ValidatingItself):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("cls", "expected"),
+    [
+        (nstruct.Struct, False),
+        (State, False),
+        (Point, False),
+        (ValidatingItself, True),
+        (InheritingValidation, True),
+    ],
+)
+def test_validates_itself_tells_a_validate_declared_before_struct(
+    cls: type[nstruct.Struct],
+    expected: bool,
+) -> None:
+    assert nstruct.validates_itself(cls) is expected
+
+
+def test_validates_itself_refuses_what_is_not_a_struct_class() -> None:
+    not_a_struct: Any = int
+    with pytest.raises(TypeError, match="Struct class"):
+        nstruct.validates_itself(not_a_struct)
+
+
+def test_from_json_refuses_wrong_arguments() -> None:
+    missing: tuple[Any, ...] = (Point, "{}", False)
+    with pytest.raises(TypeError, match="expects a class, a text, array and ignore_extra"):
+        nstruct.from_json(*missing)
+
+    not_a_class: Any = int
+    with pytest.raises(TypeError, match="Struct class"):
+        nstruct.from_json(not_a_class, "{}", False, False)
+
+
+class Undecidable:
+    def __bool__(self) -> bool:
+        raise RuntimeError("undecidable")
+
+
+@pytest.mark.parametrize("position", [2, 3])
+def test_from_json_passes_on_an_error_of_a_flag(position: int) -> None:
+    arguments: list[Any] = [Point, '{"x": 1, "y": 2}', False, False]
+    arguments[position] = Undecidable()
+    with pytest.raises(RuntimeError, match="undecidable"):
+        nstruct.from_json(*arguments)

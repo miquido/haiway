@@ -31,6 +31,7 @@ typedef struct {
     int depth;
     int limit;  /* how deep a document goes, which is as far as Python recurses */
     int repeated;  /* a key of an object was repeated - json.loads keeps the last, so a union it is within reads the document */
+    int ignore_extra;  /* a key which is not an attribute is skipped, rather than declining the document */
 } Decoder;
 
 static int
@@ -230,36 +231,46 @@ field_for_span(CompiledPlan *plan, const char *start, Py_ssize_t length, int esc
     return index;
 }
 
+/* where the number which starts at `start` ends - NULL when it is not one json spells */
+static const char *
+number_end(const char *start, const char *end, int *is_float)
+{
+    const char *p = start;
+    *is_float = 0;
+    if (p < end && *p == '-') p++;
+    if (p >= end) return NULL;
+    if (*p == '0') {
+        p++;
+        if (p < end && *p >= '0' && *p <= '9') return NULL;  /* no leading zeros */
+    } else if (*p >= '1' && *p <= '9') {
+        while (p < end && *p >= '0' && *p <= '9') p++;
+    } else {
+        return NULL;
+    }
+    if (p < end && *p == '.') {
+        const char *digits = ++p;
+        while (p < end && *p >= '0' && *p <= '9') p++;
+        if (p == digits) return NULL;
+        *is_float = 1;
+    }
+    if (p < end && (*p == 'e' || *p == 'E')) {
+        p++;
+        if (p < end && (*p == '+' || *p == '-')) p++;
+        const char *digits = p;
+        while (p < end && *p >= '0' && *p <= '9') p++;
+        if (p == digits) return NULL;
+        *is_float = 1;
+    }
+    return p;
+}
+
 static PyObject *
 decode_number(Decoder *d)
 {
     const char *start = d->p;
-    const char *p = d->p;
-    int is_float = 0;
-    if (p < d->end && *p == '-') p++;
-    if (p >= d->end) return NULL;
-    if (*p == '0') {
-        p++;
-        if (p < d->end && *p >= '0' && *p <= '9') return NULL;  /* no leading zeros */
-    } else if (*p >= '1' && *p <= '9') {
-        while (p < d->end && *p >= '0' && *p <= '9') p++;
-    } else {
-        return NULL;
-    }
-    if (p < d->end && *p == '.') {
-        const char *digits = ++p;
-        while (p < d->end && *p >= '0' && *p <= '9') p++;
-        if (p == digits) return NULL;
-        is_float = 1;
-    }
-    if (p < d->end && (*p == 'e' || *p == 'E')) {
-        p++;
-        if (p < d->end && (*p == '+' || *p == '-')) p++;
-        const char *digits = p;
-        while (p < d->end && *p >= '0' && *p <= '9') p++;
-        if (p == digits) return NULL;
-        is_float = 1;
-    }
+    int is_float;
+    const char *p = number_end(start, d->end, &is_float);
+    if (p == NULL) return NULL;
     Py_ssize_t length = p - start;
     if (!is_float && length <= 18) {  /* what fits a machine word for sure, read in place */
         const char *q = start;
@@ -411,6 +422,189 @@ decode_any(Decoder *d)
     return result;
 }
 
+/*
+ * A value which nothing reads - the one of a key which is not an attribute - is walked
+ * over without building anything, and has to be what the standard library reads: any of it
+ * which is not json, a string with an escape which is not valid or which is not UTF-8
+ * included, declines the document the way reading it would.
+ */
+static int skip_value(Decoder *d);
+
+static int
+valid_utf8(const char *text, Py_ssize_t length)
+{
+    const unsigned char *s = (const unsigned char *)text;
+    Py_ssize_t i = 0;
+    while (i < length) {
+        unsigned char c = s[i];
+        if (c < 0x80) {
+            i++;
+            continue;
+        }
+        Py_ssize_t follow;  /* the continuation bytes, the first of which may have a narrower range */
+        unsigned char low = 0x80;
+        unsigned char high = 0xbf;
+        if (c >= 0xc2 && c <= 0xdf) {
+            follow = 1;
+        } else if (c >= 0xe0 && c <= 0xef) {
+            follow = 2;
+            if (c == 0xe0) low = 0xa0;
+            if (c == 0xed) high = 0x9f;  /* no surrogates */
+        } else if (c >= 0xf0 && c <= 0xf4) {
+            follow = 3;
+            if (c == 0xf0) low = 0x90;
+            if (c == 0xf4) high = 0x8f;
+        } else {
+            return 0;
+        }
+        if (length - i <= follow || s[i + 1] < low || s[i + 1] > high) return 0;
+        for (Py_ssize_t k = 2; k <= follow; k++) {
+            if ((s[i + k] & 0xc0) != 0x80) return 0;
+        }
+        i += follow + 1;
+    }
+    return 1;
+}
+
+/* whether the bytes between the quotes of a string are text with escapes which json has */
+static int
+valid_string(const char *text, Py_ssize_t length, int escaped)
+{
+    if (!valid_utf8(text, length)) return 0;
+    if (!escaped) return 1;
+    for (Py_ssize_t i = 0; i < length; i++) {
+        if (text[i] != '\\') continue;
+        i++;  /* the character after it exists - the span of a string ends at an unescaped quote */
+        switch (text[i]) {
+        case '"': case '\\': case '/': case 'b': case 'f': case 'n': case 'r': case 't':
+            break;
+        case 'u':
+            if (length - i < 5) return 0;
+            for (int k = 1; k <= 4; k++) {
+                char h = text[i + k];
+                if (!((h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') || (h >= 'A' && h <= 'F'))) return 0;
+            }
+            i += 4;
+            break;
+        default:
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int
+skip_string(Decoder *d)
+{
+    const char *start;
+    Py_ssize_t length;
+    int escaped;
+    return string_span(d, &start, &length, &escaped) && valid_string(start, length, escaped);
+}
+
+static int
+skip_array(Decoder *d)
+{
+    d->p++;  /* [ */
+    skip_whitespace(d);
+    if (d->p < d->end && *d->p == ']') {
+        d->p++;
+        return 1;
+    }
+    for (;;) {
+        skip_whitespace(d);
+        if (!skip_value(d)) return 0;
+        skip_whitespace(d);
+        if (d->p < d->end && *d->p == ',') {
+            d->p++;
+            continue;
+        }
+        if (d->p < d->end && *d->p == ']') {
+            d->p++;
+            return 1;
+        }
+        return 0;
+    }
+}
+
+static int
+skip_object(Decoder *d)
+{
+    d->p++;  /* { */
+    skip_whitespace(d);
+    if (d->p < d->end && *d->p == '}') {
+        d->p++;
+        return 1;
+    }
+    for (;;) {
+        skip_whitespace(d);
+        if (!skip_string(d)) return 0;
+        skip_whitespace(d);
+        if (d->p >= d->end || *d->p != ':') return 0;
+        d->p++;
+        skip_whitespace(d);
+        if (!skip_value(d)) return 0;
+        skip_whitespace(d);
+        if (d->p < d->end && *d->p == ',') {
+            d->p++;
+            continue;
+        }
+        if (d->p < d->end && *d->p == '}') {
+            d->p++;
+            return 1;
+        }
+        return 0;
+    }
+}
+
+/* whether an integer of that many digits may be more than int() reads - which the standard
+ * library refuses to read, so a document holding one is for it to report. 640 is the least
+ * limit there can be other than none, so any number up to it is read; the limit itself is
+ * not asked for, as it is an attribute of the user and asking would run code mid-parse */
+static int
+integer_too_long(Py_ssize_t digits)
+{
+    return digits > 640;
+}
+
+static int
+skip_value_unbounded(Decoder *d)
+{
+    if (d->p >= d->end) return 0;
+    switch (*d->p) {
+    case '{': return skip_object(d);
+    case '[': return skip_array(d);
+    case '"': return skip_string(d);
+    case 't': return match_word(d, "true", 4);
+    case 'f': return match_word(d, "false", 5);
+    case 'n': return match_word(d, "null", 4);
+    case 'N': return match_word(d, "NaN", 3);
+    case 'I': return match_word(d, "Infinity", 8);
+    default: {
+        if (match_word(d, "-Infinity", 9)) return 1;
+        int is_float;
+        const char *end = number_end(d->p, d->end, &is_float);
+        if (end == NULL) return 0;
+        if (!is_float && integer_too_long(end - d->p - (*d->p == '-'))) return 0;
+        d->p = end;
+        return 1;
+    }
+    }
+}
+
+/* 0 for a value which is not read, with an error set when it is too deep to be */
+static int
+skip_value(Decoder *d)
+{
+    if (d->depth >= d->limit) return 0;
+    if (Py_EnterRecursiveCall(" while decoding json")) return 0;
+    d->depth++;
+    int result = skip_value_unbounded(d);
+    d->depth--;
+    Py_LeaveRecursiveCall();
+    return result;
+}
+
 static PyObject *decode_struct_unbounded(Decoder *d, PyTypeObject *type);
 
 static PyObject *
@@ -459,7 +653,18 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
             int key_escaped;
             if (!string_span(d, &key_start, &key_length, &key_escaped)) goto fail;
             Py_ssize_t index = field_for_span(plan, key_start, key_length, key_escaped);
-            if (index < 0) goto fail;  /* not an attribute */
+            if (index < 0) {
+                if (PyErr_Occurred()) goto fail;  /* telling the key failed - it is not that it names nothing */
+                /* not an attribute - read past, with its value, when those are left out. The key
+                 * is told for one, or for a spelling which is not valid, by it being found nowhere */
+                if (!d->ignore_extra || !valid_string(key_start, key_length, key_escaped)) goto fail;
+                skip_whitespace(d);
+                if (d->p >= d->end || *d->p != ':') goto fail;
+                d->p++;
+                skip_whitespace(d);
+                if (!skip_value(d)) goto fail;
+                goto next;
+            }
             if (given[index]) {
                 d->repeated = 1;
                 goto fail;
@@ -485,6 +690,7 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
                 }
             }
 
+        next:
             skip_whitespace(d);
             if (d->p < d->end && *d->p == ',') {
                 d->p++;
@@ -600,7 +806,7 @@ decode_mapping(Decoder *d, Spec *spec)
             skip_whitespace(d);
             PyObject *key = decode_string(d);
             if (key == NULL) goto fail;
-            PyObject *checked_key = validate_spec(d->state, spec->children[0], key);
+            PyObject *checked_key = validate_spec(d->state, spec->children[0], key, d->ignore_extra);
             Py_DECREF(key);
             if (checked_key == NULL) {
                 decline_failure();
@@ -673,6 +879,7 @@ refuses_objects(int kind)
     case SPEC_STR_ENUM:
     case SPEC_INT_ENUM:
     case SPEC_TUPLE:
+    case SPEC_OPEN_TUPLE:
     case SPEC_SEQUENCE:
     case SPEC_FUNCTION:
         return 1;
@@ -704,6 +911,46 @@ union_has(Spec *spec, int kind)
     return 0;
 }
 
+#define REPEAT_SCAN_KEYS 32
+
+/* whether the object at `start` has a key twice, or could have - told by the bytes of its keys,
+ * so one spelled with escapes, and an object too long to compare, count as having it */
+static int
+object_may_repeat_key(Decoder *d, const char *start)
+{
+    Decoder probe = *d;
+    probe.p = start + 1;  /* { */
+    const char *keys[REPEAT_SCAN_KEYS];
+    Py_ssize_t lengths[REPEAT_SCAN_KEYS];
+    Py_ssize_t count = 0;
+    skip_whitespace(&probe);
+    if (probe.p < probe.end && *probe.p == '}') return 0;
+    for (;;) {
+        skip_whitespace(&probe);
+        const char *key_start;
+        Py_ssize_t key_length;
+        int key_escaped;
+        if (!string_span(&probe, &key_start, &key_length, &key_escaped)) return 1;
+        if (key_escaped || count == REPEAT_SCAN_KEYS) return 1;
+        for (Py_ssize_t i = 0; i < count; i++) {
+            if (lengths[i] == key_length && memcmp(keys[i], key_start, (size_t)key_length) == 0) return 1;
+        }
+        keys[count] = key_start;
+        lengths[count++] = key_length;
+        skip_whitespace(&probe);
+        if (probe.p >= probe.end || *probe.p != ':') return 1;
+        probe.p++;
+        skip_whitespace(&probe);
+        if (!skip_value(&probe)) return 1;
+        skip_whitespace(&probe);
+        if (probe.p < probe.end && *probe.p == ',') {
+            probe.p++;
+            continue;
+        }
+        return 0;
+    }
+}
+
 /* a value read the way the spec accepts it - validated as it is read */
 static PyObject *
 decode_spec(Decoder *d, Spec *spec)
@@ -728,6 +975,7 @@ decode_spec(Decoder *d, Spec *spec)
                  * the alternatives it fits - only one repeated within it is looked for */
                 int outside = d->repeated;
                 d->repeated = 0;
+                int told = 0;
                 /* the first class the object fits - the alternatives are tried in order */
                 for (Py_ssize_t i = 0; i < spec->count; i++) {
                     Spec *alternative = spec->children[i];
@@ -747,6 +995,16 @@ decode_spec(Decoder *d, Spec *spec)
                         return instance;
                     }
                     if (d->p == start) break;  /* a class which is not read here */
+                    if (d->ignore_extra && !told) {
+                        /* a key which is left out is not looked for when repeated, so what a
+                         * failed alternative did not reach could be, by the next one, a key
+                         * json.loads keeps the last of - the document decides */
+                        told = 1;
+                        if (object_may_repeat_key(d, start)) {
+                            d->repeated = 1;
+                            return NULL;
+                        }
+                    }
                     d->p = start;
                 }
                 d->repeated = outside;
@@ -766,7 +1024,7 @@ decode_spec(Decoder *d, Spec *spec)
     /* anything else is read as it is and validated */
     PyObject *raw = decode_any(d);
     if (raw == NULL) return NULL;
-    PyObject *validated = validate_spec(d->state, spec, raw);
+    PyObject *validated = validate_spec(d->state, spec, raw, d->ignore_extra);
     Py_DECREF(raw);
     return validated != NULL ? validated : decline_failure();
 }
@@ -780,7 +1038,7 @@ apply_pending(Decoder *d)
         if (item->index == FINISHING) continue;
         PyObject *validated;
         if (item->value != NULL) {
-            validated = validate_spec(d->state, item->spec, item->value);
+            validated = validate_spec(d->state, item->spec, item->value, d->ignore_extra);
         } else {
             validated = field_default(&PLAN_OF(Py_TYPE(item->owner))->fields[item->index]);
         }
@@ -823,19 +1081,44 @@ document_text(PyObject *value, Py_ssize_t *length)
     return NULL;
 }
 
-/* from_json(cls, text, array) - an instance, or None when the standard library has to read it */
+/* validates_itself(cls) - whether a State class declares a `validate` of its own, which
+ * `is_plain_state` of Python asks too, so both tell it the same way */
 static PyObject *
-from_json_native(PyObject *mod, PyObject *args)
+validates_itself_native(PyObject *mod, PyObject *cls)
 {
     ModuleState *state = module_state(mod);
-    PyObject *cls;
-    PyObject *text;
-    int array;
-    if (!PyArg_ParseTuple(args, "OOp", &cls, &text, &array)) return NULL;
+    if (!PyType_Check(cls) || !PyType_IsSubtype((PyTypeObject *)cls, state->struct_type)) {
+        PyErr_SetString(PyExc_TypeError, "validates_itself expects a Struct class");
+        return NULL;
+    }
+    int own = validates_itself(state, (PyTypeObject *)cls);
+    if (own < 0) return NULL;
+    return PyBool_FromLong(own);
+}
+
+/* from_json(cls, text, array, ignore_extra) - an instance, or None when the standard library has to read it */
+static PyObject *
+from_json_native(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
+{
+    if (nargs != 4) {
+        PyErr_SetString(PyExc_TypeError, "from_json expects a class, a text, array and ignore_extra");
+        return NULL;
+    }
+    ModuleState *state = module_state(mod);
+    PyObject *cls = args[0];
+    PyObject *text = args[1];
+    int array = PyObject_IsTrue(args[2]);
+    if (array < 0) return NULL;
+    int ignore_extra = PyObject_IsTrue(args[3]);
+    if (ignore_extra < 0) return NULL;
     if (!PyType_Check(cls) || !PyType_IsSubtype((PyTypeObject *)cls, state->struct_type)) {
         PyErr_SetString(PyExc_TypeError, "from_json expects a Struct class");
         return NULL;
     }
+
+    /* the class validates its input - the standard library reads, and it does. one without a plan is not read here */
+    CompiledPlan *plan = PLAN_OF((PyTypeObject *)cls);
+    if (plan == NULL || plan->validates_itself) Py_RETURN_NONE;
 
     Py_ssize_t length;
     const char *data = document_text(text, &length);
@@ -847,7 +1130,7 @@ from_json_native(PyObject *mod, PyObject *args)
         Py_RETURN_NONE;
     }
 
-    Decoder decoder = {state, data, data + length, NULL, 0, 0, 0, Py_GetRecursionLimit(), 0};
+    Decoder decoder = {state, data, data + length, NULL, 0, 0, 0, Py_GetRecursionLimit(), 0, ignore_extra};
     PyObject *result = NULL;
     skip_whitespace(&decoder);
     if (!array) {
@@ -902,3 +1185,4 @@ from_json_native(PyObject *mod, PyObject *args)
 }
 
 #undef FINISHING
+#undef REPEAT_SCAN_KEYS

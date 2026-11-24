@@ -423,7 +423,9 @@ Behavior summary:
 
 - `listing(...)` returns the distinct identifiers, optionally filtered by configuration type
 - `loading(...)` fetches the newest row for an identifier and reconstructs it with `from_json(...)`,
-  raising `ConfigurationInvalid` when the stored name or content shape does not match
+  raising `ConfigurationInvalid` when the stored name or content shape does not match. The content
+  is read with `from_json(...)` as it is, so a stored key which the configuration type no longer
+  declares makes loading fail instead of being skipped
 - `defining(...)` inserts a new snapshot row instead of updating in place
 - `removing(...)` deletes all rows for the identifier
 - successful writes clear the in-memory listing/loading caches

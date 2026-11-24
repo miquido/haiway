@@ -38,6 +38,7 @@ from haiway.attributes.annotations import (
     MissingAttribute,
     NoneAttribute,
     ObjectAttribute,
+    OpenTupleAttribute,
     PathAttribute,
     ProtocolSignature,
     SequenceAttribute,
@@ -105,18 +106,19 @@ if TYPE_CHECKING:
         STR_ENUM = 15
         INT_ENUM = 16
         TUPLE = 17
-        SEQUENCE = 18
-        SET = 19
-        MAPPING = 20
-        META = 21
-        TYPED_DICT = 22
-        STATE = 23
-        CUSTOM_STATE = 24
-        CUSTOM = 25
-        FUNCTION = 26
-        UNION = 27
-        VALIDABLE = 28
-        ALIAS = 29
+        OPEN_TUPLE = 18
+        SEQUENCE = 19
+        SET = 20
+        MAPPING = 21
+        META = 22
+        TYPED_DICT = 23
+        STATE = 24
+        CUSTOM_STATE = 25
+        CUSTOM = 26
+        FUNCTION = 27
+        UNION = 28
+        VALIDABLE = 29
+        ALIAS = 30
 
 else:
     Kind = IntEnum("Kind", dict(_constants("SPEC_")))
@@ -151,14 +153,13 @@ def _verifying(annotation: Any) -> Any:
     return None if verifying is _no_verify else verifying
 
 
-def _is_plain_state(cls: Any, /) -> bool:
+def is_plain_state(cls: Any, /) -> bool:
     # a State which validates the usual way - one with a validation of its own is called,
     # not skipped over, so the native code must not decide for it
     if not isinstance(cls, nstruct.StructMeta):
         return False
 
-    validate: Any = inspect.getattr_static(cls, "validate", None)
-    return validate is nstruct.Struct.__dict__["validate"]
+    return not nstruct.validates_itself(cls)
 
 
 def describe(
@@ -278,6 +279,21 @@ def _describe_compound(  # noqa: C901, PLR0911, PLR0912
                 tuple(describe(element) for element in annotation.values),
             )
 
+        case OpenTupleAttribute():
+            return (
+                Kind.OPEN_TUPLE,
+                annotation,
+                None,
+                None,
+                _verifying(annotation),
+                len(annotation.leading),
+                (
+                    *(describe(element) for element in annotation.leading),
+                    describe(annotation.variadic),
+                    *(describe(element) for element in annotation.trailing),
+                ),
+            )
+
         case SequenceAttribute():
             return (
                 Kind.SEQUENCE,
@@ -327,7 +343,7 @@ def _describe_compound(  # noqa: C901, PLR0911, PLR0912
         case ObjectAttribute():
             base: Any = annotation.base
             return (
-                Kind.STATE if _is_plain_state(base) else Kind.CUSTOM_STATE,
+                Kind.STATE if is_plain_state(base) else Kind.CUSTOM_STATE,
                 annotation,
                 base,
                 None,

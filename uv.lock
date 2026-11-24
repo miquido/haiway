@@ -347,7 +347,7 @@ wheels = [
 
 [[package]]
 name = "haiway"
-version = "0.64.0"
+version = "0.65.0"
 source = { editable = "." }
 default-groups = "all"
 dependencies = [

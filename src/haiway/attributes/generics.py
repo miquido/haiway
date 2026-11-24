@@ -72,9 +72,10 @@ def unspecialized_defaults(
                 elements = get_args(elements[0]) if elements else ()
 
             if Ellipsis in elements:
-                continue  # of any length - nothing to stand for
-
-            default = tuple[*elements]
+                # of any length - bound as it is when it is given, `*tuple[int, ...]`
+                default = tuple[_normalized(default)]
+            else:
+                default = tuple[*elements]
 
         value: Any = _substituted(_normalized(default), bound)
         bound[parameter.__name__] = value
@@ -178,6 +179,12 @@ def _normalized(
     # the argument of a `ParamSpec` is written as a list, which can't be hashed
     if isinstance(argument, list):
         return tuple(cast(list[Any], argument))
+
+    # `Unpack[tuple[X, ...]]` is `*tuple[X, ...]` - one variant however it is spelled
+    if get_origin(argument) is typing.Unpack:
+        unpacked: Any = get_args(argument)[0]
+        if get_origin(unpacked) is tuple:
+            return next(iter(unpacked))
 
     return argument
 

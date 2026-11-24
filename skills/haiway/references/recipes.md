@@ -99,10 +99,16 @@ except ValueError as exc:                          # malformed JSON and invalid 
     raise BadRequest(...) from exc
 ```
 
-`from_json` raises `ValueError`; `from_mapping`, `State.validate(value)` and the constructor raise
-`ValidationError` (not a `ValueError`) naming the failing path. Put format rules into the type
-(`Validator` to coerce before validation, `Verifier` to enforce after, `Literal`, unions) so invalid
-data cannot get past the boundary. Return data with `to_json()`/`to_mapping()`.
+`from_json` raises `ValueError`; `from_mapping` and `State.validate(value)` raise `TypeError` for a
+key which is not an attribute at the top level, and `ValidationError` (not a `ValueError`) naming
+the failing path for an invalid value or for an unknown key within a nested State or `TypedDict`;
+the constructor raises the same. Unknown keys are refused by default - pass `ignore_extra=True` to
+`from_mapping`, `from_json` or `from_json_array` to skip them in every nested State, collection and
+`TypedDict` when the producer is not yours (not below a class with its own `__init__` or
+`validate`); a conversion invoked separately, such as a `Validator` calling `Leaf.from_mapping`,
+does not inherit the flag and has to be passed it itself. Put format rules into the type (`Validator` to coerce before validation, `Verifier` to
+enforce after, `Literal`, unions) so invalid data cannot get past the boundary. Return data with
+`to_json()`/`to_mapping()`.
 
 ## Modelling outcomes and variants
 

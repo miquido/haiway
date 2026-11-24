@@ -1,4 +1,6 @@
+import collections.abc
 import gc
+import typing
 import weakref
 from collections.abc import Sequence
 from types import GenericAlias
@@ -482,3 +484,106 @@ def test_specialization_serializes_and_round_trips() -> None:
     assert Box[int].from_json(box.to_json()) == box
     assert Box[int].from_mapping(box.to_mapping()) == box
     assert Box[int].from_mapping(box.to_basic_object()) == box
+
+
+class Forward:
+    pass
+
+
+class Named[Value](State):
+    value: Value
+
+
+class Signature[**P](State):
+    value: int
+
+
+class Variadic[*Values](State):
+    values: tuple[int, *Values]
+
+
+def _local_state() -> type[Any]:
+    class Item(State):
+        number: int
+
+    return Item
+
+
+Local: Any = _local_state()
+
+
+@mark.parametrize(
+    ("argument", "name"),
+    [
+        (int, "Named[int]"),
+        (None, "Named[None]"),
+        (type(None), "Named[None]"),
+        (Any, "Named[Any]"),
+        (list[int], "Named[list[int]]"),
+        (typing.List[int], "Named[list[int]]"),  # noqa: UP006
+        (collections.abc.Sequence[int], "Named[Sequence[int]]"),
+        (tuple[int, ...], "Named[tuple[int, ...]]"),
+        (tuple[()], "Named[tuple[()]]"),
+        (tuple[int, str], "Named[tuple[int, str]]"),
+        (int | None, "Named[int | None]"),
+        (typing.Optional[int], "Named[int | None]"),  # noqa: UP045
+        (typing.Union[int, str], "Named[int | str]"),  # noqa: UP007
+        (list[int | None], "Named[list[int | None]]"),
+        (Literal["a"], "Named[Literal['a']]"),
+        (Literal["typing.x"], "Named[Literal['typing.x']]"),
+        (Literal["a", 1], "Named[Literal['a', 1]]"),
+        (Annotated[int, "meta"], "Named[Annotated[int, 'meta']]"),
+        (Annotated[list[int], "a", 2], "Named[Annotated[list[int], 'a', 2]]"),
+        (dict[str, list[int]], "Named[dict[str, list[int]]]"),
+        (collections.abc.Callable[[int], str], "Named[Callable[[int], str]]"),
+        (Box[int], "Named[Box[int]]"),
+        (Box[list[int]], "Named[Box[list[int]]]"),
+        (dict[str, Box[list[int]]], "Named[dict[str, Box[list[int]]]]"),
+        (list[Local], "Named[list[Item]]"),
+        (list["Forward"], "Named[list[Forward]]"),
+        (typing.ForwardRef("Forward"), "Named[Forward]"),
+    ],
+)
+def test_specialization_name_spells_its_arguments(argument: Any, name: str) -> None:
+    assert Named[argument].__name__ == name
+
+
+@mark.parametrize(
+    ("arguments", "name"),
+    [
+        ([int, str], "Signature[[int, str]]"),
+        ((int,), "Signature[[int]]"),
+        ([], "Signature[()]"),
+        (..., "Signature[...]"),
+        (list[int], "Signature[[list[int]]]"),
+        ([list[int], Literal["a"]], "Signature[[list[int], Literal['a']]]"),
+    ],
+)
+def test_specialization_name_spells_the_signature_of_a_parameter_specification(
+    arguments: Any,
+    name: str,
+) -> None:
+    assert Signature[arguments].__name__ == name
+
+
+_UNBOUNDED: Any = tuple[str, ...]
+
+
+@mark.parametrize(
+    ("arguments", "name"),
+    [
+        ((), "Variadic[]"),
+        ((str,), "Variadic[str]"),
+        ((int, str), "Variadic[int,str]"),
+        ((list[int], str | None), "Variadic[list[int],str | None]"),
+        ((typing.Unpack[tuple[str, ...]],), "Variadic[*tuple[str, ...]]"),
+        ((*_UNBOUNDED,), "Variadic[*tuple[str, ...]]"),
+        ((int, *_UNBOUNDED), "Variadic[int,*tuple[str, ...]]"),
+        ((Literal["a,b"],), "Variadic[Literal['a,b']]"),
+    ],
+)
+def test_specialization_name_spells_the_arguments_of_a_variadic_parameter(
+    arguments: Any,
+    name: str,
+) -> None:
+    assert Variadic[arguments].__name__ == name

@@ -198,6 +198,10 @@ async with ctx.scope("app", repo):
     config = await DatabaseConfig.load(required=True)
 ```
 
+A loader reading configuration which may have been written by a newer version of the application,
+with attributes this version does not know, can pass `ignore_extra=True` to `from_json` to skip
+them. Without it a key which is not an attribute makes loading fail, as it does for any State.
+
 ## Error Handling
 
 ```python
