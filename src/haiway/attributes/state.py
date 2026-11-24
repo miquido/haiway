@@ -59,6 +59,7 @@ from haiway.attributes.generics import (
     argument_variances,
     bind_type_arguments,
     is_open_type_argument,
+    refused_self_specialization,
     unspecialized_defaults,
 )
 from haiway.attributes.path import AttributePath
@@ -553,8 +554,13 @@ def _specialize_locked(
     type_arguments: tuple[Any, ...],
     /,
 ) -> Any:
-    # only a generic is specialized - `__class_getitem__` refuses any other class
-    specializations: MutableMapping[tuple[Any, ...], Any] = cls.__dict__["__SPECIALIZATIONS__"]
+    # only a generic is specialized - `__class_getitem__` refuses any other class. one
+    # which has none yet is still being created, its annotations refer to it
+    specializations: MutableMapping[tuple[Any, ...], Any] | None = cls.__dict__.get(
+        "__SPECIALIZATIONS__"
+    )
+    if specializations is None:
+        raise refused_self_specialization(cls)
 
     # the arguments as they bind - the defaults are given, the arguments of a
     # variadic parameter are its own, a list is a tuple. a variant is the same

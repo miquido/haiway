@@ -19,6 +19,7 @@ __all__ = (
     "bind_type_arguments",
     "is_open_type_argument",
     "parameter_variances",
+    "refused_self_specialization",
     "type_parameters_of",
     "unspecialized_defaults",
 )
@@ -45,6 +46,41 @@ def type_parameters_of(
     """
     # `class Box[T]` has them as `__type_params__`, `class Box(Generic[T])` does not
     return getattr(cls, "__type_params__", ()) or getattr(cls, "__parameters__", ())
+
+
+def refused_self_specialization(
+    cls: type[Any],
+    /,
+) -> TypeError:
+    """
+    The error of a generic class specialized within its own declaration.
+
+    Parameters
+    ----------
+    cls : type[Any]
+        Generic class being declared, which does not exist yet to be specialized.
+
+    Returns
+    -------
+    TypeError
+        Error to raise, naming the only reference to the class which can be made - the one
+        given its own parameters.
+    """
+    parameters: str = ", ".join(_parameter_name(parameter) for parameter in type_parameters_of(cls))
+    return TypeError(
+        f"{cls.__name__} can't be specialized within its own declaration - only"
+        f" {cls.__name__}[{parameters}], its own parameters, refers to itself"
+    )
+
+
+def _parameter_name(
+    parameter: Any,
+    /,
+) -> str:
+    if isinstance(parameter, TypeVarTuple):
+        return f"*{parameter.__name__}"
+
+    return parameter.__name__
 
 
 def unspecialized_defaults(
