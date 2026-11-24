@@ -2,6 +2,32 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.65.1
+
+### Fixed
+
+- A generic State refers to itself by its own parameters, `children: Sequence[Tree[V]]` within
+  `class Tree[V](State)`, where the class failed with a `KeyError` when it was created - and a
+  variadic one, `Sequence[Row[*Ts]]`, with a `RecursionError` when it was specialized. It is the
+  same reference `Self` makes: `Tree[V]` stands for `Tree` in the class which is not specialized and
+  for `Tree[int]` within it, also for `Pair[K, V]`, `Row[*Ts]` and `Handler[P]` given their own
+  parameters in the order they are declared. Any other specialization of a generic within its own
+  declaration - `Pair[B, A]` within `Pair[A, B]`, `Nest[Sequence[V]]`, `C[int]`, or a variadic one
+  such as `Row[*Ts, int]` within `Row[*Ts]` - is refused with a `TypeError` when the class is
+  declared, also where it is made through a generic alias, where it failed with a `KeyError` or a
+  `RecursionError`.
+- A quoted annotation of a generic State is evaluated with the type parameters of the class in
+  scope, where `children: "Sequence[Tree[V]]"` of `class Tree[V](State)` failed with
+  `Cannot resolve annotation of Sequence[Tree[V]]`.
+- A State referring to itself through a `type` alias, `type Forest = Sequence[Tree]` of
+  `class Tree(State): children: Forest`, resolves the alias to the class being created, where
+  evaluating the alias failed with a `NameError` since the class was not defined yet. So does a
+  generic alias whose type parameters stand for the own parameters of the class,
+  `type Forest[V] = Sequence[Tree[V]]` used as `Forest[V]`. Other parameters of a generic alias are
+  not bound to their arguments - one is looked up by name among the parameters of the class - and
+  a variadic or `ParamSpec` generic alias is not supported. An undefined name within an alias is
+  still reported as a `NameError`, naming the alias.
+
 ## 0.65.0
 
 ### Added

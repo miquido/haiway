@@ -3,6 +3,7 @@ import builtins
 import datetime
 import enum
 import inspect
+import itertools
 import pathlib
 import types
 import typing
@@ -38,7 +39,11 @@ import typing_extensions
 from typing_extensions import is_typeddict as is_typeddict_ext  # keep this particular import
 
 from haiway import types as haiway_types
-from haiway.attributes.generics import is_open_type_argument
+from haiway.attributes.generics import (
+    is_open_type_argument,
+    refused_self_specialization,
+    type_parameters_of,
+)
 from haiway.attributes.validation import (
     Validating,
     Validator,
@@ -4201,6 +4206,90 @@ class IntEnumAttribute:
         return self
 
 
+@final
+class _OwnReference:
+    # a class being resolved with the parameters it declares - a reference to it made
+    # of those same parameters, in that order, is a reference to the class itself. none
+    # of them stands for the class being resolved where its type parameters are shadowed,
+    # as within a generic alias, which only says the class is being resolved
+    __slots__ = ("origin", "parameters")
+
+    def __init__(
+        self,
+        origin: type[Any],
+        parameters: tuple[Any, ...],
+    ) -> None:
+        self.origin: type[Any] = origin
+        self.parameters: tuple[Any, ...] = parameters
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, _OwnReference)
+            and self.origin is other.origin
+            and self.parameters == other.parameters
+        )
+
+    def __hash__(self) -> int:
+        return hash((id(self.origin), self.parameters))
+
+
+@final
+class _AliasUse:
+    # a generic alias given its arguments, as seen from what the class being resolved
+    # is referred to by - the same alias resolves to something else for another of them
+    __slots__ = ("alias", "arguments", "references")
+
+    def __init__(
+        self,
+        alias: Any,
+        arguments: tuple[Any, ...],
+        references: frozenset[_OwnReference],
+    ) -> None:
+        self.alias: Any = alias
+        self.arguments: tuple[Any, ...] = arguments
+        self.references: frozenset[_OwnReference] = references
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, _AliasUse)
+            and self.alias is other.alias
+            and self.arguments == other.arguments
+            and self.references == other.references
+        )
+
+    def __hash__(self) -> int:
+        return hash((id(self.alias), self.arguments, self.references))
+
+
+def _generic_origin(cls: type[Any], /) -> type[Any]:
+    # a specialization is resolved for the generic it specializes
+    return cls.__dict__.get("__origin__", cls)
+
+
+def _declared_parameter(argument: Any, /) -> Any | None:
+    # the parameter an argument stands for, `*Ts` for the variadic one - nothing if it
+    # is an argument of any other kind
+    if get_origin(argument) is typing.Unpack:
+        argument = get_args(argument)[0]
+
+    if isinstance(argument, TypeVar | typing.ParamSpec | typing.TypeVarTuple):
+        return argument
+
+    return None
+
+
+def _own_reference(
+    origin: Any,
+    arguments: Sequence[Any],
+    /,
+) -> _OwnReference | None:
+    parameters: tuple[Any | None, ...] = tuple(map(_declared_parameter, arguments))
+    if not parameters or None in parameters:
+        return None
+
+    return _OwnReference(origin, cast(tuple[Any, ...], parameters))
+
+
 def resolve_self_attribute(
     cls: type[Any],
     /,
@@ -4214,10 +4303,18 @@ def resolve_self_attribute(
     defaults: Set[str] = frozenset(),
 ) -> ObjectAttribute:
     recursion_guard: MutableMapping[Any, AttributeAnnotation] = {}
+    generic: type[Any] = _generic_origin(cls)
+    declared_parameters: tuple[Any, ...] = tuple(type_parameters_of(generic))
+    # what a string annotation sees: the generic itself, and its type parameters - as
+    # the class body would, were they not evaluated before the class exists
+    localns: Mapping[str, Any] = {
+        **{parameter.__name__: parameter for parameter in declared_parameters},
+        generic.__name__: generic,
+    }
     resolved_parameters: Mapping[str, AttributeAnnotation] = {
         key: resolve_attribute(
             value,
-            localns={cls.__name__: cls},
+            localns=localns,
             module=cls.__module__,
             resolved_parameters=parameters,
             recursion_guard=recursion_guard,
@@ -4233,6 +4330,10 @@ def resolve_self_attribute(
 
     # Use current annotation as reference to Self
     recursion_guard["Self"] = self_attribute
+    # and so is the generic given its own parameters, `Tree[V]` within `Tree[V]`
+    if declared_parameters:
+        recursion_guard[_OwnReference(generic, declared_parameters)] = self_attribute
+
     recursion_guard[
         _recursion_key(
             origin=cls,
@@ -4243,7 +4344,7 @@ def resolve_self_attribute(
     for key, annotation in annotations.items():
         attribute: AttributeAnnotation = resolve_attribute(
             annotation,
-            localns={self_attribute.base.__name__: self_attribute.base},
+            localns=localns,
             module=self_attribute.base.__module__,
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
@@ -4725,19 +4826,214 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
         )
 
 
-def _resolve_type_alias(
+def _alias_references(
+    recursion_guard: Mapping[Any, AttributeAnnotation],
+    /,
+    parameters: Sequence[Any],
+    arguments: Sequence[Any],
+) -> Mapping[_OwnReference, AttributeAnnotation]:
+    # an alias is written in terms of its own parameters, none of which is the parameter
+    # of a class it is given - the class being resolved is referred to by the ones
+    # standing for its parameters, whichever of them is used where several stand for one
+    references: dict[_OwnReference, AttributeAnnotation] = {}
+    for reference, attribute in tuple(recursion_guard.items()):
+        if not isinstance(reference, _OwnReference) or not reference.parameters:
+            continue
+
+        standing_for: tuple[list[Any], ...] = tuple(
+            [
+                parameter
+                for parameter, argument in zip(parameters, arguments, strict=False)
+                if _declared_parameter(argument) is declared
+            ]
+            for declared in reference.parameters
+        )
+        if not all(standing_for):
+            continue
+
+        for combination in itertools.product(*standing_for):
+            references[_OwnReference(reference.origin, combination)] = attribute
+
+    return references
+
+
+def _alias_scope(
     annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    /,
+    localns: Mapping[str, Any] | None,
+) -> Mapping[str, Any]:
+    # what the value of an alias sees is its own scope - the type parameters of the class
+    # using it are not names within it
+    scope: Mapping[str, Any] = localns or {}
+    shadowing: Mapping[str, Any] = {
+        name: value
+        for name, value in scope.items()
+        if isinstance(value, TypeVar | typing.ParamSpec | typing.TypeVarTuple)
+    }
+    if not shadowing and not annotation.__type_params__:
+        return scope
+
+    return {
+        **{name: value for name, value in scope.items() if name not in shadowing},
+        **{parameter.__name__: parameter for parameter in annotation.__type_params__},
+    }
+
+
+def _alias_value(
+    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    /,
+) -> Any:
+    try:
+        return annotation.__value__
+
+    except AttributeError as error:
+        raise AttributeError(
+            f"{error} within the value of type alias '{annotation.__name__}'",
+            name=error.name,
+            obj=error.obj,
+        ) from error
+
+    except NameError:
+        # the value is evaluated lazily, when the names it refers to may not exist yet - a
+        # class being created is not bound in its module. what is not defined is left as a
+        # reference, resolved the way any other is
+        return annotationlib.call_evaluate_function(
+            annotation.evaluate_value,
+            annotationlib.Format.FORWARDREF,
+        )
+
+
+def _resolve_alias_value(
+    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    value: Any,
+    /,
     *,
     localns: Mapping[str, Any] | None,
     module: str,
     resolved_parameters: Mapping[str, AttributeAnnotation],
     recursion_guard: MutableMapping[Any, AttributeAnnotation],
 ) -> AttributeAnnotation:
+    try:
+        return resolve_attribute(
+            value,
+            localns=_alias_scope(annotation, localns),
+            module=module,
+            resolved_parameters=resolved_parameters,
+            recursion_guard=recursion_guard,
+        )
+
+    except RuntimeError as error:
+        # reported as it is when an alias can't be evaluated - naming the alias
+        cause: BaseException | None = error.__cause__
+        if isinstance(cause, NameError):
+            raise NameError(
+                f"{cause} within the value of type alias '{annotation.__name__}'",
+                name=cause.name,
+            ) from error
+
+        if isinstance(cause, AttributeError):
+            raise AttributeError(
+                f"{cause} within the value of type alias '{annotation.__name__}'",
+                name=cause.name,
+                obj=cause.obj,
+            ) from error
+
+        raise
+
+
+def _resolve_generic_type_alias(
+    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    *,
+    arguments: Sequence[Any],
+    localns: Mapping[str, Any] | None,
+    module: str,
+    resolved_parameters: Mapping[str, AttributeAnnotation],
+    recursion_guard: MutableMapping[Any, AttributeAnnotation],
+) -> AttributeAnnotation:
+    references: Mapping[_OwnReference, AttributeAnnotation] = _alias_references(
+        recursion_guard,
+        parameters=annotation.__type_params__,
+        arguments=arguments,
+    )
+    use: _AliasUse | None = _AliasUse(annotation, tuple(arguments), frozenset(references))
+    try:
+        hash(use)
+
+    except TypeError:
+        use = None  # an argument which can't be told from another one is not cached
+
+    if use is not None and (guard := recursion_guard.get(use)):
+        return guard
+
+    placeholder = AliasAttribute(
+        type_alias=annotation.__name__,
+        module=annotation.__module__ or module,
+    )
+    if use is not None:
+        recursion_guard[use] = placeholder
+
+    # within the alias its own parameters stand where the type parameters of the class
+    # would, the class is referred to by them only - and by nothing else resolved on the
+    # way is any of it to be taken for what the alias is not given
+    scope: MutableMapping[Any, AttributeAnnotation] = {
+        key: value for key, value in recursion_guard.items() if not isinstance(key, _OwnReference)
+    }
+    scope.update(
+        {
+            _OwnReference(reference.origin, ()): attribute
+            for reference, attribute in recursion_guard.items()
+            if isinstance(reference, _OwnReference)
+        }
+    )
+    scope.update(references)
+    resolved_attribute: AttributeAnnotation = _resolve_alias_value(
+        annotation,
+        _alias_value(annotation),
+        localns=localns,
+        module=module,
+        resolved_parameters=resolved_parameters,
+        recursion_guard=scope,
+    )
+    placeholder.resolve(resolved_attribute)
+    if use is not None:
+        recursion_guard[use] = resolved_attribute
+
+    _finalize_alias_resolution(
+        resolved_attribute,
+        alias_name=placeholder.type_alias,
+        alias_module=placeholder.module,
+        alias_target=resolved_attribute,
+        visited=set(),
+    )
+
+    return resolved_attribute
+
+
+def _resolve_type_alias(
+    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    *,
+    arguments: Sequence[Any] = (),
+    localns: Mapping[str, Any] | None,
+    module: str,
+    resolved_parameters: Mapping[str, AttributeAnnotation],
+    recursion_guard: MutableMapping[Any, AttributeAnnotation],
+) -> AttributeAnnotation:
+    if annotation.__type_params__:
+        return _resolve_generic_type_alias(
+            annotation,
+            arguments=arguments,
+            localns=localns,
+            module=module,
+            resolved_parameters=resolved_parameters,
+            recursion_guard=recursion_guard,
+        )
+
     if guard := recursion_guard.get(annotation):
         return guard
 
+    value: Any = _alias_value(annotation)
     recursion_key: str = _recursion_key(
-        origin=get_origin(annotation.__value__) or annotation.__value__,
+        origin=get_origin(value) or value,
         alias=annotation.__name__,
         alias_module=annotation.__module__,
     )
@@ -4756,8 +5052,9 @@ def _resolve_type_alias(
     recursion_guard[recursion_key] = placeholder
     recursion_guard[alias_name] = placeholder
 
-    resolved_attribute: AttributeAnnotation = resolve_attribute(
-        annotation.__value__,
+    resolved_attribute: AttributeAnnotation = _resolve_alias_value(
+        annotation,
+        value,
         localns=localns,
         module=module,
         resolved_parameters=resolved_parameters,
@@ -4811,6 +5108,25 @@ def _resolved_alias_arguments(
     return resolved
 
 
+def _own_attribute(
+    origin_type: Any,
+    annotation: GenericAlias,
+    recursion_guard: Mapping[Any, AttributeAnnotation],
+    /,
+) -> AttributeAnnotation | None:
+    # the class being resolved, given its own parameters, is the class itself
+    if (reference := _own_reference(origin_type, get_args(annotation))) and (
+        own := recursion_guard.get(reference)
+    ):
+        return own
+
+    # given anything else it can't be specialized, it does not exist yet
+    if any(isinstance(key, _OwnReference) and key.origin is origin_type for key in recursion_guard):
+        raise refused_self_specialization(origin_type)
+
+    return None
+
+
 def _resolve_generic_alias(  # noqa: PLR0911
     annotation: GenericAlias,
     *,
@@ -4824,6 +5140,16 @@ def _resolve_generic_alias(  # noqa: PLR0911
         # checked by the shape of its signature, whatever its type arguments
         return FunctionAttribute(base=annotation)
 
+    if isinstance(origin_type, typing.TypeAliasType | typing_extensions.TypeAliasType):
+        return _resolve_type_alias(
+            origin_type,
+            arguments=get_args(annotation),
+            localns=localns,
+            module=module,
+            resolved_parameters=resolved_parameters,
+            recursion_guard=recursion_guard,
+        )
+
     if not hasattr(origin_type, "__class_getitem__"):
         return resolve_attribute(
             origin_type,
@@ -4832,6 +5158,9 @@ def _resolve_generic_alias(  # noqa: PLR0911
             resolved_parameters=resolved_parameters,
             recursion_guard=recursion_guard,
         )
+
+    if own := _own_attribute(origin_type, annotation, recursion_guard):
+        return own
 
     # try to resolve the alias with available types
     resolved_arguments_of_alias: Sequence[Any] | None = _resolved_alias_arguments(

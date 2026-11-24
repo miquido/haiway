@@ -268,6 +268,36 @@ alias of one, is spliced in. A second unbounded part is refused, and so is `...`
 `TypeVarTuple`: `Row[int, ...]` is spelled `Row[*tuple[int, ...]]`. A default such as
 `*Ts = *tuple[int, ...]` binds as an argument does.
 
+#### Recursive generics
+
+A generic refers to itself with its own parameters, in the order they are declared - `Tree[V]`
+within `Tree[V]` is the class itself, as `Self` is, and so are `Pair[K, V]`, `Row[*Ts]` and
+`Handler[P]` given theirs. Any other specialization of it within its own declaration, such as
+`Pair[B, A]` within `Pair[A, B]` or `Tree[int]` within `Tree[V]`, is refused with a `TypeError` -
+the class does not exist yet. A recursive State can also refer to itself through a `type` alias,
+either a plain one or a generic one whose type parameters stand for the own parameters of the class,
+as in the snippet below. The other parameters of a generic alias are not bound to the arguments it
+is given - one is looked up by its name among the parameters of the class using the alias, standing
+for anything where the class has none of that name - so such an alias should not be relied on to
+constrain them:
+
+```python
+from collections.abc import Sequence
+
+class Tree[V](State):
+    value: V
+    children: Sequence[Tree[V]] = ()  # the same as Sequence[Self]
+
+Tree[int](value=1, children=({"value": 2},))  # the child is a Tree[int]
+Tree(value="a", children=({"value": 1},))  # not specialized, it is a Tree of anything
+
+type Forest[V] = Sequence[Node[V]]
+
+class Node[V](State):
+    value: V
+    children: Forest[V] = ()
+```
+
 #### Variance
 
 Whether `Box[Dog]` is a subclass of `Box[Animal]` follows the variance of the parameter. A declared
