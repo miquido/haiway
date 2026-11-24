@@ -128,21 +128,17 @@ field_default(FieldPlan *field)
 static void
 report_failure(ModuleState *state, PyTypeObject *type, PyObject *kwargs, PyObject *name)
 {
-    if (!PyErr_ExceptionMatches(PyExc_Exception)) return;  /* not ours to wrap */
+    PyObject *exc = take_to_report();
+    if (exc == NULL) return;  /* not ours to wrap */
     if (kwargs != NULL) {
-        PyObject *exc = PyErr_GetRaisedException();
         PyObject *r = PyObject_CallFunctionObjArgs(state->check, (PyObject *)type, kwargs, NULL);
         if (r == NULL) {
             Py_DECREF(exc);
             return;
         }
         Py_DECREF(r);
-        PyErr_SetRaisedException(exc);
     }
-    PyObject *segment = PyUnicode_FromFormat(".%U", name);
-    if (segment == NULL) return;
-    report_at(state, segment);
-    Py_DECREF(segment);
+    report_taken(state, exc, PyUnicode_FromFormat(".%U", name));
 }
 
 /* raises the error of unexpected or duplicated keys, which are known to be there */

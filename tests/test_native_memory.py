@@ -10,7 +10,7 @@ import sysconfig
 import threading
 import types
 import weakref
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Callable, Generator, Mapping, Sequence, Set
 from datetime import date, datetime, time, timedelta
 from enum import IntEnum, StrEnum
 from functools import Placeholder
@@ -849,6 +849,20 @@ _SPECIAL: Sequence[str | bytes] = (
 )
 
 
+@pytest.fixture(params=(None, 1), ids=("default-gc", "gc-pressure"))
+def gc_threshold(request: pytest.FixtureRequest) -> Generator[None]:
+    thresholds: tuple[int, int, int] = gc.get_threshold()
+    if request.param is not None:
+        gc.set_threshold(request.param)
+
+    try:
+        yield
+
+    finally:
+        gc.set_threshold(*thresholds)
+
+
+@pytest.mark.usefixtures("gc_threshold")
 @pytest.mark.parametrize("seed", range(4))
 def test_native_json_reads_what_the_standard_library_reads(seed: int) -> None:
     rng = random.Random(seed)
