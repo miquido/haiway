@@ -27,6 +27,12 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   not bound to their arguments - one is looked up by name among the parameters of the class - and
   a variadic or `ParamSpec` generic alias is not supported. An undefined name within an alias is
   still reported as a `NameError`, naming the alias.
+- A `Mapping` or `TypedDict` entry which failed validation while a garbage collection was due raised
+  `SystemError: ... returned NULL without setting an exception` instead of `ValidationError` - in the
+  constructor, `validate`, `from_mapping`, `updating` and `from_json` alike. The text of the key was
+  made with the failure still pending, which let the collection report and clear it. The failure is
+  now taken before the position is built. A key which cannot be printed no longer hides the failure
+  either: the position reads `[<unprintable>]` then.
 
 ## 0.65.0
 

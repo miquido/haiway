@@ -340,13 +340,37 @@ value_error_from(const char *message)
     return NULL;
 }
 
-/* the error set, reported from the position named - which always leaves an error set */
+/*
+ * Reporting a failure from the position it happened at - the one place which does it, so every
+ * reporter follows the same protocol: the error set is taken (and so no error is set) before
+ * anything which can run Python code is called. Formatting a key with %S or %R runs its
+ * __str__ or __repr__ - and the checks of signals which come with it, which run a scheduled
+ * garbage collection, and that reports and clears an error found set. Reporters take the
+ * error first, build the segment after, and hand both over here.
+ *
+ * Takes both references, the segment may be NULL when building it failed, with that error
+ * set. A failure which is an Exception is not allowed to replace the one reported: the
+ * position is given as `[<unprintable>]` then, and the failure of the segment is dropped.
+ * Anything else (KeyboardInterrupt and the like) is not ours to swallow, it replaces the
+ * failure reported. Always leaves an error set.
+ */
 static PyObject *
-report_at(ModuleState *state, PyObject *segment)
+report_taken(ModuleState *state, PyObject *exc, PyObject *segment)
 {
-    if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;  /* not ours to wrap */
-    PyObject *exc = PyErr_GetRaisedException();
+    if (segment == NULL) {
+        if (!PyErr_ExceptionMatches(PyExc_Exception)) {
+            Py_DECREF(exc);
+            return NULL;
+        }
+        PyErr_Clear();
+        segment = PyUnicode_FromString("[<unprintable>]");
+        if (segment == NULL) {
+            Py_DECREF(exc);
+            return NULL;
+        }
+    }
     PyObject *r = PyObject_CallFunctionObjArgs(state->report, segment, exc, NULL);
+    Py_DECREF(segment);
     if (r != NULL) {  /* report is documented to raise - make sure nothing is swallowed */
         Py_DECREF(r);
         PyErr_SetRaisedException(exc);
@@ -356,24 +380,28 @@ report_at(ModuleState *state, PyObject *segment)
     return NULL;
 }
 
+/* the error set taken to be reported - NULL, with it left set, when it is not ours to wrap */
+static inline PyObject *
+take_to_report(void)
+{
+    if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
+    return PyErr_GetRaisedException();
+}
+
 static PyObject *
 report_at_index(ModuleState *state, Py_ssize_t index)
 {
-    PyObject *segment = PyUnicode_FromFormat("[%zd]", index);
-    if (segment == NULL) return NULL;
-    report_at(state, segment);
-    Py_DECREF(segment);
-    return NULL;
+    PyObject *exc = take_to_report();
+    if (exc == NULL) return NULL;
+    return report_taken(state, exc, PyUnicode_FromFormat("[%zd]", index));
 }
 
 static PyObject *
 report_at_key(ModuleState *state, PyObject *key, int quoted)
 {
-    PyObject *segment = PyUnicode_FromFormat(quoted ? "[\"%S\"]" : "[%S]", key);
-    if (segment == NULL) return NULL;
-    report_at(state, segment);
-    Py_DECREF(segment);
-    return NULL;
+    PyObject *exc = take_to_report();
+    if (exc == NULL) return NULL;
+    return report_taken(state, exc, PyUnicode_FromFormat(quoted ? "[\"%S\"]" : "[%S]", key));
 }
 
 /* ---------------------------------------------------------- checks */
@@ -919,8 +947,8 @@ validate_mapping(ModuleState *state, Spec *spec, PyObject *value, int ignore_ext
         PyObject *checked_key = validate_spec(state, spec->children[0], key, ignore_extra);
         PyObject *checked_item = checked_key == NULL ? NULL : validate_spec(state, spec->children[1], item, ignore_extra);
         if (checked_item == NULL) {
-            Py_XDECREF(checked_key);
             report_at_key(state, key, 0);
+            Py_XDECREF(checked_key);
             goto fail;
         }
         int failed = 0;
