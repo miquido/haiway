@@ -3,7 +3,6 @@ import builtins
 import datetime
 import enum
 import inspect
-import itertools
 import pathlib
 import types
 import typing
@@ -4208,29 +4207,40 @@ class IntEnumAttribute:
 
 @final
 class _OwnReference:
-    # a class being resolved with the parameters it declares - a reference to it made
-    # of those same parameters, in that order, is a reference to the class itself. none
-    # of them stands for the class being resolved where its type parameters are shadowed,
-    # as within a generic alias, which only says the class is being resolved
-    __slots__ = ("origin", "parameters")
+    # a class being resolved, with the parameters which stand for each of the ones it
+    # declares - a reference to it made of those, in the order of the declared ones, is a
+    # reference to the class itself. it is one each where the class declares them, several
+    # where a generic alias is given a parameter of the class more than once, and none
+    # where its type parameters are shadowed, as within an alias, which only says the
+    # class is being resolved
+    __slots__ = ("origin", "standing_for")
 
     def __init__(
         self,
         origin: type[Any],
-        parameters: tuple[Any, ...],
+        standing_for: tuple[frozenset[Any], ...],
     ) -> None:
         self.origin: type[Any] = origin
-        self.parameters: tuple[Any, ...] = parameters
+        self.standing_for: tuple[frozenset[Any], ...] = standing_for
+
+    def refers_to(self, arguments: Sequence[Any], /) -> bool:
+        if not self.standing_for or len(arguments) != len(self.standing_for):
+            return False
+
+        return all(
+            _declared_parameter(argument) in parameters
+            for argument, parameters in zip(arguments, self.standing_for, strict=True)
+        )
 
     def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, _OwnReference)
             and self.origin is other.origin
-            and self.parameters == other.parameters
+            and self.standing_for == other.standing_for
         )
 
     def __hash__(self) -> int:
-        return hash((id(self.origin), self.parameters))
+        return hash((id(self.origin), self.standing_for))
 
 
 @final
@@ -4278,18 +4288,6 @@ def _declared_parameter(argument: Any, /) -> Any | None:
     return None
 
 
-def _own_reference(
-    origin: Any,
-    arguments: Sequence[Any],
-    /,
-) -> _OwnReference | None:
-    parameters: tuple[Any | None, ...] = tuple(map(_declared_parameter, arguments))
-    if not parameters or None in parameters:
-        return None
-
-    return _OwnReference(origin, cast(tuple[Any, ...], parameters))
-
-
 def resolve_self_attribute(
     cls: type[Any],
     /,
@@ -4332,7 +4330,12 @@ def resolve_self_attribute(
     recursion_guard["Self"] = self_attribute
     # and so is the generic given its own parameters, `Tree[V]` within `Tree[V]`
     if declared_parameters:
-        recursion_guard[_OwnReference(generic, declared_parameters)] = self_attribute
+        recursion_guard[
+            _OwnReference(
+                generic,
+                tuple(frozenset((parameter,)) for parameter in declared_parameters),
+            )
+        ] = self_attribute
 
     recursion_guard[
         _recursion_key(
@@ -4826,6 +4829,11 @@ def _finalize_alias_resolution(  # noqa: C901, PLR0912
         )
 
 
+def _holds_type_parameters(key: Any, /) -> bool:
+    # a class is a key of itself, however many parameters it declares
+    return not isinstance(key, type) and bool(getattr(key, "__parameters__", ()))
+
+
 def _alias_references(
     recursion_guard: Mapping[Any, AttributeAnnotation],
     /,
@@ -4837,22 +4845,19 @@ def _alias_references(
     # standing for its parameters, whichever of them is used where several stand for one
     references: dict[_OwnReference, AttributeAnnotation] = {}
     for reference, attribute in tuple(recursion_guard.items()):
-        if not isinstance(reference, _OwnReference) or not reference.parameters:
+        if not isinstance(reference, _OwnReference) or not reference.standing_for:
             continue
 
-        standing_for: tuple[list[Any], ...] = tuple(
-            [
+        standing_for: tuple[frozenset[Any], ...] = tuple(
+            frozenset(
                 parameter
                 for parameter, argument in zip(parameters, arguments, strict=False)
-                if _declared_parameter(argument) is declared
-            ]
-            for declared in reference.parameters
+                if _declared_parameter(argument) in declared
+            )
+            for declared in reference.standing_for
         )
-        if not all(standing_for):
-            continue
-
-        for combination in itertools.product(*standing_for):
-            references[_OwnReference(reference.origin, combination)] = attribute
+        if all(standing_for):
+            references[_OwnReference(reference.origin, standing_for)] = attribute
 
     return references
 
@@ -4974,9 +4979,12 @@ def _resolve_generic_type_alias(
 
     # within the alias its own parameters stand where the type parameters of the class
     # would, the class is referred to by them only - and by nothing else resolved on the
-    # way is any of it to be taken for what the alias is not given
+    # way is any of it to be taken for what the alias is not given: what still holds a
+    # type parameter was resolved for the class being what it is referred to by there
     scope: MutableMapping[Any, AttributeAnnotation] = {
-        key: value for key, value in recursion_guard.items() if not isinstance(key, _OwnReference)
+        key: value
+        for key, value in recursion_guard.items()
+        if not isinstance(key, _OwnReference) and not _holds_type_parameters(key)
     }
     scope.update(
         {
@@ -5115,13 +5123,18 @@ def _own_attribute(
     /,
 ) -> AttributeAnnotation | None:
     # the class being resolved, given its own parameters, is the class itself
-    if (reference := _own_reference(origin_type, get_args(annotation))) and (
-        own := recursion_guard.get(reference)
-    ):
-        return own
+    arguments: tuple[Any, ...] = get_args(annotation)
+    references: Sequence[tuple[_OwnReference, AttributeAnnotation]] = tuple(
+        (key, value)
+        for key, value in recursion_guard.items()
+        if isinstance(key, _OwnReference) and key.origin is origin_type
+    )
+    for reference, own in references:
+        if reference.refers_to(arguments):
+            return own
 
     # given anything else it can't be specialized, it does not exist yet
-    if any(isinstance(key, _OwnReference) and key.origin is origin_type for key in recursion_guard):
+    if references:
         raise refused_self_specialization(origin_type)
 
     return None

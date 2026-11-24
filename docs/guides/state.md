@@ -272,7 +272,7 @@ alias of one, is spliced in. A second unbounded part is refused, and so is `...`
 
 A generic refers to itself with its own parameters, in the order they are declared - `Tree[V]`
 within `Tree[V]` is the class itself, as `Self` is, and so are `Pair[K, V]`, `Row[*Ts]` and
-`Handler[P]` given theirs. Any other specialization of it within its own declaration, such as
+`Handler[P, R]` given theirs. Any other specialization of it within its own declaration, such as
 `Pair[B, A]` within `Pair[A, B]` or `Tree[int]` within `Tree[V]`, is refused with a `TypeError` -
 the class does not exist yet. A recursive State can also refer to itself through a `type` alias,
 either a plain one or a generic one whose type parameters stand for the own parameters of the class,

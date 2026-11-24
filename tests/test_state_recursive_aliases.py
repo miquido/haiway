@@ -362,3 +362,70 @@ def test_a_missing_attribute_within_an_alias_is_reported_with_the_alias(
 
     with pytest.raises(AttributeError, match=r"attribute.*Nonexistent"):
         _declare_nonexistent()
+
+
+def _declare_old_pair_after(direct: tuple[str, Any], rest: str) -> Any:
+    # a reference to the class made in order, then the alias which is the one under test
+    return types.new_class(
+        "OldPair",
+        (State, OldParameters),
+        {},
+        lambda namespace: namespace.update(
+            __module__=__name__,
+            __annotations__={"a": "OldA", "b": "OldB", "direct": direct[0], "rest": rest},
+            direct=direct[1],
+            rest=(),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "direct",
+    [("OldPair[OldA, OldB]", None), ("Sequence[OldPair[OldA, OldB]]", ())],
+)
+def test_an_alias_given_the_own_parameters_swapped_is_refused_after_a_reference_in_order(
+    direct: tuple[str, Any],
+) -> None:
+    with pytest.raises(TypeError, match="can't be specialized within its own declaration"):
+        _declare_old_pair_after(direct, "OldKids[OldB, OldA]")
+
+
+def test_an_alias_given_the_own_parameters_in_order_works_after_a_reference_in_order() -> None:
+    specialized: Any = _declare_old_pair_after(
+        ("Sequence[OldPair[OldA, OldB]]", ()),
+        "OldKids[OldA, OldB]",
+    )[int, str]
+
+    state: Any = specialized(a=1, b="s", rest=({"a": 2, "b": "t"},))
+
+    assert type(state.rest[0]) is specialized
+    with pytest.raises(ValidationError):
+        specialized(a=1, b="s", rest=({"a": "x", "b": "t"},))
+
+
+def _declare_wide() -> Any:
+    # twenty parameters, each of them given to an alias twice
+    count: int = 20
+    parameters: str = ", ".join(f"T{index}" for index in range(count))
+    alias_parameters: str = ", ".join(f"X{index}, Y{index}" for index in range(count))
+    arguments: str = ", ".join(f"T{index}, T{index}" for index in range(count))
+    referring: str = ", ".join(f"{'X' if index % 2 else 'Y'}{index}" for index in range(count))
+    namespace: dict[str, Any] = {"__name__": __name__, "State": State, "Sequence": Sequence}
+    exec(
+        f"type WideKids[{alias_parameters}] = Sequence[Wide[{referring}]]\n"
+        f"class Wide[{parameters}](State):\n"
+        "    value: T0\n"
+        f"    kids: WideKids[{arguments}] = ()\n",
+        namespace,
+    )
+    return namespace["Wide"]
+
+
+def test_a_class_with_many_parameters_each_given_to_an_alias_twice() -> None:
+    specialized: Any = _declare_wide()[*(int,) * 20]
+
+    tree: Any = specialized(value=1, kids=({"value": 2, "kids": ({"value": 3},)},))
+
+    assert type(tree.kids[0].kids[0]) is specialized
+    with pytest.raises(ValidationError, match=r"kids\[0\]\.value"):
+        specialized(value=1, kids=(INVALID,))

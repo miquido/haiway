@@ -10,7 +10,7 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   `class Tree[V](State)`, where the class failed with a `KeyError` when it was created - and a
   variadic one, `Sequence[Row[*Ts]]`, with a `RecursionError` when it was specialized. It is the
   same reference `Self` makes: `Tree[V]` stands for `Tree` in the class which is not specialized and
-  for `Tree[int]` within it, also for `Pair[K, V]`, `Row[*Ts]` and `Handler[P]` given their own
+  for `Tree[int]` within it, also for `Pair[K, V]`, `Row[*Ts]` and `Handler[P, R]` given their own
   parameters in the order they are declared. Any other specialization of a generic within its own
   declaration - `Pair[B, A]` within `Pair[A, B]`, `Nest[Sequence[V]]`, `C[int]`, or a variadic one
   such as `Row[*Ts, int]` within `Row[*Ts]` - is refused with a `TypeError` when the class is
