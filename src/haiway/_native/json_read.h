@@ -557,27 +557,14 @@ skip_object(Decoder *d)
     }
 }
 
-/* whether an integer of that many digits is more than int() reads - which the standard
+/* whether an integer of that many digits may be more than int() reads - which the standard
  * library refuses to read, so a document holding one is for it to report. 640 is the least
- * limit there can be, so most numbers are told without asking */
+ * limit there can be other than none, so any number up to it is read; the limit itself is
+ * not asked for, as it is an attribute of the user and asking would run code mid-parse */
 static int
 integer_too_long(Py_ssize_t digits)
 {
-    if (digits <= 640) return 0;
-    PyObject *sys = PyImport_ImportModule("sys");
-    PyObject *limit = sys == NULL ? NULL : PyObject_CallMethod(sys, "get_int_max_str_digits", NULL);
-    Py_XDECREF(sys);
-    if (limit == NULL) {
-        if (PyErr_ExceptionMatches(PyExc_Exception)) PyErr_Clear();
-        return 1;
-    }
-    Py_ssize_t allowed = PyLong_AsSsize_t(limit);
-    Py_DECREF(limit);
-    if (allowed == -1 && PyErr_Occurred()) {
-        if (PyErr_ExceptionMatches(PyExc_Exception)) PyErr_Clear();
-        return 1;
-    }
-    return allowed != 0 && digits > allowed;
+    return digits > 640;
 }
 
 static int
@@ -667,6 +654,7 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
             if (!string_span(d, &key_start, &key_length, &key_escaped)) goto fail;
             Py_ssize_t index = field_for_span(plan, key_start, key_length, key_escaped);
             if (index < 0) {
+                if (PyErr_Occurred()) goto fail;  /* telling the key failed - it is not that it names nothing */
                 /* not an attribute - read past, with its value, when those are left out. The key
                  * is told for one, or for a spelling which is not valid, by it being found nowhere */
                 if (!d->ignore_extra || !valid_string(key_start, key_length, key_escaped)) goto fail;
@@ -923,6 +911,46 @@ union_has(Spec *spec, int kind)
     return 0;
 }
 
+#define REPEAT_SCAN_KEYS 32
+
+/* whether the object at `start` has a key twice, or could have - told by the bytes of its keys,
+ * so one spelled with escapes, and an object too long to compare, count as having it */
+static int
+object_may_repeat_key(Decoder *d, const char *start)
+{
+    Decoder probe = *d;
+    probe.p = start + 1;  /* { */
+    const char *keys[REPEAT_SCAN_KEYS];
+    Py_ssize_t lengths[REPEAT_SCAN_KEYS];
+    Py_ssize_t count = 0;
+    skip_whitespace(&probe);
+    if (probe.p < probe.end && *probe.p == '}') return 0;
+    for (;;) {
+        skip_whitespace(&probe);
+        const char *key_start;
+        Py_ssize_t key_length;
+        int key_escaped;
+        if (!string_span(&probe, &key_start, &key_length, &key_escaped)) return 1;
+        if (key_escaped || count == REPEAT_SCAN_KEYS) return 1;
+        for (Py_ssize_t i = 0; i < count; i++) {
+            if (lengths[i] == key_length && memcmp(keys[i], key_start, (size_t)key_length) == 0) return 1;
+        }
+        keys[count] = key_start;
+        lengths[count++] = key_length;
+        skip_whitespace(&probe);
+        if (probe.p >= probe.end || *probe.p != ':') return 1;
+        probe.p++;
+        skip_whitespace(&probe);
+        if (!skip_value(&probe)) return 1;
+        skip_whitespace(&probe);
+        if (probe.p < probe.end && *probe.p == ',') {
+            probe.p++;
+            continue;
+        }
+        return 0;
+    }
+}
+
 /* a value read the way the spec accepts it - validated as it is read */
 static PyObject *
 decode_spec(Decoder *d, Spec *spec)
@@ -947,6 +975,7 @@ decode_spec(Decoder *d, Spec *spec)
                  * the alternatives it fits - only one repeated within it is looked for */
                 int outside = d->repeated;
                 d->repeated = 0;
+                int told = 0;
                 /* the first class the object fits - the alternatives are tried in order */
                 for (Py_ssize_t i = 0; i < spec->count; i++) {
                     Spec *alternative = spec->children[i];
@@ -966,6 +995,16 @@ decode_spec(Decoder *d, Spec *spec)
                         return instance;
                     }
                     if (d->p == start) break;  /* a class which is not read here */
+                    if (d->ignore_extra && !told) {
+                        /* a key which is left out is not looked for when repeated, so what a
+                         * failed alternative did not reach could be, by the next one, a key
+                         * json.loads keeps the last of - the document decides */
+                        told = 1;
+                        if (object_may_repeat_key(d, start)) {
+                            d->repeated = 1;
+                            return NULL;
+                        }
+                    }
                     d->p = start;
                 }
                 d->repeated = outside;
@@ -1146,3 +1185,4 @@ from_json_native(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
 }
 
 #undef FINISHING
+#undef REPEAT_SCAN_KEYS

@@ -1,10 +1,11 @@
 import json
 import random
 import sys
+import typing
 from collections import defaultdict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import Annotated, Any, NotRequired, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict, Unpack
 
 import pytest
 
@@ -703,21 +704,26 @@ def test_extra_values_are_skipped_at_depth(extra: str) -> None:
         "[" * 5 + "]" * 4,
     ],
 )
-def test_malformed_extra_values_are_not_skipped(extra: str) -> None:
-    for document in (
-        '{"value": 1, "extra": ' + extra + ', "label": "x"}',
-        '{"value": 1, "label": "x", "extra": ' + extra + "}",
-        '{"extra": ' + extra + ', "value": 1}',
-    ):
-        assert nstruct.from_json(Leaf, document, False, True) is None
-        with pytest.raises(ValueError):
-            Leaf.from_json(document, ignore_extra=True)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        '{"value": 1, "extra": %s, "label": "x"}',
+        '{"value": 1, "label": "x", "extra": %s}',
+        '{"extra": %s, "value": 1}',
+    ],
+    ids=["between", "last", "first"],
+)
+def test_malformed_extra_values_are_not_skipped(extra: str, layout: str) -> None:
+    document: str = layout % extra
+    assert nstruct.from_json(Leaf, document, False, True) is None
+    with pytest.raises(ValueError):
+        Leaf.from_json(document, ignore_extra=True)
 
-        with pytest.raises(ValueError):
-            Leaf.from_json_array(f"[{document}]", ignore_extra=True)
+    with pytest.raises(ValueError):
+        Leaf.from_json_array(f"[{document}]", ignore_extra=True)
 
-        with pytest.raises(ValueError):
-            Leaf.from_json(document, Reading, ignore_extra=True)
+    with pytest.raises(ValueError):
+        Leaf.from_json(document, Reading, ignore_extra=True)
 
 
 @pytest.mark.parametrize(
@@ -770,17 +776,17 @@ def _from_json_array_text(text: str) -> Any:
     return Leaf.from_json_array("[" + text, ignore_extra=True)
 
 
+@pytest.mark.parametrize(
+    "decode",
+    [_from_json_text, _from_json_text_decoder, _from_json_array_text],
+    ids=["native", "decoder", "array"],
+)
 @pytest.mark.parametrize("cut", range(1, 60))
-def test_truncated_documents_are_never_read(cut: int) -> None:
+def test_truncated_documents_are_never_read(cut: int, decode: Callable[[str], Any]) -> None:
     document: str = '{"value": 1, "extra": {"a": [1, "x\\"y", {"b": null}]}, "label": "x"}'
     truncated: str = document[:cut]
-    for decode in (
-        _from_json_text,
-        _from_json_text_decoder,
-        _from_json_array_text,
-    ):
-        with pytest.raises(ValueError):
-            decode(truncated)
+    with pytest.raises(ValueError):
+        decode(truncated)
 
     assert nstruct.from_json(Leaf, truncated, False, True) is None
 
@@ -887,6 +893,68 @@ def test_first_matching_alternative_wins_when_extras_are_ignored(
     picked = decode(Either, {"pick": {"kind": "second", "other": 3}}, False)
     assert type(picked.pick) is Second
     assert picked.pick.other == 3
+
+
+class AlternativeA(State):
+    a: int
+
+
+class AlternativeB(State):
+    b: int
+
+
+class Choice(State):
+    pick: AlternativeA | AlternativeB
+
+
+@pytest.mark.parametrize("ignore_extra", [False, True])
+@pytest.mark.parametrize(
+    "document",
+    [
+        '{"pick": {"a": "bad", "a": 1, "b": 2}}',  # the repeat makes the first alternative fit
+        '{"pick": {"a": 1, "a": "bad", "b": 2}}',  # the repeat makes the first one fail
+        '{"pick": {"b": 2, "a": "bad", "a": "worse"}}',  # a later alternative has to match
+        '{"pick": {"a": "bad", "b": 1, "b": 2}}',  # the later alternative has its own repeat
+        '{"pick": {"a": "bad", "a": 1}}',
+        '{"pick": {"a": "bad", "x": 1, "x": 2, "b": 3}}',
+        '{"pick": {"a": "bad", "\\u0061": 1, "b": 2}}',  # a repeat spelled with an escape
+    ],
+)
+def test_repeated_key_in_a_union_is_read_as_the_standard_library_reads_it(
+    document: str,
+    ignore_extra: bool,
+) -> None:
+    def outcome(decoder: Any) -> Any:
+        try:
+            return Choice.from_json(document, *decoder, ignore_extra=ignore_extra)
+
+        except ValueError as exc:
+            return type(exc.__cause__)
+
+    assert outcome(()) == outcome((Reading,))
+
+
+def test_repeated_key_making_the_first_alternative_fit_picks_it() -> None:
+    document: str = '{"pick": {"a": "bad", "a": 1, "b": 2}}'
+    assert Choice.from_json(document, ignore_extra=True).pick == AlternativeA(a=1)
+    assert Choice.from_json(document, Reading, ignore_extra=True).pick == AlternativeA(a=1)
+    assert nstruct.from_json(Choice, document, False, True) is None  # left to the standard library
+
+
+def test_union_object_with_many_keys_after_a_failed_alternative_is_declined() -> None:
+    extras: str = ", ".join(f'"k{index}": {index}' for index in range(40))
+    document: str = '{"pick": {"a": "bad", ' + extras + ', "b": 2}}'
+    assert nstruct.from_json(Choice, document, False, True) is None
+    assert Choice.from_json(document, ignore_extra=True) == Choice.from_json(
+        document,
+        Reading,
+        ignore_extra=True,
+    )
+
+
+def test_later_alternative_is_still_read_natively_without_a_repeated_key() -> None:
+    document: str = '{"pick": {"a": "bad", "b": 2}}'
+    assert nstruct.from_json(Choice, document, False, True) == Choice(pick=AlternativeB(b=2))
 
 
 # the keys of a TypedDict
@@ -1393,7 +1461,8 @@ def test_typed_dict_reads_the_same_values_with_and_without_the_flag(ignore_extra
         ignore_extra=ignore_extra,
     )
     unflagged: Wrapper = Wrapper.from_mapping({"details": Multiplying(code=3)})
-    assert read == unflagged
+    assert read.details == {"code": 3}
+    assert unflagged.details == {"code": 3}
 
 
 def test_typed_dict_is_read_whole_before_the_values_are_validated() -> None:
@@ -1430,33 +1499,55 @@ def test_typed_dict_is_read_whole_before_the_values_are_validated() -> None:
     [_from_json_text, _from_json_text_decoder],
     ids=["native", "decoder"],
 )
+@pytest.mark.parametrize(
+    ("limit", "digits", "accepted"),
+    [
+        (4300, 5000, False),
+        (640, 641, False),
+        (0, 5000, True),
+        (6000, 5000, True),
+        (4300, 4300, True),
+        (4300, 600, True),
+    ],
+    ids=["above", "least-limit", "none", "raised", "at-limit", "short"],
+)
 def test_skipped_integers_are_limited_as_the_standard_library_limits_them(
     decode: Callable[[str], Any],
+    limit: int,
+    digits: int,
+    accepted: bool,
 ) -> None:
-    document: str = '{"value": 1, "extra": ' + "9" * 5000 + "}"
-    document_nested: str = '{"value": 1, "extra": [' + "-" + "9" * 5000 + "]}"
-    for text in (document, document_nested):
-        with pytest.raises(ValueError):
-            decode(text)
-
-    limit: int = sys.get_int_max_str_digits()
-    sys.set_int_max_str_digits(0)
+    documents: tuple[str, str] = (
+        '{"value": 1, "extra": ' + "9" * digits + "}",
+        '{"value": 1, "extra": [' + "-" + "9" * digits + "]}",
+    )
+    incoming: int = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(limit)
     try:
-        for text in (document, document_nested):
-            assert decode(text) == Leaf(value=1)
+        for text in documents:
+            if accepted:
+                assert decode(text) == Leaf(value=1)
+
+            else:
+                with pytest.raises(ValueError):
+                    decode(text)
 
     finally:
-        sys.set_int_max_str_digits(limit)
+        sys.set_int_max_str_digits(incoming)
 
-    sys.set_int_max_str_digits(6000)
-    try:
-        assert decode(document) == Leaf(value=1)
 
-    finally:
-        sys.set_int_max_str_digits(limit)
-
-    with pytest.raises(ValueError):
-        decode(document)
+@pytest.mark.parametrize(
+    ("digits", "read"),
+    [(600, True), (640, True), (641, False), (5000, False)],
+)
+def test_skipped_integers_over_the_least_limit_are_left_to_the_standard_library(
+    digits: int,
+    read: bool,
+) -> None:
+    # the limit is not asked for, only the least one there can be is told apart
+    document: str = '{"value": 1, "extra": ' + "9" * digits + "}"
+    expected: Leaf | None = Leaf(value=1) if read else None
+    assert nstruct.from_json(Leaf, document, False, True) == expected
 
 
 def test_skipped_long_integer_with_an_invalid_known_value_is_an_error() -> None:
@@ -1776,3 +1867,95 @@ def test_typed_dict_check_raises_what_comparing_a_key_raises() -> None:
 
     with pytest.raises(RuntimeError, match="no comparison"):
         nstruct.check(Wrapper.__FIELDS__[0].spec, {"code": 1, Incomparable(): 2})
+
+
+# a bare tuple unpacked is any number of anything
+
+
+_BARE_TUPLE: Any = tuple
+_BARE_TYPING_TUPLE: Any = typing.Tuple  # noqa: UP006
+
+# declared by their annotations as values - a bare tuple is not a type argument for pyright
+BareMiddle: Any = type(
+    "BareMiddle",
+    (State,),
+    {"__annotations__": {"items": tuple[int, Unpack[_BARE_TUPLE], str]}},  # noqa: UP044
+)
+BareTyping: Any = type(
+    "BareTyping",
+    (State,),
+    {"__annotations__": {"items": tuple[int, Unpack[_BARE_TYPING_TUPLE], str]}},  # noqa: UP044
+)
+
+
+class EmptyMiddle(State):
+    items: tuple[int, Unpack[tuple[()]], str]  # noqa: UP044 - the spelling under test
+
+
+@pytest.mark.parametrize("cls", [BareMiddle, BareTyping], ids=["tuple", "typing.Tuple"])
+@pytest.mark.parametrize(
+    "items",
+    [(1, "x"), (1, 2, "x"), (1, None, 2.5, "y", "x")],
+)
+def test_bare_unpacked_tuple_stands_for_any_number_of_anything(
+    cls: Any,
+    items: tuple[Any, ...],
+) -> None:
+    assert cls(items=items).items == items
+    assert cls.from_mapping({"items": list(items)}).items == items
+    assert cls.from_json(json.dumps({"items": list(items)})).items == items
+
+
+@pytest.mark.parametrize("cls", [BareMiddle, BareTyping], ids=["tuple", "typing.Tuple"])
+@pytest.mark.parametrize("items", [(1,), ("x", 2, "x"), (1, 2, 3)])
+def test_bare_unpacked_tuple_keeps_the_elements_around_it(
+    cls: Any,
+    items: tuple[Any, ...],
+) -> None:
+    with pytest.raises(FAILURES):
+        cls(items=items)
+
+
+@pytest.mark.parametrize(
+    ("items", "valid"),
+    [((1, "x"), True), ((1, 2, "x"), False), ((1,), False)],
+)
+def test_unpacked_empty_tuple_stays_an_empty_fixed_part(
+    items: tuple[Any, ...],
+    valid: bool,
+) -> None:
+    if valid:
+        assert EmptyMiddle(items=items).items == items
+
+    else:
+        with pytest.raises(FAILURES):
+            EmptyMiddle(items=items)
+
+
+# a tuple of the alias it is within
+
+
+type UnpackedTree = int | tuple[*tuple[UnpackedTree, ...]]
+type PlainTree = int | tuple[PlainTree, ...]
+
+
+class UnpackedTreeHolder(State):
+    tree: UnpackedTree
+
+
+class PlainTreeHolder(State):
+    tree: PlainTree
+
+
+@pytest.mark.parametrize("cls", [UnpackedTreeHolder, PlainTreeHolder], ids=["unpacked", "plain"])
+@pytest.mark.parametrize("tree", [1, (), (1, (2,)), (1, ((2, (3,)),))])
+def test_tuple_of_a_recursive_alias_is_resolved(cls: Any, tree: Any) -> None:
+    assert cls(tree=tree).tree == tree
+    assert cls.from_json(json.dumps({"tree": tree})).tree == tree
+
+
+@pytest.mark.parametrize("cls", [UnpackedTreeHolder, PlainTreeHolder], ids=["unpacked", "plain"])
+@pytest.mark.parametrize("tree", ["x", (1, "x"), (1, (2, ("x",)))])
+def test_tuple_of_a_recursive_alias_validates_its_elements(cls: Any, tree: Any) -> None:
+    with pytest.raises(FAILURES):
+        cls(tree=tree)

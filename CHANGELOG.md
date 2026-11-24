@@ -16,7 +16,10 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   handed the value unchanged, and a validator which decodes on its own does not inherit the flag.
   In a union an alternative which takes the value as it is wins first, flag or not; among the rest
   the first which validates wins, and with the flag that can drop data - list the most specific
-  alternative first, or tell them apart with a `Literal` attribute.
+  alternative first, or tell them apart with a `Literal` attribute. An object which repeats a key
+  after an alternative of a union has failed is left to the standard library with the flag as it is
+  without, so the last value of the key decides, and a skipped integer of more than 640 digits is
+  left to it too, which applies the limit of the interpreter.
 
 ### Changed
 
@@ -56,6 +59,11 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 - `tuple[*tuple[int, ...]]` and `tuple[*Ts]` are read as `tuple[int, ...]` and `tuple[Any, ...]`
   are, and a bare `tuple` or `typing.Tuple` takes any elements where it took none - only
   `tuple[()]` is the empty tuple.
+- A bare `Unpack[tuple]` or `Unpack[typing.Tuple]` within a tuple, as in
+  `tuple[int, Unpack[tuple], str]`, is an unbounded part of anything, where it was refused or taken
+  for an empty one - `Unpack[tuple[()]]` stays the empty one.
+- `tuple[*tuple[Tree, ...]]` of a recursive `type Tree = int | tuple[*tuple[Tree, ...]]` resolves,
+  where it failed with an `AssertionError`.
 - An unpacked type alias, `*IntTuple` of `type IntTuple = tuple[int, ...]`, is accepted within a
   tuple, fixed or unbounded.
 - A forward reference to a generic specialized with a class of the same name as another one,

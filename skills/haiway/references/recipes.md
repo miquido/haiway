@@ -105,7 +105,8 @@ the failing path for an invalid value or for an unknown key within a nested Stat
 the constructor raises the same. Unknown keys are refused by default - pass `ignore_extra=True` to
 `from_mapping`, `from_json` or `from_json_array` to skip them in every nested State, collection and
 `TypedDict` when the producer is not yours (not below a class with its own `__init__` or
-`validate`). Put format rules into the type (`Validator` to coerce before validation, `Verifier` to
+`validate`); a conversion invoked separately, such as a `Validator` calling `Leaf.from_mapping`,
+does not inherit the flag and has to be passed it itself. Put format rules into the type (`Validator` to coerce before validation, `Verifier` to
 enforce after, `Literal`, unions) so invalid data cannot get past the boundary. Return data with
 `to_json()`/`to_mapping()`.
 

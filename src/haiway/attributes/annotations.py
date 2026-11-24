@@ -9,6 +9,7 @@ import typing
 import uuid
 from collections import abc as collections_abc
 from collections.abc import (
+    Callable,
     Hashable,
     Iterable,
     Mapping,
@@ -4355,6 +4356,10 @@ def _unpacked_tuple(argument: Any, /) -> Sequence[Any] | None:
     elif not (isinstance(argument, GenericAlias) and argument.__unpacked__):
         return None
 
+    if unpacked is builtins.tuple or unpacked is typing.Tuple:  # noqa: UP006
+        # not parametrized at all, which is any number of anything - `tuple[()]` is the empty one
+        return (Any, builtins.Ellipsis)
+
     if get_origin(unpacked) is builtins.tuple:
         return get_args(unpacked)
 
@@ -4371,6 +4376,7 @@ def _resolve_tuple(  # noqa: C901
 ) -> AttributeAnnotation:
     leading: MutableSequence[AttributeAnnotation] = []
     variadic: AttributeAnnotation | None = None
+    variadic_base: Callable[[], Any] | None = None
     trailing: MutableSequence[AttributeAnnotation] = []
 
     def append(attribute: AttributeAnnotation) -> None:
@@ -4381,14 +4387,17 @@ def _resolve_tuple(  # noqa: C901
         else:
             trailing.append(attribute)
 
-    def open_at(attribute: AttributeAnnotation) -> None:
-        nonlocal variadic
+    def open_at(attribute: AttributeAnnotation, base: Callable[[], Any]) -> None:
+        # the base is asked for only when it is needed - an alias which stands for
+        # the tuple itself is not bound until the tuple is resolved
+        nonlocal variadic, variadic_base
         if variadic is not None:
             raise TypeError(
                 f"'{annotation}' has more than one unbounded part, a tuple can have only one"
             )
 
         variadic = attribute
+        variadic_base = base
 
     def splice_parameter(name: str) -> None:
         # a variadic parameter stands for the arguments it was given, which is
@@ -4402,14 +4411,16 @@ def _resolve_tuple(  # noqa: C901
             for value in resolved.leading:
                 append(value)
 
-            open_at(resolved.variadic)
+            open_variadic: AttributeAnnotation = resolved.variadic
+            open_at(open_variadic, lambda: open_variadic.base)
             trailing.extend(resolved.trailing)
 
         elif isinstance(resolved, SequenceAttribute):
-            open_at(resolved.values)
+            open_values: AttributeAnnotation = resolved.values
+            open_at(open_values, lambda: open_values.base)
 
         elif resolved is None:
-            open_at(ANY_ATTRIBUTE)
+            open_at(ANY_ATTRIBUTE, lambda: Any)
 
         else:
             raise TypeError(
@@ -4427,7 +4438,8 @@ def _resolve_tuple(  # noqa: C901
                         module=module,
                         resolved_parameters=resolved_parameters,
                         recursion_guard=recursion_guard,
-                    )
+                    ),
+                    lambda: element,
                 )
                 return
 
@@ -4461,8 +4473,9 @@ def _resolve_tuple(  # noqa: C901
 
     if not leading and not trailing:
         # any number of the one type is what `tuple[X, ...]` is
+        assert variadic_base is not None  # nosec: B101
         return SequenceAttribute(
-            base=Sequence[variadic.base],
+            base=Sequence[variadic_base()],
             values=variadic,
         )
 

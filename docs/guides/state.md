@@ -380,10 +380,11 @@ When working with external payloads, use the complementary helpers:
   This is handy when accepting heterogeneous inputs.
 
 By default the decoding helpers refuse a key which is not an attribute: `TypeError` at the top level
-of `from_mapping` and `validate`, `ValueError` from `from_json`, and `ValidationError` naming the
-path for a key within a nested State or TypedDict. When the payload comes from a producer you do not
-control, `from_mapping`, `from_json` and `from_json_array` take a keyword-only `ignore_extra` flag
-which skips such keys instead:
+of `from_mapping` and `validate`, and `ValueError` from `from_json`. For a key within a nested State
+or TypedDict `from_mapping` and `validate` raise a `ValidationError` naming the path, while
+`from_json` and `from_json_array` raise a `ValueError` with that `ValidationError` as its
+`__cause__`. When the payload comes from a producer you do not control, `from_mapping`, `from_json`
+and `from_json_array` take a keyword-only `ignore_extra` flag which skips such keys instead:
 
 ```python
 from haiway import State
@@ -417,8 +418,9 @@ In a union an alternative which takes the value exactly as it is wins first, fla
 `TypedDict | Mapping[str, Any]` given `{"a": 1, "x": 2}` is read as the mapping, with every key.
 Among the rest the first alternative which validates wins, and with the flag an alternative which
 fits only because its unknown keys are skipped can drop data - one with nothing but defaults, listed
-first, accepts any object. List the most specific alternative first, or tell them apart with a
-`Literal` attribute.
+first, matches an object holding nothing but unknown keys and discards them all, though it still
+refuses an invalid value of a key it knows. List the most specific alternative first, or tell them
+apart with a `Literal` attribute.
 
 Aliases apply consistently across these helpers. For example, the `Invoice.customer` field above
 accepts `customer` or `customer_id` when instantiating, and `invoice.to_mapping()` emits
@@ -762,9 +764,11 @@ intermediate Python objects - for the default `json.JSONEncoder` and `json.JSOND
 `indent`. A document which is not the usual case, or a value with no native spelling, is read or
 written through the standard library instead, which is also what reports an error of the document
 itself. Passing an `encoder_class`, a `decoder` or an `indent` uses the standard library directly.
-With `ignore_extra=True` the values of keys which are not attributes are walked over without being
-built, and the same document is refused for the same reasons as without it - a malformed value of a
-skipped key is an error too.
+With `ignore_extra=True` the native reader walks over the values of keys which are not attributes
+without building them, and the same document is refused for the same reasons as without it - a
+malformed value of a skipped key is an error too. A custom `decoder`, or a document the native
+reader declines, goes through `json.loads`, which builds every value before validation drops those
+of unknown keys.
 
 Calling a class with keyword arguments, `Point(x=1, y=2)`, and updating, `point.updating(x=3)`, are
 the fastest ways to build and change an instance. To build an instance from a mapping use
