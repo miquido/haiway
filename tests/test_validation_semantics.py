@@ -255,14 +255,25 @@ def test_float_keys_read_json_numbers(key: str) -> None:
     }
 
 
+def test_float_keys_read_the_infinities_and_nan_as_written() -> None:
+    cls: Any = holder(Mapping[float, str])
+    instance: Any = cls(v={math.inf: "a", -math.inf: "b", 1.5: "c"})
+    assert json.loads(instance.to_json()) == {"v": {"inf": "a", "-inf": "b", "1.5": "c"}}
+    assert cls.from_json(instance.to_json()) == instance
+    assert cls.from_mapping(instance.to_basic_object()) == instance
+    read: Any = cls.from_json('{"v": {"nan": "a"}}')
+    assert all(math.isnan(key) for key in read.v)
+
+
 @pytest.mark.parametrize(
     "key",
     [
-        "nan",
-        "inf",
-        "-inf",
         "NaN",
         "Infinity",
+        "-Infinity",
+        "INF",
+        "+inf",
+        "infinity",
         "+1",
         ".5",
         "1.",
@@ -347,7 +358,9 @@ def test_key_patterns_are_the_spellings_read() -> None:
         assert not re.search(integer, key)
     for key in ("0", "-1.5", "1e5", "2.5E-3", "10"):
         assert re.search(number, key)
-    for key in ("nan", "inf", "+1", ".5", "1.", "01", " 1", ""):
+    for key in ("inf", "-inf", "nan"):
+        assert re.search(number, key)
+    for key in ("NaN", "Infinity", "+inf", "+1", ".5", "1.", "01", " 1", ""):
         assert not re.search(number, key)
     assert property_of(Mapping[bool, int])["propertyNames"] == {
         "type": "string",
@@ -688,21 +701,24 @@ def test_equality_of_different_states_is_false() -> None:
 # K. mutable defaults
 
 
-@pytest.mark.parametrize(
-    "default",
-    [
-        [],
-        {},
-        set(),
-        bytearray(),
-        [1],
-        {"a": 1},
-        {1},
-        type("L", (list,), {})(),
-        type("D", (dict,), {})(),
-    ],
-    ids=lambda value: type(value).__name__,
-)
+def _type_name(value: Any) -> str:
+    return type(value).__name__
+
+
+_MUTABLE_DEFAULTS: list[Any] = [
+    [],
+    {},
+    set(),
+    bytearray(),
+    [1],
+    {"a": 1},
+    {1},
+    type("L", (list,), {})(),
+    type("D", (dict,), {})(),
+]
+
+
+@pytest.mark.parametrize("default", _MUTABLE_DEFAULTS, ids=_type_name)
 def test_mutable_plain_defaults_are_refused(default: Any) -> None:
     def body(namespace: dict[str, Any]) -> None:
         namespace["__annotations__"] = {"x": Any}
@@ -724,12 +740,12 @@ def test_default_holding_a_mutable_value_is_refused() -> None:
 def test_immutable_defaults_and_factories_are_kept() -> None:
     class Defaults(State):
         a: Any = ()
-        b: Any = frozenset()
+        b: Any = frozenset[int]()
         c: Any = Map({"a": 1})
         d: Any = "text"
         e: Any = 1
         f: Any = Level.LOW
-        g: Any = DefaultFactory(list)
+        g: Any = DefaultFactory(list[int])
 
     first: Defaults = Defaults()
     second: Defaults = Defaults()
@@ -749,40 +765,63 @@ class Constrained[T: (int, str)](State):
     item: T
 
 
+def _taking_none() -> bool:
+    return True
+
+
+def _taking_one(value: int) -> bool:
+    return value >= 0
+
+
+def _taking_two(first: int, second: int) -> bool:
+    return first >= second
+
+
 def test_specialized_param_spec_is_enforced_like_a_callable() -> None:
-    assert Handler[[int], bool](call=lambda value: True).call(1) is True
+    # declared through Any - the mismatched calls are what the type checker refuses
+    taking_int: Any = Handler[[int], bool]
+    taking_nothing: Any = Handler[[], bool]
+
+    assert taking_int(call=_taking_one).call(1) is True
     with pytest.raises(ValidationError):
-        Handler[[int], bool](call=lambda: True)
+        taking_int(call=_taking_none)
 
     with pytest.raises(ValidationError):
-        Handler[[int], bool](call=lambda first, second: True)
+        taking_int(call=_taking_two)
 
-    assert Handler[[], bool](call=lambda: True).call() is True
+    assert taking_nothing(call=_taking_none).call() is True
     with pytest.raises(ValidationError):
-        Handler[[], bool](call=lambda value: True)
+        taking_nothing(call=_taking_one)
 
     assert Handler[..., bool](call=lambda: True).call() is True
     assert Handler(call=lambda: True).call() is True
 
 
 def test_unspecialized_constraints_accept_any_of_them() -> None:
-    assert Constrained(item=1).item == 1
-    assert Constrained(item="a").item == "a"
+    # declared through Any - the refused values are what the type checker refuses
+    constrained: Any = Constrained
+    specialized: Any = Constrained[int]
+
+    assert constrained(item=1).item == 1
+    assert constrained(item="a").item == "a"
     with pytest.raises(ValidationError):
-        Constrained(item=1.5)
+        constrained(item=1.5)
 
     with pytest.raises(ValidationError):
-        Constrained(item=None)
+        constrained(item=None)
 
-    assert Constrained[int](item=1).item == 1
+    assert specialized(item=1).item == 1
     with pytest.raises(ValidationError):
-        Constrained[int](item="a")
+        specialized(item="a")
 
 
 def test_unspecialized_constraints_are_required() -> None:
-    assert Constrained.__SPECIFICATION__["required"] == ["item"]
+    constrained: Any = Constrained
+    specification: Any = constrained.__SPECIFICATION__
+
+    assert specification["required"] == ["item"]
     with pytest.raises(ValidationError):
-        Constrained()
+        constrained()
 
 
 # the paths of the extension which the cases above do not meet

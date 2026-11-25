@@ -404,7 +404,7 @@ def _prepare_specification_of_mapping(
 
 # the spellings a key is read from - exactly the ones it is written as, see `basic_key`
 _INTEGER_KEY: str = r"^(0|-?[1-9][0-9]*)$"
-_NUMBER_KEY: str = r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"
+_NUMBER_KEY: str = r"^(-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?|-?inf|nan)$"
 _BOOLEAN_KEY: str = r"^(true|false)$"
 _NULL_KEY: str = r"^null$"
 

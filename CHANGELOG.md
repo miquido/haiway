@@ -91,7 +91,8 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   write them as, and from no other: `int` keys as canonical decimal integers (no sign `+`, spaces,
   underscores, leading zeros or other scripts), `float` keys as JSON numbers, `bool` keys as
   `"true"`/`"false"` (lowercase), `None` as `"null"`, a `Literal` key as the spelling of its value,
-  an enum key as a value, a number or a name. `NaN` and infinities as float keys are not read.
+  an enum key as a value, a number or a name, and the infinities and `NaN` of `float` keys as the
+  `"inf"`, `"-inf"` and `"nan"` written for them (not the `Infinity`/`NaN` of `json.dumps`).
   Two keys which convert to one (`Mapping[int, str]` given `{"1": "a", 1: "b"}`) raise a
   `ValidationError` at the second, where it replaced the first silently.
 - **Breaking:** the JSON Schema agrees: `bool` is `anyOf` a boolean, `0`/`1` and the words in any

@@ -316,8 +316,8 @@ def test_set_accepts_what_its_schema_describes() -> None:
         ),
         (
             float,
-            ["0", "1", "-1.5", "1e5", "2.5E-3"],
-            ["nan", "inf", "+1", ".5", "1.", "01", " 1", ""],
+            ["0", "1", "-1.5", "1e5", "2.5E-3", "inf", "-inf", "nan"],
+            ["NaN", "Infinity", "+inf", "+1", ".5", "1.", "01", " 1", ""],
         ),
         (bool, ["true", "false"], ["True", "TRUE", "False", "1", "yes", "", "x"]),
         (None, ["null"], ["None", "", "x"]),
