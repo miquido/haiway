@@ -26,7 +26,7 @@ typedef struct {
     Py_ssize_t name_length;
     const char *alias_utf8;  /* NULL when there is no alias */
     Py_ssize_t alias_length;
-    const char *json_key;    /* the key as json spells it, with the colon - `"key": ` */
+    const char *json_key;    /* the key as json spells it, with the colon - `"key":` */
     Py_ssize_t json_key_length;
     Spec *spec;       /* owned by the spec object the plan tuple holds */
     PyObject *default_value;  /* () -> the validated default */

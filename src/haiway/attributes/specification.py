@@ -936,43 +936,38 @@ def unique_anchors(
     # aliases of the same shape, two classes of one name in different modules - while
     # an anchor names one subschema of the whole document. A definition met again is
     # referred to instead of repeated, and another one under a taken name is renamed,
-    # with the references within it, which are the ones leading to it
-    first: MutableMapping[str, tuple[str, str]] = {}
-    emitted: set[str] = set()
+    # with the references within it - a reference to a definition is generated within it,
+    # or to one whose name is unique in the document
+    return cast(TypeSpecification, _Anchors().renamed(specification, {}))
 
-    def renamed(node: Any, scope: Mapping[str, str], named: bool = False) -> Any:
+
+class _Anchors:
+    __slots__ = ("emitted", "first")
+
+    def __init__(self) -> None:
+        # the json of the first definition under each anchor, and the name it got
+        self.first: MutableMapping[str, tuple[str, str]] = {}
+        self.emitted: set[str] = set()
+
+    def renamed(self, node: Any, scope: Mapping[str, str]) -> Any:
         if isinstance(node, list):
-            return [renamed(element, scope) for element in cast(list[Any], node)]
+            return [self.renamed(element, scope) for element in cast(list[Any], node)]
 
         if not isinstance(node, dict):
             return node
 
         entries: dict[str, Any] = cast(dict[str, Any], node)
-        if named:  # keys are names of attributes, not keywords - each value is a schema
-            return {key: renamed(value, scope) for key, value in entries.items()}
-
         anchor: Any = entries.get("$anchor")
         if isinstance(anchor, str):
             # bool and int are told apart, as their json is
             canonical: str = json.dumps(entries, sort_keys=True)
-            if (met := first.get(anchor)) is not None and met[0] == canonical:
+            if (met := self.first.get(anchor)) is not None and met[0] == canonical:
                 return {"$ref": f"#{met[1]}"}
 
-            unique: str = anchor
-            suffix: int = 1
-            while unique in emitted:
-                suffix += 1
-                unique = f"{anchor}_{suffix}"
-
-            emitted.add(unique)
-            first.setdefault(anchor, (canonical, unique))
-            scope = {**scope, anchor: unique}
+            scope = {**scope, anchor: self.named(anchor, canonical)}
 
         result: dict[str, Any] = {
-            key: value
-            if key in _ANCHOR_VALUES
-            else renamed(value, scope, named=key in _ANCHOR_NAMED)
-            for key, value in entries.items()
+            key: self.renamed_entry(key, value, scope) for key, value in entries.items()
         }
         if isinstance(anchor, str):
             result["$anchor"] = scope[anchor]
@@ -983,7 +978,29 @@ def unique_anchors(
 
         return result
 
-    return cast(TypeSpecification, renamed(specification, {}))
+    def named(self, anchor: str, canonical: str) -> str:
+        unique: str = anchor
+        suffix: int = 1
+        while unique in self.emitted:
+            suffix += 1
+            unique = f"{anchor}_{suffix}"
+
+        self.emitted.add(unique)
+        self.first.setdefault(anchor, (canonical, unique))
+        return unique
+
+    def renamed_entry(self, key: str, value: Any, scope: Mapping[str, str]) -> Any:
+        if key in _ANCHOR_VALUES:
+            return value
+
+        if key in _ANCHOR_NAMED and isinstance(value, dict):
+            # keys are names of attributes, not keywords - each value is a schema
+            return {
+                name: self.renamed(element, scope)
+                for name, element in cast(dict[str, Any], value).items()
+            }
+
+        return self.renamed(value, scope)
 
 
 # the values of a user, not schemas - left as they are

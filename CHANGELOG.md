@@ -88,6 +88,8 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   - A union reads a whole float as it reads its int: the alternatives which take the float as it is
     win first, then the alternatives which take the int as it is, then the conversions in the order
     they are declared. `bool | int` gives `1` for `1.0` and `IntEnum | int` gives `1`, not a member.
+    The int only chooses the alternative - it validates the value as given, so a `Validator` of it
+    receives the float.
   - `Set[T]` accepts sets and sequences (`list`, `tuple`) only, and refuses mappings, dict views,
     generators, iterators, `str` and `bytes` - and `collections.abc.Set` implementations other than
     the built-in `set` and `frozenset`.

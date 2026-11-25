@@ -329,7 +329,8 @@ write_json(Buffer *buffer, PyObject *value)
     return result;
 }
 
-/* to_json(instance) - the json of an instance as `json.dumps` writes it, None when not handled here */
+/* to_json(instance) - the json of an instance as `json.dumps` writes it with compact separators,
+ * None when not handled here */
 static PyObject *
 to_json_native(PyObject *mod, PyObject *self)
 {
