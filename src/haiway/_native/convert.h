@@ -241,6 +241,10 @@ spelled_once_native(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
         PyErr_SetString(PyExc_TypeError, "spelled_once expects a set and a key");
         return NULL;
     }
+    if (!PySet_Check(args[0])) {
+        PyErr_Format(PyExc_TypeError, "spelled_once expects a set, not %.100s", Py_TYPE(args[0])->tp_name);
+        return NULL;
+    }
     int taken = PySet_Contains(args[0], args[1]);
     if (taken < 0) return NULL;
     if (taken) {

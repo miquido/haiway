@@ -87,6 +87,7 @@ class _Described(State):
 
 class _Specified(State):
     literal: Literal[1, 2]
+    literal_missing: Literal[1, 2, Missing]
     optional: int | Missing
     nullable: int | None
     required: int
@@ -103,4 +104,7 @@ def test_the_signature_follows_the_spec() -> None:
 
 
 def test_the_schema_follows_the_spec() -> None:
-    assert set(_Specified.__SPECIFICATION__["required"]) == {"literal", "nullable", "required"}
+    specification: Any = _Specified.__SPECIFICATION__
+
+    assert set(specification["required"]) == {"literal", "nullable", "required"}
+    assert specification["properties"]["literal_missing"] == {"type": "integer", "enum": [1, 2]}

@@ -123,6 +123,8 @@ def omittable(cls: Any, /) -> bool:
         (int | None | Missing, {"type": ["integer", "null"]}),
         (Box[int] | Missing, None),
         (Sequence[int] | Missing, {"type": "array", "items": {"type": "integer"}}),
+        (Literal["a", "b", Missing], {"type": "string", "enum": ["a", "b"]}),
+        (Literal["a", 1, Missing], {"enum": ["a", 1]}),
     ],
 )
 def test_missing_is_not_an_alternative_of_the_schema(

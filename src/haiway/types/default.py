@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from functools import partial
 from os import getenv as os_getenv
-from typing import Any, Literal, cast, final, overload
+from typing import Any, Literal, assert_never, cast, final, overload
 
 from haiway.types.missing import Missing
 
@@ -63,13 +63,29 @@ class DefaultValue:
     @property
     def available(self) -> bool:
         """Whether a default exists, i.e. the field is not required because of it."""
-        return not isinstance(self._source, _NoDefault)
+        source: _NoDefault | _ConstantDefault | _ComputedDefault = self._source
+        match source:
+            case _NoDefault():
+                return False
+
+            case _ConstantDefault() | _ComputedDefault():
+                return True
+
+        assert_never(source)
 
     @property
     def constant(self) -> bool:
         """Whether resolving yields the very same value each time - true of a plain default
         and of no default at all."""
-        return not isinstance(self._source, _ComputedDefault)
+        source: _NoDefault | _ConstantDefault | _ComputedDefault = self._source
+        match source:
+            case _NoDefault() | _ConstantDefault():
+                return True
+
+            case _ComputedDefault():
+                return False
+
+        assert_never(source)
 
     def __call__(self) -> Any | Missing:
         source: _NoDefault | _ConstantDefault | _ComputedDefault = self._source
@@ -79,8 +95,11 @@ class DefaultValue:
         elif isinstance(source, _ComputedDefault):
             return source.resolve()
 
-        else:
+        elif type(source) is _NoDefault:
             return Missing
+
+        else:
+            assert_never(source)
 
 
 @overload

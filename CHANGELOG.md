@@ -133,10 +133,11 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   itself or not at all. Float mapping keys keep the `"inf"`, `"-inf"` and `"nan"` spellings both
   ways. `to_mapping`, `to_basic_object` and `from_mapping` work on Python values and keep infinite
   and `NaN` floats.
-- **Breaking:** `Map` and `Meta` write and read JSON as strictly as a State does. `to_json` writes
-  compact JSON, with no space after `,` and `:`, and raises `ValueError` for an infinite or `NaN`
-  float, where `Infinity` and `NaN` were written. `from_json` refuses the constants `NaN`,
-  `Infinity` and `-Infinity` and a number beyond what a float holds (`1e400`) with `ValueError`.
+- **Breaking:** `Map` and `Meta` write and read JSON strictly. `to_json` writes compact JSON, with
+  no space after `,` and `:`, and raises `ValueError` for an infinite or `NaN` float value, where
+  `Infinity` and `NaN` were written. `from_json` refuses the constants `NaN`, `Infinity` and
+  `-Infinity` and a number beyond what a float holds (`1e400`) with `ValueError`. The keys are
+  still written by `json.dumps` as they are, unlike the keys of a State.
 - **Breaking:** a `bool` variant is no `int` variant, and a `datetime` variant no `date` variant, to
   the variance of a generic State: `Box[bool]` is not a subclass of `Box[int]` - also through union
   arguments, `Box[int | None]` - and `Box(value=True)` is not an instance of `Box[int]`, so a
@@ -246,9 +247,9 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   be omitted is read from the compiled validation itself now, where it was worked out again
   beside it.
 - A key which is an `int` or a `float` of a class with a `__str__` of its own - a mixed-in
-  `class E(int, Enum)` - is spelled as the plain number (`"1"`) in `to_basic_object`, `to_json`
-  and the key patterns of the schema, as `json.dumps` spells it, where it was spelled by `str()`
-  (`"E.A"`). `IntEnum` and `StrEnum` keys are spelled as before.
+  `class E(int, Enum)` - is spelled as the plain number (`"1"`) in `to_basic_object` and
+  `to_json`, as `json.dumps` spells it, where it was spelled by `str()` (`"E.A"`). `IntEnum` and
+  `StrEnum` keys are spelled as before.
 - A `State` holding another one in a set, a `frozenset` or another container the extension does not
   walk itself is converted by `to_mapping` as it is within a tuple, list or mapping: an override of
   `to_mapping` on the nested class is not called in any of them, where it was called in those only.

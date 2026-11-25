@@ -12,7 +12,7 @@
  * target is compiled the first time it validates. The numbers of the kinds are exported
  * by the module (`SPEC_*`), where Python reads them - nothing else spells them.
  */
-enum {
+typedef enum {
     SPEC_ANY = 0,
     SPEC_NONE,
     SPEC_MISSING,
@@ -44,10 +44,10 @@ enum {
     SPEC_UNION,        /* children: the alternatives */
     SPEC_VALIDABLE,    /* children: the attribute, validating: what runs on the raw value first */
     SPEC_ALIAS,        /* annotation: the alias, resolved on first use into children[0] */
-};
+} SpecKind;
 
 typedef struct Spec {
-    int kind;
+    SpecKind kind;
     int nested;             /* validates other specs, or instances - guarded against recursion */
     PyObject *annotation;   /* the annotation - its type_name and base word the errors */
     PyObject *base;
@@ -177,7 +177,7 @@ spec_compile(ModuleState *state, PyObject *description, Spec *enclosing)
         PyMem_RawFree(spec);
         return NULL;
     }
-    spec->kind = (int)kind;
+    spec->kind = (SpecKind)kind;
     spec->annotation = Py_NewRef(D_ANNOTATION(description));
     spec->base = D_BASE(description) == Py_None ? NULL : Py_NewRef(D_BASE(description));
     spec->validating = D_VALIDATING(description) == Py_None ? NULL : Py_NewRef(D_VALIDATING(description));
@@ -1810,10 +1810,13 @@ typedef struct MissingWalk {
 
 /*
  * Whether a spec validates `Missing`, which is what omitting a value yields - 1, 0, or -1 with an
- * error set. Nothing which could refuse it is asked: a validator receives the raw value and a
+ * error set. No validator or verifier is run to tell: a validator receives the raw value and a
  * verifier the validated one, either may refuse `Missing` or replace it - so a spec holding one
  * does not accept it, and neither does one validating itself, a class with a `validate` of its own
- * included. The walk stays within the unions and the aliases, which an alias referring back to
+ * included. Other code of the user may still run while it is told: the comparison of a literal,
+ * the lookup of `validate` on a class (a descriptor or a metaclass), `isinstance` against a class
+ * (an `__instancecheck__`, an ABC or a Protocol), and resolving an alias, which describes its
+ * annotation. The walk stays within the unions and the aliases, which an alias referring back to
  * itself may only leave through another alternative.
  */
 static int
@@ -1861,12 +1864,38 @@ spec_accepts_missing(ModuleState *state, Spec *spec, MissingWalk *outer)
         MissingWalk walk = {outer, spec};
         return spec_accepts_missing(state, target, &walk);
     }
-    default:
+    case SPEC_NONE:
+    case SPEC_BOOL:
+    case SPEC_INT:
+    case SPEC_FLOAT:
+    case SPEC_STR:
+    case SPEC_BYTES:
+    case SPEC_UUID:
+    case SPEC_DATETIME:
+    case SPEC_DATE:
+    case SPEC_TIME:
+    case SPEC_TIMEDELTA:
+    case SPEC_PATH:
+    case SPEC_STR_ENUM:
+    case SPEC_INT_ENUM:
+    case SPEC_TUPLE:
+    case SPEC_OPEN_TUPLE:
+    case SPEC_SEQUENCE:
+    case SPEC_SET:
+    case SPEC_MAPPING:
+    case SPEC_META:
+    case SPEC_TYPED_DICT:
+    case SPEC_STATE:
+    case SPEC_CUSTOM_STATE:
+    case SPEC_FUNCTION:
+    case SPEC_VALIDABLE:
         return 0;
     }
+    Py_UNREACHABLE();
 }
 
-/* accepts_missing(spec) - whether omitting a value is accepted, nothing of the user asked */
+/* accepts_missing(spec) - whether omitting a value is accepted, with no validator run, but the
+ * other code of the user spec_accepts_missing lists possibly run */
 static PyObject *
 accepts_missing_native(PyObject *mod, PyObject *spec_object)
 {

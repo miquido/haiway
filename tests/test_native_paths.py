@@ -9,6 +9,7 @@ import pytest
 
 from haiway import Map, State, ValidationError
 from haiway._native import nstruct
+from haiway.attributes.native import Kind
 
 # The paths of the native extension the rest of the suite does not reach - found with
 # `make coverage-native`. Allocation failures are left out, they can't be caused here.
@@ -235,6 +236,16 @@ def test_from_json_passes_on_an_error_of_a_flag(position: int) -> None:
         nstruct.from_json(*arguments)
 
 
+def test_kind_names_every_kind_the_extension_exports() -> None:
+    exported: dict[str, int] = {
+        name.removeprefix("SPEC_"): getattr(nstruct, name)
+        for name in dir(nstruct)
+        if name.startswith("SPEC_")
+    }
+
+    assert exported == {kind.name: kind.value for kind in Kind}
+
+
 def test_spelled_once_takes_a_spelling_in_once() -> None:
     spelled: set[Any] = set()
     nstruct.spelled_once(spelled, "a")
@@ -244,6 +255,12 @@ def test_spelled_once_takes_a_spelling_in_once() -> None:
         nstruct.spelled_once(spelled, "a")
 
     assert spelled == {"a", "b"}
+
+
+@pytest.mark.parametrize("container", (frozenset({"a"}), ["a"], {"a": 1}, None))
+def test_spelled_once_refuses_what_is_not_a_set(container: Any) -> None:
+    with pytest.raises(TypeError, match="spelled_once expects a set"):
+        _UNTYPED.spelled_once(container, "b")
 
 
 @pytest.mark.parametrize(

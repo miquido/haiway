@@ -1823,11 +1823,30 @@ def _recursive_mapping(  # noqa: PLR0911
 
     elif is_mapping(value):
         # snapshots - converting an element runs code, and the container could be
-        # changed by it, or by another thread, while it is walked
-        return {key: _recursive_mapping(element) for key, element in tuple(value.items())}
+        # changed by it, or by another thread, while it is walked. An exact `dict` is
+        # copied in one step, which is atomic on a free-threaded build - walking the
+        # items of any other mapping into a tuple is not, only as consistent as the
+        # mapping lets it be
+        items: Iterable[tuple[Any, Any]]
+        if type(value) is dict:
+            items = dict(cast(dict[Any, Any], value)).items()
+
+        else:
+            items = tuple(value.items())
+
+        return {key: _recursive_mapping(element) for key, element in items}
 
     elif is_iterable(value):
-        return [_recursive_mapping(element) for element in tuple(value)]
+        # the same for the elements - a `tuple` of an exact `list` and a `frozenset` of an exact
+        # `set` are made in one step, anything else is walked once into a tuple
+        elements: Iterable[Any]
+        if type(value) is set:
+            elements = frozenset(cast(set[Any], value))
+
+        else:
+            elements = tuple(value)
+
+        return [_recursive_mapping(element) for element in elements]
 
     elif hasattr(value, "to_mapping") and callable(value.to_mapping):
         return value.to_mapping()

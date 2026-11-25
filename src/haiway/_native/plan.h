@@ -19,10 +19,18 @@ enum {
     PURITY_IMPURE,
 };
 
+/* what is known of the default of an attribute - each is a refinement of the one before it */
+typedef enum {
+    DEFAULT_COMPUTED,        /* a different value may come every time */
+    DEFAULT_CONSTANT,        /* the very same value every time, not kept */
+    DEFAULT_CACHED_ACYCLIC,  /* constant and kept validated, which can never be part of a cycle */
+    DEFAULT_CACHED_CYCLIC    /* constant and kept validated, which may be part of one */
+} DefaultKind;
+
 typedef struct {
-    PyObject *value;  /* the validated default, when it is a constant nothing can change - NULL otherwise */
-    int acyclic;      /* whether the value can never be part of a cycle - settled once, only meaningful with a value */
-} CachedDefault;
+    DefaultKind kind;
+    PyObject *value;  /* the validated default - NULL exactly when `kind` is not one of the cached, set by `cache_default` only */
+} DefaultState;
 
 typedef struct {
     PyObject *name;
@@ -35,8 +43,7 @@ typedef struct {
     Py_ssize_t json_key_length;
     Spec *spec;       /* owned by the spec object the plan tuple holds */
     PyObject *default_value;  /* () -> the validated default */
-    CachedDefault cached;
-    int constant;     /* whether the default is the very same value every time */
+    DefaultState default_state;
     int pure;         /* PURITY_* of the spec of the attribute - told when first asked, see `field_pure` */
     PyMemberDef member;  /* what the descriptor of the attribute reads */
 } FieldPlan;
@@ -134,11 +141,38 @@ validate_field(FieldPlan *field, CompiledPlan *plan, PyObject *value, int ignore
     return validate_spec(plan->state, field->spec, value, ignore_extra);
 }
 
+static inline int
+field_constant(const FieldPlan *field)
+{
+    return field->default_state.kind != DEFAULT_COMPUTED;
+}
+
+/* the validated default kept for the attribute - NULL when it is not kept */
+static inline PyObject *
+field_cached(const FieldPlan *field)
+{
+    return field->default_state.value;
+}
+
+/* whether the value is the cached default, which can never be part of a cycle */
+static inline int
+is_cached_acyclic(const FieldPlan *field, PyObject *value)
+{
+    return field->default_state.kind == DEFAULT_CACHED_ACYCLIC && value == field->default_state.value;
+}
+
+static inline void
+cache_default(FieldPlan *field, PyObject *validated, int acyclic)
+{
+    field->default_state.kind = acyclic ? DEFAULT_CACHED_ACYCLIC : DEFAULT_CACHED_CYCLIC;
+    field->default_state.value = validated;
+}
+
 /* the default of an attribute which was not given, validated */
 static inline PyObject *
 field_default(FieldPlan *field)
 {
-    if (field->cached.value != NULL) return Py_NewRef(field->cached.value);
+    if (field_cached(field) != NULL) return Py_NewRef(field_cached(field));
     return PyObject_CallNoArgs(field->default_value);
 }
 
@@ -329,7 +363,7 @@ finish_construction(PyObject *self)
     PyObject **items = ITEMS(self);
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *value = items[i];
-        if (value == NULL || (value == plan->fields[i].cached.value && plan->fields[i].cached.acyclic)) continue;
+        if (value == NULL || is_cached_acyclic(&plan->fields[i], value)) continue;
         if (settle(plan->state, value, 0)) return;
     }
     PyObject_GC_UnTrack(self);
@@ -354,7 +388,7 @@ finish_update(PyObject *self, PyObject *source)
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *value = items[i];
         if (value == NULL || value == carried[i]) continue;
-        if (value == plan->fields[i].cached.value && plan->fields[i].cached.acyclic) continue;
+        if (is_cached_acyclic(&plan->fields[i], value)) continue;
         if (settle(plan->state, value, 0)) return;
     }
     PyObject_GC_UnTrack(self);
@@ -441,7 +475,7 @@ plan_pure(PyTypeObject *type, Visited *visited)
     visited->types[visited->count++] = type;
     int pure = constructs_natively(type);
     for (Py_ssize_t i = 0; pure && i < plan->count; i++) {
-        pure = plan->fields[i].constant && spec_pure(plan->fields[i].spec, visited);
+        pure = field_constant(&plan->fields[i]) && spec_pure(plan->fields[i].spec, visited);
     }
     /* an impure class is so for good, a pure one is only where it was asked about first,
      * as the others it met were taken as pure for the sake of the cycles. Where the walk was
@@ -708,9 +742,8 @@ compile_plan(PyObject *mod, PyObject *args)
         field->alias = E_ALIAS(entry) == Py_None ? NULL : E_ALIAS(entry);
         field->spec = ((SpecObject *)E_SPEC(entry))->spec;
         field->default_value = E_DEFAULT(entry);
-        field->cached.value = NULL;
-        field->cached.acyclic = 0;
-        field->constant = E_CONSTANT(entry) != Py_None;
+        field->default_state.kind = E_CONSTANT(entry) != Py_None ? DEFAULT_CONSTANT : DEFAULT_COMPUTED;
+        field->default_state.value = NULL;
         field->pure = PURITY_UNKNOWN;
         PyTuple_SET_ITEM(plan->names, 2 * i, Py_NewRef(field->name));
         PyTuple_SET_ITEM(plan->names, 2 * i + 1, Py_NewRef(field->alias != NULL ? field->alias : Py_None));
@@ -745,7 +778,7 @@ compile_plan(PyObject *mod, PyObject *args)
         Py_DECREF(position);
         if (failed) goto fail;
 
-        int cacheable = field->constant ? cacheable_default(state, type, field->spec, E_CONSTANT(entry)) : 0;
+        int cacheable = field_constant(field) ? cacheable_default(state, type, field->spec, E_CONSTANT(entry)) : 0;
         if (cacheable < 0) goto fail;
         if (cacheable) {
             PyObject *validated = PyObject_CallNoArgs(field->default_value);
@@ -756,8 +789,7 @@ compile_plan(PyObject *mod, PyObject *args)
                 failed = PyList_Append(plan->cached, validated) < 0;
                 Py_DECREF(validated);
                 if (failed) goto fail;
-                field->cached.value = validated;  /* the list holds it */
-                field->cached.acyclic = !settle(state, validated, 0);
+                cache_default(field, validated, !settle(state, validated, 0));  /* the list holds it */
             }
         }
     }

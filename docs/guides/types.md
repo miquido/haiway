@@ -50,12 +50,13 @@ next to `str`; through JSON, `str | Color` reads `Color.RED` back as the `str` `
 
 Nested `State` instances, dataclasses, mappings, sequences and sets are converted as the value graph
 is traversed, into `Map` and `tuple` instances. Mapping keys go through the same table and are then
-spelled the way JSON spells them - a `str` result is used as is, `int` and `float` become
-`str(key)`, and `bool` and `None` become `"true"`, `"false"` and `"null"`. That is the spelling
-`json.dumps` gives those keys on its own, so payloads which already encoded keep the output they had
-\- except for infinite and `NaN` float keys, written as `"inf"`, `"-inf"` and `"nan"` where
-`json.dumps` writes `"Infinity"`, `"-Infinity"` and `"NaN"`. Only `"inf"`, `"-inf"` and `"nan"` are
-read back. Two keys which are spelled the same - `{1: "a", "1": "b"}` - raise `ValueError`.
+spelled the way JSON spells them - a `str` result is used as is, `int` and `float` become the number
+as `json.dumps` writes it (`int.__repr__`, `float.__repr__`), and `bool` and `None` become `"true"`,
+`"false"` and `"null"`. That is the spelling `json.dumps` gives those keys on its own, so payloads
+which already encoded keep the output they had - except for infinite and `NaN` float keys, written
+as `"inf"`, `"-inf"` and `"nan"` where `json.dumps` writes `"Infinity"`, `"-Infinity"` and `"NaN"`.
+Only `"inf"`, `"-inf"` and `"nan"` are read back. Two keys which are spelled the same -
+`{1: "a", "1": "b"}` - raise `ValueError`.
 
 Float _values_ are not converted: `to_basic_object` keeps an infinite or `NaN` float as it is, and
 `from_mapping` reads it back. JSON has no spelling for it, so `to_json` raises `ValueError` and
@@ -247,8 +248,10 @@ assert merged == {"a": 1, "b": 2}
 Mutation methods such as `update`, `pop`, and item assignment raise `AttributeError`.
 
 `Map.to_json()` writes compact JSON, with no space after `,` and `:`, and raises `ValueError` for an
-infinite or `NaN` float, a key included. `Map.from_json()` refuses the constants `NaN`, `Infinity`
-and `-Infinity` and a number such as `1e400` beyond what a float holds, as `State` does.
+infinite or `NaN` float value. `Map.from_json()` refuses the constants `NaN`, `Infinity` and
+`-Infinity` and a number such as `1e400` beyond what a float holds, as `State` does. The keys are
+written by `json.dumps` as they are, so unlike the keys of a `State` they are not checked for two
+spelled alike, and an infinite float key raises.
 
 Use `Map` when you want an immutable mapping outside `State`, or when you want to document that a
 function returns a read-only mapping value concretely.

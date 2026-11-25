@@ -7,6 +7,7 @@ from typing import (
     cast,
 )
 
+from haiway._native import nstruct
 from haiway.attributes.annotations import (
     AliasAttribute,
     AnyAttribute,
@@ -38,7 +39,7 @@ from haiway.attributes.annotations import (
     UUIDAttribute,
     ValidableAttribute,
 )
-from haiway.types import TypeSpecification
+from haiway.types import Missing, TypeSpecification
 from haiway.types.basic import basic_key
 
 __all__ = (
@@ -283,11 +284,17 @@ def _prepare_specification_of_literal(
 ) -> TypeSpecification | None:
     values: list[Any] = []
     for element in cast(LiteralAttribute, annotation).values:
+        if element is Missing:
+            continue  # it has no JSON value, the attribute accepting it can be left out
+
         json_value: Any = _literal_json_value(element)
         if json_value is _NO_JSON_FORM:
             return None
 
         values.append(json_value)
+
+    if not values:
+        return None  # nothing but `Missing`
 
     # `bool` is checked before `int` - it is a subclass of it, while a JSON
     # boolean is not a JSON integer, so a schema naming one refuses the other
@@ -406,7 +413,9 @@ def _prepare_specification_of_mapping(
     }
 
 
-# the spellings a key is read from - exactly the ones it is written as, see `basic_key`
+# the spellings a key is read from - exactly the ones it is written as, see `basic_key` and the
+# reader of keys of the extension (`spec.h`), which these patterns restate - they can't be
+# derived from `nstruct.key_spelling`, which tells the spelling of a key and not what is read
 _INTEGER_KEY: str = r"^(0|-?[1-9][0-9]*)$"
 _NUMBER_KEY: str = r"^(-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?|-?inf|nan)$"
 _BOOLEAN_KEY: str = r"^(true|false)$"
@@ -466,7 +475,7 @@ def _named_key_specification(
                 "type": "string",
                 "enum": _distinct(
                     [
-                        *(str(int(member.value)) for member in keys.base),
+                        *(_integer_key(member.value) for member in keys.base),
                         *keys.base.__members__,
                     ]
                 ),
@@ -488,6 +497,16 @@ def _named_key_specification(
 
         case _:
             return None
+
+
+def _integer_key(
+    value: int,
+    /,
+) -> str:
+    spelled: str | None = nstruct.key_spelling(value)
+    assert spelled is not None  # nosec: B101 - every int has a spelling
+
+    return spelled
 
 
 def _literal_key(

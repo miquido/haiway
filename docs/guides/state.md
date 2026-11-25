@@ -520,11 +520,12 @@ State classes perform thorough type validation for all supported Python types:
   - **Mapping keys** are strings in JSON, so they are read from the spelling they are written as,
     and from no other: `int` keys as canonical decimal integers (`"-12"`, not `"+1"`, `"01"`,
     `" 1"`, `"1_0"`), `float` keys as JSON numbers or as `"inf"`, `"-inf"` and `"nan"` (the spelling
-    `str` gives them - `"Infinity"`, `"-Infinity"` and `"NaN"` of `json.dumps` are refused), `bool`
-    keys as `"true"`/`"false"`, `None` as `"null"`, `Literal` keys as the spelling of the literal,
-    enum keys as a value, a number or a name. Two keys which convert to the same one are refused
-    (`Mapping[int, str]` given `{"1": "a", 1: "b"}`), and so are two keys which are written the same
-    by `to_json` and `to_basic_object` (`{1: "a", "1": "b"}` raises `ValueError`).
+    `float.__repr__` gives them, which `json.dumps` spells `"Infinity"`, `"-Infinity"` and `"NaN"`
+    for a key - those are refused), `bool` keys as `"true"`/`"false"`, `None` as `"null"`, `Literal`
+    keys as the spelling of the literal, enum keys as a value, a number or a name. Two keys which
+    convert to the same one are refused (`Mapping[int, str]` given `{"1": "a", 1: "b"}`), and so are
+    two keys which are written the same by `to_json` and `to_basic_object` (`{1: "a", "1": "b"}`
+    raises `ValueError`).
 - **Container Types**:
   - **Sequence[T]**: sequence-like inputs are normalized to immutable tuples
   - **Mapping[K, V]**: mappings are validated recursively and converted to immutable `Map` values

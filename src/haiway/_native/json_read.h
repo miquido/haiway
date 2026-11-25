@@ -28,12 +28,16 @@ typedef enum {
 typedef struct {
     PendingKind kind;
     PyObject *owner;     /* the instance the value belongs to */
-    Py_ssize_t index;    /* the attribute of the owner - of PENDING_VALIDATE and PENDING_COMPUTE only */
     union {
         struct {
+            Py_ssize_t index;  /* the attribute of the owner */
             Spec *spec;
             PyObject *value;  /* what was read, owned */
         } validate;
+        struct {
+            Py_ssize_t index;  /* the attribute of the owner */
+        } compute;
+        /* PENDING_FINISH carries nothing but its owner */
     };
 } Pending;
 
@@ -51,7 +55,7 @@ typedef struct {
 } Decoder;
 
 static Pending *
-next_pending(Decoder *d, PendingKind kind, PyObject *owner, Py_ssize_t index)
+next_pending(Decoder *d, PendingKind kind, PyObject *owner)
 {
     if (d->pending_count == d->pending_capacity) {
         Py_ssize_t capacity = d->pending_capacity == 0 ? 8 : d->pending_capacity * 2;
@@ -66,15 +70,15 @@ next_pending(Decoder *d, PendingKind kind, PyObject *owner, Py_ssize_t index)
     Pending *item = &d->pending[d->pending_count++];
     item->kind = kind;
     item->owner = owner;
-    item->index = index;
     return item;
 }
 
 static int
 add_pending_validate(Decoder *d, PyObject *owner, Py_ssize_t index, Spec *spec, PyObject *value)
 {
-    Pending *item = next_pending(d, PENDING_VALIDATE, owner, index);
+    Pending *item = next_pending(d, PENDING_VALIDATE, owner);
     if (item == NULL) return 0;
+    item->validate.index = index;
     item->validate.spec = spec;
     item->validate.value = value;
     return 1;
@@ -83,13 +87,31 @@ add_pending_validate(Decoder *d, PyObject *owner, Py_ssize_t index, Spec *spec, 
 static int
 add_pending_compute(Decoder *d, PyObject *owner, Py_ssize_t index)
 {
-    return next_pending(d, PENDING_COMPUTE, owner, index) != NULL;
+    Pending *item = next_pending(d, PENDING_COMPUTE, owner);
+    if (item == NULL) return 0;
+    item->compute.index = index;
+    return 1;
 }
 
 static int
 add_pending_finish(Decoder *d, PyObject *owner)
 {
-    return next_pending(d, PENDING_FINISH, owner, 0) != NULL;
+    return next_pending(d, PENDING_FINISH, owner) != NULL;
+}
+
+/* the attribute a value is kept pending for - of what has one, which a finish has not */
+static inline Py_ssize_t
+pending_index(const Pending *item)
+{
+    switch (item->kind) {
+        case PENDING_VALIDATE:
+            return item->validate.index;
+        case PENDING_COMPUTE:
+            return item->compute.index;
+        case PENDING_FINISH:
+            break;
+    }
+    Py_UNREACHABLE();
 }
 
 /*
@@ -108,7 +130,7 @@ sort_pending(Decoder *d, Py_ssize_t mark, PyObject *owner)
     for (Py_ssize_t i = mark + 1; i < d->pending_count; i++) {
         Pending item = d->pending[i];
         Py_ssize_t at = i;
-        while (at > mark && d->pending[at - 1].index > item.index) {
+        while (at > mark && pending_index(&d->pending[at - 1]) > pending_index(&item)) {
             d->pending[at] = d->pending[at - 1];
             at--;
         }
@@ -787,9 +809,9 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
     for (Py_ssize_t i = 0; i < plan->count; i++) {
         if (given[i]) continue;
         FieldPlan *field = &plan->fields[i];
-        if (field->cached.value != NULL) {
-            ITEM_STORE(items, i, Py_NewRef(field->cached.value));
-        } else if (field->constant && field_pure(field)) {
+        if (field_cached(field) != NULL) {
+            ITEM_STORE(items, i, Py_NewRef(field_cached(field)));
+        } else if (field_constant(field) && field_pure(field)) {
             /* the same every time, with nothing of the user to validate it - one which fails
              * is a missing attribute, which refuses the document before any code has run */
             PyObject *validated = field_default(field);
@@ -993,7 +1015,7 @@ objects_are_instances(Spec *spec)
 
 /* whether a union has an alternative of the kind */
 static inline int
-union_has(Spec *spec, int kind)
+union_has(Spec *spec, SpecKind kind)
 {
     for (Py_ssize_t i = 0; i < spec->count; i++) {
         if (spec->children[i]->kind == kind) return 1;
@@ -1129,23 +1151,26 @@ apply_pending(Decoder *d)
     for (Py_ssize_t i = 0; i < d->pending_count; i++) {
         Pending *item = &d->pending[i];
         PyObject *validated;
+        Py_ssize_t index;
         switch (item->kind) {
             case PENDING_FINISH:
                 continue;
             case PENDING_VALIDATE:
+                index = item->validate.index;
                 validated = validate_spec(d->state, item->validate.spec, item->validate.value, d->ignore_extra);
                 break;
             case PENDING_COMPUTE:
-                validated = field_default(&PLAN_OF(Py_TYPE(item->owner))->fields[item->index]);
+                index = item->compute.index;
+                validated = field_default(&PLAN_OF(Py_TYPE(item->owner))->fields[index]);
                 break;
         }
         if (validated == NULL) {
             PyTypeObject *type = Py_TYPE(item->owner);
-            report_failure(d->state, type, NULL, PLAN_OF(type)->fields[item->index].name);
+            report_failure(d->state, type, NULL, PLAN_OF(type)->fields[index].name);
             return -1;
         }
-        PyObject *previous = ITEMS(item->owner)[item->index];
-        ITEM_STORE(ITEMS(item->owner), item->index, validated);
+        PyObject *previous = ITEMS(item->owner)[index];
+        ITEM_STORE(ITEMS(item->owner), index, validated);
         Py_XDECREF(previous);
     }
     /* the instances bound late are let go of by the collector now, where they can be -
