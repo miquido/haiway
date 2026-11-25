@@ -1254,8 +1254,8 @@ def _attribute_redaction(  # noqa: PLR0911
     visited_aliases: set[tuple[str, str]],
 ) -> str | None:
     # the marker on the attribute itself, including the one delegated by wrapping annotations
-    if annotation.redaction is not None:
-        return annotation.redaction
+    if annotation.metadata.redaction is not None:
+        return annotation.metadata.redaction
 
     # otherwise it can still be nested within the structure of the attribute
     match annotation:

@@ -187,8 +187,9 @@ struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
 
         if (value == NULL) {
             /* an absent key carries the attribute over - a Missing value clears it */
-            target[i] = carried_value(type, ITEM_LOAD(source, i));
-            if (target[i] == NULL) goto fail;
+            PyObject *carried = carried_value(type, ITEM_LOAD(source, i));
+            if (carried == NULL) goto fail;
+            ITEM_STORE(target, i, carried);
             continue;
         }
 
@@ -198,7 +199,7 @@ struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
             report_failure(plan->state, type, kwargs, field->name);
             goto fail;
         }
-        target[i] = validated;
+        ITEM_STORE(target, i, validated);
     }
 
     if (consumed != PyDict_GET_SIZE(kwargs)) {
@@ -301,7 +302,7 @@ struct_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf, PyOb
             Py_DECREF(self);
             return NULL;
         }
-        items[i] = validated;
+        ITEM_STORE(items, i, validated);
     }
     finish_construction(self);
     return self;
@@ -428,7 +429,7 @@ instance_from_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan
         for (Py_ssize_t k = 0; k < n; k++) Py_DECREF(values[k]);
         goto done;
     }
-    memcpy(ITEMS(self), values, (size_t)n * sizeof(PyObject *));
+    for (Py_ssize_t i = 0; i < n; i++) ITEM_STORE(ITEMS(self), i, values[i]);
     finish_construction(self);
 
 done:
@@ -614,11 +615,12 @@ struct_replace_fast(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyO
         FieldPlan *field = &plan->fields[i];
         if (given[i] < 0) {
             /* an absent key carries the attribute over - a Missing value clears it */
-            target[i] = carried_value(type, ITEM_LOAD(source, i));
-            if (target[i] == NULL) {
+            PyObject *carried = carried_value(type, ITEM_LOAD(source, i));
+            if (carried == NULL) {
                 Py_DECREF(copy);
                 return NULL;
             }
+            ITEM_STORE(target, i, carried);
             continue;
         }
         PyObject *validated = validate_field(field, plan, args[nargs + given[i]], 0);
@@ -627,7 +629,7 @@ struct_replace_fast(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyO
             Py_DECREF(copy);
             return NULL;
         }
-        target[i] = validated;
+        ITEM_STORE(target, i, validated);
     }
     finish_update(copy, self);
     return copy;
@@ -781,7 +783,7 @@ struct_deep_copy(ModuleState *state, PyObject *self, PyObject *memo)
     if (result != NULL || PyErr_Occurred()) goto done;
     result = type->tp_alloc(type, 0);
     if (result == NULL) goto done;
-    for (Py_ssize_t i = 0; i < n; i++) ITEMS(result)[i] = values[i];
+    for (Py_ssize_t i = 0; i < n; i++) ITEM_STORE(ITEMS(result), i, values[i]);
     copied = 0;  /* the copy holds them now */
     finish_construction(result);
     if (memo_store(memo, self, result) < 0) Py_CLEAR(result);

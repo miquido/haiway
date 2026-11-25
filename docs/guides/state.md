@@ -631,7 +631,8 @@ schema names the form which is written. What it leaves unsaid is on purpose:
 
 - An attribute is `required` when it can't be left out: it has no default and doesn't accept
   `Missing`. An attribute annotated `Any`, `object` or `X | Missing` can be omitted from the input,
-  and is not listed.
+  and is not listed - unless a `Validator` or a `Verifier` is declared on it, which may refuse
+  `Missing`.
 - `Missing` has no JSON value, so it is not an alternative of a union - `int | Missing` is an
   integer, which may be left out of the object.
 - A `format` is only claimed when everything written fits it - not for `datetime` and `time`, which

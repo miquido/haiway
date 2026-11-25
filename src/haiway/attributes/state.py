@@ -636,6 +636,8 @@ def _refuse_inheriting(
     bases: tuple[type, ...],
     /,
 ) -> None:
+    if len(bases) == 1 and not getattr(bases[0], "__FIELDS__", True):
+        return  # the usual one - a State without attributes of its own
     states: tuple[type, ...] = tuple(base for base in bases if isinstance(base, StateMeta))
     if not states:
         return  # the root State itself
@@ -735,7 +737,7 @@ def _declared_fields(
     # an attribute is left out only when it has a default or accepts `Missing`, and
     # `NotRequired` is neither - the attribute it marks would be required all the same
     for field in fields:
-        if not field.annotation.required and field.required:
+        if not field.annotation.metadata.required and field.required:
             raise TypeError(
                 f"{name}.{field.name} is annotated with NotRequired, which is not applicable"
                 " to an attribute of a State - declare a default to make it optional"
@@ -1020,9 +1022,14 @@ def _unexpected_attributes(
     keys: Iterable[Any],
 ) -> TypeError:
     # the one refusal of keys which are no attribute, wherever they are found - given
-    # to the constructor, to `updating` or read from a mapping. whatever a mapping is
-    # keyed by is not sorted by comparing the keys, they may not compare
-    texts: Sequence[str] = sorted(repr(key) for key in keys)
+    # to the constructor, to `updating` or read from a mapping. the names come first, in
+    # their order - whatever else a mapping is keyed by is not sorted by comparing the
+    # keys, they may not compare
+    given: Sequence[Any] = tuple(keys)
+    texts: Sequence[str] = (
+        *(repr(key) for key in sorted(key for key in given if isinstance(key, str))),
+        *sorted(repr(key) for key in given if not isinstance(key, str)),
+    )
     return TypeError(
         f"Unexpected attribute{'s' if len(texts) > 1 else ''} {', '.join(texts)} for {cls.__name__}"
     )

@@ -8,6 +8,7 @@ from haiway.attributes.annotations import (
     CustomAttribute,
     MissingAttribute,
     UnionAttribute,
+    ValidableAttribute,
 )
 from haiway.attributes.specification import type_specification
 from haiway.types import (
@@ -23,38 +24,60 @@ __all__ = ("Attribute",)
 _bind = object.__setattr__
 
 
-# whether the annotation validates `Missing`, which is what omitting a value yields. a
-# validator of the annotation is not asked - it receives the raw input and may refuse
-# `Missing` or replace it, which is why such an attribute is not considered omittable
+# whether the annotation validates `Missing`, which is what omitting a value yields. neither
+# a validator nor a verifier of the annotation is asked - a validator receives the raw input
+# and a verifier the validated value, either may refuse `Missing` or replace it, which is
+# why an annotation holding one, at any level, is not considered omittable
 def _accepts_missing(
     annotation: AttributeAnnotation,
     /,
-    visited: set[int],
+    visited: set[int] | None = None,
 ) -> bool:
-    if id(annotation) in visited:
-        return False  # a recursive alias, accepting it only through itself
-
-    visited.add(id(annotation))
     match annotation:
         case AnyAttribute() | MissingAttribute():
-            return True
+            return not _may_refuse_missing(annotation)
 
-        case UnionAttribute():
-            return any(
-                _accepts_missing(alternative, visited) for alternative in annotation.alternatives
-            )
-
-        case AliasAttribute():
-            return _accepts_missing(annotation.resolved, visited)
+        case UnionAttribute() | AliasAttribute():
+            return _accepts_missing_within(annotation, visited if visited is not None else set())
 
         case CustomAttribute():
-            # `object` and the like - a class validating on its own is asked to
-            return not hasattr(annotation.base, "validate") and _is_instance(
-                Missing, annotation.base
-            )
+            return not _may_refuse_missing(annotation) and _custom_accepts_missing(annotation)
 
         case _:
-            return False
+            return False  # what most are
+
+
+def _accepts_missing_within(
+    annotation: UnionAttribute | AliasAttribute,
+    /,
+    visited: set[int],
+) -> bool:
+    if id(annotation) in visited or _may_refuse_missing(annotation):
+        # a recursive alias accepts it only through itself, code of the user may refuse it
+        return False
+
+    visited.add(id(annotation))
+    if isinstance(annotation, UnionAttribute):
+        return any(
+            _accepts_missing(alternative, visited) for alternative in annotation.alternatives
+        )
+
+    return _accepts_missing(annotation.resolved, visited)
+
+
+def _custom_accepts_missing(
+    annotation: CustomAttribute,
+    /,
+) -> bool:
+    # `object` and the like - a class validating on its own is asked to
+    return not hasattr(annotation.base, "validate") and _is_instance(Missing, annotation.base)
+
+
+def _may_refuse_missing(
+    annotation: AttributeAnnotation,
+    /,
+) -> bool:
+    return isinstance(annotation, ValidableAttribute) or annotation.metadata.verifying is not None
 
 
 def _is_instance(
@@ -76,9 +99,13 @@ class Attribute:
     default: DefaultValue
     spec: Any
     redaction: str | None
+    alias: str | None
+    key: str
     __slots__ = (
+        "alias",
         "annotation",
         "default",
+        "key",
         "name",
         "redaction",
         "spec",
@@ -98,17 +125,12 @@ class Attribute:
         _bind(self, "default", default)
         _bind(self, "spec", spec)
         _bind(self, "redaction", redaction)
-
-    @property
-    def alias(self) -> str | None:
-        return self.annotation.alias
-
-    @property
-    def key(self) -> str:
-        # the name this attribute is keyed by when rendered or serialized - the
-        # alias when one was declared, the declared name otherwise
-        alias: str | None = self.annotation.alias
-        return alias if alias is not None else self.name
+        # read for each rendering and whenever the class is worked with - held, not asked
+        # of the annotation each time. the key is the name this attribute is rendered or
+        # serialized under: the alias when one was declared, the declared name otherwise
+        alias: str | None = annotation.alias
+        _bind(self, "alias", alias)
+        _bind(self, "key", alias if alias is not None else name)
 
     @property
     def description(self) -> str | None:
@@ -118,7 +140,7 @@ class Attribute:
     def required(self) -> bool:
         # an attribute can be left out when it has a default or when it accepts
         # `Missing` - it is what both the schema and the signature derive from
-        return not self.default.available and not _accepts_missing(self.annotation, set())
+        return not self.default.available and not _accepts_missing(self.annotation)
 
     @property
     def specification(self) -> TypeSpecification | None:

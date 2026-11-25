@@ -14,6 +14,7 @@ import pytest
 
 from haiway import Default, State, ValidationError, Validator
 from haiway._native import nstruct
+from haiway.attributes.state import StateMeta
 
 # What the native code does with values whose methods are code of the user, with what it
 # is handed by Python hooks, and with instances other threads can reach half made.
@@ -451,6 +452,31 @@ def test_recursive_alias_is_described_once_whatever_the_depth(
     assert len(set(counts.values())) == 1, counts
 
 
+@pytest.mark.parametrize(
+    ("aliases", "nest"),
+    [
+        pytest.param("type Root[T] = Mapping[str, Root[T]] | T", _in_mapping, id="generic"),
+        pytest.param(
+            "type Root[T] = Mapping[str, Other[T]] | T\ntype Other[T] = Sequence[Root[T]] | str",
+            _in_mapping_of_sequence,
+            id="mutually recursive generic",
+        ),
+    ],
+)
+def test_recursive_generic_alias_is_described_once_whatever_the_depth(
+    aliases: str,
+    nest: Callable[[Any], Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `Root[T]` within the body is not the `Root` itself, so the body is unfolded once more
+    # when a document first reaches it (depth 2) - from there on it is the one linked to
+    counts = {
+        depth: _descriptions_for(aliases, nest, depth, monkeypatch) for depth in (10, 50, 100)
+    }
+
+    assert len(set(counts.values())) == 1, counts
+
+
 # --- a set which changes while it is converted -------------------------------
 
 
@@ -678,6 +704,51 @@ def test_default_which_fails_to_be_checked_is_left_to_fail_where_it_is_used() ->
         Broken.from_json("{}")
 
 
+class _CheckError(Exception):
+    pass
+
+
+class _Refusing(StateMeta):
+    def __instancecheck__(cls, instance: Any) -> bool:
+        raise _CheckError("the check of the class failed")
+
+
+class _Interrupting(StateMeta):
+    def __instancecheck__(cls, instance: Any) -> bool:
+        raise KeyboardInterrupt
+
+
+def _kept(value: Any) -> Any:
+    return value
+
+
+class _RefusedByCheck(State, metaclass=_Refusing):
+    q: Annotated[int, Validator(_kept)]
+
+
+class _InterruptedByCheck(State, metaclass=_Interrupting):
+    q: Annotated[int, Validator(_kept)]
+
+
+def test_default_of_state_whose_check_fails_is_left_to_fail_where_it_is_used() -> None:
+    class Holder(State):
+        child: _RefusedByCheck = _declared(5)
+
+    with pytest.raises(ValidationError):
+        Holder()
+
+
+def test_default_of_state_whose_check_is_interrupted_interrupts_the_class() -> None:
+    with pytest.raises(KeyboardInterrupt):
+        types.new_class(
+            "InterruptedHolder",
+            (State,),
+            exec_body=lambda body: body.update(
+                __annotations__={"child": _InterruptedByCheck}, child=Default(5)
+            ),
+        )
+
+
 def test_default_which_is_interrupted_while_it_is_checked_interrupts_the_class() -> None:
     declared = _declared(_Broken(KeyboardInterrupt))
 
@@ -698,6 +769,74 @@ def test_default_with_validator_on_its_value_is_validated_for_each_instance() ->
     _Validated.from_json("{}")
 
     assert _runs == [0, 0]
+
+
+class _Leaf(State):
+    a: int
+
+
+class _Listed(State):
+    items: Sequence[_Leaf] = Default(factory=tuple)
+
+
+class _FactoryValidated(State):
+    value: Annotated[int, Validator(_counted)] = Default(factory=int)
+
+
+def test_value_given_for_attribute_with_computed_default_is_read_as_any_other() -> None:
+    assert _Listed.from_json('{"items": [{"a": 1}, {"a": 2}]}') == _Listed(
+        items=(_Leaf(a=1), _Leaf(a=2))
+    )
+    assert _Listed.from_json("{}") == _Listed(items=())
+
+    with pytest.raises(ValueError, match=r"\.items\[1\]\.a"):
+        _Listed.from_json('{"items": [{"a": 1}, {"a": "x"}]}')
+
+
+def test_computed_default_with_code_of_the_user_is_validated_once_the_document_is_right() -> None:
+    _runs.clear()
+
+    assert _FactoryValidated.from_json('{"value": 3}') == _FactoryValidated(value=3)
+    assert _runs == [3, 3]  # one for each, and the one compared with
+    _runs.clear()
+
+    assert _FactoryValidated.from_json("{}").value == 0
+    assert _runs == [0]
+
+
+def _chain(length: int, last: type[State]) -> type[State]:
+    cls: type[State] = last
+    for index in range(length):
+        cls = types.new_class(
+            f"Chained{index}",
+            (State,),
+            exec_body=lambda body, cls=cls: body.update(
+                __annotations__={"next": cls, "number": int}
+            ),
+        )
+    return cls
+
+
+@pytest.mark.parametrize("leaf", (_Leaf, _Counted))
+def test_graph_reaching_more_classes_than_are_remembered_is_read_correctly_each_time(
+    leaf: type[State],
+) -> None:
+    root: Any = _chain(100, leaf)
+    document: Any = {"number": 0}
+    inner: Any = document
+    for index in range(1, 100):
+        inner["next"] = {"number": index}
+        inner = inner["next"]
+    inner["next"] = {"a": 1} if leaf is _Leaf else {"number": 1}
+
+    _runs.clear()
+    for _ in range(3):
+        instance: Any = root.from_json(json.dumps(document))
+        assert instance.number == 0
+        assert instance.next.number == 1
+        assert instance == root.from_mapping(document)
+
+    assert len(_runs) == (0 if leaf is _Leaf else 6)  # for each of the readings, and the compared
 
 
 # --- a mapping which changes while it is converted ----------------------------

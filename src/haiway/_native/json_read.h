@@ -10,10 +10,11 @@
  * What runs code of the user - a validator, a verifier, a class validating itself, a
  * default which is computed, a constructor of the class's own - is kept pending, as the
  * document spells it, and run once the whole document is known to be right, in the order
- * of the attributes, so a document refused for something else never runs it. Whether an
- * attribute runs any is told by `field_pure`, with everything it nests, in one place: a
- * class holding such code nested in a tuple is as pending as one in a sequence. The one
- * thing which is not left to the standard library is a failure of that code, or of what
+ * of the attributes, so a document refused for something else never runs it. Whether a
+ * value given for an attribute runs any is told by `field_pure`, with everything it nests,
+ * in one place - and whether a default which is not given does, by that and by the default
+ * being the same every time. A class holding such code nested in a tuple is as pending as
+ * one in a sequence. The one thing which is not left to the standard library is a failure of that code, or of what
  * is validated with it: it has run, and reading the document again would run it again, so
  * the failure is reported where it is, the way validating the instance reports it.
  */
@@ -709,7 +710,7 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
             if (field_pure(field)) {
                 PyObject *value = decode_spec(d, field->spec);
                 if (value == NULL) goto fail;
-                items[index] = value;
+                ITEM_STORE(items, index, value);
             } else {
                 /* code of the user validates - once the document is known to be right */
                 PyObject *raw = decode_any(d);
@@ -738,8 +739,8 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
         if (given[i]) continue;
         FieldPlan *field = &plan->fields[i];
         if (field->cached != NULL) {
-            items[i] = Py_NewRef(field->cached);
-        } else if (field_pure(field)) {
+            ITEM_STORE(items, i, Py_NewRef(field->cached));
+        } else if (field->constant && field_pure(field)) {
             /* the same every time, with nothing of the user to validate it - one which fails
              * is a missing attribute, which refuses the document before any code has run */
             PyObject *validated = field_default(field);
@@ -747,7 +748,7 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
                 decline_failure();
                 goto fail;
             }
-            items[i] = validated;
+            ITEM_STORE(items, i, validated);
         } else {
             /* the default is computed - once the document is known to be right */
             if (!add_pending(d, self, i, NULL, NULL)) goto fail;
@@ -1090,8 +1091,9 @@ apply_pending(Decoder *d)
             report_failure(d->state, type, NULL, PLAN_OF(type)->fields[item->index].name);
             return -1;
         }
-        PyObject **slot = &ITEMS(item->owner)[item->index];
-        Py_XSETREF(*slot, validated);
+        PyObject *previous = ITEMS(item->owner)[item->index];
+        ITEM_STORE(ITEMS(item->owner), item->index, validated);
+        Py_XDECREF(previous);
     }
     /* the instances bound late are let go of by the collector now, where they can be -
      * those within another first, in the order they were read to the end */

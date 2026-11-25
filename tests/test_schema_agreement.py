@@ -11,7 +11,7 @@ from uuid import UUID
 
 import pytest
 
-from haiway import Missing, State
+from haiway import Missing, State, Validator, Verifier
 
 
 class Color(StrEnum):
@@ -34,6 +34,13 @@ class Mode(Enum):
 
 
 type Maybe = int | Missing
+
+
+def refuse_missing(value: Any) -> Any:
+    if value is Missing:
+        raise ValueError("Missing is refused")
+
+    return value
 
 
 class Box[Value](State):
@@ -153,6 +160,14 @@ def test_null_is_refused_where_missing_stood_for_it() -> None:
         (int, 1),
         (Any, None),
         (int | None, None),
+        # a verifier may refuse Missing, wherever it sits
+        (Annotated[int | Missing, Verifier(refuse_missing)], NO_DEFAULT),
+        (int | Annotated[Missing, Verifier(refuse_missing)], NO_DEFAULT),
+        (Annotated[Maybe, Verifier(refuse_missing)], NO_DEFAULT),
+        (Annotated[Annotated[int | Missing, Verifier(refuse_missing)], "layer"], NO_DEFAULT),
+        (Annotated[Any, Verifier(refuse_missing)], NO_DEFAULT),
+        (Annotated[int | Missing, Validator(refuse_missing)], NO_DEFAULT),
+        (int | Annotated[Missing, Validator(refuse_missing)], NO_DEFAULT),
     ],
 )
 def test_required_attributes_are_the_ones_which_cannot_be_omitted(

@@ -493,6 +493,16 @@ def test_all_unexpected_keys_are_listed_sorted_when_several(
     assert str(error.value) == "Unexpected attributes 'alpha', 'mid', 'zed' for Leaf"
 
 
+@pytest.mark.parametrize("refuse", _REFUSALS)
+def test_unexpected_names_are_sorted_by_the_names_not_by_how_they_are_quoted(
+    refuse: Callable[[Mapping[str, Any]], Any],
+) -> None:
+    with pytest.raises(TypeError) as error:
+        refuse({"it's": 1, "b": 2, "a": 3})
+
+    assert str(error.value) == "Unexpected attributes 'a', 'b', \"it's\" for Leaf"
+
+
 def test_default_messages_are_unchanged() -> None:
     with pytest.raises(TypeError) as mapping_error:
         Leaf.from_mapping({"value": 1, "extra": 2})

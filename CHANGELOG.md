@@ -11,7 +11,10 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   `to_basic_object`, `hash`, `==` of two instances and `copy.deepcopy`, as `updating` always did.
   They treated it as an instance with no attributes before: it was written as `{}`, hashed and
   compared equal to every other one. This also keeps another thread from reading an instance which
-  is being initialized while only some of its attributes are bound: it reads all of them, or raises.
+  is being initialized while only some of its attributes are bound: it reads all of them, or raises -
+  every value is bound with a release store and read with an acquire load on the free-threaded
+  build, wherever an instance is made (the constructor, `updating`, `from_json`, `from_mapping`,
+  `validate` and `copy.deepcopy`), and plain accesses with the GIL.
 - Several `Validator`s, or several `Verifier`s, on one attribute run one after another in the order
   they are declared, each given what the previous one returned - where only the last of each was
   kept, silently, so `Annotated[int, Validator(a), Validator(b)]` ran `b` alone. Validators run
@@ -21,7 +24,7 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 - A State refuses a key which is no attribute with one message, wherever the key is given:
   `Unexpected attribute 'x' for Name` from the constructor and `updating()` as well as from
   `validate` and `from_mapping`, where the first two said `Name has no attribute 'x'`. The
-  constructor and `updating()` find all of the keys at once and list them sorted,
+  constructor and `updating()` find all of the keys at once and list them sorted by name,
   `Unexpected attributes 'a', 'b' for Name`; `validate` and `from_mapping` report the first one. The `TypedDict` message,
   `Unexpected key 'x' for Name`, is unchanged.
 - `Attribute` and the attribute annotations (`IntegerAttribute`, `ObjectAttribute`, ...) refuse
@@ -42,7 +45,9 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   refuses what the State accepts, and refuses more of what the State refuses. Where it was relied on:
   - `required` lists an attribute only when it can't be left out. One accepting `Missing` - `Any`,
     `object`, `X | Missing`, an unspecialized type parameter - is no longer listed, which is also
-    how `inspect.signature` of the class reads it. `Missing` is not an alternative of a union
+    how `inspect.signature` of the class reads it. An annotation holding a `Validator` or a
+    `Verifier`, at any level, is never taken as accepting `Missing`, as either may refuse it.
+    `Missing` is not an alternative of a union
     anymore (it was `"type": "null"`, which validation refuses): `int | Missing` is `integer`.
   - A fixed tuple states `minItems` and `maxItems`, a tuple with an unbounded part `minItems` for
     the elements around it.

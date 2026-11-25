@@ -32,7 +32,7 @@ typedef struct {
     PyObject *default_value;  /* () -> the validated default */
     PyObject *cached;  /* the validated default, when it is a constant nothing can change - NULL otherwise */
     int constant;     /* whether the default is the very same value every time */
-    int pure;         /* PURITY_* of the attribute - told when first asked, see `field_pure` */
+    int pure;         /* PURITY_* of the spec of the attribute - told when first asked, see `field_pure` */
     int cached_acyclic;  /* whether the cached default can never be part of a cycle - settled once */
     PyMemberDef member;  /* what the descriptor of the attribute reads */
 } FieldPlan;
@@ -375,17 +375,21 @@ constructs_natively(PyTypeObject *type)
  * refused later; the rest waits until the document is known to be right. This is the one
  * place telling it: a spec is pure when it runs no code of its own and nothing it holds
  * does, and a class when it is constructed here and every attribute is a pure spec with a
- * default which is the same every time. A class refers to others, and to itself, so the
- * classes already met are remembered - which is also what lets a cycle end, taken as pure
- * until a part of it says otherwise. Nothing is remembered of a part which could not be
- * told (a class which has no plan yet, one too far in), so it is asked again.
+ * default which is the same every time - the two facts about an attribute are kept apart,
+ * as a value which is given needs only the first, and one which is not given both. A class
+ * refers to others, and to itself, so the classes already met are remembered - which is also
+ * what lets a cycle end, taken as pure until a part of it says otherwise. Nothing is remembered
+ * of a part which could not be told because a class has no plan yet, so it is asked again. A
+ * graph reaching more classes than can be remembered is told impure, which is what is
+ * remembered of it, as it was told no other way - and it is told once.
  */
 #define PURITY_VISITED 64
 
 typedef struct {
     PyTypeObject *types[PURITY_VISITED];
     Py_ssize_t count;
-    int inconclusive;
+    int unplanned;  /* a class without a plan was met - the answer may change once it has one */
+    int overflowed;  /* too many classes were met - everything not seen is taken as impure */
 } Visited;
 
 static int plan_pure(PyTypeObject *type, Visited *visited);
@@ -421,8 +425,12 @@ plan_pure(PyTypeObject *type, Visited *visited)
     for (Py_ssize_t i = 0; i < visited->count; i++) {
         if (visited->types[i] == type) return 1;
     }
-    if (plan == NULL || visited->count == PURITY_VISITED) {
-        visited->inconclusive = 1;
+    if (plan == NULL) {
+        visited->unplanned = 1;
+        return 0;
+    }
+    if (visited->count == PURITY_VISITED) {
+        visited->overflowed = 1;
         return 0;
     }
     int root = visited->count == 0;
@@ -432,8 +440,10 @@ plan_pure(PyTypeObject *type, Visited *visited)
         pure = plan->fields[i].constant && spec_pure(plan->fields[i].spec, visited);
     }
     /* an impure class is so for good, a pure one is only where it was asked about first,
-     * as the others it met were taken as pure for the sake of the cycles */
-    if (!visited->inconclusive && (root || !pure)) {
+     * as the others it met were taken as pure for the sake of the cycles. Where the walk was
+     * cut short it is impure, which is told for the class it started from only - the others
+     * were cut short by where they were met */
+    if (!visited->unplanned && (root || (!pure && !visited->overflowed))) {
         STORE_RELAXED(&plan->pure, pure ? PURITY_PURE : PURITY_IMPURE);
     }
     return pure;
@@ -444,13 +454,14 @@ plan_pure(PyTypeObject *type, Visited *visited)
 static Py_NO_INLINE int
 field_pure_told(FieldPlan *field)
 {
-    Visited visited = {{NULL}, 0, 0};
-    int pure = field->constant && spec_pure(field->spec, &visited);
-    if (!visited.inconclusive) STORE_RELAXED(&field->pure, pure ? PURITY_PURE : PURITY_IMPURE);
+    Visited visited = {{NULL}, 0, 0, 0};
+    int pure = spec_pure(field->spec, &visited);
+    if (!visited.unplanned) STORE_RELAXED(&field->pure, pure ? PURITY_PURE : PURITY_IMPURE);
     return pure;
 }
 
-/* whether reading an attribute of a class runs no code of the user - told once */
+/* whether validating a value given for an attribute of a class runs no code of the user -
+ * told once. Whether its default is the same every time is `constant`, not told here */
 static inline int
 field_pure(FieldPlan *field)
 {
@@ -473,18 +484,24 @@ field_pure(FieldPlan *field)
 static int
 cacheable_default(ModuleState *state, PyTypeObject *type, Spec *spec, PyObject *declared)
 {
-    Visited visited = {{type}, 1, 0};
+    Visited visited = {{type}, 1, 0, 0};
     if (spec_pure(spec, &visited)) return 1;
     if (spec->validating != NULL || spec->verifying != NULL) return 0;
     PyObject *value = PyObject_CallNoArgs(declared);
     if (value == NULL) return PyErr_ExceptionMatches(PyExc_Exception) ? (PyErr_Clear(), 0) : -1;
     int accepted = 0;
     if (spec->kind == SPEC_STATE) {
-        accepted = spec_check(state, spec, value) > 0;
+        accepted = spec_check(state, spec, value);
+        if (accepted < 0) {
+            Py_DECREF(value);
+            if (!PyErr_ExceptionMatches(PyExc_Exception)) return -1;
+            PyErr_Clear();
+            return 0;
+        }
     } else if (spec->kind == SPEC_UNION) {
         for (Py_ssize_t i = 0; i < spec->count && accepted == 0; i++) {
             Spec *alternative = spec->children[i];
-            Visited alone = {{type}, 1, 0};
+            Visited alone = {{type}, 1, 0, 0};
             int plain = (alternative->kind == SPEC_STATE && alternative->validating == NULL
                          && alternative->verifying == NULL)
                 || spec_pure(alternative, &alone);

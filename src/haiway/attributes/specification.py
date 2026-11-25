@@ -59,7 +59,7 @@ def type_specification(
 
     return _with_description(
         specification,
-        description=annotation.description,
+        description=annotation.metadata.description,
     )
 
 
@@ -112,7 +112,7 @@ def object_specification(
 
         properties[key] = _with_description(
             element_specification,
-            description=element.description,
+            description=element.metadata.description,
         )
 
         if element_required:
@@ -161,7 +161,7 @@ def _specification(
 ) -> TypeSpecification | None:
     # an explicitly declared specification is used as it stands, wherever it is
     # declared - the attribute of an object and the element of a container alike
-    if declared := annotation.specification:
+    if declared := annotation.metadata.specification:
         return declared
 
     key: int = id(annotation)
@@ -807,7 +807,7 @@ def _prepare_specification_of_typed_dict(
 
         properties[key] = specification
 
-        if not element.required:
+        if not element.metadata.required:
             continue
 
         required.append(key)
