@@ -295,6 +295,26 @@ number_end(const char *start, const char *end, int *is_float)
     return p;
 }
 
+/* the double a float spelled by the text is - 1 with it in `parsed`, 0 for one beyond the
+ * range of a double, which json spells no other way and is declined so that the standard
+ * library is to say so, -1 with an error set */
+static int
+parse_finite_double(const char *start, Py_ssize_t length, double *parsed)
+{
+    char small[64];
+    char *text = length < (Py_ssize_t)sizeof(small) ? small : PyMem_Malloc((size_t)length + 1);
+    if (text == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    memcpy(text, start, (size_t)length);
+    text[length] = '\0';
+    *parsed = PyOS_string_to_double(text, NULL, NULL);  /* beyond the range it is infinite */
+    if (text != small) PyMem_Free(text);
+    if (*parsed == -1.0 && PyErr_Occurred()) return -1;
+    return isfinite(*parsed) ? 1 : 0;
+}
+
 static PyObject *
 decode_number(Decoder *d)
 {
@@ -312,18 +332,18 @@ decode_number(Decoder *d)
         d->p = p;
         return PyLong_FromLongLong(negative ? -magnitude : magnitude);
     }
+    if (is_float) {
+        double parsed;
+        if (parse_finite_double(start, length, &parsed) <= 0) return NULL;
+        d->p = p;
+        return PyFloat_FromDouble(parsed);
+    }
     char small[64];
     char *text = length < (Py_ssize_t)sizeof(small) ? small : PyMem_Malloc((size_t)length + 1);
     if (text == NULL) return PyErr_NoMemory();
     memcpy(text, start, (size_t)length);
     text[length] = '\0';
-    PyObject *number;
-    if (is_float) {
-        double parsed = PyOS_string_to_double(text, NULL, NULL);
-        number = (parsed == -1.0 && PyErr_Occurred()) ? NULL : PyFloat_FromDouble(parsed);
-    } else {
-        number = PyLong_FromString(text, NULL, 10);
-    }
+    PyObject *number = PyLong_FromString(text, NULL, 10);
     if (text != small) PyMem_Free(text);
     d->p = p;
     return number;
@@ -430,11 +450,6 @@ decode_any_unbounded(Decoder *d)
     case 't': return match_word(d, "true", 4) ? Py_NewRef(Py_True) : NULL;
     case 'f': return match_word(d, "false", 5) ? Py_NewRef(Py_False) : NULL;
     case 'n': return match_word(d, "null", 4) ? Py_NewRef(Py_None) : NULL;
-    case 'N': return match_word(d, "NaN", 3) ? Py_NewRef(d->state->nan) : NULL;
-    case 'I': return match_word(d, "Infinity", 8) ? Py_NewRef(d->state->positive_infinity) : NULL;
-    case '-':
-        if (match_word(d, "-Infinity", 9)) return Py_NewRef(d->state->negative_infinity);
-        return decode_number(d);
     default:
         return decode_number(d);
     }
@@ -609,13 +624,15 @@ skip_value_unbounded(Decoder *d)
     case 't': return match_word(d, "true", 4);
     case 'f': return match_word(d, "false", 5);
     case 'n': return match_word(d, "null", 4);
-    case 'N': return match_word(d, "NaN", 3);
-    case 'I': return match_word(d, "Infinity", 8);
     default: {
-        if (match_word(d, "-Infinity", 9)) return 1;
         int is_float;
         const char *end = number_end(d->p, d->end, &is_float);
         if (end == NULL) return 0;
+        double parsed;
+        if (is_float && parse_finite_double(d->p, end - d->p, &parsed) <= 0) {
+            if (PyErr_Occurred()) PyErr_Clear();  /* declined all the same, json.loads says why */
+            return 0;
+        }
         if (!is_float && integer_too_long(end - d->p - (*d->p == '-'))) return 0;
         d->p = end;
         return 1;

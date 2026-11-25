@@ -81,10 +81,6 @@ typedef struct {
     PyObject *str_args;
     PyObject *str_keywords;
     PyObject *deepcopy;          /* copy.deepcopy */
-    /* what json.loads reads the constants as - one object for every occurrence, in any document */
-    PyObject *nan;
-    PyObject *positive_infinity;
-    PyObject *negative_infinity;
 } ModuleState;
 
 struct CompiledPlan;

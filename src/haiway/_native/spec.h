@@ -434,13 +434,30 @@ is_text_like(PyObject *value)
 }
 
 /*
+ * The int a float is read as - json writes a whole number as a float at times, up to the
+ * last one a float holds without gaps. A new reference, NULL without an error for a float
+ * which is no such number, NULL with an error when making the int failed.
+ */
+static PyObject *
+whole_float_as_int(PyObject *value)
+{
+    double number = PyFloat_AsDouble(value);
+    if (number == -1.0 && PyErr_Occurred()) return NULL;
+    if (isfinite(number) && floor(number) == number && fabs(number) <= 9007199254740992.0) {
+        return PyLong_FromDouble(number);
+    }
+    return NULL;
+}
+
+/*
  * What a literal accepts for a value - 1 with it in `accepted`, a new reference, 0 for
  * nothing, -1 with an error set. Being equal is not enough, as `True == 1 == 1.0` while
  * neither is the other: a value matches a literal of its very type, and is accepted as it
  * is. A str or an int also matches a literal it is equal to when one of the two is the
  * plain type and the other a subclass of it - the value json carries of an enum member,
  * or an enum member given for the plain value it carries - and the literal is what is
- * accepted then, so the attribute holds one of its literals either way.
+ * accepted then, so the attribute holds one of its literals either way. A float which is a whole number
+ * matches the literal of that int the same way - never one of a bool.
  */
 static int
 literal_match(PyObject *literals, PyObject *value, PyObject **accepted)
@@ -464,7 +481,14 @@ literal_match(PyObject *literals, PyObject *value, PyObject **accepted)
         }
         spelled_as = literal;
     }
-    if (spelled_as == NULL) return 0;
+    if (spelled_as == NULL) {
+        if (!PyFloat_Check(value)) return 0;
+        PyObject *number = whole_float_as_int(value);
+        if (number == NULL) return PyErr_Occurred() ? -1 : 0;
+        int r = literal_match(literals, number, accepted);
+        Py_DECREF(number);
+        return r;
+    }
     *accepted = Py_NewRef(spelled_as);
     return 1;
 }
@@ -521,12 +545,29 @@ sequence_snapshot(ModuleState *state, PyObject *value, int *owned)
 /* the elements of a value as a tuple, for what is accepted as a set: a snapshot of a set,
  * or what is accepted as a sequence - NULL without an error for anything else, the mappings
  * and the views of them, the generators and the iterators among it */
+/* the elements of a set as a tuple - without the GIL, iterating a set another thread
+ * changes fails, so a set which can change is copied first, which is done under its lock */
+static PyObject *
+set_elements(PyObject *value)
+{
+#ifdef Py_GIL_DISABLED
+    if (!PyFrozenSet_CheckExact(value)) {
+        PyObject *frozen = PyFrozenSet_New(value);
+        if (frozen == NULL) return NULL;
+        PyObject *items = PySequence_Tuple(frozen);
+        Py_DECREF(frozen);
+        return items;
+    }
+#endif
+    return PySequence_Tuple(value);
+}
+
 static PyObject *
 set_snapshot(ModuleState *state, PyObject *value, int *owned)
 {
     if (PyAnySet_Check(value)) {
         *owned = 1;
-        return PySequence_Tuple(value);
+        return set_elements(value);
     }
     return sequence_snapshot(state, value, owned);
 }
@@ -599,7 +640,7 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
     case SPEC_BOOL:
         return PyBool_Check(value);
     case SPEC_INT:
-        return PyLong_Check(value);  /* a bool is an int to the language, and so to the instances of a variant */
+        return PyLong_Check(value) && !PyBool_Check(value);  /* a bool is an int to the language, not to the annotation */
     case SPEC_FLOAT:
         return PyFloat_Check(value);
     case SPEC_STR:
@@ -668,7 +709,7 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
     }
     case SPEC_SET: {
         if (!PyAnySet_Check(value)) return 0;
-        PyObject *items = PySequence_Tuple(value);
+        PyObject *items = set_elements(value);
         if (items == NULL) return -1;
         int r = check_elements(state, spec->children[0], items);
         Py_DECREF(items);
@@ -809,6 +850,10 @@ validate_elements(ModuleState *state, Spec *spec, int layout, PyObject *tuple, i
             PyObject *previous = PyTuple_GET_ITEM(tuple, i);
             PyTuple_SET_ITEM(tuple, i, checked);
             Py_DECREF(previous);
+            /* a snapshot of what the collector need not track is made untracked - and what
+             * replaces its elements may lead back, so it is tracked again, until `settle`
+             * finds out it holds nothing which can */
+            if (PyObject_IS_GC(checked) && !PyObject_GC_IsTracked(tuple)) PyObject_GC_Track(tuple);
         } else {
             PyTuple_SET_ITEM(result, i, checked);
         }
@@ -1147,16 +1192,29 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value, int flags)
     } while (0)
     /* an alternative the value already matches wins over one which would only convert
      * it - resolving in the declaration order alone would let the `float` of
-     * `str | float | int` turn every int into a float */
-    for (int pass = 0; pass < 2; pass++) {
+     * `str | float | int` turn every int into a float. A whole float is read as the int
+     * it holds, so after what takes the float as it is comes what takes that int as it
+     * is - `bool | int` reads `1.0` as `1`, as it reads `1` */
+    PyObject *whole = NULL;  /* made only once no alternative took the float as it is */
+    for (int pass = 0; pass < 3; pass++) {
+        if (pass == 1) {
+            if (!PyFloat_Check(value)) continue;
+            whole = whole_float_as_int(value);
+            if (whole == NULL) {
+                if (PyErr_Occurred()) goto fail_whole;
+                continue;
+            }
+        }
+        PyObject *candidate = pass == 1 ? whole : value;
         for (Py_ssize_t i = 0; i < spec->count; i++) {
             Spec *alternative = spec->children[i];
-            if (pass == 0) {
-                int r = spec_check(state, alternative, value);
+            if (pass < 2) {
+                if (ATTEMPTED(i)) continue;
+                int r = spec_check(state, alternative, candidate);
                 if (r < 0) {
-                    if (!PyErr_ExceptionMatches(PyExc_Exception)) goto fail;
+                    if (!PyErr_ExceptionMatches(PyExc_Exception)) goto fail_whole;
                     ATTEMPT(i);  /* refused already - its validation would refuse it too */
-                    if (gather_error(&errors) < 0) goto fail;
+                    if (gather_error(&errors) < 0) goto fail_whole;
                     continue;
                 }
                 if (!r) continue;
@@ -1164,15 +1222,17 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value, int flags)
             } else if (ATTEMPTED(i)) {
                 continue;
             }
-            PyObject *validated = validate_spec(state, alternative, value, flags);
+            PyObject *validated = validate_spec(state, alternative, candidate, flags);
             if (validated != NULL) {
+                Py_XDECREF(whole);
                 PyMem_Free(attempted);
                 Py_XDECREF(errors);
                 return validated;
             }
-            if (!PyErr_ExceptionMatches(PyExc_Exception) || gather_error(&errors) < 0) goto fail;
+            if (!PyErr_ExceptionMatches(PyExc_Exception) || gather_error(&errors) < 0) goto fail_whole;
         }
     }
+    Py_XDECREF(whole);
     if (errors == NULL && (errors = PyList_New(0)) == NULL) goto fail;  /* a union of nothing */
     PyObject *names = PyList_New(0);
     if (names == NULL) goto fail;
@@ -1201,6 +1261,9 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value, int flags)
     if (group != NULL) {
         PyErr_SetRaisedException(group);
     }
+    goto fail;
+fail_whole:
+    Py_XDECREF(whole);
 fail:
     PyMem_Free(attempted);
     Py_XDECREF(errors);
@@ -1327,7 +1390,7 @@ validate_key_float(PyObject *value)
         double number = PyOS_string_to_double(text, &end, NULL);  /* beyond the range it is infinite */
         if (number == -1.0 && PyErr_Occurred()) {
             if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
-        } else if (end == text + length) {
+        } else if (end == text + length && isfinite(number)) {  /* beyond the range is no number */
             return PyFloat_FromDouble(number);
         }
     }
@@ -1404,6 +1467,12 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int flags)
             PyErr_SetString(PyExc_ValueError, "'int' value is not matching any of expected values [0, 1]");
             return NULL;
         }
+        if (PyFloat_Check(value)) {  /* the 0 and 1 a float holds, the way an int does */
+            double number = PyFloat_AsDouble(value);
+            if (number == -1.0 && PyErr_Occurred()) return NULL;
+            if (number == 0.0 || number == 1.0) return PyBool_FromLong(number == 1.0);
+            return type_error("bool", value);
+        }
         if (PyUnicode_Check(value)) {
             /* a key is spelled as json does, a value in any case */
             if (as_key ? equals_word(value, "true") : equals_ignoring_case(value, "true")) return Py_NewRef(Py_True);
@@ -1418,11 +1487,8 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int flags)
         if (PyFloat_Check(value)) {
             /* json writes a whole number as a float at times - up to the last one a float
              * holds without gaps */
-            double number = PyFloat_AsDouble(value);
-            if (number == -1.0 && PyErr_Occurred()) return NULL;
-            if (isfinite(number) && floor(number) == number && fabs(number) <= 9007199254740992.0) {
-                return PyLong_FromDouble(number);
-            }
+            PyObject *number = whole_float_as_int(value);
+            if (number != NULL || PyErr_Occurred()) return number;
             return type_error("int", value);
         }
         if (as_key && PyUnicode_Check(value)) return validate_key_integer(value);
@@ -1539,6 +1605,15 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int flags)
         if (r) return Py_NewRef(value);
         if (!PyBool_Check(value) && (PyLong_Check(value) || PyUnicode_Check(value))) {
             return validate_enum_int(state, spec, value, as_key);
+        }
+        if (PyFloat_Check(value)) {  /* the int a whole number of a float is, its member is found as for the int */
+            PyObject *number = whole_float_as_int(value);
+            if (number != NULL) {
+                PyObject *member = validate_enum_int(state, spec, number, 0);
+                Py_DECREF(number);
+                return member;
+            }
+            if (PyErr_Occurred()) return NULL;
         }
         return type_error_of(spec->base, value);
     }

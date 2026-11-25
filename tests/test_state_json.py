@@ -136,15 +136,88 @@ def test_strings_are_spelled_as_json_dumps_spells_them(text: str) -> None:
         1.5e300,
         5e-324,
         123456789.123456789,
-        float("nan"),
-        float("inf"),
-        float("-inf"),
     ],
 )
 def test_floats_are_spelled_as_json_dumps_spells_them(ratio: float) -> None:
     document = _document(ratio=ratio)
 
     assert document.to_json() == json.dumps(document.to_basic_object())
+
+
+class _Floats(State):
+    value: float = 0.0
+    anything: Any = None
+    items: Sequence[float] = ()
+    unique: Set[float] = frozenset()
+    scores: Mapping[str, float] = Map()
+    nested: Sequence[Mapping[str, Sequence[Any]]] = ()
+
+
+class _PlainEncoder(json.JSONEncoder):
+    pass
+
+
+@pytest.mark.parametrize("number", [float("nan"), float("inf"), float("-inf")], ids=str)
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda number: _Floats(value=number),
+        lambda number: _Floats(anything=number),
+        lambda number: _Floats(anything=[1, {"deep": (number,)}]),
+        lambda number: _Floats(items=[1.0, number]),
+        lambda number: _Floats(unique={number}),
+        lambda number: _Floats(scores={"a": number}),
+        lambda number: _Floats(nested=[{"a": [number]}]),
+    ],
+    ids=["field", "any", "any-nested", "sequence", "set", "mapping-value", "nested"],
+)
+def test_non_finite_floats_are_refused_when_written(
+    number: float,
+    build: Any,
+) -> None:
+    instance: _Floats = build(number)
+    with pytest.raises(ValueError, match="Failed to encode _Floats to json"):
+        instance.to_json()
+
+    with pytest.raises(ValueError, match="Failed to encode _Floats to json"):
+        instance.to_json(indent=2)
+
+    with pytest.raises(ValueError, match="Failed to encode _Floats to json"):
+        instance.to_json(encoder_class=_PlainEncoder)
+
+
+@pytest.mark.parametrize("number", [float("inf"), float("-inf")], ids=str)
+def test_non_finite_floats_are_kept_by_the_mappings(number: float) -> None:
+    instance = _Floats(value=number)
+
+    assert instance.to_mapping()["value"] == number
+    assert instance.to_basic_object()["value"] == number
+    assert _Floats.from_mapping({"value": number}).value == number
+    assert math.isnan(_Floats.from_mapping({"value": float("nan")}).value)
+
+
+@pytest.mark.parametrize(
+    ("key", "spelling"),
+    [
+        (float("nan"), "nan"),
+        (float("inf"), "inf"),
+        (float("-inf"), "-inf"),
+        (1.5, "1.5"),
+    ],
+)
+def test_float_keys_keep_their_spelling_in_json(key: float, spelling: str) -> None:
+    class Keyed(State):
+        values: Mapping[float, int]
+
+    instance = Keyed(values={key: 1})
+    for spelled in (
+        instance.to_json(),
+        instance.to_json(indent=2),
+        instance.to_json(encoder_class=_PlainEncoder),
+    ):
+        assert json.loads(spelled)["values"] == {spelling: 1}
+        (read,) = Keyed.from_json(spelled).values
+        assert (math.isnan(read) and math.isnan(key)) or read == key
 
 
 def test_empty_containers() -> None:
@@ -261,7 +334,7 @@ def test_strings_are_read_as_json_loads_reads_them(literal: str) -> None:
         "1.5",
         "-1.5e10",
         "2E-3",
-        "1e400",
+        "1e308",
         "0.0",
     ],
 )
@@ -276,15 +349,48 @@ def test_numbers_are_read_as_json_loads_reads_them(number: str) -> None:
     assert type(decoded) is type(expected)
 
 
-@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
-def test_constants_json_loads_accepts_are_accepted(constant: str) -> None:
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity", "1e400", "-1e400"])
+def test_documents_with_non_finite_numbers_are_refused(literal: str) -> None:
     class Holder(State):
-        value: float
+        value: float = 0.0
+        anything: Any = None
+        nested: Sequence[Mapping[str, Any]] = ()
 
-    decoded = Holder.from_json(f'{{"value": {constant}}}').value
-    expected = json.loads(constant)
+    class Plain(State):
+        value: int = 0
 
-    assert (math.isnan(decoded) and math.isnan(expected)) or decoded == expected
+    class Reading(json.JSONDecoder):
+        pass
+
+    documents: Sequence[str] = (
+        f'{{"value": {literal}}}',
+        f'{{"anything": {literal}}}',
+        f'{{"anything": [1, {{"deep": {literal}}}]}}',
+        f'{{"nested": [{{"key": {literal}}}]}}',
+    )
+    for document in documents:
+        with pytest.raises(ValueError, match="Failed to decode Holder from json"):
+            Holder.from_json(document)
+
+        with pytest.raises(ValueError, match="Failed to decode Holder from json"):
+            Holder.from_json(document, Reading)
+
+        with pytest.raises(ValueError, match="Failed to decode Holder from json"):
+            Holder.from_json_array(f"[{document}]")
+
+        with pytest.raises(ValueError, match="Failed to decode Holder from json"):
+            Holder.from_json_array(f"[{document}]", Reading)
+
+    skipped: str = f'{{"value": 1, "extra": {literal}}}'
+    for ignore_extra in (True, False):
+        with pytest.raises(ValueError, match="Failed to decode Plain from json"):
+            Plain.from_json(skipped, ignore_extra=ignore_extra)
+
+        with pytest.raises(ValueError, match="Failed to decode Plain from json"):
+            Plain.from_json(skipped, Reading, ignore_extra=ignore_extra)
+
+        with pytest.raises(ValueError, match="Failed to decode Plain from json"):
+            Plain.from_json_array(f"[{skipped}]", ignore_extra=ignore_extra)
 
 
 def test_integer_is_read_as_a_float_for_a_float_attribute() -> None:

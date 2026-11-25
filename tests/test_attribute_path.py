@@ -1,11 +1,12 @@
 import threading
 from collections.abc import Callable, Mapping, Sequence, Set
-from typing import Annotated, Any, TypedDict, cast
+from dataclasses import dataclass
+from typing import Annotated, Any, Literal, TypedDict, cast
 
 import pytest
 from pytest import raises
 
-from haiway import Alias, AttributePath, Map, State
+from haiway import Alias, AttributePath, Map, Missing, State, ValidationError, Verifier
 
 
 class SequenceState(State):
@@ -556,3 +557,126 @@ def test_item_paths_kept_are_still_bounded() -> None:
         _ = paths[index]
 
     assert len(paths.__children__) <= 256
+
+
+class _Shaped(State):
+    literal: Literal["a", "b"] = "a"
+    anything: Any = None
+    optional: int | Missing = Missing
+    real: float = 0.0
+    flag: bool = False
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        pytest.param("literal", "b", id="literal"),
+        pytest.param("anything", [1], id="any"),
+        pytest.param("optional", 1, id="missing union"),
+    ],
+)
+def test_paths_read_and_update_attributes_of_any_annotation(name: str, value: Any) -> None:
+    path: AttributePath[_Shaped, Any] = getattr(_Shaped._, name)
+    initial = _Shaped()
+    assert path(initial) is getattr(initial, name)
+
+    updated: _Shaped = path(initial, value)
+    assert path(updated) == getattr(_Shaped(**{name: value}), name)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        pytest.param("real", 1, id="int as float"),
+        pytest.param("flag", "true", id="str as bool"),
+        pytest.param("literal", "b", id="literal"),
+    ],
+)
+def test_path_updates_validate_as_construction_does(name: str, value: Any) -> None:
+    path: AttributePath[_Shaped, Any] = getattr(_Shaped._, name)
+    expected: Any = getattr(_Shaped(**{name: value}), name)
+    updated: Any = getattr(path(_Shaped(), value), name)
+    assert updated == expected
+    assert type(updated) is type(expected)
+
+
+def test_path_updates_refuse_what_construction_refuses() -> None:
+    with raises(ValidationError) as constructed:
+        _Shaped(**{"literal": "c"})
+
+    with raises(ValidationError) as updated:
+        _Shaped._.literal(_Shaped(), cast(Any, "c"))
+
+    assert updated.value.path == constructed.value.path
+
+
+def _refusing_five(value: int) -> None:
+    if value == 5:
+        raise ValueError("five refused")
+
+
+class _Inner(State):
+    number: Annotated[int, Verifier(_refusing_five)] = 0
+    items: Sequence[int] = ()
+
+
+class _Outer(State):
+    inner: _Inner = _Inner()
+    many: Sequence[_Inner] = ()
+    named: Mapping[str, _Inner] = Map()
+
+
+@pytest.mark.parametrize(
+    ("update", "construct"),
+    [
+        pytest.param(
+            lambda outer: _Outer._.inner.items(outer, cast(Any, [1, "x"])),
+            lambda: _Outer(inner=cast(Any, {"items": [1, "x"]})),
+            id="attribute",
+        ),
+        pytest.param(
+            lambda outer: _Outer._.inner.number(outer, 5),
+            lambda: _Outer(inner=cast(Any, {"number": 5})),
+            id="verified",
+        ),
+        pytest.param(
+            lambda outer: _Outer._.many[0].number(outer, 5),
+            lambda: _Outer(many=cast(Any, [{"number": 5}])),
+            id="sequence item",
+        ),
+        pytest.param(
+            lambda outer: _Outer._.named["a"].number(outer, 5),
+            lambda: _Outer(named=cast(Any, {"a": {"number": 5}})),
+            id="mapping item",
+        ),
+    ],
+)
+def test_path_update_failures_report_the_whole_path(
+    update: Callable[[_Outer], _Outer],
+    construct: Callable[[], _Outer],
+) -> None:
+    outer = _Outer(many=[_Inner()], named={"a": _Inner()})
+    with raises(ValidationError) as constructed:
+        construct()
+
+    with raises(ValidationError) as updated:
+        update(outer)
+
+    assert tuple(updated.value.path) == tuple(constructed.value.path)
+    assert type(updated.value.cause) is type(constructed.value.cause)
+
+
+@dataclass(frozen=True)
+class _Plain:
+    number: int = 0
+
+
+class _HoldingPlain(State):
+    plain: _Plain = _Plain()
+
+
+def test_path_updates_of_other_objects_take_values_as_they_do() -> None:
+    # a dataclass validates nothing - a path updating it neither, as on construction
+    holding = _HoldingPlain()
+    updated = _HoldingPlain._.plain.number(holding, cast(Any, "text"))
+    assert updated.plain == _Plain(number=cast(Any, "text"))

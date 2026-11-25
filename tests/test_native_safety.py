@@ -4,7 +4,7 @@ import json
 import threading
 import time
 import types
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from datetime import date, datetime
 from datetime import time as clock
 from pathlib import Path
@@ -858,3 +858,39 @@ def test_items_of_a_mapping_are_converted_from_a_snapshot() -> None:
 
     assert dict(converted) == {"a": 1, "b": "spelled"}
     assert len(entries) == 3
+
+
+class _Numbers(State):
+    values: Set[int]
+
+
+class _Carrying[T](State):
+    value: T
+
+
+def test_a_set_changed_by_another_thread_is_validated_as_one_snapshot() -> None:
+    # without the GIL a set iterated while another thread changes it fails - a set given
+    # is copied as it is at one moment instead, so whatever it holds then is accepted
+    shared: set[int] = set(range(10))
+    carrying = _Carrying(value=shared)
+    stop = threading.Event()
+
+    def change() -> None:
+        while not stop.is_set():
+            for number in range(100):
+                shared.add(number)
+
+            for number in range(100):
+                shared.discard(number)
+
+    changing = threading.Thread(target=change)
+    changing.start()
+    try:
+        deadline: float = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            assert len(_Numbers(values=shared).values) <= 100
+            assert isinstance(carrying, _Carrying[Set[int]])
+
+    finally:
+        stop.set()
+        changing.join()

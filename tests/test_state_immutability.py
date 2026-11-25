@@ -495,7 +495,7 @@ def test_generic_class_can_not_be_changed_and_is_still_specialized() -> None:
         Box[int].value = 1  # pyright: ignore[reportAttributeAccessIssue]
 
     assert Box[int] is Box[int]
-    assert isinstance(Box[bool](value=True), Box[int])
+    assert isinstance(Box[int](value=1), Box[int])
 
 
 class _CopiedState(State):

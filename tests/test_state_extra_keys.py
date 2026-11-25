@@ -13,6 +13,7 @@ from haiway import Alias, State, Validator
 from haiway._native import nstruct
 from haiway.attributes.validation import ValidationError
 from haiway.types import Map
+from tests.strict_json import strict_loads
 
 FAILURES = (TypeError, ValueError, ValidationError)
 
@@ -546,7 +547,6 @@ def test_ignore_extra_is_keyword_only() -> None:
 @pytest.mark.parametrize(
     "document",
     [
-        '{"value": 1, "extra": 2, "when": NaN}',  # not read natively - a key spelled twice
         '{"value": 1, "value": 2, "extra": 3}',
         b"\xef\xbb\xbf" + b'{"value": 1, "extra": 2}',  # a mark of the encoding
         '{"value": 1, "extra": "\\ud800"}',  # a lone surrogate
@@ -558,7 +558,7 @@ def test_documents_read_by_the_standard_library_honor_the_flag(
 ) -> None:
     expected: Leaf | None
     try:
-        expected = Leaf.from_mapping(json.loads(document), ignore_extra=ignore_extra)
+        expected = Leaf.from_mapping(strict_loads(document), ignore_extra=ignore_extra)
 
     except Exception:
         expected = None
@@ -604,7 +604,7 @@ def test_native_reader_reads_nested_extras_without_falling_back() -> None:
     )
     read: Any = nstruct.from_json(Holder, document, False, True)
     assert read is not None
-    assert read == Holder.from_mapping(json.loads(document), ignore_extra=True)
+    assert read == Holder.from_mapping(strict_loads(document), ignore_extra=True)
     assert read.leaves == (Leaf(value=2),)
     assert read.either == Leaf(value=4)
 
@@ -636,9 +636,6 @@ EXTRA_VALUES: dict[str, str] = {
     "true": "true",
     "false": "false",
     "null": "null",
-    "nan": "NaN",
-    "infinity": "Infinity",
-    "negative_infinity": "-Infinity",
     "key_escapes": '{"k\\"ey": 1, "\\u00e9": 2, "é": 3}',
     "deep": "[" * 50 + "]" * 50,
     "deep_objects": '{"a":' * 50 + "1" + "}" * 50,
@@ -677,7 +674,7 @@ def test_extra_values_are_skipped_natively(extra: str, layout: str) -> None:
     assert Leaf.from_json(document.encode(), ignore_extra=True) == expected
     assert Leaf.from_json(document, Reading, ignore_extra=True) == expected
     assert Leaf.from_json_array(f"[{document}]", ignore_extra=True) == (expected,)
-    assert Leaf.from_mapping(json.loads(document), ignore_extra=True) == expected
+    assert Leaf.from_mapping(strict_loads(document), ignore_extra=True) == expected
 
     if layout != "only_known":
         assert nstruct.from_json(Leaf, document, False, False) is None
@@ -860,7 +857,7 @@ def test_deep_extra_values_are_read_as_the_standard_library_reads_them(depth: in
     document: str = '{"value": 1, "extra": ' + _nested(depth) + "}"
     expected: Leaf | None
     try:
-        expected = Leaf.from_mapping(json.loads(document), ignore_extra=True)
+        expected = Leaf.from_mapping(strict_loads(document), ignore_extra=True)
 
     except Exception:
         expected = None
@@ -1408,7 +1405,7 @@ def test_skipping_reads_what_the_standard_library_reads(seed: int) -> None:
 
         expected: Holder | None
         try:
-            expected = Holder.from_mapping(json.loads(document), ignore_extra=True)
+            expected = Holder.from_mapping(strict_loads(document), ignore_extra=True)
 
         except Exception:
             expected = None
@@ -1627,7 +1624,7 @@ def test_json_is_validated_by_a_class_validating_itself(ignore_extra: bool) -> N
     for decode in (
         lambda: Owning.from_json(document, ignore_extra=ignore_extra),
         lambda: Owning.from_json(document, Reading, ignore_extra=ignore_extra),
-        lambda: Owning.from_mapping(json.loads(document), ignore_extra=ignore_extra),
+        lambda: Owning.from_mapping(strict_loads(document), ignore_extra=ignore_extra),
         lambda: Owning.from_json_array("[" + document + "]", ignore_extra=ignore_extra)[0],
         lambda: Owning.from_json_array("[" + document + "]", Reading, ignore_extra=ignore_extra)[0],
     ):
@@ -1646,7 +1643,7 @@ def test_json_with_extras_is_given_to_a_class_validating_itself_as_it_is(
     for decode in (
         lambda: Owning.from_json(document, ignore_extra=ignore_extra),
         lambda: Owning.from_json(document, Reading, ignore_extra=ignore_extra),
-        lambda: Owning.from_mapping(json.loads(document), ignore_extra=ignore_extra),
+        lambda: Owning.from_mapping(strict_loads(document), ignore_extra=ignore_extra),
         lambda: Owning.from_json_array("[" + document + "]", ignore_extra=ignore_extra),
     ):
         received.clear()

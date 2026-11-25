@@ -2,7 +2,6 @@ import copy
 import functools
 import gc
 import json
-import math
 import os
 import random
 import sys
@@ -16,13 +15,14 @@ from enum import IntEnum, StrEnum
 from functools import Placeholder
 from pathlib import Path
 from types import MethodType
-from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, Protocol, Self, TypedDict
 from uuid import UUID, SafeUUID
 
 import pytest
 
 from haiway import Alias, Default, Map, Meta, State, ValidationError, Validator
 from haiway._native import nstruct
+from tests.strict_json import strict_loads
 
 # The native storage is checked here for what its tests of behavior would not show: that
 # no operation leaks, that the JSON reader stays memory safe on any input, and that the
@@ -557,6 +557,63 @@ def test_cycle_through_a_nested_state_is_collected() -> None:
     assert finalized == [True]
 
 
+class _Linked:
+    def __init__(self, name: str) -> None:
+        self.name: str = name
+        self.back: object = None
+
+    @classmethod
+    def validate(cls, value: object) -> Self:
+        if isinstance(value, cls):
+            return value
+
+        if isinstance(value, str):
+            return cls(value)
+
+        raise TypeError("expected a name")
+
+
+def _names(*names: str) -> Any:
+    return list(names)
+
+
+class _Linking(State):
+    sequence: Sequence[_Linked] = ()
+    open: tuple[_Linked, ...] = ()
+    pair: tuple[_Linked, _Linked] | None = None
+
+
+@pytest.mark.parametrize(
+    ("make", "linked"),
+    [
+        pytest.param(lambda: _Linking(sequence=_names("a")), "sequence", id="sequence"),
+        pytest.param(lambda: _Linking(open=_names("a")), "open", id="open tuple"),
+        pytest.param(lambda: _Linking(pair=_names("a", "b")), "pair", id="fixed tuple"),
+        pytest.param(lambda: _Linking.validate({"sequence": ["a"]}), "sequence", id="validate"),
+        pytest.param(lambda: _Linking().updating(sequence=_names("a")), "sequence", id="updating"),
+        pytest.param(lambda: _Linking.from_json('{"sequence": ["a"]}'), "sequence", id="from_json"),
+    ],
+)
+def test_cycle_through_elements_converted_from_a_list_is_collected(
+    make: Callable[[], _Linking],
+    linked: str,
+) -> None:
+    # a list of names is snapshot into a tuple holding nothing the collector tracks, and the
+    # elements converted from the names are stored into that tuple - which has to be tracked
+    # from then on, as they can lead back
+    instance: _Linking = make()
+    elements: tuple[_Linked, ...] | None = getattr(instance, linked)
+    assert elements is not None
+    assert gc.is_tracked(elements)
+    assert gc.is_tracked(instance)
+
+    reference = weakref.ref(elements[0])
+    elements[0].back = instance  # the cycle: instance -> tuple -> element -> instance
+    del instance, elements
+    gc.collect()
+    assert reference() is None
+
+
 class _Checked(State):
     value: Annotated[int, Validator(_passing)]
 
@@ -796,7 +853,7 @@ def _same(left: State | None, right: State | None) -> bool:
 
 def _oracle(cls: type[State], document: str | bytes) -> State | None:
     try:
-        return cls.validate(json.loads(document))
+        return cls.validate(strict_loads(document))
 
     except Exception:
         return None
@@ -917,7 +974,7 @@ def test_native_json_skips_what_the_standard_library_reads(seed: int) -> None:
     for document in documents:
         expected: State | None
         try:
-            expected = Rich.from_mapping(json.loads(document), ignore_extra=True)
+            expected = Rich.from_mapping(strict_loads(document), ignore_extra=True)
 
         except Exception:
             expected = None
@@ -941,11 +998,12 @@ def test_native_json_skips_what_the_standard_library_reads(seed: int) -> None:
         assert _same(read, expected), document
 
 
-def test_values_read_natively_are_not_nan_sensitive() -> None:
-    # a float read natively compares the way one read by the standard library does
-    other: Any = nstruct.from_json(Other, '{"kind": "other", "ratio": NaN}', False, False)
-    assert other is not None
-    assert math.isnan(other.ratio)
+@pytest.mark.parametrize("ratio", ["NaN", "Infinity", "-Infinity", "1e400", "-1e400"])
+def test_non_finite_numbers_are_not_read_natively(ratio: str) -> None:
+    document: str = '{"kind": "other", "ratio": ' + ratio + "}"
+    assert nstruct.from_json(Other, document, False, False) is None
+    with pytest.raises(ValueError):
+        Other.from_json(document)
 
 
 def test_validation_errors_keep_their_position_natively() -> None:

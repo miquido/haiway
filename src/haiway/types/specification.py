@@ -122,6 +122,7 @@ class ArraySpecification(AnchoredSpecification, total=False):
     items: NotRequired[TypeSpecification]
     uniqueItems: NotRequired[bool]
     minItems: NotRequired[int]
+    maxItems: NotRequired[int]
     description: NotRequired[str]
 
 

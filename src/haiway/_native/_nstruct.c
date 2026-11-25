@@ -246,13 +246,6 @@ module_exec(PyObject *module)
     state->deepcopy = PyObject_GetAttrString(copy, "deepcopy");
     Py_DECREF(copy);
     if (state->deepcopy == NULL) return -1;
-    PyObject *decoder = PyImport_ImportModule("json.decoder");
-    if (decoder == NULL) return -1;
-    state->nan = PyObject_GetAttrString(decoder, "NaN");
-    state->positive_infinity = PyObject_GetAttrString(decoder, "PosInf");
-    state->negative_infinity = PyObject_GetAttrString(decoder, "NegInf");
-    Py_DECREF(decoder);
-    if (state->nan == NULL || state->positive_infinity == NULL || state->negative_infinity == NULL) return -1;
 
     if (PyModule_AddObjectRef(module, "StructMeta", (PyObject *)state->meta_type) < 0
         || PyModule_AddObjectRef(module, "Struct", (PyObject *)state->struct_type) < 0
@@ -273,7 +266,7 @@ module_exec(PyObject *module)
     V(str_isoformat) V(str_as_posix) V(str_type_name) \
     V(str_fromisoformat) V(str_validate) V(str_int) V(str_code) V(str_defaults) V(str_kwdefaults) \
     V(str_call) V(str_func) V(str_args) V(str_keywords) \
-    V(deepcopy) V(nan) V(positive_infinity) V(negative_infinity)
+    V(deepcopy)
 
 static int
 module_traverse(PyObject *module, visitproc visit, void *arg)

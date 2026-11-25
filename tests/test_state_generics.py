@@ -2,10 +2,12 @@ import collections.abc
 import gc
 import typing
 import weakref
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from datetime import date, datetime
 from types import GenericAlias
 from typing import Annotated, Any, Literal, Protocol, TypeVar
 
+import pytest
 from pytest import mark, raises
 
 from haiway import State, ValidationError
@@ -587,3 +589,53 @@ def test_specialization_name_spells_the_arguments_of_a_variadic_parameter(
     name: str,
 ) -> None:
     assert Variadic[arguments].__name__ == name
+
+
+class _Held[T](State):
+    value: T
+
+
+class _HoldingInt(State):
+    held: _Held[int]
+
+
+def test_a_bool_variant_is_no_int_variant() -> None:
+    # a bool is an int to the language, not to an annotation - validation refuses it
+    assert not issubclass(_Held[bool], _Held[int])
+    assert not isinstance(_Held[bool](value=True), _Held[int])
+    assert not isinstance(_Held(value=True), _Held[int])
+    assert not issubclass(_Held[datetime], _Held[date])
+    assert not issubclass(_Held[_Held[bool]], _Held[_Held[int]])
+    assert not issubclass(_Held[bool], _Held[int | None])
+    assert not issubclass(_Held[datetime | None], _Held[date | None])
+    assert issubclass(_Held[int], _Held[int | None])
+    assert issubclass(_Held[int | None], _Held[int | str | None])
+    assert isinstance(_Held(value=1), _Held[int])
+
+
+class _Taking[T](State):
+    take: Callable[[T], None]
+
+
+def test_a_bool_taking_variant_and_an_int_taking_one_are_unrelated() -> None:
+    assert not issubclass(_Taking[int], _Taking[bool])
+    assert not issubclass(_Taking[bool], _Taking[int])
+    assert issubclass(_Taking[int | None], _Taking[int])
+
+
+@pytest.mark.parametrize(
+    "held",
+    [
+        pytest.param(lambda: _Held[bool](value=True), id="specialized"),
+        pytest.param(lambda: _Held(value=True), id="unspecialized"),
+        pytest.param(lambda: {"value": True}, id="mapping"),
+    ],
+)
+def test_an_int_attribute_refuses_a_bool_however_it_is_held(held: Callable[[], Any]) -> None:
+    with pytest.raises(ValidationError):
+        _HoldingInt(held=held())
+
+
+def test_what_an_int_variant_accepts_reads_back_from_json() -> None:
+    holding = _HoldingInt(held=_Held(value=1))
+    assert _HoldingInt.from_json(holding.to_json()).to_json() == holding.to_json()

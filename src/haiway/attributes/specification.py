@@ -43,6 +43,7 @@ from haiway.types.basic import basic_key
 __all__ = (
     "object_specification",
     "type_specification",
+    "unique_anchors",
 )
 
 
@@ -58,9 +59,11 @@ def type_specification(
     if specification is None:
         return None
 
-    return _with_description(
-        specification,
-        description=annotation.metadata.description,
+    return unique_anchors(
+        _with_description(
+            specification,
+            description=annotation.metadata.description,
+        )
     )
 
 
@@ -532,6 +535,12 @@ def _prepare_specification_of_tuple(
 
         elements_specification.append(element_specification)
 
+    if not elements_specification:  # `tuple[()]` - `prefixItems` can't be empty
+        return {
+            "type": "array",
+            "maxItems": 0,
+        }
+
     return {
         "type": "array",
         "prefixItems": elements_specification,
@@ -876,7 +885,8 @@ def _prepare_specification_of_typed_dict(
 def _state_specification(
     annotation: AttributeAnnotation,
 ) -> TypeSpecification | None:
-    specification = cast(TypeSpecification | None, annotation.base.__SPECIFICATION__)
+    # as the class holds it - its anchors are made unique once in the whole document
+    specification = cast(TypeSpecification | None, annotation.base.__JSON_SPECIFICATION__)
     if specification is not None and annotation.description and "description" in specification:
         # the description of the attribute is more specific than the one of its type
         return cast(
@@ -915,6 +925,55 @@ def _with_anchor(
             "$anchor": anchor,
         },
     )
+
+
+def unique_anchors(
+    specification: TypeSpecification,
+    /,
+) -> TypeSpecification:
+    # an anchor is named after its type, which other types can share - two recursive
+    # aliases of the same shape, two classes of one name in different modules - while
+    # an anchor names one subschema of the whole document. A definition met again is
+    # referred to instead of repeated, and another one under a taken name is renamed,
+    # with the references within it, which are the ones leading to it
+    first: MutableMapping[str, tuple[TypeSpecification, str]] = {}
+    taken: MutableMapping[str, int] = {}
+
+    def renamed(node: Any, scope: Mapping[str, str]) -> Any:
+        if isinstance(node, list):
+            return [renamed(element, scope) for element in cast(list[Any], node)]
+
+        if not isinstance(node, dict):
+            return node
+
+        entries: dict[str, Any] = cast(dict[str, Any], node)
+        anchor: Any = entries.get("$anchor")
+        if isinstance(anchor, str):
+            if (met := first.get(anchor)) is not None and met[0] == entries:
+                return {"$ref": f"#{met[1]}"}
+
+            unique: str = anchor
+            if anchor in taken:
+                taken[anchor] += 1
+                unique = f"{anchor}_{taken[anchor]}"
+
+            else:
+                taken[anchor] = 1
+
+            first.setdefault(anchor, (cast(TypeSpecification, entries), unique))
+            scope = {**scope, anchor: unique}
+
+        result: dict[str, Any] = {key: renamed(value, scope) for key, value in entries.items()}
+        if isinstance(anchor, str):
+            result["$anchor"] = scope[anchor]
+
+        reference: Any = entries.get("$ref")
+        if isinstance(reference, str) and reference.startswith("#"):
+            result["$ref"] = f"#{scope.get(reference[1:], reference[1:])}"
+
+        return result
+
+    return cast(TypeSpecification, renamed(specification, {}))
 
 
 _ANCHOR_DISALLOWED: re.Pattern[str] = re.compile(r"[^-A-Za-z0-9._]")

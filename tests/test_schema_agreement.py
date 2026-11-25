@@ -6,12 +6,12 @@ from datetime import date, datetime, time, timedelta
 from enum import Enum, IntEnum, StrEnum
 from pathlib import Path
 from types import GenericAlias, new_class
-from typing import Annotated, Any, Literal, NotRequired
+from typing import Annotated, Any, ForwardRef, Literal, NotRequired, cast
 from uuid import UUID
 
 import pytest
 
-from haiway import Missing, State, Validator, Verifier
+from haiway import Default, Missing, State, Validator, Verifier
 
 
 class Color(StrEnum):
@@ -197,6 +197,18 @@ def test_unspecialized_generic_attribute_is_optional() -> None:
 def test_not_required_attribute_without_default_is_refused() -> None:
     with pytest.raises(TypeError, match="NotRequired"):
         state_of(NotRequired[int])
+
+
+@pytest.mark.parametrize(
+    "default",
+    [
+        pytest.param(Missing, id="missing"),
+        pytest.param(Default(Missing), id="default of missing"),
+    ],
+)
+def test_default_of_missing_refused_by_the_annotation_is_reported_as_such(default: Any) -> None:
+    with pytest.raises(TypeError, match=r"defaults to Missing.*\| Missing"):
+        state_of(int, default=default)
 
 
 def test_not_required_attribute_with_default_is_a_default() -> None:
@@ -401,3 +413,94 @@ def test_annotated_description_is_kept() -> None:
         "type": "string",
         "description": "moment",
     }
+
+
+# 4. Anchors of recursive types name one subschema of the whole document
+
+
+type _Nested = int | Sequence[_Nested]
+type _NestedInObjects = int | Sequence[Mapping[str, _NestedInObjects]]
+
+
+class _Tree(State):
+    children: Sequence[_Tree] = ()
+
+
+class _Boxed[T](State):
+    value: T
+
+
+def _anchored(node: Any, found: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    if isinstance(node, dict):
+        entries: dict[str, Any] = cast(dict[str, Any], node)
+        if isinstance(anchor := entries.get("$anchor"), str):
+            found.setdefault(anchor, []).append(entries)
+
+        for value in entries.values():
+            _anchored(value, found)
+
+    elif isinstance(node, list):
+        for element in cast(list[Any], node):
+            _anchored(element, found)
+
+    return found
+
+
+def _references(node: Any, found: list[str]) -> list[str]:
+    if isinstance(node, dict):
+        entries: dict[str, Any] = cast(dict[str, Any], node)
+        if isinstance(reference := entries.get("$ref"), str):
+            found.append(reference.removeprefix("#"))
+
+        for value in entries.values():
+            _references(value, found)
+
+    elif isinstance(node, list):
+        for element in cast(list[Any], node):
+            _references(element, found)
+
+    return found
+
+
+def _recursive_item(module: str, attribute: type[Any]) -> Any:
+    name: str = "Item"
+
+    def body(namespace: dict[str, Any]) -> None:
+        namespace["__module__"] = module
+        # the class refers to itself by its name, as the one declared in a module would
+        namespace["__annotations__"] = {"value": attribute, "parts": Sequence[ForwardRef(name)]}
+        namespace["parts"] = ()
+
+    item: Any = new_class(name, (State,), {}, body)
+    return item
+
+
+def test_anchors_are_unique_and_every_reference_resolves() -> None:
+    first: Any = _recursive_item("first", str)
+    second: Any = _recursive_item("second", int)
+
+    class Holder(State):
+        nested: _Nested
+        nested_in_objects: _NestedInObjects
+        tree: _Tree
+        boxed: _Boxed[_Tree]
+        trees: Sequence[_Tree]
+        first_item: first
+        second_item: second
+
+    schema: Any = json.loads(cast(str, Holder.json_schema()))
+    anchors: dict[str, list[Any]] = _anchored(schema, {})
+    assert all(len(nodes) == 1 for nodes in anchors.values()), anchors.keys()
+    assert set(_references(schema, [])) <= set(anchors)
+    # each alias and class keeps its own subschema rather than reaching another one
+    properties: Any = schema["properties"]
+    assert properties["nested"]["$anchor"] != properties["nested_in_objects"]["$anchor"]
+    assert properties["first_item"]["$anchor"] != properties["second_item"]["$anchor"]
+    tree: dict[str, str] = {"$ref": f"#{properties['tree']['$anchor']}"}
+    assert properties["boxed"]["properties"]["value"] == tree
+    assert properties["trees"]["items"] == tree
+
+
+def test_empty_tuple_is_an_array_with_no_items() -> None:
+    # `prefixItems` has to name at least one schema - an empty tuple names none
+    assert schema_of(state_of(tuple[()]))["properties"]["v"] == {"type": "array", "maxItems": 0}

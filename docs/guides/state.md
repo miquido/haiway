@@ -229,7 +229,10 @@ Each specialization is a distinct class - `Container[int]` is not `Container[str
 relation between the arguments is preserved: `Container[Dog]` is a subclass of `Container[Animal]`
 when `Dog` inherits from `Animal`, also through nested arguments such as
 `Container[Container[Dog]]`. `isinstance(Container(value=1), Container[int])` checks the held values
-of an unspecialized instance against the arguments.
+of an unspecialized instance against the arguments. The relation is the one validation keeps, not
+the one of the language: a `bool` is no `int` and a `datetime` no `date` to an annotation, so
+`Container[bool]` is not a subclass of `Container[int]` and `Container(value=True)` is no instance
+of it.
 
 Bounds and constraints of the type parameters are checked when the class is specialized. A class
 which is not specialized takes a parameter for its bound, or for any one of its constraints
@@ -430,6 +433,15 @@ When working with external payloads, use the complementary helpers:
   is read through the standard library. Validation errors are converted into informative exceptions.
 - `state.to_json(indent=2)` — encode a State instance to JSON using the same alias behaviour as
   `to_mapping`.
+- The JSON State writes and reads is strict. A float value which is infinite or `NaN` is not JSON,
+  so `to_json` raises `ValueError` for it wherever it is - an attribute, an `Any`, a nested
+  container - and `from_json` and `from_json_array` refuse the constants `NaN`, `Infinity` and
+  `-Infinity`, and a number beyond what a float holds (`1e400`), wherever they are, a key skipped by
+  `ignore_extra` included. A custom `decoder` is given the `parse_float` and `parse_constant` which
+  refuse them - it has to accept both and leave them as they are, and one which overrides `decode`
+  refuses them itself or not at all. Float mapping _keys_ keep the spelling `"inf"`, `"-inf"` and
+  `"nan"`, and refuse a number beyond what a float holds as well. `to_mapping`, `to_basic_object`
+  and `from_mapping` work on Python values and keep such floats.
 - `state.to_basic_object()` — convert to a mapping of JSON-compatible values, in memory. Where
   `to_mapping` keeps the live `UUID`, `datetime` or `bytes` values, this encodes every leaf and key
   to the spelling validation reads back, so the result round trips through `from_mapping` - bar the
@@ -492,21 +504,27 @@ accepts `customer` or `customer_id` when instantiating, and `invoice.to_mapping(
 State classes perform thorough type validation for all supported Python types:
 
 - **Basic Types**: int, str, bool, float, bytes
-  - **bool** accepts `True`/`False`, the ints `0` and `1` and the strings `"true"`/`"false"` in any
-    case; any other int (`2`, `-1`), any other string (`"1"`, `"yes"`) and floats are refused.
+  - **bool** accepts `True`/`False`, the ints `0` and `1`, the floats `0.0`, `-0.0` and `1.0` and
+    the strings `"true"`/`"false"` in any case; any other int (`2`, `-1`), any other float, any
+    other string (`"1"`, `"yes"`) is refused.
   - **int** accepts an int (not a `bool`) and a float which is a whole number up to 2\*\*53 (read as
     an int); strings are never parsed, and non-integral floats, `NaN`, infinities and larger floats
     are refused. **float** accepts an int (not a `bool`) and a float, and refuses strings.
-  - **StrEnum/IntEnum** read a member, then the raw value (a `str`; an `int` which is not a `bool`),
-    then the name of a member - so a value always wins over a name. A numeric string is no value of
-    an `IntEnum`.
+  - **StrEnum/IntEnum** read a member, then the raw value (a `str`; an `int` which is not a `bool`,
+    or for an `IntEnum` a float which is a whole number up to 2\*\*53, read as that int), then the
+    name of a member - so a value always wins over a name. A numeric string is no value of an
+    `IntEnum`.
+  - **Literal** of ints reads the same whole float as the int it equals (`Literal[1]` given `1.0` is
+    `1`); a float never matches a `bool` literal. In a union the alternative which takes the value
+    as it is wins first, so `float | IntEnum` given `1.0` stays a float.
   - **Mapping keys** are strings in JSON, so they are read from the spelling they are written as,
     and from no other: `int` keys as canonical decimal integers (`"-12"`, not `"+1"`, `"01"`,
-    `" 1"`, `"1_0"`), `float` keys as JSON numbers, `bool` keys as `"true"`/`"false"`, `None` as
-    `"null"`, `Literal` keys as the spelling of the literal, enum keys as a value, a number or a
-    name. Two keys which convert to the same one are refused (`Mapping[int, str]` given
-    `{"1": "a", 1: "b"}`), and so are two keys which are written the same by `to_json` and
-    `to_basic_object` (`{1: "a", "1": "b"}` raises `ValueError`).
+    `" 1"`, `"1_0"`), `float` keys as JSON numbers or as `"inf"`, `"-inf"` and `"nan"` (the spelling
+    `str` gives them - `"Infinity"`, `"-Infinity"` and `"NaN"` of `json.dumps` are refused), `bool`
+    keys as `"true"`/`"false"`, `None` as `"null"`, `Literal` keys as the spelling of the literal,
+    enum keys as a value, a number or a name. Two keys which convert to the same one are refused
+    (`Mapping[int, str]` given `{"1": "a", 1: "b"}`), and so are two keys which are written the same
+    by `to_json` and `to_basic_object` (`{1: "a", "1": "b"}` raises `ValueError`).
 - **Container Types**:
   - **Sequence[T]**: sequence-like inputs are normalized to immutable tuples
   - **Mapping[K, V]**: mappings are validated recursively and converted to immutable `Map` values
@@ -652,8 +670,9 @@ detect unsupported shapes early.
 The schema is made to agree with validation of a JSON document: it accepts every document the State
 writes, and refuses what the State refuses wherever JSON Schema can say so. Where it can't, it is
 the looser of the two - a document which passes the schema can still fail validation, and that is
-what validation is for. A few spellings which validation reads leniently are not described, the
-schema names the form which is written. What it leaves unsaid is on purpose:
+what validation is for. The other way around, the State reads a few spellings besides the one it
+writes, which the schema leaves out: the Python names of aliased attributes, and the other forms of
+a `UUID` and a `date`. What it leaves unsaid is on purpose:
 
 - An attribute is `required` when it can't be left out: it has no default and doesn't accept
   `Missing`. An attribute annotated `Any`, `object` or `X | Missing` can be omitted from the input,
@@ -669,10 +688,15 @@ schema names the form which is written. What it leaves unsaid is on purpose:
 - A fixed tuple has exactly its length (`minItems` and `maxItems`). A tuple with an unbounded part
   has `minItems` for the elements around it, and takes what follows its leading elements as any of
   the types after them, as a schema can't tell the elements at the end from those in the middle.
-- JSON Schema compares numbers by value, so it can't tell `1` from `1.0`: the schemas of `bool`
-  (`0`, `1`), of an `IntEnum` and of `int` accept `1.0` where the State refuses it for a `bool` or
-  an `IntEnum`, and the `int` schema accepts whole floats beyond 2\*\*53 which the State refuses.
-  The schema accepts more than the State, never less.
+- JSON Schema compares numbers by value, so it can't tell `1` from `1.0`, and the State reads a
+  whole float as the int it equals for an `int`, an `IntEnum`, an int `Literal` and a `bool`. What
+  remains is the bound: the `int` schema accepts whole floats beyond 2\*\*53, which the State
+  refuses, and so do the schemas of an `IntEnum` or a `Literal` holding a value beyond it. A number
+  beyond what a float holds (`1e400`) passes a `number` schema, while the State refuses it.
+- A `UUID` and a `date` are read with `UUID(...)` and `date.fromisoformat`, which take more
+  spellings than the `uuid` and `date` formats: hex digits without hyphens, braces or the
+  `urn:uuid:` prefix for a `UUID`, the basic (`20240102`) and week (`2025-W01-1`) forms for a
+  `date`. A validator asserting `format` refuses those, the State writes the canonical form alone.
 - The keys of a mapping which are not strings constrain `propertyNames` to the way they are spelled
   where that can be told - `int`, `float`, `bool`, `None`, `UUID`, enum and `Literal` keys - with
   the exact spellings written. `bool` is described as a boolean, `0`, `1` or `true`/`false` in any
@@ -682,8 +706,6 @@ schema names the form which is written. What it leaves unsaid is on purpose:
 - Both the name of an attribute and its alias are accepted as input, while the schema names the
   alias alone, as `additionalProperties` is off. A document using the Python names of aliased
   attributes passes validation and not the schema.
-- The values validation accepts leniently - `"1"` for an `int`, an object for a set, the name of an
-  enum member - are not described either, the schema names the form which is written.
 
 A State can describe itself with the `description` class keyword. It is kept on the type as
 `__DESCRIPTION__` and written into its schema, so it survives `python -OO` (which strips docstrings)

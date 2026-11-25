@@ -3,6 +3,7 @@ import base64
 import builtins
 import inspect
 import json
+import math
 import os
 import re
 import sys
@@ -64,7 +65,7 @@ from haiway.attributes.generics import (
     unspecialized_defaults,
 )
 from haiway.attributes.path import AttributePath
-from haiway.attributes.specification import object_specification
+from haiway.attributes.specification import object_specification, unique_anchors
 from haiway.attributes.validation import ValidationError
 from haiway.types import (
     BasicObject,
@@ -396,7 +397,10 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         if specification is None:
             raise TypeError(f"{cls.__name__} cannot be represented using json schema")
 
-        return specification
+        # the class holds what its attributes resolved to, nested classes as they hold
+        # theirs - the anchors of the whole document are made unique here, once it is asked
+        # for rather than for every class defined
+        return unique_anchors(specification)
 
     @property
     def __SERIALIZABLE__(cls) -> bool:
@@ -744,9 +748,16 @@ def _declared_fields(
     )
 
     # an attribute is left out only when it has a default or accepts `Missing`, and
-    # `NotRequired` is neither - the attribute it marks would be required all the same
+    # `NotRequired` is neither, nor a default of `Missing` for an annotation refusing it -
+    # the attribute would be required all the same
     for field in fields:
         if not field.annotation.metadata.required and field.required:
+            if field.name in defaults:
+                raise TypeError(
+                    f"{name}.{field.name} defaults to Missing, which its annotation does not"
+                    " accept - annotate it with `| Missing` to make it optional"
+                )
+
             raise TypeError(
                 f"{name}.{field.name} is annotated with NotRequired, which is not applicable"
                 " to an attribute of a State - declare a default to make it optional"
@@ -803,22 +814,57 @@ def _compatible(
             variance,
         )
 
-    # the relation of two classes is all there is to decide it on - an argument
-    # which is not one, a parameterized generic, a union or a literal, only ever
-    # matches the equal argument admitted above
+    # the relation of two classes, or of the alternatives of unions, is all there is to
+    # decide it on - an argument which is neither, a parameterized generic or a literal,
+    # only ever matches the equal argument admitted above
     try:
         match variance:
             case "co":
-                return issubclass(subclass_arg, cast(Any, self_arg))
+                return _annotated_subclass(subclass_arg, self_arg)
 
             case "contra":
-                return issubclass(cast(Any, self_arg), subclass_arg)
+                return _annotated_subclass(self_arg, subclass_arg)
 
             case "inv":
                 return False
 
     except TypeError:
         return False
+
+
+def _annotated_subclass(
+    subclass: Any,
+    base: Any,
+    /,
+) -> bool:
+    # each alternative of a union has to fit one of the other - compared one by one, as
+    # the language would relate a bool to `int | None` as a whole
+    return all(
+        any(_annotated_member_subclass(member, base_member) for base_member in _members(base))
+        for member in _members(subclass)
+    )
+
+
+def _members(annotation: Any, /) -> Sequence[Any]:
+    if isinstance(annotation, types.UnionType):
+        return get_args(annotation)
+
+    return (annotation,)
+
+
+def _annotated_member_subclass(
+    subclass: Any,
+    base: Any,
+    /,
+) -> bool:
+    # a bool is an int and a datetime a date to the language, and neither is to an
+    # annotation - validation refuses them, so a variant holding one is no subclass
+    if (base is int and issubclass(subclass, bool)) or (
+        base is date and issubclass(subclass, datetime)
+    ):
+        return False
+
+    return issubclass(subclass, base)
 
 
 def _compatible_signatures(
@@ -1312,7 +1358,9 @@ class State(nstruct.Struct, metaclass=StateMeta):
         value : str | bytes
             JSON payload representing a single instance.
         decoder : type[json.JSONDecoder], default=json.JSONDecoder
-            Decoder class used by ``json.loads``.
+            Decoder class used by ``json.loads``. It is given ``parse_float`` and
+            ``parse_constant`` refusing what is not json, which it has to accept and
+            keep - a ``decode`` of its own refuses that itself or not at all.
         ignore_extra : bool, default=False
             When ``True``, keys which are neither an attribute name nor an alias are
             skipped instead of refused, in every nested State, sequence, mapping, tuple,
@@ -1329,7 +1377,9 @@ class State(nstruct.Struct, metaclass=StateMeta):
         Raises
         ------
         ValueError
-            If the payload cannot be decoded or fails State validation.
+            If the payload cannot be decoded or fails State validation. The constants
+            ``NaN``, ``Infinity`` and ``-Infinity``, and a number beyond what a float
+            holds, are not json and refuse the payload, wherever they are.
         """
         try:
             if decoder is json.JSONDecoder:
@@ -1344,6 +1394,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
                 json.loads(
                     value,
                     cls=decoder,
+                    parse_constant=_refused_constant,
+                    parse_float=_finite_float,
                 ),
                 ignore_extra,
             )
@@ -1368,7 +1420,9 @@ class State(nstruct.Struct, metaclass=StateMeta):
         value : str | bytes
             JSON payload representing an array of objects.
         decoder : type[json.JSONDecoder], default=json.JSONDecoder
-            Decoder class used by ``json.loads``.
+            Decoder class used by ``json.loads``. It is given ``parse_float`` and
+            ``parse_constant`` refusing what is not json, which it has to accept and
+            keep - a ``decode`` of its own refuses that itself or not at all.
         ignore_extra : bool, default=False
             When ``True``, keys which are neither an attribute name nor an alias are
             skipped instead of refused, in every nested State, sequence, mapping, tuple,
@@ -1385,7 +1439,9 @@ class State(nstruct.Struct, metaclass=StateMeta):
         Raises
         ------
         ValueError
-            If decoding fails or the payload is not an array of valid objects.
+            If decoding fails or the payload is not an array of valid objects. The
+            constants ``NaN``, ``Infinity`` and ``-Infinity``, and a number beyond what a
+            float holds, are not json and refuse the payload, wherever they are.
         """
         payload: Any
         try:
@@ -1397,6 +1453,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
             payload = json.loads(
                 value,
                 cls=decoder,
+                parse_constant=_refused_constant,
+                parse_float=_finite_float,
             )
 
         except ValidationError as exc:
@@ -1443,7 +1501,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
         Raises
         ------
         ValueError
-            If encoding fails. The message names the type only - the values are
+            If encoding fails, a float value which is infinite or ``nan`` included - json
+            has no spelling for it. The message names the type only - the values are
             left to the cause, so a payload which failed to encode cannot carry
             a redacted attribute into a log through the error path.
         """
@@ -1461,6 +1520,7 @@ class State(nstruct.Struct, metaclass=StateMeta):
                 _basic_object(self, strict=False),
                 indent=indent,
                 cls=encoder_class,
+                allow_nan=False,
             )
 
         except Exception as exc:
@@ -1769,6 +1829,18 @@ def _recursive_mapping(  # noqa: PLR0911
 
     else:
         return deepcopy(value)
+
+
+def _refused_constant(name: str) -> NoReturn:
+    raise ValueError(f"'{name}' is not a json value")
+
+
+def _finite_float(text: str) -> float:
+    number: float = float(text)
+    if not math.isfinite(number):
+        raise ValueError(f"'{text}' is not a finite number")
+
+    return number
 
 
 def _validated[Instance: State](cls: type[Instance], value: Any, ignore_extra: bool) -> Instance:

@@ -32,8 +32,12 @@ are intentionally forbidden.
 
 `State.to_basic_object()`, `State.to_json()`, and `Meta` validation all share one conversion into
 this representation. Each leaf is encoded to the spelling the matching attribute validation reads
-back, so a converted value can be validated into the type it came from - with the exception of the
-mapping keys which spell alike once encoded, see the limitation below:
+back, so a converted value can be validated into the type it came from - with two exceptions: the
+mapping keys which spell alike once encoded, see the limitation below, and a union with an
+alternative taking the encoded value as it is, which wins whatever its position. `str | UUID`
+holding a `UUID` reads back the `str` it is written as, and so does a `datetime`, `Path` or `bytes`
+next to `str`; through JSON, `str | Color` reads `Color.RED` back as the `str` `"red"` and
+`int | Num` an `IntEnum` member as its `int`:
 
 | Type                               | Basic value          |
 | ---------------------------------- | -------------------- |
@@ -48,8 +52,15 @@ Nested `State` instances, dataclasses, mappings, sequences and sets are converte
 is traversed, into `Map` and `tuple` instances. Mapping keys go through the same table and are then
 spelled the way JSON spells them - a `str` result is used as is, `int` and `float` become
 `str(key)`, and `bool` and `None` become `"true"`, `"false"` and `"null"`. That is the spelling
-`json.dumps` gives those keys on its own, so payloads which already encoded keep the output they
-had. Two keys which are spelled the same - `{1: "a", "1": "b"}` - raise `ValueError`.
+`json.dumps` gives those keys on its own, so payloads which already encoded keep the output they had
+\- except for infinite and `NaN` float keys, written as `"inf"`, `"-inf"` and `"nan"` where
+`json.dumps` writes `"Infinity"`, `"-Infinity"` and `"NaN"`. Only `"inf"`, `"-inf"` and `"nan"` are
+read back. Two keys which are spelled the same - `{1: "a", "1": "b"}` - raise `ValueError`.
+
+Float _values_ are not converted: `to_basic_object` keeps an infinite or `NaN` float as it is, and
+`from_mapping` reads it back. JSON has no spelling for it, so `to_json` raises `ValueError` and
+`from_json` refuses the constants `NaN`, `Infinity` and `-Infinity` and a number such as `1e400`
+beyond what a float holds.
 
 ```python
 from collections.abc import Mapping

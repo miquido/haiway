@@ -228,10 +228,8 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
     if (PyLong_Check(value)) return write_int(buffer, value);  /* an enum of ints as the int it is */
     if (PyFloat_Check(value)) {
         double number = PyFloat_AS_DOUBLE(value);
-        if (isnan(number)) return buffer_put(buffer, "NaN", 3) ? JSON_OK : JSON_ERROR;
-        if (isinf(number)) {
-            return (number > 0 ? buffer_put(buffer, "Infinity", 8) : buffer_put(buffer, "-Infinity", 9)) ? JSON_OK : JSON_ERROR;
-        }
+        /* json has no spelling for these - the writer of the standard library, which raises, is left to say so */
+        if (!isfinite(number)) return JSON_BAIL;
         /* the shortest spelling which reads back the same - what `repr` of a float is */
         char *text = PyOS_double_to_string(number, 'r', 0, Py_DTSF_ADD_DOT_0, NULL);
         if (text == NULL) return JSON_ERROR;

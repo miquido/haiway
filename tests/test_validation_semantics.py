@@ -117,10 +117,41 @@ def test_bool_accepts_booleans_zero_and_one_and_the_words(value: Any, expected: 
 
 @pytest.mark.parametrize(
     "value",
-    [2, -1, 2**70, "1", "0", "yes", "", " true", "true ", 1.0, 0.0, None, Level.LOW, b"true"],
+    [
+        2,
+        -1,
+        2**70,
+        "1",
+        "0",
+        "yes",
+        "",
+        " true",
+        "true ",
+        1.5,
+        2.0,
+        -1.0,
+        0.5,
+        float("inf"),
+        float("nan"),
+        2.0**53 + 2,
+        None,
+        Level.LOW,
+        b"true",
+    ],
 )
 def test_bool_refuses_everything_else(value: Any) -> None:
     assert refused(bool, value)
+    assert not checked(bool, value)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(1.0, True), (0.0, False), (-0.0, False)],
+)
+def test_bool_reads_the_whole_floats_of_zero_and_one(value: float, expected: bool) -> None:
+    assert validated(bool, value) is expected
+    assert from_json_value(bool, json.dumps(value)) is expected
+    assert not checked(bool, value)
 
 
 def test_bool_check_accepts_booleans_only() -> None:
@@ -246,13 +277,19 @@ def test_int_keys_refuse_every_other_spelling(key: str) -> None:
         holder(Mapping[int, str]).validate({"v": {key: "a"}})
 
 
-@pytest.mark.parametrize(
-    "key", ["0", "1", "-1", "1.5", "-1e5", "1E+5", "0.5", "2.5e-3", "1e999"], ids=repr
-)
+@pytest.mark.parametrize("key", ["0", "1", "-1", "1.5", "-1e5", "1E+5", "0.5", "2.5e-3"], ids=repr)
 def test_float_keys_read_json_numbers(key: str) -> None:
     assert holder(Mapping[float, str]).from_json(f'{{"v": {{"{key}": "a"}}}}').v == {
         float(key): "a"
     }
+
+
+@pytest.mark.parametrize("key", ["1e999", "-1e400"], ids=repr)
+def test_float_keys_refuse_numbers_beyond_a_double(key: str) -> None:
+    # as a value beyond the range is refused - the infinities are spelled "inf" and "-inf"
+    assert decoding_fails(Mapping[float, str], json.dumps({"v": {key: "a"}}))
+    with pytest.raises(ValidationError):
+        holder(Mapping[float, str]).validate({"v": {key: "a"}})
 
 
 def test_float_keys_read_the_infinities_and_nan_as_written() -> None:
@@ -413,13 +450,92 @@ def test_enums_read_members_then_values_then_names(
         (Level, "1"),
         (Level, "2"),
         (Level, 3),
-        (Level, 1.0),
+        (Level, 3.0),
+        (Level, 1.5),
+        (Level, 2.0**53 + 2),
+        (Level, float("inf")),
+        (Level, float("nan")),
         (Level, "low"),
         (Mode, 1),
         (Mode, "other"),
     ],
 )
 def test_enums_refuse_the_rest(annotation: Any, value: Any) -> None:
+    assert refused(annotation, value)
+    assert not checked(annotation, value)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(1.0, Level.LOW), (2.0, Level.HIGH)],
+)
+def test_int_enum_reads_the_whole_float_of_a_member(value: float, expected: Level) -> None:
+    assert validated(Level, value) is expected
+    assert from_json_value(Level, json.dumps(value)) is expected
+    assert not checked(Level, value)
+
+
+def test_union_keeps_the_exact_alternative_of_a_whole_float() -> None:
+    assert type(validated(float | Level, 1.0)) is float
+    assert type(validated(Level | float, 1.0)) is float
+    assert type(validated(float | bool, 1.0)) is float
+    assert validated(Level | bool, 1.0) is Level.LOW
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        pytest.param(bool | int, id="bool | int"),
+        pytest.param(Level | int, id="IntEnum | int"),
+        pytest.param(int | bool, id="int | bool"),
+        pytest.param(Level | bool, id="IntEnum | bool"),
+        pytest.param(bool | Level, id="bool | IntEnum"),
+    ],
+)
+def test_union_reads_a_whole_float_as_it_reads_its_int(annotation: Any) -> None:
+    # a whole float is read as the int it holds - what takes that int as it is wins
+    for read in (validated(annotation, 1.0), from_json_value(annotation, "1.0")):
+        expected: Any = validated(annotation, 1)
+        assert read == expected
+        assert type(read) is type(expected)
+
+
+@pytest.mark.parametrize(
+    ("annotation", "value", "expected"),
+    [
+        (Literal[1], 1.0, 1),
+        (Literal[0, 1], 0.0, 0),
+        (Literal[0, 1], -0.0, 0),
+        (Literal[2, "a"], 2.0, 2),
+        (Literal[Level.HIGH], 2.0, Level.HIGH),
+        (Literal[1, True], 1.0, 1),
+    ],
+)
+def test_int_literal_reads_the_whole_float_of_its_value(
+    annotation: Any, value: float, expected: Any
+) -> None:
+    result: Any = validated(annotation, value)
+    assert result == expected
+    assert type(result) is type(expected)
+    assert from_json_value(annotation, json.dumps(value)) == expected
+    assert not checked(annotation, value)
+
+
+@pytest.mark.parametrize(
+    ("annotation", "value"),
+    [
+        (Literal[True], 1.0),
+        (Literal[False], 0.0),
+        (Literal[True, False], 1.0),
+        (Literal[1], 1.5),
+        (Literal[1], 2.0),
+        (Literal[1], 2.0**53 + 2),
+        (Literal["1"], 1.0),
+        (Literal[1], float("inf")),
+        (Literal[1], float("nan")),
+    ],
+)
+def test_literal_refuses_the_floats_which_are_not_its_value(annotation: Any, value: float) -> None:
     assert refused(annotation, value)
     assert not checked(annotation, value)
 
@@ -574,24 +690,16 @@ def test_to_json_writes_keys_which_do_not_collide() -> None:
 # H. NaN and the infinities of a document
 
 
-@pytest.mark.parametrize(
-    ("text", "shared"),
-    [
-        ("NaN", "NaN"),
-        ("Infinity", "PosInf"),
-        ("-Infinity", "NegInf"),
-    ],
-)
-def test_json_constants_are_the_objects_of_the_standard_library(text: str, shared: str) -> None:
-    values: Any = from_json_value(Sequence[float], f"[{text}, {text}]")
-    assert values[0] is values[1]
-    assert values[0] is getattr(json.decoder, shared)
-    assert values[0] is json.loads(text)
+@pytest.mark.parametrize("text", ["NaN", "Infinity", "-Infinity", "1e400", "-1e400"])
+def test_json_refuses_non_finite_numbers(text: str) -> None:
+    assert decoding_fails(Sequence[float], f'{{"v": [{text}, {text}]}}')
+    assert decoding_fails(Set[float], f'{{"v": [{text}]}}')
+    assert decoding_fails(Any, f'{{"v": {text}}}')
 
 
-@pytest.mark.parametrize("text", ["NaN", "Infinity", "-Infinity"])
-def test_set_of_floats_reads_a_repeated_constant_once(text: str) -> None:
-    assert len(from_json_value(Set[float], f"[{text}, {text}]")) == 1
+@pytest.mark.parametrize("number", [float("inf"), float("-inf")])
+def test_set_of_floats_reads_a_repeated_infinity_once(number: float) -> None:
+    assert len(validated(Set[float], [number, number])) == 1
 
 
 # I. the hash of an instance agrees with its equality
