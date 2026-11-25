@@ -211,7 +211,7 @@ def test_unknown_keyword_still_replaces_a_failed_value_under_gc_pressure(
 ) -> None:
     arguments: dict[str, Any] = {"value": "x", "unknown": 1}
     for _ in range(25):
-        with pytest.raises(TypeError, match="_Plain has no attribute 'unknown'"):
+        with pytest.raises(TypeError, match="Unexpected attribute 'unknown' for _Plain"):
             _Plain(**arguments)
 
     assert unraisable == []

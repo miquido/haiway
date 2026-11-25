@@ -52,7 +52,6 @@ from haiway.attributes.annotations import (
     UnionAttribute,
     UUIDAttribute,
     ValidableAttribute,
-    _no_verify,  # pyright: ignore[reportPrivateUsage]
 )
 from haiway.attributes.attribute import Attribute
 from haiway.types.frozen import same_copy, same_deepcopy
@@ -148,9 +147,8 @@ _LEAVES: Final[Mapping[type[Any], Kind]] = {
 }
 
 
-def _verifying(annotation: Any) -> Any:
-    verifying: Any = getattr(annotation, "verifying", _no_verify)
-    return None if verifying is _no_verify else verifying
+def _verifying(annotation: AttributeAnnotation) -> Any:
+    return annotation.metadata.verifying
 
 
 def is_plain_state(cls: Any, /) -> bool:

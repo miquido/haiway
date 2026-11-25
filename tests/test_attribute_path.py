@@ -1,4 +1,5 @@
-from collections.abc import Mapping, Sequence, Set
+import threading
+from collections.abc import Callable, Mapping, Sequence, Set
 from typing import Annotated, Any, TypedDict, cast
 
 import pytest
@@ -493,3 +494,65 @@ def test_serialized_components_return_immutable_sequence() -> None:
 def test_serialized_components_align_with_components() -> None:
     path = _SerializedRoot._.items[0].field
     assert len(path.serialized_components) == len(path.components)
+
+
+# the first use of a path from several threads at once gives every one of them the same path
+
+_THREADS = 16
+_ROUNDS = 100
+
+
+def _paths_found_by_threads(
+    root: Any,
+    path_of: Callable[[Any], Any],
+) -> set[int]:
+    barrier: threading.Barrier = threading.Barrier(_THREADS)
+    found: list[Any] = [None] * _THREADS
+
+    def work(index: int) -> None:
+        barrier.wait()
+        found[index] = path_of(root)
+
+    threads: list[threading.Thread] = [
+        threading.Thread(target=work, args=(index,)) for index in range(_THREADS)
+    ]
+    for thread in threads:
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    return {id(path) for path in found}
+
+
+def _same_path_for_all_threads(
+    make_root: Callable[[], Any],
+    path_of: Callable[[Any], Any],
+) -> bool:
+    # paths are kept on the class, so each round starts with the first use of a new one
+    return all(len(_paths_found_by_threads(make_root(), path_of)) == 1 for _ in range(_ROUNDS))
+
+
+def _new_state_class() -> Any:
+    class Created(State):
+        value: int
+        items: Sequence[int] = ()
+
+    return Created
+
+
+def test_first_use_of_an_attribute_path_from_threads_gives_one_path() -> None:
+    assert _same_path_for_all_threads(_new_state_class, lambda root: root._.value)
+
+
+def test_first_use_of_an_item_path_from_threads_gives_one_path() -> None:
+    assert _same_path_for_all_threads(_new_state_class, lambda root: root._.items[0])
+
+
+def test_item_paths_kept_are_still_bounded() -> None:
+    root: Any = _new_state_class()
+    paths: Any = root._.items
+    for index in range(1000):
+        _ = paths[index]
+
+    assert len(paths.__children__) <= 256

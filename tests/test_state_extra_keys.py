@@ -462,6 +462,37 @@ def test_other_ways_of_building_keep_refusing_extra_keys() -> None:
         Holder.validate({"name": "n", "leaf": {"value": 1, "extra": 2}})
 
 
+_REFUSALS: Sequence[Callable[[Mapping[str, Any]], Any]] = (
+    lambda extra: Leaf(value=1, **extra),
+    lambda extra: Leaf(value=1).updating(**extra),
+    lambda extra: Leaf(value=1).__replace__(**extra),
+)
+
+
+@pytest.mark.parametrize("refuse", _REFUSALS)
+def test_constructing_and_updating_refuse_keys_with_the_message_of_validation(
+    refuse: Callable[[Mapping[str, Any]], Any],
+) -> None:
+    with pytest.raises(TypeError) as constructing:
+        refuse({"extra": 2})
+
+    with pytest.raises(TypeError) as validating:
+        Leaf.validate({"value": 1, "extra": 2})
+
+    assert str(constructing.value) == str(validating.value)
+    assert str(constructing.value) == "Unexpected attribute 'extra' for Leaf"
+
+
+@pytest.mark.parametrize("refuse", _REFUSALS)
+def test_all_unexpected_keys_are_listed_sorted_when_several(
+    refuse: Callable[[Mapping[str, Any]], Any],
+) -> None:
+    with pytest.raises(TypeError) as error:
+        refuse({"zed": 1, "alpha": 2, "mid": 3})
+
+    assert str(error.value) == "Unexpected attributes 'alpha', 'mid', 'zed' for Leaf"
+
+
 def test_default_messages_are_unchanged() -> None:
     with pytest.raises(TypeError) as mapping_error:
         Leaf.from_mapping({"value": 1, "extra": 2})

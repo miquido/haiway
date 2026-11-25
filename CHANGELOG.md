@@ -2,6 +2,51 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.66.0
+
+### Changed
+
+- Several `Validator`s, or several `Verifier`s, on one attribute run one after another in the order
+  they are declared, each given what the previous one returned - where only the last of each was
+  kept, silently, so `Annotated[int, Validator(a), Validator(b)]` ran `b` alone. Validators run
+  before the base validation and verifiers after it, whichever is declared first; declarations
+  nested through `Annotated` or a `type` alias run inner first. A `Verifier` has to return the value
+  - what it returns is what the attribute holds, a verifier returning `None` stores `None`.
+- A State refuses a key which is no attribute with one message, wherever the key is given:
+  `Unexpected attribute 'x' for Name` from the constructor and `updating()` as well as from
+  `validate` and `from_mapping`, where the first two said `Name has no attribute 'x'`. The
+  constructor and `updating()` find all of the keys at once and list them sorted,
+  `Unexpected attributes 'a', 'b' for Name`; `validate` and `from_mapping` report the first one. The `TypedDict` message,
+  `Unexpected key 'x' for Name`, is unchanged.
+- `Attribute` and the attribute annotations (`IntegerAttribute`, `ObjectAttribute`, ...) refuse
+  assignment after they are made. The annotations hold what an attribute is declared with besides
+  its type - alias, description, specification, meta, redaction, whether it is required and its
+  verifier - in a single `AttributeMetadata`, which is the only place an `Annotated` is read. The
+  `alias`, `description`, `specification`, `meta`, `redaction` and `required` properties are read
+  as before, but the constructors of the annotations take `metadata=AttributeMetadata(...)` in
+  place of the `alias=`, `description=`, `verifying=`, `required=`, `specification=`, `meta=` and
+  `redaction=` keywords, and `verifying` is now `metadata.verifying` - `None` when no verifier is
+  declared.
+- The `__SPECIFICATION__` of a State which cannot be represented using json schema is no longer
+  kept next to a `__SERIALIZABLE__` flag: both are derived from the one specification the class
+  holds, if any. Reading them behaves as before - `__SPECIFICATION__` raises a `TypeError` for such
+  a class. `__ALIASES__` is gone, `__ALLOWED_FIELDS__` is a mapping of each key an attribute can be
+  given under to its name.
+
+### Fixed
+
+- Reading the first path of an attribute from several threads at once - `Model._.field` or
+  `Model._.items[0]` on a free-threaded build - could give each of them a path of its own, so paths
+  of the same attribute were not identical. The first one made is kept and given to all.
+- The variances of the parameters of a generic State are published as a whole when worked out, where
+  they were filled in place, and a thread reading them meanwhile could find a part of them.
+- `to_mapping()` turned a `bytearray` or a `memoryview` into a list of integers, where `bytes` stays
+  as it is - bytes-like values are all kept as they are, the way `to_basic_object()` encodes all of
+  them as base64.
+- `typing.ReadOnly` (PEP 705), in a `TypedDict` or on an attribute, failed with
+  `Unsupported annotation of 'typing.ReadOnly[int]'`. It is resolved as the type it qualifies and
+  changes nothing in the schema.
+
 ## 0.65.1
 
 ### Fixed
