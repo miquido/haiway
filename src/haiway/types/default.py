@@ -47,13 +47,9 @@ class DefaultValue:
 
     ``DefaultValue`` stores a prepared default source. The owning ``State`` type
     calls the instance during object construction to resolve the effective value
-    for that field. Use ``Default``, ``DefaultFactory`` or ``DefaultEnv`` to create one.
-
-    Parameters
-    ----------
-    source : _NoDefault | _ConstantDefault | _ComputedDefault
-        What the default is: none at all, a value which is the very same each time or
-        a callable invoked every time the default is resolved.
+    for that field. It is made by ``Default``, ``DefaultFactory`` and ``DefaultEnv``
+    rather than constructed directly - what it holds is no default at all, a value which
+    is the very same each time, or a callable invoked every time it is resolved.
     """
 
     __slots__ = ("_source",)

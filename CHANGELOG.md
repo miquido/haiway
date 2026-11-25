@@ -6,6 +6,9 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
 ### Changed
 
+- `DefaultValue` is made by `Default`, `DefaultFactory` and `DefaultEnv` only: its constructor no
+  longer takes `resolve`, `available` and `constant`, which could describe a default which is
+  neither there nor constant. `available` and `constant` are read as before.
 - haiway has no runtime dependencies: `typing-extensions` is no longer required. When it is
   installed (the `opentelemetry` and `fastapi` extras bring it), its `TypedDict`s are recognized as
   before; every other form it provides is the one of `typing` on Python 3.15.
