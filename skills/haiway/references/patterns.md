@@ -69,6 +69,9 @@ class Invoice(State):
 - Describe a type for schemas (LLM tools, structured output) with the class keyword
   `class Invoice(State, description="...")` - stored as `__DESCRIPTION__`, written into the schema and
   kept under `python -OO`, unlike a docstring. A `Description` on the attribute holding it wins.
+- `json_schema()` is strict: it names the form a State writes (`bool` is `{"type": "boolean"}`, an
+  enum lists its values), while `from_json` still converts other spellings (`1`, `"TRUE"`, a member
+  name). Don't widen a schema to match decoding.
 - A `State` with attributes cannot be subclassed. Share attributes by holding an instance, type a
   variant with a generic (`class Page[T](State)`), share behavior with an attribute-less base.
 - States cannot be pickled and the class cannot be patched after creation.
