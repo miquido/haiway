@@ -6,7 +6,6 @@ from haiway import (
     Default,
     DefaultEnv,
     DefaultFactory,
-    DefaultValue,
     Missing,
     State,
     ValidationError,
@@ -210,9 +209,16 @@ def test_default_environment_required_with_mapping_reports_unset(
     assert "HAIWAY_TEST_DEFAULT" in str(exception.value)
 
 
-def test_default_value_is_a_plain_store() -> None:
-    default_value = DefaultValue(lambda: 1, available=False, constant=True)
+def test_default_value_without_a_source_is_constant_and_resolves_missing() -> None:
+    default_value = Default(Missing)
 
-    assert default_value() == 1
+    assert default_value() is Missing
     assert not default_value.available
     assert default_value.constant
+
+
+def test_default_value_of_a_factory_is_not_constant() -> None:
+    default_value = Default(factory=list)
+
+    assert default_value.available
+    assert not default_value.constant

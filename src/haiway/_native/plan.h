@@ -20,6 +20,11 @@ enum {
 };
 
 typedef struct {
+    PyObject *value;  /* the validated default, when it is a constant nothing can change - NULL otherwise */
+    int acyclic;      /* whether the value can never be part of a cycle - settled once, only meaningful with a value */
+} CachedDefault;
+
+typedef struct {
     PyObject *name;
     PyObject *alias;  /* NULL when there is none */
     const char *name_utf8;   /* the spellings json keys are compared with, in place */
@@ -30,10 +35,9 @@ typedef struct {
     Py_ssize_t json_key_length;
     Spec *spec;       /* owned by the spec object the plan tuple holds */
     PyObject *default_value;  /* () -> the validated default */
-    PyObject *cached;  /* the validated default, when it is a constant nothing can change - NULL otherwise */
+    CachedDefault cached;
     int constant;     /* whether the default is the very same value every time */
     int pure;         /* PURITY_* of the spec of the attribute - told when first asked, see `field_pure` */
-    int cached_acyclic;  /* whether the cached default can never be part of a cycle - settled once */
     PyMemberDef member;  /* what the descriptor of the attribute reads */
 } FieldPlan;
 
@@ -134,7 +138,7 @@ validate_field(FieldPlan *field, CompiledPlan *plan, PyObject *value, int ignore
 static inline PyObject *
 field_default(FieldPlan *field)
 {
-    if (field->cached != NULL) return Py_NewRef(field->cached);
+    if (field->cached.value != NULL) return Py_NewRef(field->cached.value);
     return PyObject_CallNoArgs(field->default_value);
 }
 
@@ -325,7 +329,7 @@ finish_construction(PyObject *self)
     PyObject **items = ITEMS(self);
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *value = items[i];
-        if (value == NULL || (value == plan->fields[i].cached && plan->fields[i].cached_acyclic)) continue;
+        if (value == NULL || (value == plan->fields[i].cached.value && plan->fields[i].cached.acyclic)) continue;
         if (settle(plan->state, value, 0)) return;
     }
     PyObject_GC_UnTrack(self);
@@ -350,7 +354,7 @@ finish_update(PyObject *self, PyObject *source)
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *value = items[i];
         if (value == NULL || value == carried[i]) continue;
-        if (value == plan->fields[i].cached && plan->fields[i].cached_acyclic) continue;
+        if (value == plan->fields[i].cached.value && plan->fields[i].cached.acyclic) continue;
         if (settle(plan->state, value, 0)) return;
     }
     PyObject_GC_UnTrack(self);
@@ -704,10 +708,10 @@ compile_plan(PyObject *mod, PyObject *args)
         field->alias = E_ALIAS(entry) == Py_None ? NULL : E_ALIAS(entry);
         field->spec = ((SpecObject *)E_SPEC(entry))->spec;
         field->default_value = E_DEFAULT(entry);
-        field->cached = NULL;
+        field->cached.value = NULL;
+        field->cached.acyclic = 0;
         field->constant = E_CONSTANT(entry) != Py_None;
         field->pure = PURITY_UNKNOWN;
-        field->cached_acyclic = 0;
         PyTuple_SET_ITEM(plan->names, 2 * i, Py_NewRef(field->name));
         PyTuple_SET_ITEM(plan->names, 2 * i + 1, Py_NewRef(field->alias != NULL ? field->alias : Py_None));
         /* the spellings point into the strings, which the plan holds */
@@ -752,8 +756,8 @@ compile_plan(PyObject *mod, PyObject *args)
                 failed = PyList_Append(plan->cached, validated) < 0;
                 Py_DECREF(validated);
                 if (failed) goto fail;
-                field->cached = validated;  /* the list holds it */
-                field->cached_acyclic = !settle(state, validated, 0);
+                field->cached.value = validated;  /* the list holds it */
+                field->cached.acyclic = !settle(state, validated, 0);
             }
         }
     }

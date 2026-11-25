@@ -3,7 +3,6 @@ import base64
 import builtins
 import inspect
 import json
-import math
 import os
 import re
 import sys
@@ -84,6 +83,7 @@ from haiway.types.basic import (
     spelled_once,
 )
 from haiway.types.guards import is_iterable, is_mapping
+from haiway.types.strict_json import finite_float, refused_constant
 
 __all__ = ("State",)
 
@@ -1394,8 +1394,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
                 json.loads(
                     value,
                     cls=decoder,
-                    parse_constant=_refused_constant,
-                    parse_float=_finite_float,
+                    parse_constant=refused_constant,
+                    parse_float=finite_float,
                 ),
                 ignore_extra,
             )
@@ -1453,8 +1453,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
             payload = json.loads(
                 value,
                 cls=decoder,
-                parse_constant=_refused_constant,
-                parse_float=_finite_float,
+                parse_constant=refused_constant,
+                parse_float=finite_float,
             )
 
         except ValidationError as exc:
@@ -1832,18 +1832,6 @@ def _recursive_mapping(  # noqa: PLR0911
 
     else:
         return deepcopy(value)
-
-
-def _refused_constant(name: str) -> NoReturn:
-    raise ValueError(f"'{name}' is not a json value")
-
-
-def _finite_float(text: str) -> float:
-    number: float = float(text)
-    if not math.isfinite(number):
-        raise ValueError(f"'{text}' is not a finite number")
-
-    return number
 
 
 def _validated[Instance: State](cls: type[Instance], value: Any, ignore_extra: bool) -> Instance:

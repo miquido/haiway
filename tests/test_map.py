@@ -89,6 +89,30 @@ def test_to_json_rejects_unencodable_values() -> None:
         Map({"a": {1, 2}}).to_json()
 
 
+def test_to_json_is_compact() -> None:
+    mapping = Map({"a": 1, "b": [1, 2], "c": {"d": None}})
+
+    assert mapping.to_json() == '{"a":1,"b":[1,2],"c":{"d":null}}'
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_to_json_refuses_non_finite_floats(value: float) -> None:
+    with pytest.raises(ValueError):
+        Map({"a": value}).to_json()
+
+    with pytest.raises(ValueError):
+        Map({value: "a"}).to_json()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ['{"a": NaN}', '{"a": Infinity}', '{"a": -Infinity}', '{"a": 1e400}'],
+)
+def test_from_json_refuses_what_is_not_a_finite_number(payload: str) -> None:
+    with pytest.raises(ValueError):
+        Map.from_json(payload)
+
+
 def test_to_str_matches_str() -> None:
     mapping = Map({"a": 1})
 

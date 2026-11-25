@@ -246,6 +246,10 @@ assert merged == {"a": 1, "b": 2}
 
 Mutation methods such as `update`, `pop`, and item assignment raise `AttributeError`.
 
+`Map.to_json()` writes compact JSON, with no space after `,` and `:`, and raises `ValueError` for an
+infinite or `NaN` float, a key included. `Map.from_json()` refuses the constants `NaN`, `Infinity`
+and `-Infinity` and a number such as `1e400` beyond what a float holds, as `State` does.
+
 Use `Map` when you want an immutable mapping outside `State`, or when you want to document that a
 function returns a read-only mapping value concretely.
 
@@ -298,6 +302,9 @@ meta = Meta.empty.with_error(ValueError("quota exceeded"))
 assert meta["error"] == "quota exceeded"
 assert isinstance(meta.error, Exception)
 ```
+
+`Meta.to_json()` and `Meta.from_json()` are as strict as the ones of `Map`: compact output, no
+infinite or `NaN` float written and none of `NaN`, `Infinity`, `-Infinity` or `1e400` read.
 
 One subtlety matters: direct `Meta({...})` construction does not recursively validate or normalize
 values on its own. Use the factory helpers when the input comes from user code, JSON, or mutable

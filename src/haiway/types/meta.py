@@ -7,6 +7,7 @@ from uuid import UUID
 from haiway.types.basic import BasicValue, basic_value
 from haiway.types.guards import is_mapping
 from haiway.types.mapping_base import MapBase, plain_repr
+from haiway.types.strict_json import finite_float, refused_constant
 
 __all__ = (
     "Meta",
@@ -186,9 +187,14 @@ class Meta(MapBase[str, BasicValue]):
         Raises
         ------
         ValueError
-            If the payload is not a JSON object.
+            If the payload is not a JSON object or holds ``NaN``, ``Infinity``,
+            ``-Infinity`` or a number beyond what a float holds, which are not json.
         """
-        match json.loads(value):
+        match json.loads(
+            value,
+            parse_constant=refused_constant,
+            parse_float=finite_float,
+        ):
             case {**values}:
                 return cls({key: basic_value(value, strict=True) for key, value in values.items()})
 
@@ -214,12 +220,19 @@ class Meta(MapBase[str, BasicValue]):
         """
         Serialize metadata to a JSON object string.
 
+        The output is compact, with no space after ``,`` and ``:``.
+
         Returns
         -------
         str
             JSON encoding of the metadata mapping.
+
+        Raises
+        ------
+        ValueError
+            If a float is infinite or ``nan`` - json has no spelling for it.
         """
-        return json.dumps(self)
+        return json.dumps(self, separators=(",", ":"), allow_nan=False)
 
     @property
     def kind(self) -> str | None:

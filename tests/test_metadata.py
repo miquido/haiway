@@ -90,6 +90,27 @@ def test_meta_to_json():
     assert "test" in json_str
 
 
+def test_meta_to_json_is_compact():
+    meta = Meta({"kind": "test", "tags": ("a", "b"), "nested": Map({"x": 1})})
+
+    assert meta.to_json() == '{"kind":"test","tags":["a","b"],"nested":{"x":1}}'
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_meta_to_json_refuses_non_finite_floats(value: float):
+    with raises(ValueError):
+        Meta({"value": value}).to_json()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ['{"a": NaN}', '{"a": Infinity}', '{"a": -Infinity}', '{"a": 1e400}'],
+)
+def test_meta_from_json_refuses_what_is_not_a_finite_number(payload: str):
+    with raises(ValueError):
+        Meta.from_json(payload)
+
+
 def test_meta_kind_property():
     meta = Meta({"kind": "user"})
     assert meta.kind == "user"

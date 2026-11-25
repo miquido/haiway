@@ -130,6 +130,10 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   itself or not at all. Float mapping keys keep the `"inf"`, `"-inf"` and `"nan"` spellings both
   ways. `to_mapping`, `to_basic_object` and `from_mapping` work on Python values and keep infinite
   and `NaN` floats.
+- **Breaking:** `Map` and `Meta` write and read JSON as strictly as a State does. `to_json` writes
+  compact JSON, with no space after `,` and `:`, and raises `ValueError` for an infinite or `NaN`
+  float, where `Infinity` and `NaN` were written. `from_json` refuses the constants `NaN`,
+  `Infinity` and `-Infinity` and a number beyond what a float holds (`1e400`) with `ValueError`.
 - **Breaking:** a `bool` variant is no `int` variant, and a `datetime` variant no `date` variant, to
   the variance of a generic State: `Box[bool]` is not a subclass of `Box[int]` - also through union
   arguments, `Box[int | None]` - and `Box(value=True)` is not an instance of `Box[int]`, so a

@@ -5,6 +5,7 @@ from typing import Any, NoReturn, Self, final
 
 from haiway.types.guards import is_mapping
 from haiway.types.mapping_base import MapBase, plain_repr
+from haiway.types.strict_json import finite_float, refused_constant
 
 __all__ = ("Map",)
 
@@ -43,9 +44,15 @@ class Map[Key, Element](MapBase[Key, Element]):
         Raises
         ------
         ValueError
-            If the payload does not decode to a JSON object.
+            If the payload does not decode to a JSON object or holds ``NaN``,
+            ``Infinity``, ``-Infinity`` or a number beyond what a float holds, which are
+            not json.
         """
-        match json.loads(value):
+        match json.loads(
+            value,
+            parse_constant=refused_constant,
+            parse_float=finite_float,
+        ):
             case {**values}:
                 return cls(values)
 
@@ -74,7 +81,8 @@ class Map[Key, Element](MapBase[Key, Element]):
         The contents are encoded as they are - a ``Map`` holds whatever it was
         given and ``from_json`` validates nothing on the way back, so there is
         no spelling to convert values into which reading them back would
-        restore. Keys and values json can't encode raise here instead.
+        restore. Keys and values json can't encode raise here instead. The output is
+        compact, with no space after ``,`` and ``:``.
 
         Returns
         -------
@@ -85,8 +93,11 @@ class Map[Key, Element](MapBase[Key, Element]):
         ------
         TypeError
             If any key or value has no JSON representation.
+        ValueError
+            If a float, a key included, is infinite or ``nan`` - json has no spelling
+            for it.
         """
-        return json.dumps(self)
+        return json.dumps(self, separators=(",", ":"), allow_nan=False)
 
     # a `frozendict` spells itself with the name of its class, which is not how the
     # mapping it replaces has ever been printed. its hash is the one of `frozendict`:

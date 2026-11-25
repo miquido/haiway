@@ -14,43 +14,77 @@ __all__ = (
 
 
 @final
+class _NoDefault:
+    __slots__ = ()
+
+
+@final
+class _ConstantDefault:
+    __slots__ = ("value",)
+
+    def __init__(
+        self,
+        value: Any,
+    ) -> None:
+        self.value: Any = value
+
+
+@final
+class _ComputedDefault:
+    __slots__ = ("resolve",)
+
+    def __init__(
+        self,
+        resolve: Callable[[], Any | Missing],
+    ) -> None:
+        self.resolve: Callable[[], Any | Missing] = resolve
+
+
+@final
 class DefaultValue:
     """
     Resolver for field default values.
 
-    ``DefaultValue`` stores a prepared default resolver. The owning ``State`` type
+    ``DefaultValue`` stores a prepared default source. The owning ``State`` type
     calls the instance during object construction to resolve the effective value
     for that field. Use ``Default``, ``DefaultFactory`` or ``DefaultEnv`` to create one.
 
     Parameters
     ----------
-    resolve : Callable[[], Any | Missing]
-        Callable invoked every time the default is resolved.
-    available : bool
-        Whether a default exists, i.e. the field is not required because of it.
-    constant : bool
-        Whether ``resolve`` yields the very same value each time, which is the
-        case of a plain default only.
+    source : _NoDefault | _ConstantDefault | _ComputedDefault
+        What the default is: none at all, a value which is the very same each time or
+        a callable invoked every time the default is resolved.
     """
 
-    __slots__ = (
-        "_resolve",
-        "available",
-        "constant",
-    )
+    __slots__ = ("_source",)
 
     def __init__(
         self,
-        resolve: Callable[[], Any | Missing],
-        available: bool,
-        constant: bool,
+        source: _NoDefault | _ConstantDefault | _ComputedDefault,
     ) -> None:
-        self._resolve: Callable[[], Any | Missing] = resolve
-        self.available: bool = available
-        self.constant: bool = constant
+        self._source: _NoDefault | _ConstantDefault | _ComputedDefault = source
+
+    @property
+    def available(self) -> bool:
+        """Whether a default exists, i.e. the field is not required because of it."""
+        return not isinstance(self._source, _NoDefault)
+
+    @property
+    def constant(self) -> bool:
+        """Whether resolving yields the very same value each time - true of a plain default
+        and of no default at all."""
+        return not isinstance(self._source, _ComputedDefault)
 
     def __call__(self) -> Any | Missing:
-        return self._resolve()
+        source: _NoDefault | _ConstantDefault | _ComputedDefault = self._source
+        if isinstance(source, _ConstantDefault):
+            return source.value
+
+        elif isinstance(source, _ComputedDefault):
+            return source.resolve()
+
+        else:
+            return Missing
 
 
 @overload
@@ -100,11 +134,7 @@ def Default[Value](
     if factory is Missing:
         return cast(
             Value,
-            DefaultValue(
-                lambda: default,
-                available=default is not Missing,
-                constant=True,
-            ),
+            DefaultValue(_NoDefault() if default is Missing else _ConstantDefault(default)),
         )
 
     else:
@@ -112,11 +142,7 @@ def Default[Value](
 
         return cast(
             Value,
-            DefaultValue(
-                factory,
-                available=True,
-                constant=False,
-            ),
+            DefaultValue(_ComputedDefault(factory)),
         )
 
 
@@ -153,9 +179,7 @@ def DefaultFactory[**Args, Value](
     return cast(
         Value,
         DefaultValue(
-            partial(factory, *args, **kwargs) if args or kwargs else factory,
-            available=True,
-            constant=False,
+            _ComputedDefault(partial(factory, *args, **kwargs) if args or kwargs else factory),
         ),
     )
 
@@ -266,9 +290,5 @@ def DefaultEnv[Value = str, Fallback = None](
 
     return cast(
         Value | Fallback,
-        DefaultValue(
-            resolve,
-            available=True,
-            constant=False,
-        ),
+        DefaultValue(_ComputedDefault(resolve)),
     )
