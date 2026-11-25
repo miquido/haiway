@@ -296,7 +296,7 @@ def test_instance_being_initialized_is_never_read_half_bound() -> None:
         namespace,
     )
     wide: Any = namespace["Wide"]
-    torn: list[int] = []
+    torn: list[Any] = []
 
     for _ in range(200):
         shared: Any = wide.__new__(wide)
@@ -310,13 +310,13 @@ def test_instance_being_initialized_is_never_read_half_bound() -> None:
             start.wait()
             for _ in range(20):
                 try:
-                    count: int = len(json.loads(shared.to_json()))
+                    read_values: Any = json.loads(shared.to_json())
 
                 except ValueError:
-                    continue
+                    continue  # not initialized yet - refused whole
 
-                if count != len(values):
-                    torn.append(count)
+                if read_values != values:
+                    torn.append(read_values)
 
         threads = [
             threading.Thread(target=initialize),
@@ -341,12 +341,24 @@ class _Base(State):
     pass
 
 
+def _constructed_whole(subclass: type[_Base], fields: int) -> bool | None:
+    created: Any = subclass
+    try:
+        instance: Any = created(f0=5)
+
+    except TypeError, AttributeError:
+        return None
+
+    return instance.f0 == 5 and instance.f29 == 29 and len(instance.to_mapping()) == fields
+
+
 def test_class_reached_while_it_is_being_created_is_usable_or_refused() -> None:
     fields = 30
     source = "class Created(Base):\n" + "\n".join(f"    f{i}: int = {i}" for i in range(fields))
     done = threading.Event()
-    wrong: list[str] = []
-    used: list[str] = []
+    enough = threading.Event()
+    wrong: list[bool] = []
+    used: list[bool] = []
     keep: list[Any] = []
 
     def create() -> None:
@@ -358,19 +370,14 @@ def test_class_reached_while_it_is_being_created_is_usable_or_refused() -> None:
 
     def use() -> None:
         while not done.is_set():
-            for subclass in _Base.__subclasses__():
-                created: Any = subclass
-                try:
-                    instance: Any = created(f0=5)
-
-                except TypeError, AttributeError:
-                    continue  # not given its plan yet
-
-                if instance.f0 != 5 or instance.f29 != 29 or len(instance.to_mapping()) != fields:
-                    wrong.append(subclass.__name__)
-
-                else:
-                    used.append(subclass.__name__)
+            # a class not given its plan yet is refused, which counts for neither
+            outcomes: list[bool | None] = [
+                _constructed_whole(subclass, fields) for subclass in _Base.__subclasses__()
+            ]
+            used.extend(True for outcome in outcomes if outcome is True)
+            wrong.extend(False for outcome in outcomes if outcome is False)
+            if len(used) >= 100:
+                enough.set()
 
     threads = [threading.Thread(target=create) for _ in range(2)] + [
         threading.Thread(target=use) for _ in range(3)
@@ -378,7 +385,7 @@ def test_class_reached_while_it_is_being_created_is_usable_or_refused() -> None:
     for thread in threads:
         thread.start()
 
-    time.sleep(0.5)
+    enough.wait(timeout=10)  # bounded - the assertions below tell what was reached
     done.set()
     for thread in threads:
         thread.join()

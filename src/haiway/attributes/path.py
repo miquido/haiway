@@ -933,13 +933,13 @@ class AttributePath[Root, Attribute]:
         # the keys of items are whatever the code indexes with, so what is kept is bounded -
         # the attributes of a class are not, they can't outgrow its annotations. the bound
         # is checked before keeping, so threads keeping at the same time may overshoot it
-        # by their number - it is there to stop growth, not to be exact. the first path
-        # kept for an item is the one every thread gets
+        # by their number - it is there to stop growth, not to be exact. below it, the first
+        # path kept for an item is the one every thread gets
         if len(children) < _ITEM_PATHS_KEPT:
             return children.setdefault(item, extended)
 
-        # past the bound nothing more is kept, but an item kept by another thread meanwhile
-        # is the one to give
+        # past the bound nothing more is kept and each use may make a path of its own - an
+        # item kept by another thread meanwhile is still the one given when it is found
         return children.get(item, extended)
 
     @overload

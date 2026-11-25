@@ -957,16 +957,43 @@ def unique_anchors(
     # referred to instead of repeated, and another one under a taken name is renamed,
     # with the references within it - a reference to a definition is generated within it,
     # or to one whose name is unique in the document
-    return cast(TypeSpecification, _Anchors().renamed(specification, {}))
+    anchors: _Anchors = _Anchors()
+    anchors.reserve(specification)
+    return cast(TypeSpecification, anchors.renamed(specification, {}))
 
 
 class _Anchors:
-    __slots__ = ("emitted", "first")
+    __slots__ = ("emitted", "first", "reserved")
 
     def __init__(self) -> None:
-        # the json of the first definition under each anchor, and the name it got
+        # the first definition under each anchor - its json with the names the references
+        # out of it are bound to - and the name it got
         self.first: MutableMapping[str, tuple[str, str]] = {}
         self.emitted: set[str] = set()
+        # every name the document spells - a renamed definition takes none of them, so a
+        # reference to a name given once keeps reaching its definition wherever it is
+        self.reserved: set[str] = set()
+
+    def reserve(self, node: Any) -> None:
+        if isinstance(node, list):
+            for element in cast(list[Any], node):
+                self.reserve(element)
+
+        elif isinstance(node, dict):
+            entries: dict[str, Any] = cast(dict[str, Any], node)
+            if isinstance(anchor := entries.get("$anchor"), str):
+                self.reserved.add(anchor)
+
+            for key, value in entries.items():
+                if key in _ANCHOR_VALUES:
+                    continue
+
+                if key in _ANCHOR_NAMED and isinstance(value, dict):
+                    for element in cast(dict[str, Any], value).values():
+                        self.reserve(element)
+
+                else:
+                    self.reserve(value)
 
     def renamed(self, node: Any, scope: Mapping[str, str]) -> Any:
         if isinstance(node, list):
@@ -978,12 +1005,13 @@ class _Anchors:
         entries: dict[str, Any] = cast(dict[str, Any], node)
         anchor: Any = entries.get("$anchor")
         if isinstance(anchor, str):
-            # bool and int are told apart, as their json is
-            canonical: str = json.dumps(entries, sort_keys=True)
-            if (met := self.first.get(anchor)) is not None and met[0] == canonical:
+            # bool and int are told apart, as their json is - and a definition is the same
+            # one only when the references out of it lead to the same definitions as well
+            identity: str = json.dumps([entries, sorted(scope.items())], sort_keys=True)
+            if (met := self.first.get(anchor)) is not None and met[0] == identity:
                 return {"$ref": f"#{met[1]}"}
 
-            scope = {**scope, anchor: self.named(anchor, canonical)}
+            scope = {**scope, anchor: self.named(anchor, identity)}
 
         result: dict[str, Any] = {
             key: self.renamed_entry(key, value, scope) for key, value in entries.items()
@@ -997,15 +1025,17 @@ class _Anchors:
 
         return result
 
-    def named(self, anchor: str, canonical: str) -> str:
+    def named(self, anchor: str, identity: str) -> str:
         unique: str = anchor
-        suffix: int = 1
-        while unique in self.emitted:
-            suffix += 1
+        if unique in self.emitted:
+            suffix: int = 2
             unique = f"{anchor}_{suffix}"
+            while unique in self.emitted or unique in self.reserved:
+                suffix += 1
+                unique = f"{anchor}_{suffix}"
 
         self.emitted.add(unique)
-        self.first.setdefault(anchor, (canonical, unique))
+        self.first.setdefault(anchor, (identity, unique))
         return unique
 
     def renamed_entry(self, key: str, value: Any, scope: Mapping[str, str]) -> Any:

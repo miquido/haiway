@@ -585,7 +585,9 @@ def test_generated_anchor_names_do_not_collide_with_taken_ones() -> None:
     )
 
     anchors: dict[str, list[Any]] = _anchored(result, {})
-    assert sorted(anchors) == ["Item", "Item_2", "Item_2_2"]
+    # the name given once keeps it, the repeated one takes a name nothing spells
+    assert sorted(anchors) == ["Item", "Item_2", "Item_3"]
+    assert result["anyOf"][2]["$anchor"] == "Item_2"
     assert all(len(nodes) == 1 for nodes in anchors.values())
     # the references within each definition lead to that definition
     for node in result["anyOf"]:
@@ -864,17 +866,22 @@ def test_schema_and_state_accept_the_same_documents(name: str) -> None:
     assert _disagreements(name) == expected
 
 
-@pytest.mark.parametrize("name", list(_AGREEMENTS))
-def test_written_instances_conform_to_the_schema_and_read_back(name: str) -> None:
-    agreement: _Agreement = _AGREEMENTS[name]
-    cls: Any = state_of(agreement.annotation)
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        pytest.param(name, value, id=f"{name}-{index}")
+        for name, agreement in _AGREEMENTS.items()
+        for index, value in enumerate(agreement.instances)
+    ],
+)
+def test_written_instances_conform_to_the_schema_and_read_back(name: str, value: Any) -> None:
+    cls: Any = state_of(_AGREEMENTS[name].annotation)
     validator: Draft202012Validator = Draft202012Validator(schema_of(cls), format_checker=_FORMATS)
-    for value in agreement.instances:
-        instance: Any = cls(**{"v": value})
-        text: str = instance.to_json()
+    instance: Any = cls(**{"v": value})
+    text: str = instance.to_json()
 
-        validator.validate(strict_loads(text))
-        assert cls.from_json(text) == instance
+    validator.validate(strict_loads(text))
+    assert cls.from_json(text) == instance
 
 
 def test_python_names_of_aliased_attributes_are_read_but_not_named_by_the_schema() -> None:
@@ -949,3 +956,59 @@ def test_recursive_definitions_sharing_names_are_written_to_the_schema() -> None
 
     Draft202012Validator(schema_of(_Multi), format_checker=_FORMATS).validate(strict_loads(text))
     assert _Multi.from_json(text) == instance
+
+
+def _anchored_definition(anchor: str, kind: str) -> dict[str, Any]:
+    return {
+        "$anchor": anchor,
+        "type": "array",
+        "items": {"anyOf": [{"type": kind}, {"$ref": f"#{anchor}"}]},
+    }
+
+
+def test_a_name_given_once_keeps_reaching_its_definition() -> None:
+    # a specification of the user may refer to an anchor from outside of it - renaming a
+    # repeated name takes no name the document spells
+    schema: Any = unique_anchors(
+        cast(
+            Any,
+            {
+                "type": "object",
+                "properties": {
+                    "a": _anchored_definition("Item", "integer"),
+                    "b": _anchored_definition("Item", "boolean"),
+                    "c": _anchored_definition("Item_2", "string"),
+                    "d": {"$ref": "#Item_2"},
+                },
+            },
+        )
+    )
+    properties: Any = schema["properties"]
+    assert properties["c"]["$anchor"] == "Item_2"
+    assert properties["b"]["$anchor"] not in {"Item", "Item_2"}
+    assert properties["d"] == {"$ref": "#Item_2"}
+    assert properties["b"]["items"]["anyOf"][1] == {"$ref": f"#{properties['b']['$anchor']}"}
+
+
+def test_equal_definitions_bound_to_other_definitions_are_kept_apart() -> None:
+    # the same text within definitions renamed apart refers to each of them, so it is two
+    def holding(kind: str) -> dict[str, Any]:
+        return {
+            "$anchor": "Item",
+            "type": "object",
+            "properties": {
+                "value": {"type": kind},
+                "parts": {"$anchor": "Nest", "anyOf": [{"$ref": "#Item"}, {"$ref": "#Nest"}]},
+            },
+        }
+
+    schema: Any = unique_anchors(
+        cast(
+            Any,
+            {"type": "object", "properties": {"a": holding("string"), "b": holding("integer")}},
+        )
+    )
+    second: Any = schema["properties"]["b"]
+    assert second["$anchor"] != "Item"
+    assert "$anchor" in second["properties"]["parts"]
+    assert second["properties"]["parts"]["anyOf"][0] == {"$ref": f"#{second['$anchor']}"}
