@@ -446,7 +446,7 @@ def _key_specification(
             return {"type": "string", "pattern": _NULL_KEY}
 
         case UUIDAttribute():
-            return {"type": "string", "format": "uuid"}
+            return {"type": "string", "format": "uuid", "pattern": _UUID}
 
         case _:
             return _named_key_specification(keys)
@@ -759,6 +759,21 @@ def _prepare_specification_of_int_enum(
     }
 
 
+# the spellings a value is written as - see `basic_value`, `format_duration` and the writer of
+# the extension (`convert.h`), which these patterns restate. They are what a value is written as
+# alone, while the State reads more - a `format` is claimed only where it fits every spelling
+# written, which a datetime or time with no offset, or a negative or fractional duration, doesn't
+_UUID: str = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+_BASE64: str = r"^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+_CLOCK: str = r"([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{6})?"
+_OFFSET: str = r"([+-]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]{6})?)?)?"
+_DATETIME: str = r"^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T" + _CLOCK + _OFFSET + "$"
+_TIME: str = "^" + _CLOCK + _OFFSET + "$"
+_SECONDS: str = r"[0-9]+(\.[0-9]{1,6})?S"
+_DURATION_TIME: str = rf"T([0-9]+H([0-9]+M)?({_SECONDS})?|[0-9]+M({_SECONDS})?|{_SECONDS})"
+_DURATION: str = rf"^-?P([0-9]+D({_DURATION_TIME})?|{_DURATION_TIME})$"
+
+
 def _prepare_specification_of_bytes(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
@@ -766,6 +781,7 @@ def _prepare_specification_of_bytes(
     return {
         "type": "string",
         "contentEncoding": "base64",
+        "pattern": _BASE64,
     }
 
 
@@ -776,6 +792,7 @@ def _prepare_specification_of_uuid(
     return {
         "type": "string",
         "format": "uuid",
+        "pattern": _UUID,
     }
 
 
@@ -795,6 +812,7 @@ def _prepare_specification_of_datetime(
 ) -> TypeSpecification:
     return {
         "type": "string",
+        "pattern": _DATETIME,
     }
 
 
@@ -804,6 +822,7 @@ def _prepare_specification_of_time(
 ) -> TypeSpecification:
     return {
         "type": "string",
+        "pattern": _TIME,
     }
 
 
@@ -813,6 +832,7 @@ def _prepare_specification_of_timedelta(
 ) -> TypeSpecification:
     return {
         "type": "string",
+        "pattern": _DURATION,
     }
 
 

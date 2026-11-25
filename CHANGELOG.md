@@ -12,6 +12,12 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   the names of their members, and an `IntEnum` is a plain `integer` enum. A mapping with enum keys
   constrains `propertyNames` to the values alone. Decoding is unchanged: it still reads those
   spellings.
+- `datetime`, `time` and `timedelta` have a `pattern` of the spelling they are written in, where
+  they were plain strings - no `format` fits a datetime or time with no offset, or a negative or
+  fractional duration. `bytes` has a padded base64 `pattern` besides `contentEncoding`, and a `UUID`
+  (and a `UUID` key) the lowercase hyphenated `pattern` besides its `format`. The State still reads
+  the other spellings it did - a date alone for a `datetime`, a `time` without seconds, a `UUID`
+  without hyphens.
 
 ## 0.66.0
 

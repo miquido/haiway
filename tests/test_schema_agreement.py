@@ -399,10 +399,7 @@ def test_names_of_enum_members_are_read_but_not_named_by_the_schema(
 
 
 def test_mapping_of_uuid_keys_names_the_format() -> None:
-    assert property_of(mapping_of(UUID))["propertyNames"] == {
-        "type": "string",
-        "format": "uuid",
-    }
+    assert property_of(mapping_of(UUID))["propertyNames"] == property_of(UUID)
 
 
 # 8. formats
@@ -448,7 +445,7 @@ def test_naive_datetime_and_negative_duration_conform() -> None:
 
 
 def test_annotated_description_is_kept() -> None:
-    assert property_of(Annotated[datetime, "moment"]) == {
+    assert property_of(Annotated[Path, "moment"]) == {
         "type": "string",
         "description": "moment",
     }
@@ -828,11 +825,9 @@ _DISAGREEMENTS: Mapping[str, Sequence[tuple[Any, str]]] = {
     "uuid": [(_UUID.replace("-", ""), _STATE_ONLY), (f"{{{_UUID}}}", _STATE_ONLY)],
     "date": [("20260102", _STATE_ONLY)],
     "uuid mapping": [({_UUID.replace("-", ""): "a"}, _STATE_ONLY)],
-    # these are plain strings in the schema - it names no format the output keeps
-    "datetime": [("", _SCHEMA_ONLY), ("x", _SCHEMA_ONLY)],
-    "time": [("", _SCHEMA_ONLY), ("x", _SCHEMA_ONLY)],
-    "timedelta": [("", _SCHEMA_ONLY), ("x", _SCHEMA_ONLY), ("5", _SCHEMA_ONLY)],
-    "bytes": [("!", _SCHEMA_ONLY)],
+    # a datetime is read from a date, a time without seconds - the schema names what is written
+    "datetime": [("2026-01-02", _STATE_ONLY)],
+    "time": [("03:04", _STATE_ONLY)],
     # a pattern cannot bound the magnitude of the number a key spells
     "float mapping": [({"1e400": "a"}, _SCHEMA_ONLY)],
 }
