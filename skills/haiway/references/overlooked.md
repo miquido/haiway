@@ -12,7 +12,7 @@ use.
 | `os.getenv`, `os.environ[...]`, manual casting | `getenv_str/int/float/bool/base64`, `getenv`, `parse_bool`; `load_env()` reads `.env`; in a `State`, `DefaultEnv("NAME", mapping=int, fallback=..., required=True)` |
 | `field(default_factory=...)`, `__post_init__` defaults | `Default(value)`, `Default(factory=fn)`, `DefaultFactory(fn, *args)`, `DefaultEnv(...)` |
 | hand-written validation in `__init__` | `Annotated[T, Validator(fn)]` (before the built-in validation, coerces raw input) and `Verifier(fn)` (after it, on the typed value); both return the value (what a `Verifier` returns is what is stored) and raise to reject; several of either compose in declaration order |
-| nested `dataclasses.replace(...)` | `state.updating(...)`; for deep paths `AttributePath`: `User._.profile.name(user)` reads, `User._.profile.name(user, updated="new")` returns an updated copy, `User._.roles[0]` for items |
+| nested `dataclasses.replace(...)` | `state.updating(...)`; for deep paths `AttributePath`: `User._.profile.name(user)` reads, `User._.profile.name(user, updated="new")` returns an updated copy validated as construction is (`ValidationError` with the path from the root), `User._.roles[0]` for items |
 | JSON/dict (de)serialization, schema | `to_json`, `to_mapping`, `from_json`, `from_json_array`, `from_mapping`, `State.validate(value)`, `State.json_schema()`; `ignore_extra=True` on the `from_*` helpers skips keys which are not attributes |
 | renaming/describing fields for APIs and LLM tools | `Alias`, `Description`, `Specification`, `Meta.of(...)` annotations; describe the type itself with `class X(State, description="...")` |
 | masking secrets in repr/logs | `Annotated[str, Sensitive()]` |

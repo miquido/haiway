@@ -69,15 +69,22 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
 - **Breaking:** validation of the plain types is stricter, and no string is parsed into a number
   anymore:
-  - `bool` accepts `True`/`False`, the ints `0` and `1` and `"true"`/`"false"` in any case. Any other
-    int (`2`, `-1`) was `True` before, and is refused now, as is any other string and a float.
+  - `bool` accepts `True`/`False`, the ints `0` and `1`, the floats `0.0`, `-0.0` and `1.0` and
+    `"true"`/`"false"` in any case. Any other int (`2`, `-1`) was `True` before, and is refused now,
+    as is any other string and any other float.
   - `int` accepts an int (not a `bool`) and a float which is a whole number up to 2**53, and refuses
     every string, where `"5"` was read as `5` (and `"1_0"`, `" 1 "` and the digits of any script
     with it). Floats which are not whole numbers, `NaN`, infinities and those beyond 2**53 are
     refused. `float` refuses strings - `"nan"`, `"inf"`, `"1_0.0"` and `"1.5"` were read before.
-  - `IntEnum` refuses `bool` (`True` was read as the member of `1`) and numeric strings (`"1"`). A
-    member is read by its value first, by its name second - a value always wins over a name. A
-    `StrEnum` reads the same way.
+  - `IntEnum` refuses `bool` (`True` was read as the member of `1`) and numeric strings (`"1"`), and
+    reads a float which is a whole number up to 2**53 as the int it equals, as `int` does (`1.0` is
+    the member of `1`). A member is read by its value first, by its name second - a value always wins
+    over a name. A `StrEnum` reads the same way. An `int` `Literal` reads such a float as the int
+    too (`Literal[1]` given `1.0` holds `1`), including the int values of `IntEnum` members within
+    it, and a float never matches a `bool` literal.
+  - A union reads a whole float as it reads its int: the alternatives which take the float as it is
+    win first, then the alternatives which take the int as it is, then the conversions in the order
+    they are declared. `bool | int` gives `1` for `1.0` and `IntEnum | int` gives `1`, not a member.
   - `Set[T]` accepts sets and sequences (`list`, `tuple`) only, and refuses mappings, dict views,
     generators, iterators, `str` and `bytes` - and `collections.abc.Set` implementations other than
     the built-in `set` and `frozenset`.
@@ -86,13 +93,14 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
     for the first, a `date` for the second.
   - `bool | int` and `int | bool` keep `1` an `int` and `True` a `bool`: a value which is accepted as
     it is wins over one which would convert, whichever is declared first. Of `bool | IntEnum` a
-    `1` is read as `True`, while an `IntEnum` member is kept.
+    `1` and a `1.0` are read as `True`, while an `IntEnum` member is kept.
 - **Breaking:** the keys of a mapping are read from the spelling `to_json` and `to_basic_object`
   write them as, and from no other: `int` keys as canonical decimal integers (no sign `+`, spaces,
   underscores, leading zeros or other scripts), `float` keys as JSON numbers, `bool` keys as
   `"true"`/`"false"` (lowercase), `None` as `"null"`, a `Literal` key as the spelling of its value,
   an enum key as a value, a number or a name, and the infinities and `NaN` of `float` keys as the
-  `"inf"`, `"-inf"` and `"nan"` written for them (not the `Infinity`/`NaN` of `json.dumps`).
+  `"inf"`, `"-inf"` and `"nan"` written for them (not the `Infinity`/`NaN` of `json.dumps`). A
+  `float` key beyond what a float holds (`"1e400"`) is refused.
   Two keys which convert to one (`Mapping[int, str]` given `{"1": "a", 1: "b"}`) raise a
   `ValidationError` at the second, where it replaced the first silently.
 - **Breaking:** the JSON Schema agrees: `bool` is `anyOf` a boolean, `0`/`1` and the words in any
@@ -103,6 +111,22 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   them, also as `Default(value)` - raises `TypeError` when the class is created, as every instance
   would share it. Use `DefaultFactory(list)`, `Default(factory=...)` or an immutable value
   (`()`, `frozenset()`, `Map()`).
+- **Breaking:** the JSON a State writes and reads is strict. `to_json` - the native writer, with
+  `indent` and with a custom encoder class alike - raises `ValueError` for an infinite or `NaN`
+  float value wherever it is: an attribute, an `Any`, a nested container, a set or the value of a
+  mapping, where `Infinity` and `NaN` were written, which no strict JSON parser reads.
+  `from_json` and `from_json_array` refuse the constants `NaN`, `Infinity` and `-Infinity` and a
+  number beyond what a float holds (`1e400`) anywhere in the document, a key skipped by
+  `ignore_extra` included. A custom `decoder` class is given `parse_float` and `parse_constant`
+  hooks which do that, and has to accept and keep them; a decoder overriding `decode` refuses them
+  itself or not at all. Float mapping keys keep the `"inf"`, `"-inf"` and `"nan"` spellings both
+  ways. `to_mapping`, `to_basic_object` and `from_mapping` work on Python values and keep infinite
+  and `NaN` floats.
+- **Breaking:** a `bool` variant is no `int` variant, and a `datetime` variant no `date` variant, to
+  the variance of a generic State: `Box[bool]` is not a subclass of `Box[int]` - also through union
+  arguments, `Box[int | None]` - and `Box(value=True)` is not an instance of `Box[int]`, so a
+  `Box[int]` attribute refuses a `Box[bool]` instance. Neither direction relates `bool` and `int`
+  for a contravariant parameter. Instances, subclass checks and mappings agree now, and round trip.
 - `to_json` and `to_basic_object` raise `ValueError` for a mapping holding two keys which are
   written the same (`{1: "a", "1": "b"}`, `{True: 1, "true": 2}`), where one of them was kept
   silently, or both written for `to_json` natively.
@@ -172,9 +196,6 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   `from_json("{}")` accepted it left out.
 - A `Literal` of enum members put the members themselves in the schema, which can't be written as
   JSON.
-- A `NaN` or an infinity read by the native JSON reader is the very object the standard library
-  gives (`json.decoder.NaN`, `PosInf`, `NegInf`), so `Set[float]` read from `[NaN, NaN]` holds one
-  element, as it does from `json.loads`.
 - `isinstance` against a specialization (`Box[date]`, `Box[Set[int]]`) agrees with validation: a
   `datetime` is no `date`, and only a `set` or `frozenset` is a `Set`.
 - A `float` given an int too large for it is a `ValidationError` with a `ValueError` cause, where
@@ -183,6 +204,27 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   with a member named like the value of another read the wrong member before.
 - A `None` key of a mapping is read back (`Mapping[None, int]` round trips), and so is a `Literal`
   key written as a number (`Mapping[Literal["a", 1], int]`).
+- A State built from a list whose elements were converted into objects the garbage collector tracks -
+  a custom class with a `validate`, through `Sequence[X]`, `tuple[X, ...]` or a fixed tuple, by the
+  constructor, `validate`, `updating` or `from_json` - was left untracked itself, so reference
+  cycles through it were never collected. It is tracked now - earlier releases leaked the same way.
+- `AttributePath` (`State._.x`) no longer asserts the annotation of an attribute with `isinstance`:
+  reading and updating a `Literal`, `Any` or `X | Missing` attribute raised `TypeError`, and an
+  update refused a value which construction converts (an `int` for a `float`) with an
+  `AssertionError`, which `python -O` skipped, so it behaved differently. An update validates as
+  construction does, and its `ValidationError` names the whole path from the root (`.inner.x`,
+  `.many[0].x`). A value given to an object which is no State along the path, a dataclass, is taken
+  as its own `__replace__` or assignment takes it. `AssertionError` remains for a root, or a subject
+  along the path, of the wrong type.
+- Free-threading: a `set` changed by another thread while it was given for validation raised
+  `Set changed size during iteration`. It is copied under its lock before it is iterated.
+- JSON Schema: the `$anchor` names are unique in the whole document. Two recursive aliases of one
+  shape (`int | Sequence[...]`) and same-named recursive classes of different modules shared one,
+  and a `$ref` resolved to the wrong subschema. A recursive State embedded several times is defined
+  once and referenced, and `tuple[()]` is `{"type": "array", "maxItems": 0}`, which was invalid
+  against the metaschema. `ArraySpecification` gained `maxItems`.
+- `x: int = Missing` raises a `TypeError` saying the attribute defaults to `Missing`, which its
+  annotation does not accept, and to annotate it with `| Missing`, where it blamed `NotRequired`.
 
 ## 0.65.1
 

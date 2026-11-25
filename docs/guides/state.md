@@ -742,7 +742,8 @@ class SerializableInvoice(State, serializable=True):
 
 Every `State` subclass exposes an `AttributePath` builder via the class attribute `_`. Paths let you
 read or update deeply nested values without manually rebuilding intermediate objects, and they work
-with the same validation rules as regular constructors.
+with the same validation rules as regular constructors: an update which validation refuses raises
+`ValidationError` naming the whole path from the root (`.profile.name`, `.roles[0]`).
 
 ```python
 from collections.abc import Mapping, Sequence
