@@ -871,7 +871,7 @@ def test_serializable_state_path_schema_and_json() -> None:
     schema = PathState.json_schema(required=True)
     schema_json = json.loads(schema)
     assert "path" in schema_json["properties"]
-    assert schema_json["properties"]["path"]["format"] == "path"
+    assert schema_json["properties"]["path"] == {"type": "string"}
 
 
 def test_attributes_are_stored_in_slots() -> None:

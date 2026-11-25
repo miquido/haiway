@@ -2,6 +2,41 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.66.0
+
+### Changed
+
+- The JSON schema of a State is made to agree with the validation of a JSON document - it no longer
+  refuses what the State accepts, and refuses more of what the State refuses. Where it was relied on:
+  - `required` lists an attribute only when it can't be left out. One accepting `Missing` - `Any`,
+    `object`, `X | Missing`, an unspecialized type parameter - is no longer listed, which is also
+    how `inspect.signature` of the class reads it. `Missing` is not an alternative of a union
+    anymore (it was `"type": "null"`, which validation refuses): `int | Missing` is `integer`.
+  - A fixed tuple states `minItems` and `maxItems`, a tuple with an unbounded part `minItems` for
+    the elements around it.
+  - A set no longer states `uniqueItems`, which refused a document with a repeated element that is
+    read as a set all the same.
+  - `datetime`, `time` and `timedelta` no longer state a `format` - they are written without an
+    offset, or with a sign when negative, which `date-time`, `time` and `duration` don't allow - and
+    `Path` no longer states `format: path`, which is no standard format.
+  - A mapping with keys other than `str` states `propertyNames` for `int`, `bool`, `UUID`, enum and
+    `Literal` keys.
+  - A `Literal` of enum members is written as their values.
+- A `Literal` holding a value with no JSON form - a plain `Enum` member or `bytes` - leaves the State
+  without a schema, where `json_schema()` failed with a bare `TypeError` on the raw value and
+  `serializable=True` accepted the class. With `serializable=True` such a class is refused when it
+  is created.
+- `NotRequired[T]` on an attribute of a State which has no default is refused with a `TypeError`
+  when the class is created. It was listed neither as required in the schema nor accepted as
+  omitted by validation, which still required the value.
+
+### Fixed
+
+- A State with an attribute accepting `Missing` listed it in the `required` of its schema, where
+  `from_json("{}")` accepted it left out.
+- A `Literal` of enum members put the members themselves in the schema, which can't be written as
+  JSON.
+
 ## 0.65.1
 
 ### Fixed

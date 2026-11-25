@@ -142,8 +142,10 @@ Marking an attribute sensitive covers rendering only: attribute access, `to_mapp
 the generated JSON schema all keep working on the real value, so persistence and outgoing requests
 are unaffected. Review those call sites separately when handling secrets.
 
-`typing.NotRequired[T]` is most useful inside `TypedDict` definitions embedded in State fields. For
-regular State attributes, prefer an explicit default when a field may be omitted.
+`typing.NotRequired[T]` belongs to `TypedDict` definitions embedded in State fields. It is refused
+with a `TypeError` on an attribute of a State itself, which has no default - validation would still
+require the value, so the annotation would promise what the class does not do. Give the attribute a
+default, or accept `Missing` (`int | Missing`), to make it optional.
 
 ### Structured Metadata with `Meta`
 
@@ -387,25 +389,33 @@ You can convert a State instance to a dictionary using the `to_mapping` method:
 user_dict = user.to_mapping()
 # {"id": UUID('...'), "name": "Alice Smith", "email": None, "created_at": datetime(...)}
 
-# For nested conversion
-user_dict = user.to_mapping(recursive=True)
+# Only the State itself is converted, the nested ones are kept as they are
+user_dict = user.to_mapping(recursive=False)
 ```
 
-This is useful for serialization or when you need to work with plain dictionaries.
+The conversion is recursive by default (`recursive=True`): nested States and the States within
+collections become mappings as well, while the values which are not States - `UUID`, `datetime`,
+`bytes` - are kept as they are. This is useful for serialization or when you need to work with plain
+dictionaries.
 
 When working with external payloads, use the complementary helpers:
 
-- `State.from_mapping(mapping)` — accepts both attribute names and aliases. A key which is neither
-  is refused, in nested States and TypedDicts as well; see `ignore_extra` below.
-- `State.from_json(payload)` / `State.from_json_array(payload)` — decode JSON strings into State
-  instances (or tuples of instances). Validation errors are converted into informative exceptions.
+- `State.from_mapping(value, /, *, ignore_extra=False)` — accepts both attribute names and aliases.
+  A key which is neither is refused, in nested States and TypedDicts as well; see `ignore_extra`
+  below.
+- `State.from_json(value, /, decoder=json.JSONDecoder, *, ignore_extra=False)` /
+  `State.from_json_array(...)` of the same parameters — decode a JSON `str` or `bytes` into a State
+  instance (or a sequence of instances). `decoder` is a `json.JSONDecoder` class, and a custom one
+  is read through the standard library. Validation errors are converted into informative exceptions.
 - `state.to_json(indent=2)` — encode a State instance to JSON using the same alias behaviour as
   `to_mapping`.
 - `state.to_basic_object()` — convert to a mapping of JSON-compatible values, in memory. Where
   `to_mapping` keeps the live `UUID`, `datetime` or `bytes` values, this encodes every leaf and key
-  to the spelling validation reads back, so the result round trips through `from_mapping`. An
-  attribute with no basic spelling - a plain `Enum`, a `Decimal` - raises `TypeError` naming the
-  path and the type. See [Converting to Basic Values](types.md#converting-to-basic-values).
+  to the spelling validation reads back, so the result round trips through `from_mapping` - bar the
+  mapping keys which spell alike once encoded, which can't be told apart afterwards. An attribute
+  with no basic spelling - a plain `Enum`, a `Decimal` - raises `TypeError` naming the path and the
+  type. See [Converting to Basic Values](types.md#converting-to-basic-values), also for the
+  limitation.
 - `State.validate(value)` — coerce an instance or compatible mapping into the target State type.
   This is handy when accepting heterogeneous inputs.
 
@@ -466,7 +476,9 @@ State classes perform thorough type validation for all supported Python types:
   - **Mapping[K, V]**: mappings are validated recursively and converted to immutable `Map` values
   - **Set[T]**: set-like inputs are normalized to immutable frozensets
   - **tuple[T, ...]**: Fixed or variable-length tuples
-- **Special Types**: UUID, datetime, date, time, timedelta, timezone, Path, re.Pattern
+- **Special Types**: UUID, datetime, date, time, timedelta, Path - `timezone` and `re.Pattern` are
+  accepted as well, but have no JSON form and no JSON Schema: a State holding one is not
+  serializable (`to_json` raises, `json_schema()` raises `TypeError`)
 - **Union Types**: str | None, int | float
 - **Literal Types**: Literal["a", "b", "c"] - a value has to be of the type of the literal it is
   equal to, so `Literal[1]` refuses `True` and `1.0`. A plain `str` or `int` and a `StrEnum` or
@@ -580,21 +592,50 @@ A few validation details matter in practice:
 
 ### JSON Schema Generation
 
-Every State exposes a JSON Schema fragment through the `__SPECIFICATION__` attribute. Call
+A State with a JSON schema exposes it through the `__SPECIFICATION__` attribute. Call
 `State.json_schema(indent=2)` when you need a ready-to-serialize schema definition:
 
 ```python
 schema = Invoice.json_schema(indent=2)
 ```
 
-Besides the primitives, the schema covers the standard value types: `UUID`, `datetime`, `date`,
-`time`, `timedelta` and `Path` (as strings with a `format`), `bytes` (a base64 string,
-`contentEncoding`) and sets (arrays with `uniqueItems`). A `timedelta` is spelled as an ISO 8601
-duration such as `P1DT2H3M4.5S`; years and months are refused because their length depends on the
-calendar date. Aliases and descriptions propagate into the schema automatically, and any custom
-`Specification` overrides are respected. If a State cannot be represented as JSON Schema (for
-example, when it holds callables), `json_schema(required=True)` raises a `TypeError` so you can
+Besides the primitives, the schema covers the standard value types: `UUID` and `date` (strings with
+a `format`), `datetime`, `time`, `timedelta` and `Path` (plain strings), `bytes` (a base64 string,
+`contentEncoding`) and sets (arrays). A `timedelta` is spelled as an ISO 8601 duration such as
+`P1DT2H3M4.5S`, with a leading `-` when negative; years and months are refused because their length
+depends on the calendar date. Aliases and descriptions propagate into the schema automatically, and
+any custom `Specification` overrides are respected. If a State cannot be represented as JSON Schema
+(for example, when it holds callables), `json_schema(required=True)` raises a `TypeError` so you can
 detect unsupported shapes early.
+
+The schema is made to agree with validation of a JSON document: it accepts every document the State
+writes, and refuses what the State refuses wherever JSON Schema can say so. Where it can't, it is
+the looser of the two - a document which passes the schema can still fail validation, and that is
+what validation is for. A few spellings which validation reads leniently are not described, the
+schema names the form which is written. What it leaves unsaid is on purpose:
+
+- An attribute is `required` when it can't be left out: it has no default and doesn't accept
+  `Missing`. An attribute annotated `Any`, `object` or `X | Missing` can be omitted from the input,
+  and is not listed.
+- `Missing` has no JSON value, so it is not an alternative of a union - `int | Missing` is an
+  integer, which may be left out of the object.
+- A `format` is only claimed when everything written fits it - not for `datetime` and `time`, which
+  are written without an offset when they have none, and not for `timedelta`, which is written with
+  a sign when negative.
+- Sets don't claim `uniqueItems` - elements which differ may be written the same way, and a repeated
+  one is read as a set all the same.
+- A fixed tuple has exactly its length (`minItems` and `maxItems`). A tuple with an unbounded part
+  has `minItems` for the elements around it, and takes what follows its leading elements as any of
+  the types after them, as a schema can't tell the elements at the end from those in the middle.
+- The keys of a mapping which are not strings constrain `propertyNames` to the way they are spelled
+  where that can be told - `int`, `bool`, `UUID`, enum and `Literal` keys.
+- A `Literal` of enum members is written as their values, and one of values with no JSON form (a
+  plain `Enum` member, `bytes`) leaves the State without a schema.
+- Both the name of an attribute and its alias are accepted as input, while the schema names the
+  alias alone, as `additionalProperties` is off. A document using the Python names of aliased
+  attributes passes validation and not the schema.
+- The values validation accepts leniently - `"1"` for an `int`, an object for a set, the name of an
+  enum member - are not described either, the schema names the form which is written.
 
 A State can describe itself with the `description` class keyword. It is kept on the type as
 `__DESCRIPTION__` and written into its schema, so it survives `python -OO` (which strips docstrings)
@@ -660,7 +701,7 @@ assert renamed.profile.name == "Alicia"
 
 # Combine with AttributeRequirement to assert invariants
 AttributeRequirement.equal(
-    value="admin",
+    "admin",
     path=User._.roles[0],
 ).check(renamed)
 ```
@@ -770,8 +811,10 @@ user4 = user.updating(address=new_address)
 ### Native Storage
 
 A compiled extension stores the attributes of a State inline in the instance, validates every
-built-in annotation without calling back into Python, and converts to mappings and JSON natively.
-The immutability is real - an attribute can't be rebound through `object.__setattr__` either, and an
+built-in annotation, and converts to mappings and JSON natively. It calls into Python for a few
+values it doesn't make itself: decoding `bytes` from base64, parsing a `timedelta` or an ISO
+`datetime`, `date` or `time`, constructing a `UUID` or a `Path`, and validating `Meta`. The
+immutability is real - an attribute can't be rebound through `object.__setattr__` either, and an
 instance has no `__dict__` or `__weakref__`. Calling `__init__` a second time on an instance raises.
 The class is just as fixed: once it is created, assigning or deleting one of its attributes raises
 `TypeError`, so neither a method nor the descriptor of an attribute can be replaced. Declare
@@ -784,10 +827,10 @@ Keeping many instances alive therefore adds nothing for the collector to walk. O
 value, such as a `list` in an `Any` attribute, stays tracked, so a cycle through it is still
 collected.
 
-What runs Python is the code of the user alone: a `Validator`, a `Verifier`, a class validating
-itself, a default factory. `ValidationError` reports a failure at its position the same way for
-every kind. When reading JSON, such code runs once the whole document is known to be right, so a
-document refused for something else never runs it.
+Besides those, what runs Python is the code of the user: a `Validator`, a `Verifier`, a class
+validating itself, a default factory. `ValidationError` reports a failure at its position the same
+way for every kind. When reading JSON, such code runs once the whole document is known to be right,
+so a document refused for something else never runs it.
 
 `to_json`, `from_json` and `from_json_array` read and write the JSON natively, without the
 intermediate Python objects - for the default `json.JSONEncoder` and `json.JSONDecoder`, and with no

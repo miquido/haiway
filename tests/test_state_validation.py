@@ -573,19 +573,24 @@ def test_unpacked_tuple_json_schema() -> None:
             {"type": "string"},
         ],
         "items": False,
+        "minItems": 4,
+        "maxItems": 4,
     }
     leading: Any = schema_of(UnpackedLeading)
     assert len(leading["prefixItems"]) == 1
     assert leading["items"] == {"type": "integer"}
+    assert leading["minItems"] == 1
     # what follows the unbounded part can't be told from it by a schema - it is allowed to be any
     assert schema_of(UnpackedTrailing) == {
         "type": "array",
         "items": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
+        "minItems": 1,
     }
     assert schema_of(UnpackedAround) == {
         "type": "array",
         "prefixItems": [{"type": "string"}],
         "items": {"anyOf": [{"type": "integer"}, {"type": "string"}]},
+        "minItems": 2,
     }
 
 

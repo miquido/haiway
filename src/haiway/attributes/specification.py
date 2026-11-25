@@ -1,5 +1,6 @@
 import re
 from collections.abc import Callable, Mapping, MutableMapping, MutableSequence, Sequence
+from enum import Enum
 from typing import (
     Any,
     cast,
@@ -264,17 +265,24 @@ def _prepare_specification_of_none(
 def _prepare_specification_of_missing(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
-) -> TypeSpecification:
-    return {
-        "type": "null",
-    }
+) -> TypeSpecification | None:
+    # `Missing` stands for a value which was not provided, there is no JSON
+    # value for it - an attribute accepting it can be left out, which is what
+    # `required` of the object tells
+    return None
 
 
 def _prepare_specification_of_literal(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
-) -> TypeSpecification:
-    values: Sequence[Any] = list(cast(LiteralAttribute, annotation).values)
+) -> TypeSpecification | None:
+    values: list[Any] = []
+    for element in cast(LiteralAttribute, annotation).values:
+        json_value: Any = _literal_json_value(element)
+        if json_value is _NO_JSON_FORM:
+            return None
+
+        values.append(json_value)
 
     # `bool` is checked before `int` - it is a subclass of it, while a JSON
     # boolean is not a JSON integer, so a schema naming one refuses the other
@@ -301,6 +309,30 @@ def _prepare_specification_of_literal(
     return {
         "enum": values,
     }
+
+
+_NO_JSON_FORM: object = object()
+
+
+def _literal_json_value(
+    value: Any,
+    /,
+) -> Any:
+    # a member of an enum is read as its value, which is what both the encoder
+    # writes and the decoder accepts - when it equals the member, an enum which
+    # does not is not read from a JSON value at all
+    if isinstance(value, Enum):
+        json_value: Any = value.value
+        if json_value == value and isinstance(json_value, str | int):
+            return json_value
+
+        return _NO_JSON_FORM
+
+    # `bytes` is written as base64 text, which is not read back as the literal
+    if value is None or isinstance(value, str | int):
+        return value
+
+    return _NO_JSON_FORM
 
 
 def _prepare_specification_of_sequence(
@@ -333,10 +365,11 @@ def _prepare_specification_of_set(
     if items_specification is None:
         return None
 
+    # no `uniqueItems` - elements which differ may be written the same way, and a
+    # document repeating one is read as a set all the same
     return {
         "type": "array",
         "items": items_specification,
-        "uniqueItems": True,
     }
 
 
@@ -352,10 +385,88 @@ def _prepare_specification_of_mapping(
     if properties_specification is None:
         return None
 
+    names_specification: TypeSpecification | None = _key_specification(
+        cast(MappingAttribute, annotation).keys,
+    )
+    if names_specification is None:
+        return {
+            "type": "object",
+            "additionalProperties": properties_specification,
+        }
+
     return {
         "type": "object",
+        "propertyNames": names_specification,
         "additionalProperties": properties_specification,
     }
+
+
+_INTEGER_KEY: str = r"^\s*[+-]?[^\x00-\x2f\x3a-\x7f]"
+_BOOLEAN_KEY: str = r"^(?:[tT][rR][uU][eE]|[fF][aA][lL][sS][eE])$"
+
+
+def _key_specification(
+    keys: AttributeAnnotation,
+    /,
+) -> TypeSpecification | None:
+    # a key is a string in a JSON object, read the way the annotation reads one - a
+    # specification is made where its spelling can be told, and where it can't nothing
+    # is better than one refusing what is accepted. an integer is read by `int`, which
+    # takes the digits of any script, spaces, a sign and underscores - the pattern asks
+    # for the first character of a number, which is as much as is told safely
+    while isinstance(keys, AliasAttribute):
+        keys = keys.resolved
+
+    match keys:
+        case IntegerAttribute():
+            return {"type": "string", "pattern": _INTEGER_KEY}
+
+        case BoolAttribute():
+            return {"type": "string", "pattern": _BOOLEAN_KEY}
+
+        case UUIDAttribute():
+            return {"type": "string", "format": "uuid"}
+
+        case _:
+            return _named_key_specification(keys)
+
+
+def _named_key_specification(
+    keys: AttributeAnnotation,
+    /,
+) -> TypeSpecification | None:
+    match keys:
+        case StrEnumAttribute():
+            # read by its value or by the name of a member
+            return {
+                "type": "string",
+                "enum": [
+                    *(member.value for member in keys.base),
+                    *(member.name for member in keys.base),
+                ],
+            }
+
+        case IntEnumAttribute():
+            return {
+                "anyOf": [
+                    {"type": "string", "enum": [member.name for member in keys.base]},
+                    {"type": "string", "pattern": _INTEGER_KEY},
+                ],
+            }
+
+        case LiteralAttribute():
+            names: list[str] = [
+                value
+                for value in (_literal_json_value(element) for element in keys.values)
+                if isinstance(value, str)
+            ]
+            if not names:
+                return None
+
+            return {"type": "string", "enum": names}
+
+        case _:
+            return None
 
 
 def _prepare_specification_of_meta(
@@ -389,6 +500,8 @@ def _prepare_specification_of_tuple(
         "type": "array",
         "prefixItems": elements_specification,
         "items": False,
+        "minItems": len(elements_specification),
+        "maxItems": len(elements_specification),
     }
 
 
@@ -428,7 +541,18 @@ def _prepare_specification_of_open_tuple(
         rest_specification[0] if len(rest_specification) == 1 else {"anyOf": rest_specification}
     )
 
+    # the elements which have to be there - a schema can't tell where the ones at the
+    # end are, though the number of them is known
+    minimum: int = len(open_tuple.leading) + len(open_tuple.trailing)
+
     if not leading_specification:
+        if minimum:
+            return {
+                "type": "array",
+                "items": items_specification,
+                "minItems": minimum,
+            }
+
         return {
             "type": "array",
             "items": items_specification,
@@ -438,6 +562,7 @@ def _prepare_specification_of_open_tuple(
         "type": "array",
         "prefixItems": leading_specification,
         "items": items_specification,
+        "minItems": minimum,
     }
 
 
@@ -474,6 +599,9 @@ def _prepare_specification_of_union(
     compressed_alternatives: list[str] = []
     compressible: bool = True
     for argument in cast(UnionAttribute, annotation).alternatives:
+        if isinstance(argument, MissingAttribute):
+            continue  # it has no JSON value, the attribute accepting it can be left out
+
         specification: TypeSpecification | None = _specification(
             argument,
             recursion_guard=recursion_guard,
@@ -488,10 +616,16 @@ def _prepare_specification_of_union(
 
         elif compressed_type not in compressed_alternatives:
             # a type can be named only once within a list of types, while the
-            # alternatives can name it more than once - i.e. `None | Missing`
+            # alternatives can name it more than once - i.e. `int | Annotated[int, ...]`
             compressed_alternatives.append(compressed_type)
 
-    if alternatives and compressible:
+    if not alternatives:
+        return None  # nothing but `Missing`
+
+    if len(alternatives) == 1:  # `Missing` left out, what remains is the union itself
+        return alternatives[0]
+
+    if compressible:
         if len(compressed_alternatives) == 1:  # alternatives of one and the same type
             return cast(
                 TypeSpecification,
@@ -607,7 +741,6 @@ def _prepare_specification_of_datetime(
 ) -> TypeSpecification:
     return {
         "type": "string",
-        "format": "date-time",
     }
 
 
@@ -617,7 +750,6 @@ def _prepare_specification_of_time(
 ) -> TypeSpecification:
     return {
         "type": "string",
-        "format": "time",
     }
 
 
@@ -627,7 +759,6 @@ def _prepare_specification_of_timedelta(
 ) -> TypeSpecification:
     return {
         "type": "string",
-        "format": "duration",
     }
 
 
@@ -637,7 +768,6 @@ def _prepare_specification_of_path(
 ) -> TypeSpecification:
     return {
         "type": "string",
-        "format": "path",
     }
 
 
