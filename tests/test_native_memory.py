@@ -865,7 +865,7 @@ def test_native_json_writes_what_the_standard_library_writes(seed: int) -> None:
     for _ in range(max(FUZZ_ROUNDS // 20, 50)):
         rich: Rich = _rich(rng)
         written: str = rich.to_json()
-        assert written == json.dumps(rich.to_basic_object())
+        assert written == json.dumps(rich.to_basic_object(), separators=(",", ":"))
         assert Rich.from_json(written) == rich
 
 

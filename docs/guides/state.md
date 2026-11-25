@@ -432,7 +432,7 @@ When working with external payloads, use the complementary helpers:
   instance (or a sequence of instances). `decoder` is a `json.JSONDecoder` class, and a custom one
   is read through the standard library. Validation errors are converted into informative exceptions.
 - `state.to_json(indent=2)` — encode a State instance to JSON using the same alias behaviour as
-  `to_mapping`.
+  `to_mapping`. Without `indent` the JSON is compact, with no space after `,` and `:`.
 - The JSON State writes and reads is strict. A float value which is infinite or `NaN` is not JSON,
   so `to_json` raises `ValueError` for it wherever it is - an attribute, an `Any`, a nested
   container - and `from_json` and `from_json_array` refuse the constants `NaN`, `Infinity` and

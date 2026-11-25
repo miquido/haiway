@@ -98,7 +98,7 @@ def _document(**overrides: Any) -> Document:
 def test_json_is_what_json_dumps_writes_of_the_basic_object() -> None:
     document = _document()
 
-    assert document.to_json() == json.dumps(document.to_basic_object())
+    assert document.to_json() == json.dumps(document.to_basic_object(), separators=(",", ":"))
     assert Document.from_json(document.to_json()) == document
 
 
@@ -121,7 +121,7 @@ def test_json_is_what_json_dumps_writes_of_the_basic_object() -> None:
 def test_strings_are_spelled_as_json_dumps_spells_them(text: str) -> None:
     document = _document(name=text, scores={text: 1})
 
-    assert document.to_json() == json.dumps(document.to_basic_object())
+    assert document.to_json() == json.dumps(document.to_basic_object(), separators=(",", ":"))
     assert json.loads(document.to_json())["name"] == text
 
 
@@ -141,7 +141,7 @@ def test_strings_are_spelled_as_json_dumps_spells_them(text: str) -> None:
 def test_floats_are_spelled_as_json_dumps_spells_them(ratio: float) -> None:
     document = _document(ratio=ratio)
 
-    assert document.to_json() == json.dumps(document.to_basic_object())
+    assert document.to_json() == json.dumps(document.to_basic_object(), separators=(",", ":"))
 
 
 class _Floats(State):
@@ -223,7 +223,7 @@ def test_float_keys_keep_their_spelling_in_json(key: float, spelling: str) -> No
 def test_empty_containers() -> None:
     document = _document(many=[], scores={}, tags=())
 
-    assert document.to_json() == json.dumps(document.to_basic_object())
+    assert document.to_json() == json.dumps(document.to_basic_object(), separators=(",", ":"))
     assert Document.from_json(document.to_json()) == document
 
 
@@ -240,7 +240,7 @@ def test_value_without_a_spelling_is_refused_unless_an_encoder_takes_it() -> Non
         def default(self, o: Any) -> Any:
             return str(o) if isinstance(o, Decimal) else super().default(o)
 
-    assert holder.to_json(encoder_class=DecimalEncoder) == '{"value": "1.5"}'
+    assert holder.to_json(encoder_class=DecimalEncoder) == '{"value":"1.5"}'
 
 
 def test_indented_json_is_what_json_dumps_writes() -> None:
@@ -268,8 +268,8 @@ def test_non_string_keys_are_spelled_the_way_json_spells_them() -> None:
 
     holder = Holder(values={1: "a", None: "c", 2.5: "d", False: "e"})
 
-    assert holder.to_json() == json.dumps({"values": json.loads(holder.to_json())["values"]})
     spelled = json.loads(holder.to_json())["values"]
+    assert holder.to_json() == json.dumps({"values": spelled}, separators=(",", ":"))
     assert spelled == {"1": "a", "null": "c", "2.5": "d", "false": "e"}
 
 
@@ -929,7 +929,7 @@ def test_random_documents_agree_between_reading_and_validating(seed: int) -> Non
 
     assert decoded == Document.validate(json.loads(text))
     assert Document.from_json(decoded.to_json()) == decoded
-    assert decoded.to_json() == json.dumps(decoded.to_basic_object())
+    assert decoded.to_json() == json.dumps(decoded.to_basic_object(), separators=(",", ":"))
 
 
 def test_validation_error_of_a_nested_attribute_names_its_position() -> None:

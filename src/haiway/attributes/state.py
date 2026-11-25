@@ -1489,7 +1489,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
         Parameters
         ----------
         indent : int | None, optional
-            Indentation passed to ``json.dumps`` for pretty-printing.
+            Indentation passed to ``json.dumps`` for pretty-printing. Without it the
+            json is compact, with no space after ``,`` and ``:``.
         encoder_class : type[json.JSONEncoder], default=JSONEncoder
             Encoder class responsible for encoding custom types.
 
@@ -1519,6 +1520,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
             return json.dumps(
                 _basic_object(self, strict=False),
                 indent=indent,
+                # compact as written natively - an indented document keeps the default
+                separators=(",", ":") if indent is None else None,
                 cls=encoder_class,
                 allow_nan=False,
             )

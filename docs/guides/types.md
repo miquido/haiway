@@ -86,7 +86,7 @@ event.to_basic_object()
 
 # keys are converted too, so a mapping json could not key encodes now
 Journal(events={UUID(int=1): event}).to_json()
-# '{"events": {"00000000-0000-0000-0000-000000000001": {"identifier": "000...", ...}}}'
+# '{"events":{"00000000-0000-0000-0000-000000000001":{"identifier":"000...",...}}}'
 ```
 
 A known limitation: keys of one mapping which are encoded to the same string collide in the result,

@@ -6,6 +6,9 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
 ### Changed
 
+- `to_json` writes compact JSON, with no space after `,` and `:` (`{"a":1,"b":[1,2]}`), where it
+  wrote `json.dumps`'s default `", "` and `": "` - shorter payloads, written faster. With `indent`
+  the output is as before. Code comparing the exact text of the output has to follow.
 - An instance which was never initialized - made with `__new__`, or with an `__init__` which did not
   delegate - raises `TypeError: ... is not initialized` for `to_json`, `to_mapping`,
   `to_basic_object`, `hash`, `==` of two instances and `copy.deepcopy`, as `updating` always did.

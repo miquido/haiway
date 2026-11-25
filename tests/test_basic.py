@@ -292,12 +292,12 @@ def test_to_json_encodes_non_str_keys() -> None:
     }
 
 
-def test_to_json_output_is_unchanged_for_str_keys() -> None:
+def test_to_json_output_for_str_keys() -> None:
     assert EVERYTHING.to_json() == (
-        '{"text": "text", "number": 7, "ratio": 1.5, "flag": true, "nothing": null,'
-        ' "identifier": "00000000-0000-0000-0000-000000000001",'
-        ' "moment": "2026-01-02T03:04:05+00:00", "day": "2026-01-02", "clock": "03:04:05",'
-        ' "location": "/tmp/example", "payload": "AAFibG9i", "shade": "red", "level": 3}'
+        '{"text":"text","number":7,"ratio":1.5,"flag":true,"nothing":null,'
+        '"identifier":"00000000-0000-0000-0000-000000000001",'
+        '"moment":"2026-01-02T03:04:05+00:00","day":"2026-01-02","clock":"03:04:05",'
+        '"location":"/tmp/example","payload":"AAFibG9i","shade":"red","level":3}'
     )
 
 
@@ -314,8 +314,7 @@ def test_to_json_still_reaches_a_custom_encoder() -> None:
 
     # non-strict conversion leaves `Decimal` for the encoder to handle
     assert (
-        WithDecimal(amount=Decimal("1.5")).to_json(encoder_class=DecimalEncoder)
-        == '{"amount": 1.5}'
+        WithDecimal(amount=Decimal("1.5")).to_json(encoder_class=DecimalEncoder) == '{"amount":1.5}'
     )
 
 

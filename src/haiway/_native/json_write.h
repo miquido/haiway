@@ -139,13 +139,14 @@ write_string(Buffer *buffer, PyObject *text)
     return buffer_putc(buffer, '"');
 }
 
-/* the key of an attribute as json spells it, followed by the colon - what a plan keeps */
+/* the key of an attribute as json spells it, followed by the colon - what a plan keeps. The
+ * json written is compact, with no space after a separator */
 static PyObject *
 json_key_bytes(PyObject *key)
 {
     Buffer buffer = {NULL, NULL, 0, 0};
     PyObject *result = NULL;
-    if (write_string(&buffer, key) && buffer_put(&buffer, ": ", 2)) {
+    if (write_string(&buffer, key) && buffer_putc(&buffer, ':')) {
         result = PyBytes_FromStringAndSize(buffer.data, buffer.length);
     }
     PyMem_Free(buffer.data);
@@ -180,7 +181,7 @@ write_struct_json(Buffer *buffer, PyObject *self)
         }
         if (value == buffer->state->missing) continue;
         FieldPlan *field = &plan->fields[i];
-        if (!first && !buffer_put(buffer, ", ", 2)) return JSON_ERROR;
+        if (!first && !buffer_putc(buffer, ',')) return JSON_ERROR;
         first = 0;
         if (!buffer_put(buffer, field->json_key, field->json_key_length)) return JSON_ERROR;
         int r = write_json(buffer, value);
@@ -246,7 +247,7 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
         Py_ssize_t n = PyTuple_GET_SIZE(items);
         int status = buffer_putc(buffer, '[') ? JSON_OK : JSON_ERROR;
         for (Py_ssize_t i = 0; status == JSON_OK && i < n; i++) {
-            if (i > 0 && !buffer_put(buffer, ", ", 2)) status = JSON_ERROR;
+            if (i > 0 && !buffer_putc(buffer, ',')) status = JSON_ERROR;
             else status = write_json(buffer, PyTuple_GET_ITEM(items, i));
         }
         Py_DECREF(items);
@@ -285,9 +286,9 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
                     break;
                 }
             }
-            if (!first && !buffer_put(buffer, ", ", 2)) status = JSON_ERROR;
+            if (!first && !buffer_putc(buffer, ',')) status = JSON_ERROR;
             else if (text ? !write_string(buffer, key) : !write_quoted_int(buffer, key)) status = JSON_ERROR;
-            else if (!buffer_put(buffer, ": ", 2)) status = JSON_ERROR;
+            else if (!buffer_putc(buffer, ':')) status = JSON_ERROR;
             else status = write_json(buffer, item);
             first = 0;
         }

@@ -664,7 +664,7 @@ def test_serializable_flag_requires_schema() -> None:
         value: int
 
     assert Fine.__SERIALIZABLE__ is True
-    assert Fine(value=1).to_json() == '{"value": 1}'
+    assert Fine(value=1).to_json() == '{"value":1}'
 
 
 def test_recursive_state_has_schema_with_reference() -> None:
