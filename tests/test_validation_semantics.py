@@ -182,14 +182,8 @@ def test_bool_unions_prefer_the_alternative_a_value_matches_then_the_declared_or
     assert type(result) is type(expected)
 
 
-def test_bool_schema_accepts_what_validation_accepts() -> None:
-    assert property_of(bool) == {
-        "anyOf": [
-            {"type": "boolean"},
-            {"enum": [0, 1]},
-            {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
-        ]
-    }
+def test_bool_schema_names_the_boolean_alone() -> None:
+    assert property_of(bool) == {"type": "boolean"}
 
 
 # B. int and float
@@ -409,14 +403,14 @@ def test_key_patterns_are_the_spellings_read() -> None:
     }
 
 
-def test_literal_and_enum_key_schemas_list_every_spelling() -> None:
+def test_literal_and_enum_key_schemas_list_the_written_spellings() -> None:
     assert property_of(Mapping[Literal["a", 1, True, None], int])["propertyNames"] == {
         "type": "string",
         "enum": ["a", "1", "true", "null"],
     }
     assert property_of(Mapping[Level, int])["propertyNames"] == {
         "type": "string",
-        "enum": ["1", "2", "LOW", "HIGH"],
+        "enum": ["1", "2"],
     }
 
 
@@ -555,14 +549,9 @@ def test_literal_refuses_the_floats_which_are_not_its_value(annotation: Any, val
     assert not checked(annotation, value)
 
 
-def test_enum_schemas_hold_values_and_names() -> None:
-    assert property_of(Mode) == {"type": "string", "enum": ["fast", "slow", "FAST", "SLOW"]}
-    assert property_of(Level) == {
-        "anyOf": [
-            {"type": "integer", "enum": [1, 2]},
-            {"type": "string", "enum": ["LOW", "HIGH"]},
-        ]
-    }
+def test_enum_schemas_hold_values_alone() -> None:
+    assert property_of(Mode) == {"type": "string", "enum": ["fast", "slow"]}
+    assert property_of(Level) == {"type": "integer", "enum": [1, 2]}
 
 
 # D. sets

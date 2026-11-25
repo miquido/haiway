@@ -2,6 +2,17 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.67.0
+
+### Changed
+
+- The JSON Schema of a State describes the strict form it writes, regardless of the extra spellings
+  decoding converts. A `bool` is `{"type": "boolean"}`, where it was an `anyOf` also naming `0`, `1`
+  and `"true"`/`"false"` in any case. A `StrEnum` and an `IntEnum` list their values alone, without
+  the names of their members, and an `IntEnum` is a plain `integer` enum. A mapping with enum keys
+  constrains `propertyNames` to the values alone. Decoding is unchanged: it still reads those
+  spellings.
+
 ## 0.66.0
 
 ### Changed

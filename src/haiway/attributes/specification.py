@@ -426,9 +426,9 @@ def _key_specification(
     keys: AttributeAnnotation,
     /,
 ) -> TypeSpecification | None:
-    # a key is a string in a JSON object, read the way the annotation reads one - a
-    # specification is made where its spelling can be told, and where it can't nothing
-    # is better than one refusing what is accepted
+    # a key is a string in a JSON object - a specification names the spelling it is
+    # written as where that can be told, and where it can't nothing is better than one
+    # refusing what is written
     while isinstance(keys, AliasAttribute):
         keys = keys.resolved
 
@@ -458,27 +458,15 @@ def _named_key_specification(
 ) -> TypeSpecification | None:
     match keys:
         case StrEnumAttribute():
-            # read by its value or by the name of a member
             return {
                 "type": "string",
-                "enum": _distinct(
-                    [
-                        *(member.value for member in keys.base),
-                        *keys.base.__members__,
-                    ]
-                ),
+                "enum": _distinct([member.value for member in keys.base]),
             }
 
         case IntEnumAttribute():
-            # the number of a member spelled as a key, or the name of one
             return {
                 "type": "string",
-                "enum": _distinct(
-                    [
-                        *(_integer_key(member.value) for member in keys.base),
-                        *keys.base.__members__,
-                    ]
-                ),
+                "enum": _distinct([_integer_key(member.value) for member in keys.base]),
             }
 
         case LiteralAttribute():
@@ -718,14 +706,8 @@ def _prepare_specification_of_bool(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
-    # a boolean, the numbers 0 and 1 and the words in any case - which has to be spelled
-    # out, as a pattern of JSON Schema has no flag to ignore it
     return {
-        "anyOf": [
-            {"type": "boolean"},
-            {"enum": [0, 1]},
-            {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
-        ],
+        "type": "boolean",
     }
 
 
@@ -760,16 +742,9 @@ def _prepare_specification_of_str_enum(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
-    # read by its value or by the name of a member
-    members: type[Enum] = cast(StrEnumAttribute, annotation).base
     return {
         "type": "string",
-        "enum": _distinct(
-            [
-                *(member.value for member in members),
-                *members.__members__,
-            ]
-        ),
+        "enum": _distinct([member.value for member in cast(StrEnumAttribute, annotation).base]),
     }
 
 
@@ -777,13 +752,10 @@ def _prepare_specification_of_int_enum(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
-    # read by its value, an int, or by the name of a member - never by the number as text
     members: type[Enum] = cast(IntEnumAttribute, annotation).base
     return {
-        "anyOf": [
-            {"type": "integer", "enum": [int(member.value) for member in members]},
-            {"type": "string", "enum": list(members.__members__)},
-        ],
+        "type": "integer",
+        "enum": _distinct([int(member.value) for member in members]),
     }
 
 

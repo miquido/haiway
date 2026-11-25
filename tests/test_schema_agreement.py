@@ -377,34 +377,22 @@ def test_mapping_keys_without_a_spelling_are_not_constrained(key: Any) -> None:
 
 
 @pytest.mark.parametrize(
-    ("annotation", "member", "key", "name"),
+    ("annotation", "member", "name", "values", "keys"),
     [
-        (Aliased, "red", "red", "CRIMSON"),
-        (AliasedLevel, 1, "1", "MINIMUM"),
+        (Aliased, "red", "CRIMSON", ["red"], ["red"]),
+        (AliasedLevel, 1, "MINIMUM", [1, 2], ["1", "2"]),
     ],
 )
-def test_aliases_of_enum_members_are_named_by_the_schema(
+def test_names_of_enum_members_are_read_but_not_named_by_the_schema(
     annotation: Any,
     member: Any,
-    key: str,
     name: str,
+    values: Sequence[Any],
+    keys: Sequence[str],
 ) -> None:
-    value_schema: Any = property_of(annotation)
-    key_schema: Any = property_of(mapping_of(annotation))["propertyNames"]
-    value_names: list[Any] = (
-        value_schema["enum"]
-        if "enum" in value_schema
-        else [name for part in value_schema["anyOf"] for name in part["enum"]]
-    )
-
-    assert name in value_names
-    assert name in key_schema["enum"]
-    assert key in key_schema["enum"]
-    assert len(value_names) == len(set(value_names))
-    assert len(key_schema["enum"]) == len(set(key_schema["enum"]))
-    # what the schema names, the class reads
-    holder: Any = state_of(annotation)
-    assert holder.from_json(json.dumps({"v": name})).v == member
+    assert property_of(annotation)["enum"] == values
+    assert property_of(mapping_of(annotation))["propertyNames"]["enum"] == keys
+    assert state_of(annotation).from_json(json.dumps({"v": name})).v == member
     assert state_of(mapping_of(annotation)).from_json(json.dumps({"v": {name: "x"}})).v == {
         member: "x"
     }
@@ -824,6 +812,18 @@ _STATE_ONLY: str = "state only"
 _DISAGREEMENTS: Mapping[str, Sequence[tuple[Any, str]]] = {
     # a whole float beyond 2**53 is not read as an int, as its digits are no longer exact
     "int": [(1e308, _SCHEMA_ONLY)],
+    # the schema names what is written alone, while the class reads more spellings - a bool from
+    # 0, 1 and words, an enum member from its name
+    "bool": [
+        (0, _STATE_ONLY),
+        (1, _STATE_ONLY),
+        (1.0, _STATE_ONLY),
+        ("true", _STATE_ONLY),
+        ("false", _STATE_ONLY),
+    ],
+    "bool or int": [("true", _STATE_ONLY)],
+    "str enum": [("RED", _STATE_ONLY)],
+    "int enum": [("LOW", _STATE_ONLY)],
     # the spellings of a UUID other than the canonical one are read, not named by the schema
     "uuid": [(_UUID.replace("-", ""), _STATE_ONLY), (f"{{{_UUID}}}", _STATE_ONLY)],
     "date": [("20260102", _STATE_ONLY)],

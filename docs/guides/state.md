@@ -669,12 +669,14 @@ any custom `Specification` overrides are respected. If a State cannot be represe
 (for example, when it holds callables), `json_schema(required=True)` raises a `TypeError` so you can
 detect unsupported shapes early.
 
-The schema is made to agree with validation of a JSON document: it accepts every document the State
-writes, and refuses what the State refuses wherever JSON Schema can say so. Where it can't, it is
-the looser of the two - a document which passes the schema can still fail validation, and that is
-what validation is for. The other way around, the State reads a few spellings besides the one it
-writes, which the schema leaves out: the Python names of aliased attributes, and the other forms of
-a `UUID` and a `date`. What it leaves unsaid is on purpose:
+The schema is strict: it describes the form the State writes, regardless of what decoding is lenient
+about. It accepts every document the State writes, and refuses what the State refuses wherever JSON
+Schema can say so. Where it can't, it is the looser of the two - a document which passes the schema
+can still fail validation, and that is what validation is for. The other way around, the State reads
+spellings besides the one it writes, which the schema leaves out: a `bool` from `0`, `1` or
+`"true"`/`"false"` in any case, an enum member from its name, the Python names of aliased
+attributes, and the other forms of a `UUID` and a `date`. A `bool` is `{"type": "boolean"}` and an
+enum lists its values alone. What it leaves unsaid is on purpose:
 
 - An attribute is `required` when it can't be left out: it has no default and doesn't accept
   `Missing`. An attribute annotated `Any`, `object` or `X | Missing` can be omitted from the input,
@@ -691,19 +693,18 @@ a `UUID` and a `date`. What it leaves unsaid is on purpose:
   has `minItems` for the elements around it, and takes what follows its leading elements as any of
   the types after them, as a schema can't tell the elements at the end from those in the middle.
 - JSON Schema compares numbers by value, so it can't tell `1` from `1.0`, and the State reads a
-  whole float as the int it equals for an `int`, an `IntEnum`, an int `Literal` and a `bool`. What
-  remains is the bound: the `int` schema accepts whole floats beyond 2\*\*53, which the State
-  refuses, and so do the schemas of an `IntEnum` or a `Literal` holding a value beyond it. A number
-  beyond what a float holds (`1e400`) passes a `number` schema, and the pattern of a `float` key,
-  while the State refuses it.
+  whole float as the int it equals for an `int`, an `IntEnum` and an int `Literal`. What remains is
+  the bound: the `int` schema accepts whole floats beyond 2\*\*53, which the State refuses, and so
+  do the schemas of an `IntEnum` or a `Literal` holding a value beyond it. A number beyond what a
+  float holds (`1e400`) passes a `number` schema, and the pattern of a `float` key, while the State
+  refuses it.
 - A `UUID` and a `date` are read with `UUID(...)` and `date.fromisoformat`, which take more
   spellings than the `uuid` and `date` formats: hex digits without hyphens, braces or the
   `urn:uuid:` prefix for a `UUID`, the basic (`20240102`) and week (`2025-W01-1`) forms for a
   `date`. A validator asserting `format` refuses those, the State writes the canonical form alone.
 - The keys of a mapping which are not strings constrain `propertyNames` to the way they are spelled
   where that can be told - `int`, `float`, `bool`, `None`, `UUID`, enum and `Literal` keys - with
-  the exact spellings written. `bool` is described as a boolean, `0`, `1` or `true`/`false` in any
-  case, an `IntEnum` as its values or the names of its members.
+  the exact spellings written, so an enum key is spelled as its values.
 - A `Literal` of enum members is written as their values, and one of values with no JSON form (a
   plain `Enum` member, `bytes`) leaves the State without a schema.
 - Both the name of an attribute and its alias are accepted as input, while the schema names the
