@@ -89,10 +89,9 @@ Journal(events={UUID(int=1): event}).to_json()
 # '{"events":{"00000000-0000-0000-0000-000000000001":{"identifier":"000...",...}}}'
 ```
 
-A known limitation: keys of one mapping which are encoded to the same string collide in the result,
-the last one winning - `None` and `"null"` in a `Mapping[None | str, ...]`, `1` and `"1"` in a
-`Mapping[int | str, ...]` or a `Mapping[Literal[1, "1"], ...]` - so a mapping holding both is not
-the one which is read back.
+Keys spelled alike, such as `None` and `"null"` or `1` and `"1"`, raise `ValueError` as described
+above. A JSON document which repeats a key - `{"a": 1, "a": 2}` - is read as `json.loads` reads it,
+the last one winning.
 
 Anything else - a plain `Enum`, a `Decimal`, `Missing` held within a value - has no basic spelling
 the validation would read back. Rather than encoding it into a value which could only fail on the

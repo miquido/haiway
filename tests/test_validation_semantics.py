@@ -7,12 +7,12 @@ from collections.abc import Callable, Mapping, Sequence, Set
 from datetime import date, datetime
 from enum import IntEnum, StrEnum
 from types import MappingProxyType, new_class
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from unittest import mock
 
 import pytest
 
-from haiway import Default, DefaultFactory, Map, State, ValidationError
+from haiway import Default, DefaultFactory, Map, State, ValidationError, Validator
 from haiway._native import nstruct
 
 # What validation accepts and refuses for the plain types, the keys of a mapping and the
@@ -498,6 +498,21 @@ def test_union_reads_a_whole_float_as_it_reads_its_int(annotation: Any) -> None:
         expected: Any = validated(annotation, 1)
         assert read == expected
         assert type(read) is type(expected)
+
+
+def test_union_hands_a_validator_the_raw_whole_float() -> None:
+    received: list[Any] = []
+
+    def record(value: Any, /) -> Any:
+        received.append(value)
+        return value
+
+    result: Any = validated(Annotated[int, Validator(record)] | str, 3.0)
+    assert result == 3
+    assert type(result) is int
+    assert len(received) == 1
+    assert type(received[0]) is float
+    assert received[0] == 3.0
 
 
 @pytest.mark.parametrize(

@@ -1,3 +1,4 @@
+import json
 import re
 from collections.abc import Callable, Mapping, MutableMapping, MutableSequence, Sequence
 from enum import Enum
@@ -454,7 +455,7 @@ def _named_key_specification(
                 "enum": _distinct(
                     [
                         *(member.value for member in keys.base),
-                        *(member.name for member in keys.base),
+                        *keys.base.__members__,
                     ]
                 ),
             }
@@ -466,7 +467,7 @@ def _named_key_specification(
                 "enum": _distinct(
                     [
                         *(str(int(member.value)) for member in keys.base),
-                        *(member.name for member in keys.base),
+                        *keys.base.__members__,
                     ]
                 ),
             }
@@ -747,7 +748,7 @@ def _prepare_specification_of_str_enum(
         "enum": _distinct(
             [
                 *(member.value for member in members),
-                *(member.name for member in members),
+                *members.__members__,
             ]
         ),
     }
@@ -762,7 +763,7 @@ def _prepare_specification_of_int_enum(
     return {
         "anyOf": [
             {"type": "integer", "enum": [int(member.value) for member in members]},
-            {"type": "string", "enum": [member.name for member in members]},
+            {"type": "string", "enum": list(members.__members__)},
         ],
     }
 
@@ -936,10 +937,10 @@ def unique_anchors(
     # an anchor names one subschema of the whole document. A definition met again is
     # referred to instead of repeated, and another one under a taken name is renamed,
     # with the references within it, which are the ones leading to it
-    first: MutableMapping[str, tuple[TypeSpecification, str]] = {}
-    taken: MutableMapping[str, int] = {}
+    first: MutableMapping[str, tuple[str, str]] = {}
+    emitted: set[str] = set()
 
-    def renamed(node: Any, scope: Mapping[str, str]) -> Any:
+    def renamed(node: Any, scope: Mapping[str, str], named: bool = False) -> Any:
         if isinstance(node, list):
             return [renamed(element, scope) for element in cast(list[Any], node)]
 
@@ -947,23 +948,32 @@ def unique_anchors(
             return node
 
         entries: dict[str, Any] = cast(dict[str, Any], node)
+        if named:  # keys are names of attributes, not keywords - each value is a schema
+            return {key: renamed(value, scope) for key, value in entries.items()}
+
         anchor: Any = entries.get("$anchor")
         if isinstance(anchor, str):
-            if (met := first.get(anchor)) is not None and met[0] == entries:
+            # bool and int are told apart, as their json is
+            canonical: str = json.dumps(entries, sort_keys=True)
+            if (met := first.get(anchor)) is not None and met[0] == canonical:
                 return {"$ref": f"#{met[1]}"}
 
             unique: str = anchor
-            if anchor in taken:
-                taken[anchor] += 1
-                unique = f"{anchor}_{taken[anchor]}"
+            suffix: int = 1
+            while unique in emitted:
+                suffix += 1
+                unique = f"{anchor}_{suffix}"
 
-            else:
-                taken[anchor] = 1
-
-            first.setdefault(anchor, (cast(TypeSpecification, entries), unique))
+            emitted.add(unique)
+            first.setdefault(anchor, (canonical, unique))
             scope = {**scope, anchor: unique}
 
-        result: dict[str, Any] = {key: renamed(value, scope) for key, value in entries.items()}
+        result: dict[str, Any] = {
+            key: value
+            if key in _ANCHOR_VALUES
+            else renamed(value, scope, named=key in _ANCHOR_NAMED)
+            for key, value in entries.items()
+        }
         if isinstance(anchor, str):
             result["$anchor"] = scope[anchor]
 
@@ -974,6 +984,13 @@ def unique_anchors(
         return result
 
     return cast(TypeSpecification, renamed(specification, {}))
+
+
+# the values of a user, not schemas - left as they are
+_ANCHOR_VALUES: frozenset[str] = frozenset(("enum", "const", "default", "examples"))
+_ANCHOR_NAMED: frozenset[str] = frozenset(
+    ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas")
+)
 
 
 _ANCHOR_DISALLOWED: re.Pattern[str] = re.compile(r"[^-A-Za-z0-9._]")

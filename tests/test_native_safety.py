@@ -329,6 +329,8 @@ def test_instance_being_initialized_is_never_read_half_bound() -> None:
         for thread in threads:
             thread.join()
 
+        assert json.loads(shared.to_json()) == values
+
     assert torn == []
 
 
@@ -344,6 +346,7 @@ def test_class_reached_while_it_is_being_created_is_usable_or_refused() -> None:
     source = "class Created(Base):\n" + "\n".join(f"    f{i}: int = {i}" for i in range(fields))
     done = threading.Event()
     wrong: list[str] = []
+    used: list[str] = []
     keep: list[Any] = []
 
     def create() -> None:
@@ -366,6 +369,9 @@ def test_class_reached_while_it_is_being_created_is_usable_or_refused() -> None:
                 if instance.f0 != 5 or instance.f29 != 29 or len(instance.to_mapping()) != fields:
                     wrong.append(subclass.__name__)
 
+                else:
+                    used.append(subclass.__name__)
+
     threads = [threading.Thread(target=create) for _ in range(2)] + [
         threading.Thread(target=use) for _ in range(3)
     ]
@@ -378,6 +384,7 @@ def test_class_reached_while_it_is_being_created_is_usable_or_refused() -> None:
         thread.join()
 
     assert wrong == []
+    assert used  # some of the classes were constructed, not only refused
 
 
 # --- a recursive alias -------------------------------------------------------
@@ -868,6 +875,17 @@ class _Carrying[T](State):
     value: T
 
 
+def _written_by_the_changing_thread(values: Set[int], /) -> bool:
+    # the thread adds 0..99 in order, then discards 0..99 in order, starting from 0..9
+    ordered: list[int] = sorted(values)
+    if not ordered:
+        return True
+
+    growing: bool = ordered == list(range(ordered[-1] + 1))
+    shrinking: bool = ordered == list(range(ordered[0], 100))
+    return growing or shrinking
+
+
 def test_a_set_changed_by_another_thread_is_validated_as_one_snapshot() -> None:
     # without the GIL a set iterated while another thread changes it fails - a set given
     # is copied as it is at one moment instead, so whatever it holds then is accepted
@@ -888,7 +906,8 @@ def test_a_set_changed_by_another_thread_is_validated_as_one_snapshot() -> None:
     try:
         deadline: float = time.monotonic() + 0.5
         while time.monotonic() < deadline:
-            assert len(_Numbers(values=shared).values) <= 100
+            values: Set[int] = _Numbers(values=shared).values
+            assert _written_by_the_changing_thread(values), sorted(values)
             assert isinstance(carrying, _Carrying[Set[int]])
 
     finally:

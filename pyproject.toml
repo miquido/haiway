@@ -49,6 +49,7 @@ fastapi = ["fastapi~=0.162", "starlette~=1.10"]
 dev = [
   "haiway[opentelemetry,httpx,postgres,rabbitmq,starlette,fastapi]",
   "bandit~=1.9",
+  "jsonschema[format-nongpl]~=4.26",
   "pyright~=1.1",
   "pytest~=9.2",
   "pytest-asyncio~=1.4",

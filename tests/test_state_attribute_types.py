@@ -228,15 +228,27 @@ def test_attribute_rejects_invalid_values_naming_the_attribute(
         make_state(annotation)(value=raw)
 
 
+def valid_value_of(annotation: Any, /) -> Any:
+    if annotation == Callable[[], int]:
+        return IMPL.run
+
+    for case in ACCEPTED:
+        if case.values[0] == annotation:
+            return case.values[2]
+
+    raise AssertionError(f"No valid value known for {annotation!r}")
+
+
 @mark.parametrize(("annotation", "raw"), REJECTED)
 def test_updating_rejects_invalid_values(
     annotation: Any,
     raw: Any,
 ) -> None:
-    state_type = make_state(annotation, value=None)
+    valid: Any = valid_value_of(annotation)
+    state: Any = make_state(annotation, value=Default(factory=lambda: valid))()
 
     with raises(ValidationError, match=r"Validation of \.value"):
-        state_type().updating(value=raw)  # pyright: ignore[reportCallIssue]
+        state.updating(value=raw)
 
 
 # --- instance checks of specialized variants (attribute `check`) ------------

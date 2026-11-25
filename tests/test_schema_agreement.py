@@ -1,17 +1,21 @@
 import inspect
 import json
+import math
 import re
 from collections.abc import Hashable, Mapping, Sequence, Set, Sized
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum, IntEnum, StrEnum
 from pathlib import Path
 from types import GenericAlias, new_class
-from typing import Annotated, Any, ForwardRef, Literal, NotRequired, cast
+from typing import Annotated, Any, ForwardRef, Literal, NamedTuple, NotRequired, TypedDict, cast
 from uuid import UUID
 
 import pytest
+from jsonschema import Draft202012Validator, FormatChecker
 
-from haiway import Default, Missing, State, Validator, Verifier
+from haiway import Alias, Default, Missing, State, Validator, Verifier
+from haiway.attributes.specification import unique_anchors
+from tests.strict_json import strict_loads
 
 
 class Color(StrEnum):
@@ -21,6 +25,17 @@ class Color(StrEnum):
 
 class Level(IntEnum):
     LOW = 1
+    HIGH = 2
+
+
+class Aliased(StrEnum):
+    RED = "red"
+    CRIMSON = "red"
+
+
+class AliasedLevel(IntEnum):
+    LOW = 1
+    MINIMUM = 1
     HIGH = 2
 
 
@@ -359,6 +374,40 @@ def test_mapping_keys_without_a_spelling_are_not_constrained(key: Any) -> None:
     assert "propertyNames" not in property_of(mapping_of(key))
 
 
+@pytest.mark.parametrize(
+    ("annotation", "member", "key", "name"),
+    [
+        (Aliased, "red", "red", "CRIMSON"),
+        (AliasedLevel, 1, "1", "MINIMUM"),
+    ],
+)
+def test_aliases_of_enum_members_are_named_by_the_schema(
+    annotation: Any,
+    member: Any,
+    key: str,
+    name: str,
+) -> None:
+    value_schema: Any = property_of(annotation)
+    key_schema: Any = property_of(mapping_of(annotation))["propertyNames"]
+    value_names: list[Any] = (
+        value_schema["enum"]
+        if "enum" in value_schema
+        else [name for part in value_schema["anyOf"] for name in part["enum"]]
+    )
+
+    assert name in value_names
+    assert name in key_schema["enum"]
+    assert key in key_schema["enum"]
+    assert len(value_names) == len(set(value_names))
+    assert len(key_schema["enum"]) == len(set(key_schema["enum"]))
+    # what the schema names, the class reads
+    holder: Any = state_of(annotation)
+    assert holder.from_json(json.dumps({"v": name})).v == member
+    assert state_of(mapping_of(annotation)).from_json(json.dumps({"v": {name: "x"}})).v == {
+        member: "x"
+    }
+
+
 def test_mapping_of_uuid_keys_names_the_format() -> None:
     assert property_of(mapping_of(UUID))["propertyNames"] == {
         "type": "string",
@@ -462,7 +511,7 @@ def _references(node: Any, found: list[str]) -> list[str]:
     return found
 
 
-def _recursive_item(module: str, attribute: type[Any]) -> Any:
+def _recursive_item(module: str, attribute: Any) -> Any:
     name: str = "Item"
 
     def body(namespace: dict[str, Any]) -> None:
@@ -501,6 +550,400 @@ def test_anchors_are_unique_and_every_reference_resolves() -> None:
     assert properties["trees"]["items"] == tree
 
 
+def test_anchored_definitions_told_apart_by_bool_and_int_are_not_merged() -> None:
+    with_true: Any = _recursive_item("first", Literal[True, "o"])
+    with_one: Any = _recursive_item("second", Literal[1, "o"])
+
+    class Holder(State):
+        true_item: with_true
+        one_item: with_one
+
+    schema: Any = json.loads(cast(str, Holder.json_schema()))
+    properties: Any = schema["properties"]
+    assert "$ref" not in properties["one_item"]
+    assert properties["true_item"]["$anchor"] != properties["one_item"]["$anchor"]
+
+
+def _anchored_object(anchor: str, marker: int) -> Any:
+    return {"$anchor": anchor, "const": marker, "properties": {"parts": {"$ref": f"#{anchor}"}}}
+
+
+def test_generated_anchor_names_do_not_collide_with_taken_ones() -> None:
+    result: Any = unique_anchors(
+        cast(
+            Any,
+            {
+                "anyOf": [
+                    _anchored_object("Item", 1),
+                    _anchored_object("Item", 2),
+                    _anchored_object("Item_2", 3),
+                ]
+            },
+        )
+    )
+
+    anchors: dict[str, list[Any]] = _anchored(result, {})
+    assert sorted(anchors) == ["Item", "Item_2", "Item_2_2"]
+    assert all(len(nodes) == 1 for nodes in anchors.values())
+    # the references within each definition lead to that definition
+    for node in result["anyOf"]:
+        assert node["properties"]["parts"] == {"$ref": f"#{node['$anchor']}"}
+
+
+def test_values_of_a_user_are_not_searched_for_anchors() -> None:
+    fragment: Any = {"$anchor": "Item", "type": "string"}
+    result: Any = unique_anchors(
+        cast(
+            Any,
+            {
+                "allOf": [
+                    {"$anchor": "Item", "type": "integer"},
+                    {"enum": [fragment], "const": fragment, "default": fragment},
+                    {"examples": [fragment]},
+                    {"properties": {"default": {"$anchor": "Item", "type": "null"}}},
+                ]
+            },
+        )
+    )
+
+    assert result["allOf"][1] == {"enum": [fragment], "const": fragment, "default": fragment}
+    assert result["allOf"][2] == {"examples": [fragment]}
+    # a property which is named like a keyword is still a schema
+    assert result["allOf"][3]["properties"]["default"]["$anchor"] == "Item_2"
+
+
 def test_empty_tuple_is_an_array_with_no_items() -> None:
     # `prefixItems` has to name at least one schema - an empty tuple names none
     assert schema_of(state_of(tuple[()]))["properties"]["v"] == {"type": "array", "maxItems": 0}
+
+
+# 8. a real validator against the State, both ways
+
+
+class _Payload(TypedDict):
+    name: str
+    count: NotRequired[int]
+
+
+class _Leaf(State):
+    number: int
+
+
+type _Shape = int | Sequence[_Shape]
+
+
+_OMITTED: Any = object()
+
+
+class _Agreement(NamedTuple):
+    annotation: Any
+    documents: Sequence[Any]  # the values of the attribute, as they are read from a document
+    instances: Sequence[Any]  # the values the attribute holds, written and read back
+    key: str = "v"
+
+
+_FORMATS: FormatChecker = FormatChecker()
+_STRINGS: Sequence[Any] = ("", "a", 1, 1.5, True, None, ["a"], {})
+_UUID: str = "00000000-0000-0000-0000-000000000001"
+_NOW: datetime = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+_AGREEMENTS: Mapping[str, _Agreement] = {
+    "str": _Agreement(str, _STRINGS, ["", "text", "ü"]),
+    "int": _Agreement(
+        int,
+        [1, 1.0, 0, -0.0, 2**53, 1e308, 1.5, "1", "", True, None, [], {}],
+        [0, 1, -1, 2**53],
+    ),
+    "float": _Agreement(
+        float,
+        [1, 1.0, 1.5, -0.0, 1e308, 2**53, "1", "", True, None, []],
+        [0.0, 1.5, -0.0, 1e308],
+    ),
+    "bool": _Agreement(
+        bool,
+        [True, False, 0, 1, 2, 1.0, "true", "false", "", None, []],
+        [True, False],
+    ),
+    "none": _Agreement(None, [None, 0, "", "null", False, []], [None]),
+    "uuid": _Agreement(
+        UUID,
+        [_UUID, _UUID.upper(), _UUID.replace("-", ""), f"{{{_UUID}}}", "", "x", 1, None],
+        [UUID(_UUID), UUID(int=2**128 - 1)],
+    ),
+    "datetime": _Agreement(
+        datetime,
+        ["2026-01-02T03:04:05+00:00", "2026-01-02T03:04:05", "2026-01-02", "", "x", 1, None],
+        [_NOW, datetime(2026, 1, 2, 3, 4, 5, 6)],
+    ),
+    "date": _Agreement(
+        date,
+        ["2026-01-02", "20260102", "2026-1-2", "2026-01-02T00:00:00", "", "x", 1, None],
+        [date(2026, 1, 2)],
+    ),
+    "time": _Agreement(
+        time,
+        ["03:04:05", "03:04:05+00:00", "03:04", "", "x", 1, None],
+        [time(3, 4, 5), time(3, 4, 5, 6, tzinfo=UTC)],
+    ),
+    "timedelta": _Agreement(
+        timedelta,
+        ["PT5S", "P1D", "-PT5S", "5", "", "x", 5, None],
+        [timedelta(seconds=5), timedelta(days=1), timedelta(seconds=-5)],
+    ),
+    "path": _Agreement(Path, ["/a/b", "", 1, None], [Path("/a/b"), Path("a")]),
+    "bytes": _Agreement(bytes, ["aGk=", "", "!", 1, None], [b"hi", b"", b"\x00\xff"]),
+    "str enum": _Agreement(
+        Color, ["red", "blue", "RED", "green", "", 1, None], [Color.RED, Color.BLUE]
+    ),
+    "int enum": _Agreement(
+        Level, [1, 2, 1.0, 3, "LOW", "1", True, "", None], [Level.LOW, Level.HIGH]
+    ),
+    "str literal": _Agreement(Literal["a", "b"], ["a", "b", "c", "", 1, None], ["a", "b"]),
+    "int literal": _Agreement(Literal[1, 2], [1, 2, 1.0, 3, "1", True, 0, None], [1, 2]),
+    "enum literal": _Agreement(
+        Literal[Level.LOW, Level.HIGH], [1, 2, 2.0, 3, "LOW", True, None], [Level.LOW, Level.HIGH]
+    ),
+    "optional": _Agreement(str | None, ["a", None, 1, "", []], ["a", None]),
+    "union": _Agreement(int | str, [1, "a", 1.0, 1.5, None, True, []], [1, "a"]),
+    "bool or int": _Agreement(bool | int, [True, 1, 0, 2, 1.0, "true", None], [True, 1, 0]),
+    "sequence": _Agreement(
+        Sequence[int], [[], [1, 2], [1.0], [1, "a"], [True], "12", 1, None, {}], [(), (1, 2)]
+    ),
+    "variadic tuple": _Agreement(
+        tuple[int, ...], [[], [1], [1, 2], ["a"], 1, None], [(), (1,), (1, 2)]
+    ),
+    "tuple": _Agreement(
+        tuple[int, str], [[1, "a"], [1], [1, "a", 2], ["a", 1], [], 1, None], [(1, "a")]
+    ),
+    "empty tuple": _Agreement(tuple[()], [[], [1], 1, None], [()]),
+    "set": _Agreement(Set[str], [[], ["a"], ["a", "a"], [1], "a", None], [frozenset(), {"a", "b"}]),
+    "str mapping": _Agreement(
+        Mapping[str, int], [{}, {"a": 1}, {"a": "x"}, {"": 1}, [], None], [{}, {"a": 1}, {"": 2}]
+    ),
+    "int mapping": _Agreement(
+        Mapping[int, str],
+        [{}, {"1": "a"}, {"01": "a"}, {"+1": "a"}, {"-1": "a"}, {"x": "a"}, {"1": 1}],
+        [{}, {1: "a", -2: "b"}],
+    ),
+    "float mapping": _Agreement(
+        Mapping[float, str],
+        [
+            {},
+            {"1.5": "a"},
+            {"1": "a"},
+            {"inf": "a"},
+            {"-inf": "a"},
+            {"nan": "a"},
+            {"Infinity": "a"},
+            {"1e400": "a"},
+            {"x": "a"},
+        ],
+        [{}, {1.5: "a", 1.0: "b"}, {math.inf: "a"}],
+    ),
+    "bool mapping": _Agreement(
+        Mapping[bool, str],
+        [{}, {"true": "a"}, {"false": "a"}, {"True": "a"}, {"1": "a"}, {"": "a"}],
+        [{}, {True: "a", False: "b"}],
+    ),
+    "uuid mapping": _Agreement(
+        Mapping[UUID, str],
+        [{}, {_UUID: "a"}, {_UUID.upper(): "a"}, {_UUID.replace("-", ""): "a"}, {"x": "a"}],
+        [{}, {UUID(_UUID): "a"}],
+    ),
+    "typed dict": _Agreement(
+        _Payload,
+        [{"name": "n"}, {"name": "n", "count": 1}, {"count": 1}, {"name": 1}, {}, [], None],
+        [{"name": "n"}, {"name": "n", "count": 1}],
+    ),
+    "state": _Agreement(
+        _Leaf,
+        [{"number": 1}, {"number": "x"}, {}, {"number": 1, "extra": 1}, [], None],
+        [_Leaf(number=1)],
+    ),
+    "generic state": _Agreement(
+        Box[int],
+        [{"value": 1}, {"value": "x"}, {}, {"value": 1.0}, [], None],
+        [Box[int](value=1)],
+    ),
+    "recursive state": _Agreement(
+        _Tree,
+        [
+            {},
+            {"children": []},
+            {"children": [{}]},
+            {"children": [{"children": [{}]}]},
+            {"children": [1]},
+            {"children": [{"children": 1}]},
+            None,
+        ],
+        [_Tree(), _Tree(children=[_Tree(children=[_Tree()])])],
+    ),
+    "recursive alias": _Agreement(
+        _Shape,
+        [1, [], [1, [2, [3]]], [1, "a"], [[[["a"]]]], "a", None, 1.5],
+        [1, (), (1, (2, (3,)))],
+    ),
+    "aliased": _Agreement(
+        Annotated[int, Alias("renamed")],
+        [1, "x", None],
+        [1],
+        key="renamed",
+    ),
+    "optional missing": _Agreement(int | Missing, [_OMITTED, 1, "x", None], [1, Missing]),
+}
+
+
+def _text_of(agreement: _Agreement, document: Any, /) -> str:
+    return json.dumps({} if document is _OMITTED else {agreement.key: document})
+
+
+def _schema_accepts(cls: Any, text: str, /) -> bool:
+    validator: Draft202012Validator = Draft202012Validator(schema_of(cls), format_checker=_FORMATS)
+    return validator.is_valid(json.loads(text))
+
+
+def _state_accepts(cls: Any, text: str, /) -> bool:
+    try:
+        cls.from_json(text)
+
+    except ValueError, TypeError:
+        return False
+
+    return True
+
+
+# the documents on which the schema and the class are known to differ - anything else has to
+# agree. "schema only" is accepted by the schema and refused by the class, "state only" the other
+# way round
+_SCHEMA_ONLY: str = "schema only"
+_STATE_ONLY: str = "state only"
+_DISAGREEMENTS: Mapping[str, Sequence[tuple[Any, str]]] = {
+    # a whole float beyond 2**53 is not read as an int, as its digits are no longer exact
+    "int": [(1e308, _SCHEMA_ONLY)],
+    # the spellings of a UUID other than the canonical one are read, not named by the schema
+    "uuid": [(_UUID.replace("-", ""), _STATE_ONLY), (f"{{{_UUID}}}", _STATE_ONLY)],
+    "date": [("20260102", _STATE_ONLY)],
+    "uuid mapping": [({_UUID.replace("-", ""): "a"}, _STATE_ONLY)],
+    # these are plain strings in the schema - it names no format the output keeps
+    "datetime": [("", _SCHEMA_ONLY), ("x", _SCHEMA_ONLY)],
+    "time": [("", _SCHEMA_ONLY), ("x", _SCHEMA_ONLY)],
+    "timedelta": [("", _SCHEMA_ONLY), ("x", _SCHEMA_ONLY), ("5", _SCHEMA_ONLY)],
+    "bytes": [("!", _SCHEMA_ONLY)],
+    # a pattern cannot bound the magnitude of the number a key spells
+    "float mapping": [({"1e400": "a"}, _SCHEMA_ONLY)],
+}
+
+
+def _disagreements(name: str, /) -> Mapping[str, str]:
+    agreement: _Agreement = _AGREEMENTS[name]
+    cls: Any = state_of(agreement.annotation)
+    found: dict[str, str] = {}
+    for document in agreement.documents:
+        text: str = _text_of(agreement, document)
+        by_schema: bool = _schema_accepts(cls, text)
+        by_state: bool = _state_accepts(cls, text)
+        if by_schema != by_state:
+            found[text] = "schema only" if by_schema else "state only"
+
+    return found
+
+
+@pytest.mark.parametrize("name", list(_AGREEMENTS))
+def test_schema_is_a_valid_json_schema(name: str) -> None:
+    Draft202012Validator.check_schema(schema_of(state_of(_AGREEMENTS[name].annotation)))
+
+
+@pytest.mark.parametrize("name", list(_AGREEMENTS))
+def test_schema_and_state_accept_the_same_documents(name: str) -> None:
+    agreement: _Agreement = _AGREEMENTS[name]
+    expected: Mapping[str, str] = {
+        _text_of(agreement, document): kind for document, kind in _DISAGREEMENTS.get(name, ())
+    }
+    assert _disagreements(name) == expected
+
+
+@pytest.mark.parametrize("name", list(_AGREEMENTS))
+def test_written_instances_conform_to_the_schema_and_read_back(name: str) -> None:
+    agreement: _Agreement = _AGREEMENTS[name]
+    cls: Any = state_of(agreement.annotation)
+    validator: Draft202012Validator = Draft202012Validator(schema_of(cls), format_checker=_FORMATS)
+    for value in agreement.instances:
+        instance: Any = cls(**{"v": value})
+        text: str = instance.to_json()
+
+        validator.validate(strict_loads(text))
+        assert cls.from_json(text) == instance
+
+
+def test_python_names_of_aliased_attributes_are_read_but_not_named_by_the_schema() -> None:
+    cls: Any = state_of(Annotated[int, Alias("renamed")])
+    text: str = json.dumps({"v": 1})
+
+    assert _state_accepts(cls, text)
+    assert not _schema_accepts(cls, text)
+
+
+type _Same = int | Sequence[_Same]
+_FirstItem: Any = _recursive_item("first", str)
+_SecondItem: Any = _recursive_item("second", int)
+
+
+class _Multi(State):
+    first_alias: _Nested
+    second_alias: _Same
+    first_item: _FirstItem
+    second_item: _SecondItem
+    tree: _Tree
+    boxed: _Boxed[_Tree]
+    trees: Sequence[_Tree]
+
+
+def _multi_document(**changes: Any) -> Any:
+    document: dict[str, Any] = {
+        "first_alias": [1, [2]],
+        "second_alias": [3, [4]],
+        "first_item": {"value": "a", "parts": [{"value": "b"}]},
+        "second_item": {"value": 1, "parts": [{"value": 2}]},
+        "tree": {"children": [{}]},
+        "boxed": {"value": {"children": [{}]}},
+        "trees": [{}, {"children": [{}]}],
+    }
+    return {**document, **changes}
+
+
+_MULTI_DOCUMENTS: Sequence[Any] = (
+    _multi_document(),
+    _multi_document(first_alias=["a"]),
+    _multi_document(second_alias=[1, ["a"]]),
+    _multi_document(first_item={"value": 1}),
+    _multi_document(second_item={"value": "a"}),
+    _multi_document(first_item={"value": "a", "parts": [{"value": 1}]}),
+    _multi_document(second_item={"value": 1, "parts": [{"value": "a"}]}),
+    _multi_document(tree={"children": [{"children": 1}]}),
+    _multi_document(boxed={"value": {"children": [1]}}),
+    _multi_document(trees=[{}, {"children": [{"children": [1]}]}]),
+    _multi_document(trees=[{"children": [{"children": [{}]}]}]),
+)
+
+
+@pytest.mark.parametrize("document", _MULTI_DOCUMENTS, ids=range(len(_MULTI_DOCUMENTS)))
+def test_recursive_definitions_sharing_names_agree_with_the_schema(document: Any) -> None:
+    text: str = json.dumps(document)
+
+    assert _schema_accepts(_Multi, text) == _state_accepts(_Multi, text)
+
+
+def test_recursive_definitions_sharing_names_keep_their_own_schemas() -> None:
+    assert _schema_accepts(_Multi, json.dumps(_multi_document()))
+    assert not _schema_accepts(_Multi, json.dumps(_multi_document(first_item={"value": 1})))
+    assert not _schema_accepts(_Multi, json.dumps(_multi_document(second_item={"value": "a"})))
+    anchors: dict[str, list[Any]] = _anchored(schema_of(_Multi), {})
+    assert all(len(nodes) == 1 for nodes in anchors.values())
+
+
+def test_recursive_definitions_sharing_names_are_written_to_the_schema() -> None:
+    instance: _Multi = _Multi.from_json(json.dumps(_multi_document()))
+    text: str = instance.to_json()
+
+    Draft202012Validator(schema_of(_Multi), format_checker=_FORMATS).validate(strict_loads(text))
+    assert _Multi.from_json(text) == instance

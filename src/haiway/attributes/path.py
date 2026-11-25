@@ -938,7 +938,9 @@ class AttributePath[Root, Attribute]:
         if len(children) < _ITEM_PATHS_KEPT:
             return children.setdefault(item, extended)
 
-        return extended
+        # past the bound nothing more is kept, but an item kept by another thread meanwhile
+        # is the one to give
+        return children.get(item, extended)
 
     @overload
     def __call__(
@@ -1008,6 +1010,13 @@ class AttributePath[Root, Attribute]:
         )
 
         if updated is not Missing:
+            if not self.__components__:  # the path is the root itself - it is what replaces it
+                assert isinstance(updated, _unaliased_origin(self.__root__)), (  # nosec: B101
+                    f"AttributePath '{self.__repr__()}' used with unexpected value of "
+                    f"'{type(updated).__name__}' instead of '{self.__root__.__name__}'"
+                )
+                return updated
+
             resolved: Any = root
             updates_stack: deque[tuple[Any, AttributePathComponent]] = deque()
             for component in self.__components__:

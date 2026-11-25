@@ -1222,7 +1222,7 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value, int flags)
             } else if (ATTEMPTED(i)) {
                 continue;
             }
-            PyObject *validated = validate_spec(state, alternative, candidate, flags);
+            PyObject *validated = validate_spec(state, alternative, value, flags);
             if (validated != NULL) {
                 Py_XDECREF(whole);
                 PyMem_Free(attempted);

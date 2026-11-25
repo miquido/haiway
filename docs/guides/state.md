@@ -539,9 +539,10 @@ State classes perform thorough type validation for all supported Python types:
   State holding one is not serializable (`to_json` raises, `json_schema()` raises `TypeError`)
 - **Union Types**: str | None, int | float
 - **Literal Types**: Literal["a", "b", "c"] - a value has to be of the type of the literal it is
-  equal to, so `Literal[1]` refuses `True` and `1.0`. A plain `str` or `int` and a `StrEnum` or
-  `IntEnum` member equal to it stand for each other, and the literal itself is what gets stored:
-  `Literal[Color.RED]` reads `"red"` as `Color.RED`, `Literal["red"]` reads `Color.RED` as `"red"`
+  equal to, so `Literal[1]` refuses `True`, while a whole float such as `1.0` is read as the int it
+  holds. A plain `str` or `int` and a `StrEnum` or `IntEnum` member equal to it stand for each
+  other, and the literal itself is what gets stored: `Literal[Color.RED]` reads `"red"` as
+  `Color.RED`, `Literal["red"]` reads `Color.RED` as `"red"`
 - **Enum Types**: Enum, StrEnum, and IntEnum
 - **Callable Types**: Function types and Protocol interfaces
 - **TypedDict**: Validates structure with Required/NotRequired fields. A key the TypedDict does not

@@ -507,12 +507,17 @@ def _paths_found_by_threads(
     root: Any,
     path_of: Callable[[Any], Any],
 ) -> set[int]:
-    barrier: threading.Barrier = threading.Barrier(_THREADS)
+    barrier: threading.Barrier = threading.Barrier(_THREADS, timeout=10)
     found: list[Any] = [None] * _THREADS
+    failures: list[BaseException] = []
 
     def work(index: int) -> None:
-        barrier.wait()
-        found[index] = path_of(root)
+        try:
+            barrier.wait()
+            found[index] = path_of(root)
+
+        except BaseException as exc:
+            failures.append(exc)
 
     threads: list[threading.Thread] = [
         threading.Thread(target=work, args=(index,)) for index in range(_THREADS)
@@ -523,6 +528,8 @@ def _paths_found_by_threads(
     for thread in threads:
         thread.join()
 
+    assert not failures, failures
+    assert all(isinstance(path, AttributePath) for path in found), found
     return {id(path) for path in found}
 
 
@@ -610,9 +617,11 @@ def test_path_updates_refuse_what_construction_refuses() -> None:
     assert updated.value.path == constructed.value.path
 
 
-def _refusing_five(value: int) -> None:
+def _refusing_five(value: int) -> int:
     if value == 5:
         raise ValueError("five refused")
+
+    return value
 
 
 class _Inner(State):
@@ -680,3 +689,13 @@ def test_path_updates_of_other_objects_take_values_as_they_do() -> None:
     holding = _HoldingPlain()
     updated = _HoldingPlain._.plain.number(holding, cast(Any, "text"))
     assert updated.plain == _Plain(number=cast(Any, "text"))
+
+
+def test_path_of_the_root_replaces_it_with_a_root() -> None:
+    replacement = _Shaped()
+    assert _Shaped._(_Shaped(), replacement) is replacement
+
+
+def test_path_of_the_root_refuses_what_is_not_a_root() -> None:
+    with raises(AssertionError, match="unexpected value of 'str'"):
+        _Shaped._(_Shaped(), cast(Any, "bad"))

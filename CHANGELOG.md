@@ -130,9 +130,10 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   arguments, `Box[int | None]` - and `Box(value=True)` is not an instance of `Box[int]`, so a
   `Box[int]` attribute refuses a `Box[bool]` instance. Neither direction relates `bool` and `int`
   for a contravariant parameter. Instances, subclass checks and mappings agree now, and round trip.
-- `to_json` and `to_basic_object` raise `ValueError` for a mapping holding two keys which are
-  written the same (`{1: "a", "1": "b"}`, `{True: 1, "true": 2}`), where one of them was kept
-  silently, or both written for `to_json` natively.
+- `to_json` and `to_basic_object` raise `ValueError` for a mapping holding two keys of different
+  types which are written the same (`{1: "a", "1": "b"}`, `{True: 1, "true": 2}`), where one of
+  them was kept silently, or both written for `to_json` natively. `str` keys which only differ as
+  lone surrogates are not covered.
 - `==` of a State with something which is no State returns `NotImplemented`, so the other operand
   decides (`instance == mock.ANY` is true). Two States of different classes are still never equal.
 - A `Callable[P, R]` attribute of a specialization (`Handler[[int], bool]`) is checked against the

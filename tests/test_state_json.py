@@ -2,7 +2,7 @@ import enum
 import json
 import math
 import random
-from collections.abc import Mapping, Sequence, Set
+from collections.abc import Callable, Mapping, Sequence, Set
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -205,19 +205,30 @@ def test_non_finite_floats_are_kept_by_the_mappings(number: float) -> None:
         (1.5, "1.5"),
     ],
 )
-def test_float_keys_keep_their_spelling_in_json(key: float, spelling: str) -> None:
+@pytest.mark.parametrize(
+    "encode",
+    [
+        pytest.param(lambda instance: instance.to_json(), id="default"),
+        pytest.param(lambda instance: instance.to_json(indent=2), id="indented"),
+        pytest.param(
+            lambda instance: instance.to_json(encoder_class=_PlainEncoder),
+            id="plain encoder",
+        ),
+    ],
+)
+def test_float_keys_keep_their_spelling_in_json(
+    key: float,
+    spelling: str,
+    encode: Callable[[Any], str],
+) -> None:
     class Keyed(State):
         values: Mapping[float, int]
 
-    instance = Keyed(values={key: 1})
-    for spelled in (
-        instance.to_json(),
-        instance.to_json(indent=2),
-        instance.to_json(encoder_class=_PlainEncoder),
-    ):
-        assert json.loads(spelled)["values"] == {spelling: 1}
-        (read,) = Keyed.from_json(spelled).values
-        assert (math.isnan(read) and math.isnan(key)) or read == key
+    spelled: str = encode(Keyed(values={key: 1}))
+
+    assert json.loads(spelled)["values"] == {spelling: 1}
+    (read,) = Keyed.from_json(spelled).values
+    assert (math.isnan(read) and math.isnan(key)) or read == key
 
 
 def test_empty_containers() -> None:
@@ -349,48 +360,65 @@ def test_numbers_are_read_as_json_loads_reads_them(number: str) -> None:
     assert type(decoded) is type(expected)
 
 
-@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity", "1e400", "-1e400"])
-def test_documents_with_non_finite_numbers_are_refused(literal: str) -> None:
-    class Holder(State):
-        value: float = 0.0
-        anything: Any = None
-        nested: Sequence[Mapping[str, Any]] = ()
+_NON_FINITE = ["NaN", "Infinity", "-Infinity", "1e400", "-1e400"]
 
-    class Plain(State):
-        value: int = 0
 
-    class Reading(json.JSONDecoder):
-        pass
+class _NonFiniteHolder(State):
+    value: float = 0.0
+    anything: Any = None
+    nested: Sequence[Mapping[str, Any]] = ()
 
-    documents: Sequence[str] = (
-        f'{{"value": {literal}}}',
-        f'{{"anything": {literal}}}',
-        f'{{"anything": [1, {{"deep": {literal}}}]}}',
-        f'{{"nested": [{{"key": {literal}}}]}}',
-    )
-    for document in documents:
-        with pytest.raises(ValueError, match="Failed to decode Holder from json"):
-            Holder.from_json(document)
 
-        with pytest.raises(ValueError, match="Failed to decode Holder from json"):
-            Holder.from_json(document, Reading)
+class _NonFinitePlain(State):
+    value: int = 0
 
-        with pytest.raises(ValueError, match="Failed to decode Holder from json"):
-            Holder.from_json_array(f"[{document}]")
 
-        with pytest.raises(ValueError, match="Failed to decode Holder from json"):
-            Holder.from_json_array(f"[{document}]", Reading)
+class _NonFiniteReading(json.JSONDecoder):
+    pass
 
+
+@pytest.mark.parametrize("literal", _NON_FINITE)
+@pytest.mark.parametrize(
+    "template",
+    [
+        '{{"value": {literal}}}',
+        '{{"anything": {literal}}}',
+        '{{"anything": [1, {{"deep": {literal}}}]}}',
+        '{{"nested": [{{"key": {literal}}}]}}',
+    ],
+)
+def test_documents_with_non_finite_numbers_are_refused(literal: str, template: str) -> None:
+    document: str = template.format(literal=literal)
+
+    with pytest.raises(ValueError, match="Failed to decode _NonFiniteHolder from json"):
+        _NonFiniteHolder.from_json(document)
+
+    with pytest.raises(ValueError, match="Failed to decode _NonFiniteHolder from json"):
+        _NonFiniteHolder.from_json(document, _NonFiniteReading)
+
+    with pytest.raises(ValueError, match="Failed to decode _NonFiniteHolder from json"):
+        _NonFiniteHolder.from_json_array(f"[{document}]")
+
+    with pytest.raises(ValueError, match="Failed to decode _NonFiniteHolder from json"):
+        _NonFiniteHolder.from_json_array(f"[{document}]", _NonFiniteReading)
+
+
+@pytest.mark.parametrize("literal", _NON_FINITE)
+@pytest.mark.parametrize("ignore_extra", [True, False])
+def test_non_finite_numbers_are_refused_in_skipped_attributes(
+    literal: str,
+    ignore_extra: bool,
+) -> None:
     skipped: str = f'{{"value": 1, "extra": {literal}}}'
-    for ignore_extra in (True, False):
-        with pytest.raises(ValueError, match="Failed to decode Plain from json"):
-            Plain.from_json(skipped, ignore_extra=ignore_extra)
 
-        with pytest.raises(ValueError, match="Failed to decode Plain from json"):
-            Plain.from_json(skipped, Reading, ignore_extra=ignore_extra)
+    with pytest.raises(ValueError, match="Failed to decode _NonFinitePlain from json"):
+        _NonFinitePlain.from_json(skipped, ignore_extra=ignore_extra)
 
-        with pytest.raises(ValueError, match="Failed to decode Plain from json"):
-            Plain.from_json_array(f"[{skipped}]", ignore_extra=ignore_extra)
+    with pytest.raises(ValueError, match="Failed to decode _NonFinitePlain from json"):
+        _NonFinitePlain.from_json(skipped, _NonFiniteReading, ignore_extra=ignore_extra)
+
+    with pytest.raises(ValueError, match="Failed to decode _NonFinitePlain from json"):
+        _NonFinitePlain.from_json_array(f"[{skipped}]", ignore_extra=ignore_extra)
 
 
 def test_integer_is_read_as_a_float_for_a_float_attribute() -> None:
