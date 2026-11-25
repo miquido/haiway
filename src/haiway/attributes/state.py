@@ -48,6 +48,7 @@ from uuid import UUID, SafeUUID
 from haiway._native import nstruct
 from haiway.attributes import native
 from haiway.attributes.annotations import (
+    AttributeAnnotation,
     ObjectAttribute,
     attribute_redaction,
     resolve_self_attribute,
@@ -337,16 +338,12 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
 
             return cls  # early exit - base class
 
-        fields: Sequence[Attribute] = tuple(
-            Attribute(
-                name=key,
-                annotation=attribute,
-                default=_resolve_default(defaults.get(key, Missing)),
-                redaction=attribute_redaction(attribute),
-                spec=native.compile(attribute),
-            )
-            for key, attribute in self_attribute.attributes.items()
+        fields: Sequence[Attribute] = _declared_fields(
+            name,
+            attributes=self_attribute.attributes,
+            defaults=defaults,
         )
+
         # every key an attribute can be provided under, refusing a collision
         allowed_fields: Mapping[str, str] = _allowed_fields(
             name,
@@ -716,6 +713,35 @@ def _allowed_fields(
             allowed[key] = field.name
 
     return allowed
+
+
+def _declared_fields(
+    name: str,
+    /,
+    attributes: Mapping[str, AttributeAnnotation],
+    defaults: Mapping[str, Any],
+) -> Sequence[Attribute]:
+    fields: Sequence[Attribute] = tuple(
+        Attribute(
+            name=key,
+            annotation=attribute,
+            default=_resolve_default(defaults.get(key, Missing)),
+            redaction=attribute_redaction(attribute),
+            spec=native.compile(attribute),
+        )
+        for key, attribute in attributes.items()
+    )
+
+    # an attribute is left out only when it has a default or accepts `Missing`, and
+    # `NotRequired` is neither - the attribute it marks would be required all the same
+    for field in fields:
+        if not field.annotation.required and field.required:
+            raise TypeError(
+                f"{name}.{field.name} is annotated with NotRequired, which is not applicable"
+                " to an attribute of a State - declare a default to make it optional"
+            )
+
+    return fields
 
 
 def _resolve_default(

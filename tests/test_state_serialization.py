@@ -477,10 +477,12 @@ def test_json_schema_formats_of_standard_types() -> None:
     properties = json.loads(Formatted.json_schema())["properties"]
 
     assert properties["identifier"]["format"] == "uuid"
-    assert properties["created"]["format"] == "date-time"
     assert properties["day"]["format"] == "date"
-    assert properties["moment"]["format"] == "time"
-    assert properties["location"]["format"] == "path"
+    # the output of these is not always what the format describes - a naive
+    # datetime or time has no offset, which RFC 3339 requires
+    assert properties["created"] == {"type": "string"}
+    assert properties["moment"] == {"type": "string"}
+    assert properties["location"] == {"type": "string"}
     assert properties["nested"]["properties"]["x"] == {"type": "integer"}
 
 
@@ -497,14 +499,13 @@ def test_json_schema_of_bytes_is_a_base64_string() -> None:
 
 
 @mark.parametrize("annotation", [Set[int], frozenset[int], set[int]])
-def test_json_schema_of_sets_is_an_array_of_unique_items(annotation: Any) -> None:
+def test_json_schema_of_sets_is_an_array(annotation: Any) -> None:
     class Holder(State, serializable=True):
         items: annotation  # pyright: ignore[reportInvalidTypeForm]
 
     assert json.loads(Holder.json_schema())["properties"]["items"] == {
         "type": "array",
         "items": {"type": "integer"},
-        "uniqueItems": True,
     }
 
     holder = Holder(items={1, 2})  # pyright: ignore[reportCallIssue]
@@ -604,13 +605,14 @@ def test_timedelta_refuses_other_types(value: Any) -> None:
         Holder(span=value)  # pyright: ignore[reportArgumentType]
 
 
-def test_json_schema_of_timedelta_is_a_duration_string() -> None:
+def test_json_schema_of_timedelta_is_a_string() -> None:
     class Holder(State, serializable=True):
         span: timedelta
 
+    # not `format: duration` - a negative one is written with a sign, which the
+    # duration of RFC 3339 has none of
     assert json.loads(Holder.json_schema())["properties"]["span"] == {
         "type": "string",
-        "format": "duration",
     }
 
 

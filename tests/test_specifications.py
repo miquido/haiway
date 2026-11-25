@@ -5,10 +5,10 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from haiway import (
     Description,
-    Missing,
     Specification,
     State,
     TypeSpecification,
+    Verifier,
 )
 from haiway.attributes.annotations import (
     BoolAttribute,
@@ -90,6 +90,8 @@ def test_specifications() -> None:
         "type": "array",
         "prefixItems": [{"type": "string"}, {"type": "string"}],
         "items": False,
+        "minItems": 2,
+        "maxItems": 2,
     }
     assert type_specification(
         MappingAttribute(
@@ -153,7 +155,7 @@ def test_parametrized_specification() -> None:
         "properties": {
             "param": {"type": ANY_TYPES},
         },
-        "required": ["param"],
+        "required": [],  # unspecialized, it accepts `Missing`
         "additionalProperties": False,
     }
     assert TestModel[str].__SPECIFICATION__ == {
@@ -442,7 +444,7 @@ def test_literal_of_mixed_types_names_only_the_values() -> None:
 
 def test_union_of_the_same_type_names_it_once() -> None:
     class Example(State):
-        value: Missing | None = None
+        value: Annotated[None, Verifier(lambda value: None)] | None = None
 
     # a type can be named only once within a list of types
     assert properties_of(Example)["value"] == {"type": "null"}  # pyright: ignore[reportTypedDictNotRequiredAccess]

@@ -32,7 +32,8 @@ are intentionally forbidden.
 
 `State.to_basic_object()`, `State.to_json()`, and `Meta` validation all share one conversion into
 this representation. Each leaf is encoded to the spelling the matching attribute validation reads
-back, so a converted value can be validated into the type it came from:
+back, so a converted value can be validated into the type it came from - with the exception of the
+mapping keys which spell alike once encoded, see the limitation below:
 
 | Type                               | Basic value          |
 | ---------------------------------- | -------------------- |
@@ -76,6 +77,11 @@ event.to_basic_object()
 Journal(events={UUID(int=1): event}).to_json()
 # '{"events": {"00000000-0000-0000-0000-000000000001": {"identifier": "000...", ...}}}'
 ```
+
+A known limitation: keys of one mapping which are encoded to the same string collide in the result,
+the last one winning - `None` and `"null"` in a `Mapping[None | str, ...]`, `1` and `"1"` in a
+`Mapping[int | str, ...]` or a `Mapping[Literal[1, "1"], ...]` - so a mapping holding both is not
+the one which is read back.
 
 Anything else - a plain `Enum`, a `Decimal`, `Missing` held within a value - has no basic spelling
 the validation would read back. Rather than encoding it into a value which could only fail on the
