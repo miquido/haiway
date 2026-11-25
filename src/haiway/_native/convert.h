@@ -142,6 +142,19 @@ time_spelling(PyObject *value)
     return PyUnicode_FromStringAndSize(text, length);
 }
 
+/* the spelling a method gives, which is code of the user for a subclass - so that it is a
+ * str is checked rather than assumed, as what reads it reads the text of a str */
+static PyObject *
+spelled_by_method(PyObject *value, PyObject *method)
+{
+    PyObject *spelled = PyObject_CallMethodNoArgs(value, method);
+    if (spelled == NULL || PyUnicode_Check(spelled)) return spelled;
+    PyErr_Format(PyExc_TypeError, "%U of '%s' returned non-str (type %s)", method, Py_TYPE(value)->tp_name,
+                 Py_TYPE(spelled)->tp_name);
+    Py_DECREF(spelled);
+    return NULL;
+}
+
 /* the spelling of a value which has one of its own, a new reference - NULL with no error for none */
 static PyObject *
 native_spelling(ModuleState *state, PyObject *value)
@@ -164,11 +177,11 @@ native_spelling(ModuleState *state, PyObject *value)
     if (r == 0) r = instance_of(value, state->date);
     if (r == 0) r = instance_of(value, state->time);
     if (r < 0) return NULL;
-    if (r) return PyObject_CallMethodNoArgs(value, state->str_isoformat);
+    if (r) return spelled_by_method(value, state->str_isoformat);
 
     r = instance_of(value, state->path);
     if (r < 0) return NULL;
-    if (r) return PyObject_CallMethodNoArgs(value, state->str_as_posix);
+    if (r) return spelled_by_method(value, state->str_as_posix);
 
     return NULL;
 }
@@ -184,6 +197,62 @@ dict_source(PyObject *value)
     if (PyFrozenDict_Check(value)) return Py_NewRef(value);
     if (PyDict_Check(value)) return PyDict_Copy(value);
     return NULL;
+}
+
+/* the keys of a mapping which are spelled alike - the one rule of it, whoever walks the mapping */
+static void
+report_colliding_keys(void)
+{
+    PyErr_SetString(PyExc_ValueError, "Keys of a mapping are the same once spelled as keys of json");
+}
+
+/*
+ * The spelling of a key as a key of json, for the keys which have no text of their own - a bool,
+ * None, an int or a float, an enum of one of those included. NULL without an error for any other
+ * key, which is spelled by the basic conversion of its value. An int is spelled as `json.dumps`
+ * spells it, a float as `repr` does - the infinities and nan included, which json has no number
+ * for, but a key has the text of.
+ */
+static PyObject *
+key_spelling(PyObject *key)
+{
+    if (key == Py_None) return PyUnicode_FromString("null");
+    if (key == Py_True) return PyUnicode_FromString("true");
+    if (key == Py_False) return PyUnicode_FromString("false");
+    if (PyLong_Check(key)) return PyLong_Type.tp_repr(key);
+    if (PyFloat_Check(key)) return PyFloat_Type.tp_repr(key);
+    return NULL;
+}
+
+/* key_spelling(key) - the spelling, or None for a key which has none of its own */
+static PyObject *
+key_spelling_native(PyObject *mod, PyObject *key)
+{
+    PyObject *spelled = key_spelling(key);
+    if (spelled == NULL && !PyErr_Occurred()) Py_RETURN_NONE;
+    return spelled;
+}
+
+/* spelled_once(spelled, key) - takes the spelling of a key in, raises when it was taken already */
+static PyObject *
+spelled_once_native(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
+{
+    if (nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "spelled_once expects a set and a key");
+        return NULL;
+    }
+    if (!PySet_Check(args[0])) {
+        PyErr_Format(PyExc_TypeError, "spelled_once expects a set, not %.100s", Py_TYPE(args[0])->tp_name);
+        return NULL;
+    }
+    int taken = PySet_Contains(args[0], args[1]);
+    if (taken < 0) return NULL;
+    if (taken) {
+        report_colliding_keys();
+        return NULL;
+    }
+    if (PySet_Add(args[0], args[1]) < 0) return NULL;
+    Py_RETURN_NONE;
 }
 
 static PyObject *basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNode *node, PyObject *prefix);
@@ -206,8 +275,13 @@ basic_struct(ModuleState *state, PyObject *self, int strict, PathNode *node, PyO
     if (result == NULL) return NULL;
     Py_ssize_t n = plan->count;
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
-        if (value == NULL || value == state->missing) continue;
+        PyObject *value = ITEM_LOAD(ITEMS(self), i);  /* bound once, for good - read as it is */
+        if (value == NULL) {
+            not_initialized(Py_TYPE(self));
+            Py_DECREF(result);
+            return NULL;
+        }
+        if (value == state->missing) continue;
         FieldPlan *field = &plan->fields[i];
         PyObject *key = field_key(field);
         PathNode step = {node, key, 0};
@@ -269,15 +343,22 @@ basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNod
             PyObject *key_basic;
             if (PyUnicode_CheckExact(key)) {
                 key_basic = Py_NewRef(key);
-            } else if (PyLong_CheckExact(key)) {  /* spelled the way `basic_key` does, natively */
-                key_basic = PyObject_Str(key);
-                if (key_basic == NULL) goto items_fail;
             } else {
-                PyObject *path = path_tuple(node, prefix);
-                if (path == NULL) goto items_fail;
-                key_basic = PyObject_CallFunction(state->basic_key, "OOO", key, strict ? Py_True : Py_False, path);
-                Py_DECREF(path);
-                if (key_basic == NULL) goto items_fail;
+                key_basic = key_spelling(key);
+                if (key_basic == NULL) {
+                    if (PyErr_Occurred()) goto items_fail;
+                    PyObject *path = path_tuple(node, prefix);
+                    if (path == NULL) goto items_fail;
+                    key_basic = PyObject_CallFunction(state->basic_key, "OOO", key, strict ? Py_True : Py_False, path);
+                    Py_DECREF(path);
+                    if (key_basic == NULL) goto items_fail;
+                }
+            }
+            int taken = PyDict_Contains(result, key_basic);  /* two keys spelled alike */
+            if (taken != 0) {
+                if (taken > 0) report_colliding_keys();
+                Py_DECREF(key_basic);
+                goto items_fail;
             }
             PathNode step = {node, key_basic, 0};
             PyObject *converted = basic_convert(state, item, strict, &step, prefix);
@@ -357,8 +438,13 @@ recursive_struct(ModuleState *state, PyObject *self, int recursive)
     if (result == NULL) return NULL;
     Py_ssize_t n = plan->count;
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
-        if (value == NULL || value == state->missing) continue;
+        PyObject *value = ITEM_LOAD(ITEMS(self), i);  /* bound once, for good - read as it is */
+        if (value == NULL) {
+            not_initialized(Py_TYPE(self));
+            Py_DECREF(result);
+            return NULL;
+        }
+        if (value == state->missing) continue;
         PyObject *key = field_key(&plan->fields[i]);
         PyObject *converted = recursive ? recursive_convert(state, value) : Py_NewRef(value);
         if (converted == NULL || PyDict_SetItem(result, key, converted) < 0) {

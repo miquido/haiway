@@ -94,8 +94,11 @@ class Invoice(State):
   `str`/`repr`/`format_str`, value kept for serialization - use it for every secret).
 - Instances: `.updating(**kwargs)`, `.to_mapping()`, `.to_json()`, `.from_mapping()`,
   `.from_json()`, `.json_schema()`. Generics are supported and enforced (`class Box[T](State)`):
-  each specialization is a distinct class, `Box[Dog]` is a subclass of `Box[Animal]`, and type
-  parameter bounds are checked. States can't be pickled - use `to_json`/`to_basic_object`.
+  each specialization is a distinct class, `Box[Dog]` is a subclass of `Box[Animal]` (but
+  `Box[bool]` is not one of `Box[int]`), and type parameter bounds are checked. `to_json` raises
+  `ValueError` for `inf`/`nan` floats and `from_json` refuses `NaN`/`Infinity`; attribute paths
+  (`Model._.x(obj, v)`) validate the update as the constructor does. States can't be pickled - use
+  `to_json`/`to_basic_object`.
 - A `State` has a single base: `State`, or an attribute-less `State` sharing behavior - plus
   `Generic` for type parameters. A class declaring attributes is final; mixins and multiple
   inheritance are refused. Compose by holding instances as attributes.

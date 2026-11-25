@@ -59,7 +59,7 @@ def test_alias_and_name_are_both_accepted_but_not_together() -> None:
 
 
 def test_unexpected_keywords_and_positionals_are_refused() -> None:
-    with pytest.raises(TypeError, match="no attribute 'z'"):
+    with pytest.raises(TypeError, match="Unexpected attribute 'z' for Point"):
         Point(x=1, z=2)  # pyright: ignore[reportCallIssue]
 
     with pytest.raises(TypeError):
@@ -117,7 +117,7 @@ def test_updating_by_keywords_by_alias_and_by_unpacking() -> None:
 def test_updating_refuses_what_it_can_not_apply() -> None:
     point = Point(x=1)
 
-    with pytest.raises(TypeError, match="no attribute 'z'"):
+    with pytest.raises(TypeError, match="Unexpected attribute 'z' for Point"):
         point.updating(z=1)  # pyright: ignore[reportCallIssue]
 
     with pytest.raises(TypeError, match="Duplicate attribute"):

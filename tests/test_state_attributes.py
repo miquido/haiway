@@ -1,16 +1,18 @@
 import datetime
 import enum
 import pathlib
+import sys
 import typing
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Annotated, Any, Final, NotRequired, Required, TypedDict
+from typing import Annotated, Any, Final, NotRequired, ReadOnly, Required, TypedDict
 
 import pytest
 import typing_extensions as te
 
 from haiway import State
+from haiway.attributes import annotations as annotations_module
 from haiway.attributes import native
 from haiway.attributes.annotations import (
     AliasAttribute,
@@ -29,7 +31,7 @@ from haiway.attributes.annotations import (
     UUIDAttribute,
     ValidableAttribute,
 )
-from haiway.attributes.validation import Validator
+from haiway.attributes.validation import ValidationError, Validator
 from haiway.types import Alias, Description, Meta, Specification
 
 _SENTINEL = object()
@@ -442,7 +444,7 @@ def test_str_enum_attribute_accepts_value_and_name() -> None:
         _validate(annotation, "green")
 
 
-def test_int_enum_attribute_accepts_value_name_and_stringified_value() -> None:
+def test_int_enum_attribute_accepts_value_and_name_but_not_stringified_value() -> None:
     class Priority(enum.IntEnum):
         LOW = 1
         HIGH = 2
@@ -455,6 +457,95 @@ def test_int_enum_attribute_accepts_value_name_and_stringified_value() -> None:
     annotation = attribute_of(Example, "priority")
     assert _validate(annotation, 1) is Priority.LOW
     assert _validate(annotation, "HIGH") is Priority.HIGH
-    assert _validate(annotation, "2") is Priority.HIGH
+    with pytest.raises(ValueError):
+        _validate(annotation, "2")
+
     with pytest.raises(ValueError):
         _validate(annotation, "Missing")
+
+
+# --- ReadOnly (PEP 705) ----------------------------------------------------------------
+
+
+class _ReadOnlyMapping(TypedDict):
+    plain: int
+    qualified: ReadOnly[int]
+    qualified_extension: te.ReadOnly[int]
+    optional: NotRequired[ReadOnly[int]]
+    also_optional: ReadOnly[NotRequired[int]]
+    described: ReadOnly[Annotated[str, Description("described")]]
+
+
+class _PlainMapping(TypedDict):
+    plain: int
+    qualified: int
+    qualified_extension: int
+    optional: NotRequired[int]
+    also_optional: NotRequired[int]
+    described: Annotated[str, Description("described")]
+
+
+def test_read_only_is_resolved_as_what_it_qualifies_inside_a_typed_dict() -> None:
+    class Example(State):
+        mapping: _ReadOnlyMapping
+
+    class Plain(State):
+        mapping: _PlainMapping
+
+    annotation = attribute_of(Example, "mapping")
+    assert isinstance(annotation, TypedDictAttribute)
+    attributes = annotation.attributes
+    for name in ("plain", "qualified", "qualified_extension", "optional", "also_optional"):
+        assert isinstance(attributes[name], IntegerAttribute)
+
+    assert attributes["qualified"].required is True
+    assert attributes["optional"].required is False
+    assert attributes["also_optional"].required is False
+    assert attributes["described"].description == "described"
+    read_only_specification: Any = Example.__SPECIFICATION__
+    plain_specification: Any = Plain.__SPECIFICATION__
+    assert (
+        read_only_specification["properties"]["mapping"]
+        == (plain_specification["properties"]["mapping"])
+    )
+
+
+def test_typed_dict_with_read_only_keys_is_validated() -> None:
+    class Example(State):
+        mapping: _ReadOnlyMapping
+
+    value: Any = {"plain": 1, "qualified": 2, "qualified_extension": 3, "described": "d"}
+    assert Example(mapping=value).mapping == value
+
+    invalid: Any = {**value, "qualified": "not an int"}
+    with pytest.raises(ValidationError):
+        Example(mapping=invalid)
+
+
+def test_read_only_attribute_is_resolved_as_what_it_qualifies() -> None:
+    # not valid where a type checker reads it, so the class is made from the annotations
+    qualifier: Any = ReadOnly
+    qualifier_extension: Any = te.ReadOnly
+    Example: Any = type(
+        "Example",
+        (State,),
+        {"__annotations__": {"value": qualifier[int], "extension": qualifier_extension[str]}},
+    )
+
+    assert isinstance(attribute_of(Example, "value"), IntegerAttribute)
+    assert Example(value=1, extension="a").value == 1
+    specification: Any = Example.__SPECIFICATION__
+    assert specification["properties"] == {
+        "value": {"type": "integer"},
+        "extension": {"type": "string"},
+    }
+
+
+def test_typed_dicts_are_recognized_without_typing_extensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # typing_extensions is optional - without it only the TypedDicts of typing exist
+    monkeypatch.setitem(sys.modules, "typing_extensions", None)
+    checks: Any = vars(annotations_module)["_typeddict_checks"]()
+    assert len(checks) == 1
+    assert checks[0](TypedDict("Plain", {"a": int}))

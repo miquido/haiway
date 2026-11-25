@@ -139,13 +139,14 @@ write_string(Buffer *buffer, PyObject *text)
     return buffer_putc(buffer, '"');
 }
 
-/* the key of an attribute as json spells it, followed by the colon - what a plan keeps */
+/* the key of an attribute as json spells it, followed by the colon - what a plan keeps. The
+ * json written is compact, with no space after a separator */
 static PyObject *
 json_key_bytes(PyObject *key)
 {
     Buffer buffer = {NULL, NULL, 0, 0};
     PyObject *result = NULL;
-    if (write_string(&buffer, key) && buffer_put(&buffer, ": ", 2)) {
+    if (write_string(&buffer, key) && buffer_putc(&buffer, ':')) {
         result = PyBytes_FromStringAndSize(buffer.data, buffer.length);
     }
     PyMem_Free(buffer.data);
@@ -173,10 +174,14 @@ write_struct_json(Buffer *buffer, PyObject *self)
     if (!buffer_putc(buffer, '{')) return JSON_ERROR;
     int first = 1;
     for (Py_ssize_t i = 0; i < plan->count; i++) {
-        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
-        if (value == NULL || value == buffer->state->missing) continue;
+        PyObject *value = ITEM_LOAD(ITEMS(self), i);  /* bound once, for good - read as it is */
+        if (value == NULL) {
+            not_initialized(Py_TYPE(self));
+            return JSON_ERROR;
+        }
+        if (value == buffer->state->missing) continue;
         FieldPlan *field = &plan->fields[i];
-        if (!first && !buffer_put(buffer, ", ", 2)) return JSON_ERROR;
+        if (!first && !buffer_putc(buffer, ',')) return JSON_ERROR;
         first = 0;
         if (!buffer_put(buffer, field->json_key, field->json_key_length)) return JSON_ERROR;
         int r = write_json(buffer, value);
@@ -207,13 +212,6 @@ write_int(Buffer *buffer, PyObject *value)
     return write_text_of(buffer, PyLong_Type.tp_repr(value));
 }
 
-/* an int key - quoted, as the standard library spells it */
-static int
-write_quoted_int(Buffer *buffer, PyObject *key)
-{
-    return buffer_putc(buffer, '"') && write_int(buffer, key) == JSON_OK && buffer_putc(buffer, '"');
-}
-
 static int
 write_json_unbounded(Buffer *buffer, PyObject *value)
 {
@@ -224,10 +222,8 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
     if (PyLong_Check(value)) return write_int(buffer, value);  /* an enum of ints as the int it is */
     if (PyFloat_Check(value)) {
         double number = PyFloat_AS_DOUBLE(value);
-        if (isnan(number)) return buffer_put(buffer, "NaN", 3) ? JSON_OK : JSON_ERROR;
-        if (isinf(number)) {
-            return (number > 0 ? buffer_put(buffer, "Infinity", 8) : buffer_put(buffer, "-Infinity", 9)) ? JSON_OK : JSON_ERROR;
-        }
+        /* json has no spelling for these - the writer of the standard library, which raises, is left to say so */
+        if (!isfinite(number)) return JSON_BAIL;
         /* the shortest spelling which reads back the same - what `repr` of a float is */
         char *text = PyOS_double_to_string(number, 'r', 0, Py_DTSF_ADD_DOT_0, NULL);
         if (text == NULL) return JSON_ERROR;
@@ -244,7 +240,7 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
         Py_ssize_t n = PyTuple_GET_SIZE(items);
         int status = buffer_putc(buffer, '[') ? JSON_OK : JSON_ERROR;
         for (Py_ssize_t i = 0; status == JSON_OK && i < n; i++) {
-            if (i > 0 && !buffer_put(buffer, ", ", 2)) status = JSON_ERROR;
+            if (i > 0 && !buffer_putc(buffer, ',')) status = JSON_ERROR;
             else status = write_json(buffer, PyTuple_GET_ITEM(items, i));
         }
         Py_DECREF(items);
@@ -267,10 +263,28 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
                 status = JSON_BAIL;  /* spelled as a key by the standard library */
                 break;
             }
-            if (!first && !buffer_put(buffer, ", ", 2)) status = JSON_ERROR;
-            else if (text ? !write_string(buffer, key) : !write_quoted_int(buffer, key)) status = JSON_ERROR;
-            else if (!buffer_put(buffer, ": ", 2)) status = JSON_ERROR;
-            else status = write_json(buffer, item);
+            PyObject *spelled = NULL;
+            if (!text) {
+                /* spelled as the str which another key may be as well - which json.dumps writes
+                 * twice, and any reader keeps one of */
+                spelled = key_spelling(key);
+                if (spelled == NULL) {
+                    status = JSON_ERROR;
+                    break;
+                }
+                int taken = PyDict_Contains(source, spelled);
+                if (taken != 0) {
+                    Py_DECREF(spelled);
+                    if (taken > 0) report_colliding_keys();
+                    status = JSON_ERROR;
+                    break;
+                }
+            }
+            if (!first && !buffer_putc(buffer, ',')) status = JSON_ERROR;
+            else if (!write_string(buffer, text ? key : spelled)) status = JSON_ERROR;
+            else if (!buffer_putc(buffer, ':')) status = JSON_ERROR;
+            Py_XDECREF(spelled);
+            if (status == JSON_OK) status = write_json(buffer, item);
             first = 0;
         }
         Py_DECREF(source);
@@ -310,7 +324,8 @@ write_json(Buffer *buffer, PyObject *value)
     return result;
 }
 
-/* to_json(instance) - the json of an instance as `json.dumps` writes it, None when not handled here */
+/* to_json(instance) - the json of an instance as `json.dumps` writes it with compact separators,
+ * None when not handled here */
 static PyObject *
 to_json_native(PyObject *mod, PyObject *self)
 {

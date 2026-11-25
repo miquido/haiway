@@ -99,7 +99,6 @@ VERIFIED_CASES: Sequence[tuple[str, Any, Any, Any]] = (
     ("int_enum", Numbered, Numbered.ONE, Numbered.ONE),
     ("int_enum_from_value", Numbered, 1, Numbered.ONE),
     ("int_enum_from_name", Numbered, "ONE", Numbered.ONE),
-    ("int_enum_from_str_value", Numbered, "1", Numbered.ONE),
 )
 
 

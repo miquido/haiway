@@ -39,7 +39,6 @@ from typing import (
     TypeVarTuple,
     cast,
     dataclass_transform,
-    final,
     get_args,
     get_origin,
     overload,
@@ -49,6 +48,7 @@ from uuid import UUID, SafeUUID
 from haiway._native import nstruct
 from haiway.attributes import native
 from haiway.attributes.annotations import (
+    AttributeAnnotation,
     ObjectAttribute,
     attribute_redaction,
     resolve_self_attribute,
@@ -56,6 +56,7 @@ from haiway.attributes.annotations import (
 from haiway.attributes.attribute import Attribute
 from haiway.attributes.generics import (
     Variance,
+    VariancesCell,
     argument_variances,
     bind_type_arguments,
     is_open_type_argument,
@@ -63,7 +64,7 @@ from haiway.attributes.generics import (
     unspecialized_defaults,
 )
 from haiway.attributes.path import AttributePath
-from haiway.attributes.specification import object_specification
+from haiway.attributes.specification import object_specification, unique_anchors
 from haiway.attributes.validation import ValidationError
 from haiway.types import (
     BasicObject,
@@ -74,8 +75,14 @@ from haiway.types import (
     Missing,
     TypeSpecification,
 )
-from haiway.types.basic import basic_key, basic_value, parse_duration
+from haiway.types.basic import (
+    basic_key,
+    basic_value,
+    parse_duration,
+    spelled_once,
+)
 from haiway.types.guards import is_iterable, is_mapping
+from haiway.types.strict_json import finite_float, refused_constant
 
 __all__ = ("State",)
 
@@ -174,17 +181,17 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
     __SELF_ATTRIBUTE__: ObjectAttribute
     __TYPE_PARAMETERS__: Mapping[str, Any] | None
     __SPECIALIZED__: bool
-    __SPECIFICATION__: TypeSpecification
+    # none for a class which can't be represented using json schema
+    __JSON_SPECIFICATION__: TypeSpecification | None
     __FIELDS__: Sequence[Attribute]
-    __ALLOWED_FIELDS__: Set[str]
-    __ALIASES__: Mapping[str, str]
-    __SERIALIZABLE__: bool
+    # every key an attribute can be provided under, by the name of the attribute
+    __ALLOWED_FIELDS__: Mapping[str, str]
     __DESCRIPTION__: str | None
     __DEFAULTED__: Set[str]
     __ANNOTATED__: Mapping[str, Any]
     # held by a generic class alone, filled in place when first asked for
     __SPECIALIZATIONS__: MutableMapping[tuple[Any, ...], Any]
-    __VARIANCES__: MutableMapping[str, Variance]
+    __VARIANCES__: VariancesCell
     __slots__: tuple[str, ...]
     __match_args__: tuple[str, ...]
     # declared by a specialization alone - `__SPECIALIZED__` tells whether the
@@ -238,6 +245,9 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         declared_defaults: Mapping[str, Any] = {
             key: namespace.pop(key) for key in names if key in namespace
         }
+        for key, default in declared_defaults.items():
+            _refuse_mutable_default(name, key, default)
+
         defaults.update(declared_defaults)
         # resolved again, now that no declared default can answer for a type of
         # the same name - see the note on the names above
@@ -319,36 +329,30 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
             cls.__SPECIALIZATIONS__ = {}  # pyright: ignore[reportConstantRedefinition]
             # the variance of its parameters, worked out when first asked for - once
             # the classes its annotations refer to exist
-            cls.__VARIANCES__ = {}  # pyright: ignore[reportConstantRedefinition]
+            cls.__VARIANCES__ = VariancesCell()  # pyright: ignore[reportConstantRedefinition]
 
         if not any(isinstance(base, StateMeta) for base in bases):
             # the base class - no fields specified
             assert not type_parameters  # nosec: B101
-            cls.__SPECIFICATION__ = {  # pyright: ignore[reportConstantRedefinition]
+            cls.__JSON_SPECIFICATION__ = {  # pyright: ignore[reportConstantRedefinition]
                 "type": "object",
                 "properties": {},
                 "required": [],
                 "additionalProperties": False,
             }
             cls.__FIELDS__ = ()  # pyright: ignore[reportConstantRedefinition]
-            cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
-            cls.__ALIASES__ = {}  # pyright: ignore[reportConstantRedefinition]
-            cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
+            cls.__ALLOWED_FIELDS__ = {}  # pyright: ignore[reportConstantRedefinition]
             cls.__match_args__ = ()
             native.install(cls, (), ())  # last - the class can't be changed after
 
             return cls  # early exit - base class
 
-        fields: Sequence[Attribute] = tuple(
-            Attribute(
-                name=key,
-                annotation=attribute,
-                default=_resolve_default(defaults.get(key, Missing)),
-                redaction=attribute_redaction(attribute),
-                spec=native.compile(attribute),
-            )
-            for key, attribute in self_attribute.attributes.items()
+        fields: Sequence[Attribute] = _declared_fields(
+            name,
+            attributes=self_attribute.attributes,
+            defaults=defaults,
         )
+
         # every key an attribute can be provided under, refusing a collision
         allowed_fields: Mapping[str, str] = _allowed_fields(
             name,
@@ -369,24 +373,13 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
             description=cls.__DESCRIPTION__,
         )
 
-        if specification is not None:  # it is technically not serializable otherwise
-            cls.__SPECIFICATION__ = specification  # pyright: ignore[reportConstantRedefinition]
-            cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
-
-        elif serializable:
+        if specification is None and serializable:
             raise TypeError(f"{cls.__name__} requires serialization but cannot produce json schema")
 
-        else:  # no specification
-            cls.__SERIALIZABLE__ = False  # pyright: ignore[reportConstantRedefinition]
-            cls.__SPECIFICATION__ = _no_specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
-
+        # without a specification the class is not serializable
+        cls.__JSON_SPECIFICATION__ = specification  # pyright: ignore[reportConstantRedefinition]
         cls.__FIELDS__ = fields  # pyright: ignore[reportConstantRedefinition]
-        cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
-        # resolved here so that updates can be normalized to canonical names
-        # without rebuilding this mapping of the class on each of them
-        cls.__ALIASES__ = {  # pyright: ignore[reportConstantRedefinition]
-            field.alias: field.name for field in fields if field.alias is not None
-        }
+        cls.__ALLOWED_FIELDS__ = allowed_fields  # pyright: ignore[reportConstantRedefinition]
         # every field, unlike `__slots__` which holds the names declared here - a
         # specialized generic declares none of them and matches all of them
         cls.__match_args__ = tuple(field.name for field in fields)
@@ -395,6 +388,22 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         native.install(cls, fields, names)
 
         return cls
+
+    @property
+    def __SPECIFICATION__(cls) -> TypeSpecification:
+        # the one place telling a class can't be represented using json schema
+        specification: TypeSpecification | None = cls.__JSON_SPECIFICATION__
+        if specification is None:
+            raise TypeError(f"{cls.__name__} cannot be represented using json schema")
+
+        # the class holds what its attributes resolved to, nested classes as they hold
+        # theirs - the anchors of the whole document are made unique here, once it is asked
+        # for rather than for every class defined
+        return unique_anchors(specification)
+
+    @property
+    def __SERIALIZABLE__(cls) -> bool:
+        return cls.__JSON_SPECIFICATION__ is not None
 
     @property
     def __signature__(cls) -> inspect.Signature:
@@ -507,12 +516,13 @@ def _check_keys(
 ) -> None:
     # what the constructor and `__replace__` refuse before looking at any value -
     # the native code hands over the moment it finds a key which is not right
-    if unexpected := kwargs.keys() - cls.__ALLOWED_FIELDS__:
+    allowed: Mapping[str, str] = cls.__ALLOWED_FIELDS__
+    if unexpected := kwargs.keys() - allowed.keys():
         raise _unexpected_attributes(cls, unexpected)
 
-    for alias, name in cls.__ALIASES__.items():
-        if alias in kwargs and name in kwargs:
-            raise _duplicate_attribute(cls, name, alias)
+    for key, name in allowed.items():
+        if key != name and key in kwargs and name in kwargs:  # an alias and its name
+            raise _duplicate_attribute(cls, name, key)
 
 
 # a variant is made once - two threads asking for the same one at the same time would
@@ -638,6 +648,8 @@ def _refuse_inheriting(
     bases: tuple[type, ...],
     /,
 ) -> None:
+    if len(bases) == 1 and not getattr(bases[0], "__FIELDS__", True):
+        return  # the usual one - a State without attributes of its own
     states: tuple[type, ...] = tuple(base for base in bases if isinstance(base, StateMeta))
     if not states:
         return  # the root State itself
@@ -717,6 +729,64 @@ def _allowed_fields(
     return allowed
 
 
+def _declared_fields(
+    name: str,
+    /,
+    attributes: Mapping[str, AttributeAnnotation],
+    defaults: Mapping[str, Any],
+) -> Sequence[Attribute]:
+    fields: Sequence[Attribute] = tuple(
+        Attribute(
+            name=key,
+            annotation=attribute,
+            default=_resolve_default(defaults.get(key, Missing)),
+            redaction=attribute_redaction(attribute),
+            spec=native.compile(attribute),
+        )
+        for key, attribute in attributes.items()
+    )
+
+    # an attribute is left out only when it has a default or accepts `Missing`, and
+    # `NotRequired` is neither, nor a default of `Missing` for an annotation refusing it -
+    # the attribute would be required all the same
+    for field in fields:
+        if not field.annotation.metadata.required and field.required:
+            if field.name in defaults:
+                raise TypeError(
+                    f"{name}.{field.name} defaults to Missing, which its annotation does not"
+                    " accept - annotate it with `| Missing` to make it optional"
+                )
+
+            raise TypeError(
+                f"{name}.{field.name} is annotated with NotRequired, which is not applicable"
+                " to an attribute of a State - declare a default to make it optional"
+            )
+
+    return fields
+
+
+# what a default can't be - one value is kept by the class and given to every instance, so
+# changing it in one of them would change it in all
+_MUTABLE_DEFAULTS: Final[tuple[type[Any], ...]] = (list, dict, set, bytearray)
+
+
+def _refuse_mutable_default(
+    name: str,
+    attribute: str,
+    value: DefaultValue | Any | Missing,
+    /,
+) -> None:
+    # a `Default(value)` is the same plain default, only a factory makes one for each instance
+    plain: Any = value() if isinstance(value, DefaultValue) and value.constant else value
+    kind: str = type(plain).__name__
+    if isinstance(plain, _MUTABLE_DEFAULTS):
+        raise TypeError(
+            f"{name}.{attribute} declares a mutable {kind} as its default,"
+            " which every instance would share - declare it with DefaultFactory or"
+            " Default(factory=...) to make one for each of them"
+        )
+
+
 def _resolve_default(
     value: DefaultValue | Any | Missing,
 ) -> DefaultValue:
@@ -743,22 +813,57 @@ def _compatible(
             variance,
         )
 
-    # the relation of two classes is all there is to decide it on - an argument
-    # which is not one, a parameterized generic, a union or a literal, only ever
-    # matches the equal argument admitted above
+    # the relation of two classes, or of the alternatives of unions, is all there is to
+    # decide it on - an argument which is neither, a parameterized generic or a literal,
+    # only ever matches the equal argument admitted above
     try:
         match variance:
             case "co":
-                return issubclass(subclass_arg, cast(Any, self_arg))
+                return _annotated_subclass(subclass_arg, self_arg)
 
             case "contra":
-                return issubclass(cast(Any, self_arg), subclass_arg)
+                return _annotated_subclass(self_arg, subclass_arg)
 
             case "inv":
                 return False
 
     except TypeError:
         return False
+
+
+def _annotated_subclass(
+    subclass: Any,
+    base: Any,
+    /,
+) -> bool:
+    # each alternative of a union has to fit one of the other - compared one by one, as
+    # the language would relate a bool to `int | None` as a whole
+    return all(
+        any(_annotated_member_subclass(member, base_member) for base_member in _members(base))
+        for member in _members(subclass)
+    )
+
+
+def _members(annotation: Any, /) -> Sequence[Any]:
+    if isinstance(annotation, types.UnionType):
+        return get_args(annotation)
+
+    return (annotation,)
+
+
+def _annotated_member_subclass(
+    subclass: Any,
+    base: Any,
+    /,
+) -> bool:
+    # a bool is an int and a datetime a date to the language, and neither is to an
+    # annotation - validation refuses them, so a variant holding one is no subclass
+    if (base is int and issubclass(subclass, bool)) or (
+        base is date and issubclass(subclass, datetime)
+    ):
+        return False
+
+    return issubclass(subclass, base)
 
 
 def _compatible_signatures(
@@ -990,26 +1095,20 @@ def _duplicate_attribute(
 def _unexpected_attributes(
     cls: type[Any],
     /,
-    keys: Set[str],
+    keys: Iterable[Any],
 ) -> TypeError:
-    return TypeError(
-        f"{cls.__name__} has no attribute {', '.join(repr(key) for key in sorted(keys))}"
+    # the one refusal of keys which are no attribute, wherever they are found - given
+    # to the constructor, to `updating` or read from a mapping. the names come first, in
+    # their order - whatever else a mapping is keyed by is not sorted by comparing the
+    # keys, they may not compare
+    given: Sequence[Any] = tuple(keys)
+    texts: Sequence[str] = (
+        *(repr(key) for key in sorted(key for key in given if isinstance(key, str))),
+        *sorted(repr(key) for key in given if not isinstance(key, str)),
     )
-
-
-@final
-class _NoSpecification:
-    __slots__ = ()
-
-    def __get__(
-        self,
-        instance: object,
-        owner: type[object],
-    ) -> NoReturn:
-        raise TypeError(f"{owner.__name__} cannot be represented using json schema")
-
-
-_no_specification: _NoSpecification = _NoSpecification()
+    return TypeError(
+        f"Unexpected attribute{'s' if len(texts) > 1 else ''} {', '.join(texts)} for {cls.__name__}"
+    )
 
 
 class State(nstruct.Struct, metaclass=StateMeta):
@@ -1258,7 +1357,9 @@ class State(nstruct.Struct, metaclass=StateMeta):
         value : str | bytes
             JSON payload representing a single instance.
         decoder : type[json.JSONDecoder], default=json.JSONDecoder
-            Decoder class used by ``json.loads``.
+            Decoder class used by ``json.loads``. It is given ``parse_float`` and
+            ``parse_constant`` refusing what is not json, which it has to accept and
+            keep - a ``decode`` of its own refuses that itself or not at all.
         ignore_extra : bool, default=False
             When ``True``, keys which are neither an attribute name nor an alias are
             skipped instead of refused, in every nested State, sequence, mapping, tuple,
@@ -1275,7 +1376,9 @@ class State(nstruct.Struct, metaclass=StateMeta):
         Raises
         ------
         ValueError
-            If the payload cannot be decoded or fails State validation.
+            If the payload cannot be decoded or fails State validation. The constants
+            ``NaN``, ``Infinity`` and ``-Infinity``, and a number beyond what a float
+            holds, are not json and refuse the payload, wherever they are.
         """
         try:
             if decoder is json.JSONDecoder:
@@ -1290,6 +1393,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
                 json.loads(
                     value,
                     cls=decoder,
+                    parse_constant=refused_constant,
+                    parse_float=finite_float,
                 ),
                 ignore_extra,
             )
@@ -1314,7 +1419,9 @@ class State(nstruct.Struct, metaclass=StateMeta):
         value : str | bytes
             JSON payload representing an array of objects.
         decoder : type[json.JSONDecoder], default=json.JSONDecoder
-            Decoder class used by ``json.loads``.
+            Decoder class used by ``json.loads``. It is given ``parse_float`` and
+            ``parse_constant`` refusing what is not json, which it has to accept and
+            keep - a ``decode`` of its own refuses that itself or not at all.
         ignore_extra : bool, default=False
             When ``True``, keys which are neither an attribute name nor an alias are
             skipped instead of refused, in every nested State, sequence, mapping, tuple,
@@ -1331,7 +1438,9 @@ class State(nstruct.Struct, metaclass=StateMeta):
         Raises
         ------
         ValueError
-            If decoding fails or the payload is not an array of valid objects.
+            If decoding fails or the payload is not an array of valid objects. The
+            constants ``NaN``, ``Infinity`` and ``-Infinity``, and a number beyond what a
+            float holds, are not json and refuse the payload, wherever they are.
         """
         payload: Any
         try:
@@ -1343,7 +1452,14 @@ class State(nstruct.Struct, metaclass=StateMeta):
             payload = json.loads(
                 value,
                 cls=decoder,
+                parse_constant=refused_constant,
+                parse_float=finite_float,
             )
+
+        except ValidationError as exc:
+            # an element read natively was refused by its validation - the way it is when
+            # the array is read here, and each element validated after it
+            raise ValueError(f"Failed to decode {cls.__name__} from json array: {exc}") from exc
 
         except Exception as exc:
             raise ValueError(f"Failed to decode {cls.__name__} from json: {exc}") from exc
@@ -1372,7 +1488,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
         Parameters
         ----------
         indent : int | None, optional
-            Indentation passed to ``json.dumps`` for pretty-printing.
+            Indentation passed to ``json.dumps`` for pretty-printing. Without it the
+            json is compact, with no space after ``,`` and ``:``.
         encoder_class : type[json.JSONEncoder], default=JSONEncoder
             Encoder class responsible for encoding custom types.
 
@@ -1384,7 +1501,8 @@ class State(nstruct.Struct, metaclass=StateMeta):
         Raises
         ------
         ValueError
-            If encoding fails. The message names the type only - the values are
+            If encoding fails, a float value which is infinite or ``nan`` included - json
+            has no spelling for it. The message names the type only - the values are
             left to the cause, so a payload which failed to encode cannot carry
             a redacted attribute into a log through the error path.
         """
@@ -1401,7 +1519,10 @@ class State(nstruct.Struct, metaclass=StateMeta):
             return json.dumps(
                 _basic_object(self, strict=False),
                 indent=indent,
+                # compact as written natively - an indented document keeps the default
+                separators=(",", ":") if indent is None else None,
                 cls=encoder_class,
+                allow_nan=False,
             )
 
         except Exception as exc:
@@ -1646,8 +1767,11 @@ def _basic_items(
     strict: bool,
     path: tuple[str, ...],
 ) -> Generator[Any]:
-    for key, element in mapping.items():
+    # a snapshot, as `_basic_elements` walks one
+    spelled: set[Any] = set()
+    for key, element in tuple(mapping.items()):
         key_basic: Any = basic_key(key, strict=strict, path=path)
+        spelled_once(spelled, key_basic)
         yield (
             key_basic,
             _basic_mapping(
@@ -1666,7 +1790,9 @@ def _basic_elements(
     strict: bool,
     path: tuple[str, ...],
 ) -> Generator[Any]:
-    for index, element in enumerate(value):
+    # a snapshot - converting an element runs code of the user, and the iterable could be
+    # changed by it, or by another thread, while it is walked
+    for index, element in enumerate(tuple(value)):
         yield _basic_mapping(
             element,
             strict=strict,
@@ -1681,11 +1807,13 @@ def _is_dataclass_instance(value: Any, /) -> bool:
 def _recursive_mapping(  # noqa: PLR0911
     value: Any,
 ) -> Any:
-    if isinstance(value, str | bytes | float | int | bool | None):
-        return value
+    # bytes-like values are leaves, as they are when they are converted to basic ones
+    if isinstance(value, str | bytes | bytearray | memoryview | float | int | bool | None):
+        return cast(Any, value)  # a leaf as it is
 
     elif isinstance(value, State):
-        return value.to_mapping(recursive=True)
+        # converted by the extension, as it converts a State within any other container
+        return nstruct.to_mapping(value, True)
 
     elif _is_dataclass_instance(value):
         return {
@@ -1694,10 +1822,31 @@ def _recursive_mapping(  # noqa: PLR0911
         }
 
     elif is_mapping(value):
-        return {key: _recursive_mapping(element) for key, element in value.items()}
+        # snapshots - converting an element runs code, and the container could be
+        # changed by it, or by another thread, while it is walked. An exact `dict` is
+        # copied in one step, which is atomic on a free-threaded build - walking the
+        # items of any other mapping into a tuple is not, only as consistent as the
+        # mapping lets it be
+        items: Iterable[tuple[Any, Any]]
+        if type(value) is dict:
+            items = dict(cast(dict[Any, Any], value)).items()
+
+        else:
+            items = tuple(value.items())
+
+        return {key: _recursive_mapping(element) for key, element in items}
 
     elif is_iterable(value):
-        return [_recursive_mapping(element) for element in value]
+        # the same for the elements - a `tuple` of an exact `list` and a `frozenset` of an exact
+        # `set` are made in one step, anything else is walked once into a tuple
+        elements: Iterable[Any]
+        if type(value) is set:
+            elements = frozenset(cast(set[Any], value))
+
+        else:
+            elements = tuple(value)
+
+        return [_recursive_mapping(element) for element in elements]
 
     elif hasattr(value, "to_mapping") and callable(value.to_mapping):
         return value.to_mapping()
@@ -1716,7 +1865,7 @@ def _validated[Instance: State](cls: type[Instance], value: Any, ignore_extra: b
 
 
 def _unexpected_key(cls: Any, key: Any) -> NoReturn:
-    raise TypeError(f"Unexpected attribute '{key}' for {cls.__name__}")
+    raise _unexpected_attributes(cls, (key,))
 
 
 def _basic_fallback(value: Any, strict: bool, path: tuple[str, ...]) -> Any:
@@ -1756,7 +1905,6 @@ native.configure(
         mapping=Mapping,
         sequence=Sequence,
         set=Set,
-        iterable=Iterable,
         uuid=UUID,
         safe_uuid=SafeUUID,
         datetime=datetime,

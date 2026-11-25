@@ -88,7 +88,7 @@ static inline int
 any_bound(PyObject **items, Py_ssize_t n)
 {
     for (Py_ssize_t i = 0; i < n; i++) {
-        if (items[i] != NULL) return 1;
+        if (ITEM_LOAD(items, i) != NULL) return 1;
     }
     return 0;
 }
@@ -123,7 +123,9 @@ init_instance(PyObject *obj, PyObject *args, PyObject *kwargs, int ignore_extra)
     if (bind_values(plan, type, kwargs, values, ignore_extra)) {
         Py_BEGIN_CRITICAL_SECTION(obj);
         if (!any_bound(items, n)) {
-            for (Py_ssize_t i = 0; i < n; i++) items[i] = values[i];
+            /* a reader takes no lock - what it finds bound is whole, and it finds nothing
+             * for what is not bound yet, which it does not take for Missing */
+            for (Py_ssize_t i = 0; i < n; i++) ITEM_STORE(items, i, values[i]);
             bound = 1;
         }
         Py_END_CRITICAL_SECTION();
@@ -150,7 +152,7 @@ static inline PyObject *
 carried_value(PyTypeObject *type, PyObject *value)
 {
     if (value == NULL) {
-        PyErr_Format(PyExc_TypeError, "%s is not initialized", type->tp_name);
+        not_initialized(type);
         return NULL;
     }
     return Py_NewRef(value);
@@ -185,8 +187,9 @@ struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
 
         if (value == NULL) {
             /* an absent key carries the attribute over - a Missing value clears it */
-            target[i] = carried_value(type, source[i]);
-            if (target[i] == NULL) goto fail;
+            PyObject *carried = carried_value(type, ITEM_LOAD(source, i));
+            if (carried == NULL) goto fail;
+            ITEM_STORE(target, i, carried);
             continue;
         }
 
@@ -196,7 +199,7 @@ struct_replace(PyObject *self, PyObject *args, PyObject *kwargs)
             report_failure(plan->state, type, kwargs, field->name);
             goto fail;
         }
-        target[i] = validated;
+        ITEM_STORE(target, i, validated);
     }
 
     if (consumed != PyDict_GET_SIZE(kwargs)) {
@@ -255,14 +258,6 @@ keywords_dict(PyObject *const *values, PyObject *kwnames, Py_ssize_t nkw)
     return dict;
 }
 
-/* whether the class is constructed here - one declaring a `__new__` or an `__init__` of
- * its own takes over, whenever it is given one */
-static inline int
-constructs_natively(PyTypeObject *type)
-{
-    return type->tp_new == struct_new && type->tp_init == struct_init;
-}
-
 static PyObject *
 struct_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf, PyObject *kwnames)
 {
@@ -307,7 +302,7 @@ struct_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf, PyOb
             Py_DECREF(self);
             return NULL;
         }
-        items[i] = validated;
+        ITEM_STORE(items, i, validated);
     }
     finish_construction(self);
     return self;
@@ -434,7 +429,7 @@ instance_from_entries(ModuleState *state, PyTypeObject *type, CompiledPlan *plan
         for (Py_ssize_t k = 0; k < n; k++) Py_DECREF(values[k]);
         goto done;
     }
-    memcpy(ITEMS(self), values, (size_t)n * sizeof(PyObject *));
+    for (Py_ssize_t i = 0; i < n; i++) ITEM_STORE(ITEMS(self), i, values[i]);
     finish_construction(self);
 
 done:
@@ -516,6 +511,7 @@ instance_from_mapping(ModuleState *state, PyObject *cls, PyObject *mapping, int 
             Py_XDECREF(r);
             Py_DECREF(unknown);
             Py_DECREF(kwargs);
+            if (r != NULL) PyErr_SetString(PyExc_TypeError, "unexpected attributes");  /* it is documented to raise */
             return NULL;
         }
     }
@@ -619,11 +615,12 @@ struct_replace_fast(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyO
         FieldPlan *field = &plan->fields[i];
         if (given[i] < 0) {
             /* an absent key carries the attribute over - a Missing value clears it */
-            target[i] = carried_value(type, source[i]);
-            if (target[i] == NULL) {
+            PyObject *carried = carried_value(type, ITEM_LOAD(source, i));
+            if (carried == NULL) {
                 Py_DECREF(copy);
                 return NULL;
             }
+            ITEM_STORE(target, i, carried);
             continue;
         }
         PyObject *validated = validate_field(field, plan, args[nargs + given[i]], 0);
@@ -632,7 +629,7 @@ struct_replace_fast(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyO
             Py_DECREF(copy);
             return NULL;
         }
-        target[i] = validated;
+        ITEM_STORE(target, i, validated);
     }
     finish_update(copy, self);
     return copy;
@@ -773,16 +770,20 @@ struct_deep_copy(ModuleState *state, PyObject *self, PyObject *memo)
     PyObject *result = NULL;
     Py_ssize_t copied = 0;
     for (; copied < n; copied++) {
-        PyObject *value = ITEMS(self)[copied];
-        values[copied] = value == NULL ? NULL : deep_copy(state, value, memo);
-        if (value != NULL && values[copied] == NULL) goto done;
+        PyObject *value = ITEM_LOAD(ITEMS(self), copied);
+        if (value == NULL) {  /* a copy of it would hold what was not bound, for good */
+            not_initialized(type);
+            goto done;
+        }
+        values[copied] = deep_copy(state, value, memo);
+        if (values[copied] == NULL) goto done;
     }
 
     result = memo_lookup(memo, self);  /* entered while its values were copied */
     if (result != NULL || PyErr_Occurred()) goto done;
     result = type->tp_alloc(type, 0);
     if (result == NULL) goto done;
-    for (Py_ssize_t i = 0; i < n; i++) ITEMS(result)[i] = values[i];
+    for (Py_ssize_t i = 0; i < n; i++) ITEM_STORE(ITEMS(result), i, values[i]);
     copied = 0;  /* the copy holds them now */
     finish_construction(result);
     if (memo_store(memo, self, result) < 0) Py_CLEAR(result);

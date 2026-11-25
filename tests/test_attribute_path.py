@@ -1,10 +1,12 @@
-from collections.abc import Mapping, Sequence, Set
-from typing import Annotated, Any, TypedDict, cast
+import threading
+from collections.abc import Callable, Mapping, Sequence, Set
+from dataclasses import dataclass
+from typing import Annotated, Any, Literal, TypedDict, cast
 
 import pytest
 from pytest import raises
 
-from haiway import Alias, AttributePath, State
+from haiway import Alias, AttributePath, Map, Missing, State, ValidationError, Verifier
 
 
 class SequenceState(State):
@@ -366,7 +368,7 @@ class _SerializedRoot(State):
     optional: _SerializedLeaf | None = None
     items: Annotated[Sequence[_SerializedLeaf], Alias("its")] = ()
     pair: tuple[_SerializedLeaf, ...] = ()
-    mapping: Mapping[str, _SerializedLeaf] = {}
+    mapping: Mapping[str, _SerializedLeaf] = Map()
     typed: _SerializedTyped | None = None
     aliased: _SerializedLeaves = ()
 
@@ -412,7 +414,7 @@ def test_serialized_components_keep_python_components_untouched() -> None:
 
 class _SerializedFixedTuple(State):
     pair: tuple[_SerializedLeaf, Annotated[_SerializedLeaf, Alias("second")]]
-    by_int: Mapping[int, _SerializedLeaf] = {}
+    by_int: Mapping[int, _SerializedLeaf] = Map()
 
 
 def _resolved_in_mapping(
@@ -493,3 +495,207 @@ def test_serialized_components_return_immutable_sequence() -> None:
 def test_serialized_components_align_with_components() -> None:
     path = _SerializedRoot._.items[0].field
     assert len(path.serialized_components) == len(path.components)
+
+
+# the first use of a path from several threads at once gives every one of them the same path
+
+_THREADS = 16
+_ROUNDS = 100
+
+
+def _paths_found_by_threads(
+    root: Any,
+    path_of: Callable[[Any], Any],
+) -> set[int]:
+    barrier: threading.Barrier = threading.Barrier(_THREADS, timeout=10)
+    found: list[Any] = [None] * _THREADS
+    failures: list[BaseException] = []
+
+    def work(index: int) -> None:
+        try:
+            barrier.wait()
+            found[index] = path_of(root)
+
+        except BaseException as exc:
+            failures.append(exc)
+
+    threads: list[threading.Thread] = [
+        threading.Thread(target=work, args=(index,)) for index in range(_THREADS)
+    ]
+    for thread in threads:
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    assert not failures, failures
+    assert all(isinstance(path, AttributePath) for path in found), found
+    return {id(path) for path in found}
+
+
+def _same_path_for_all_threads(
+    make_root: Callable[[], Any],
+    path_of: Callable[[Any], Any],
+) -> bool:
+    # paths are kept on the class, so each round starts with the first use of a new one
+    return all(len(_paths_found_by_threads(make_root(), path_of)) == 1 for _ in range(_ROUNDS))
+
+
+def _new_state_class() -> Any:
+    class Created(State):
+        value: int
+        items: Sequence[int] = ()
+
+    return Created
+
+
+def test_first_use_of_an_attribute_path_from_threads_gives_one_path() -> None:
+    assert _same_path_for_all_threads(_new_state_class, lambda root: root._.value)
+
+
+def test_first_use_of_an_item_path_from_threads_gives_one_path() -> None:
+    assert _same_path_for_all_threads(_new_state_class, lambda root: root._.items[0])
+
+
+def test_item_paths_kept_are_still_bounded() -> None:
+    root: Any = _new_state_class()
+    paths: Any = root._.items
+    for index in range(1000):
+        _ = paths[index]
+
+    assert len(paths.__children__) <= 256
+
+
+class _Shaped(State):
+    literal: Literal["a", "b"] = "a"
+    anything: Any = None
+    optional: int | Missing = Missing
+    real: float = 0.0
+    flag: bool = False
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        pytest.param("literal", "b", id="literal"),
+        pytest.param("anything", [1], id="any"),
+        pytest.param("optional", 1, id="missing union"),
+    ],
+)
+def test_paths_read_and_update_attributes_of_any_annotation(name: str, value: Any) -> None:
+    path: AttributePath[_Shaped, Any] = getattr(_Shaped._, name)
+    initial = _Shaped()
+    assert path(initial) is getattr(initial, name)
+
+    updated: _Shaped = path(initial, value)
+    assert path(updated) == getattr(_Shaped(**{name: value}), name)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        pytest.param("real", 1, id="int as float"),
+        pytest.param("flag", "true", id="str as bool"),
+        pytest.param("literal", "b", id="literal"),
+    ],
+)
+def test_path_updates_validate_as_construction_does(name: str, value: Any) -> None:
+    path: AttributePath[_Shaped, Any] = getattr(_Shaped._, name)
+    expected: Any = getattr(_Shaped(**{name: value}), name)
+    updated: Any = getattr(path(_Shaped(), value), name)
+    assert updated == expected
+    assert type(updated) is type(expected)
+
+
+def test_path_updates_refuse_what_construction_refuses() -> None:
+    with raises(ValidationError) as constructed:
+        _Shaped(**{"literal": "c"})
+
+    with raises(ValidationError) as updated:
+        _Shaped._.literal(_Shaped(), cast(Any, "c"))
+
+    assert updated.value.path == constructed.value.path
+
+
+def _refusing_five(value: int) -> int:
+    if value == 5:
+        raise ValueError("five refused")
+
+    return value
+
+
+class _Inner(State):
+    number: Annotated[int, Verifier(_refusing_five)] = 0
+    items: Sequence[int] = ()
+
+
+class _Outer(State):
+    inner: _Inner = _Inner()
+    many: Sequence[_Inner] = ()
+    named: Mapping[str, _Inner] = Map()
+
+
+@pytest.mark.parametrize(
+    ("update", "construct"),
+    [
+        pytest.param(
+            lambda outer: _Outer._.inner.items(outer, cast(Any, [1, "x"])),
+            lambda: _Outer(inner=cast(Any, {"items": [1, "x"]})),
+            id="attribute",
+        ),
+        pytest.param(
+            lambda outer: _Outer._.inner.number(outer, 5),
+            lambda: _Outer(inner=cast(Any, {"number": 5})),
+            id="verified",
+        ),
+        pytest.param(
+            lambda outer: _Outer._.many[0].number(outer, 5),
+            lambda: _Outer(many=cast(Any, [{"number": 5}])),
+            id="sequence item",
+        ),
+        pytest.param(
+            lambda outer: _Outer._.named["a"].number(outer, 5),
+            lambda: _Outer(named=cast(Any, {"a": {"number": 5}})),
+            id="mapping item",
+        ),
+    ],
+)
+def test_path_update_failures_report_the_whole_path(
+    update: Callable[[_Outer], _Outer],
+    construct: Callable[[], _Outer],
+) -> None:
+    outer = _Outer(many=[_Inner()], named={"a": _Inner()})
+    with raises(ValidationError) as constructed:
+        construct()
+
+    with raises(ValidationError) as updated:
+        update(outer)
+
+    assert tuple(updated.value.path) == tuple(constructed.value.path)
+    assert type(updated.value.cause) is type(constructed.value.cause)
+
+
+@dataclass(frozen=True)
+class _Plain:
+    number: int = 0
+
+
+class _HoldingPlain(State):
+    plain: _Plain = _Plain()
+
+
+def test_path_updates_of_other_objects_take_values_as_they_do() -> None:
+    # a dataclass validates nothing - a path updating it neither, as on construction
+    holding = _HoldingPlain()
+    updated = _HoldingPlain._.plain.number(holding, cast(Any, "text"))
+    assert updated.plain == _Plain(number=cast(Any, "text"))
+
+
+def test_path_of_the_root_replaces_it_with_a_root() -> None:
+    replacement = _Shaped()
+    assert _Shaped._(_Shaped(), replacement) is replacement
+
+
+def test_path_of_the_root_refuses_what_is_not_a_root() -> None:
+    with raises(AssertionError, match="unexpected value of 'str'"):
+        _Shaped._(_Shaped(), cast(Any, "bad"))

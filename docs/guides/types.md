@@ -32,7 +32,12 @@ are intentionally forbidden.
 
 `State.to_basic_object()`, `State.to_json()`, and `Meta` validation all share one conversion into
 this representation. Each leaf is encoded to the spelling the matching attribute validation reads
-back, so a converted value can be validated into the type it came from:
+back, so a converted value can be validated into the type it came from - with two exceptions: the
+mapping keys which spell alike once encoded, see the limitation below, and a union with an
+alternative taking the encoded value as it is, which wins whatever its position. `str | UUID`
+holding a `UUID` reads back the `str` it is written as, and so does a `datetime`, `Path` or `bytes`
+next to `str`; through JSON, `str | Color` reads `Color.RED` back as the `str` `"red"` and
+`int | Num` an `IntEnum` member as its `int`:
 
 | Type                               | Basic value          |
 | ---------------------------------- | -------------------- |
@@ -45,10 +50,18 @@ back, so a converted value can be validated into the type it came from:
 
 Nested `State` instances, dataclasses, mappings, sequences and sets are converted as the value graph
 is traversed, into `Map` and `tuple` instances. Mapping keys go through the same table and are then
-spelled the way JSON spells them - a `str` result is used as is, `int` and `float` become
-`str(key)`, and `bool` and `None` become `"true"`, `"false"` and `"null"`. That is the spelling
-`json.dumps` gives those keys on its own, so payloads which already encoded keep the output they
-had.
+spelled the way JSON spells them - a `str` result is used as is, `int` and `float` become the number
+as `json.dumps` writes it (`int.__repr__`, `float.__repr__`), and `bool` and `None` become `"true"`,
+`"false"` and `"null"`. That is the spelling `json.dumps` gives those keys on its own, so payloads
+which already encoded keep the output they had - except for infinite and `NaN` float keys, written
+as `"inf"`, `"-inf"` and `"nan"` where `json.dumps` writes `"Infinity"`, `"-Infinity"` and `"NaN"`.
+Only `"inf"`, `"-inf"` and `"nan"` are read back. Two keys which are spelled the same -
+`{1: "a", "1": "b"}` - raise `ValueError`.
+
+Float _values_ are not converted: `to_basic_object` keeps an infinite or `NaN` float as it is, and
+`from_mapping` reads it back. JSON has no spelling for it, so `to_json` raises `ValueError` and
+`from_json` refuses the constants `NaN`, `Infinity` and `-Infinity` and a number such as `1e400`
+beyond what a float holds.
 
 ```python
 from collections.abc import Mapping
@@ -74,8 +87,12 @@ event.to_basic_object()
 
 # keys are converted too, so a mapping json could not key encodes now
 Journal(events={UUID(int=1): event}).to_json()
-# '{"events": {"00000000-0000-0000-0000-000000000001": {"identifier": "000...", ...}}}'
+# '{"events":{"00000000-0000-0000-0000-000000000001":{"identifier":"000...",...}}}'
 ```
+
+Keys spelled alike, such as `None` and `"null"` or `1` and `"1"`, raise `ValueError` as described
+above. A JSON document which repeats a key - `{"a": 1, "a": 2}` - is read as `json.loads` reads it,
+the last one winning.
 
 Anything else - a plain `Enum`, a `Decimal`, `Missing` held within a value - has no basic spelling
 the validation would read back. Rather than encoding it into a value which could only fail on the
@@ -230,6 +247,12 @@ assert merged == {"a": 1, "b": 2}
 
 Mutation methods such as `update`, `pop`, and item assignment raise `AttributeError`.
 
+`Map.to_json()` writes compact JSON, with no space after `,` and `:`, and raises `ValueError` for an
+infinite or `NaN` float value. `Map.from_json()` refuses the constants `NaN`, `Infinity` and
+`-Infinity` and a number such as `1e400` beyond what a float holds, as `State` does. The keys are
+written by `json.dumps` as they are, so unlike the keys of a `State` they are not checked for two
+spelled alike, and an infinite float key raises.
+
 Use `Map` when you want an immutable mapping outside `State`, or when you want to document that a
 function returns a read-only mapping value concretely.
 
@@ -283,6 +306,9 @@ assert meta["error"] == "quota exceeded"
 assert isinstance(meta.error, Exception)
 ```
 
+`Meta.to_json()` and `Meta.from_json()` are as strict as the ones of `Map`: compact output, no
+infinite or `NaN` float written and none of `NaN`, `Infinity`, `-Infinity` or `1e400` read.
+
 One subtlety matters: direct `Meta({...})` construction does not recursively validate or normalize
 values on its own. Use the factory helpers when the input comes from user code, JSON, or mutable
 objects.
@@ -298,7 +324,9 @@ Haiway consumes several types through `typing.Annotated[...]` when resolving `St
 - `Meta.of(...)` attaches structured metadata to the resolved attribute definition
 - `Validator(callable)` applies an additional validation or coercion step before the base type
   validation runs
-- `Verifier(callable)` applies an additional check after the base type has been validated
+- `Verifier(callable)` applies an additional check after the base type has been validated; it has to
+  return the value, which is what the attribute then holds. Several validators, or several
+  verifiers, of one attribute compose in the order they are declared
 
 ```python
 from typing import Annotated

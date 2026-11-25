@@ -2,6 +2,258 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.66.0
+
+### Changed
+
+- `DefaultValue` is made by `Default`, `DefaultFactory` and `DefaultEnv` only: its constructor no
+  longer takes `resolve`, `available` and `constant`, which could describe a default which is
+  neither there nor constant. `available` and `constant` are read as before.
+- haiway has no runtime dependencies: `typing-extensions` is no longer required. When it is
+  installed (the `opentelemetry` and `fastapi` extras bring it), its `TypedDict`s are recognized as
+  before; every other form it provides is the one of `typing` on Python 3.15.
+- `to_json` writes compact JSON, with no space after `,` and `:` (`{"a":1,"b":[1,2]}`), where it
+  wrote `json.dumps`'s default `", "` and `": "` - shorter payloads, written faster. With `indent`
+  the output is as before. Code comparing the exact text of the output has to follow.
+- An instance which was never initialized - made with `__new__`, or with an `__init__` which did not
+  delegate - raises `TypeError: ... is not initialized` for `to_json`, `to_mapping`,
+  `to_basic_object`, `hash`, `==` of two instances and `copy.deepcopy`, as `updating` always did.
+  They treated it as an instance with no attributes before: it was written as `{}`, hashed and
+  compared equal to every other one. This also keeps another thread from reading an instance which
+  is being initialized while only some of its attributes are bound: it reads all of them, or raises -
+  every value is bound with a release store and read with an acquire load on the free-threaded
+  build, wherever an instance is made (the constructor, `updating`, `from_json`, `from_mapping`,
+  `validate` and `copy.deepcopy`), and plain accesses with the GIL.
+- Several `Validator`s, or several `Verifier`s, on one attribute run one after another in the order
+  they are declared, each given what the previous one returned - where only the last of each was
+  kept, silently, so `Annotated[int, Validator(a), Validator(b)]` ran `b` alone. Validators run
+  before the base validation and verifiers after it, whichever is declared first; declarations
+  nested through `Annotated` or a `type` alias run inner first. A `Verifier` has to return the value
+  - what it returns is what the attribute holds, a verifier returning `None` stores `None`.
+- A State refuses a key which is no attribute with one message, wherever the key is given:
+  `Unexpected attribute 'x' for Name` from the constructor and `updating()` as well as from
+  `validate` and `from_mapping`, where the first two said `Name has no attribute 'x'`. The
+  constructor and `updating()` find all of the keys at once and list them sorted by name,
+  `Unexpected attributes 'a', 'b' for Name`; `validate` and `from_mapping` report the first one. The `TypedDict` message,
+  `Unexpected key 'x' for Name`, is unchanged.
+- `Attribute` and the attribute annotations (`IntegerAttribute`, `ObjectAttribute`, ...) refuse
+  assignment after they are made. The annotations hold what an attribute is declared with besides
+  its type - alias, description, specification, meta, redaction, whether it is required and its
+  verifier - in a single `AttributeMetadata`, which is the only place an `Annotated` is read. The
+  `alias`, `description`, `specification`, `meta`, `redaction` and `required` properties are read
+  as before, but the constructors of the annotations take `metadata=AttributeMetadata(...)` in
+  place of the `alias=`, `description=`, `verifying=`, `required=`, `specification=`, `meta=` and
+  `redaction=` keywords, and `verifying` is now `metadata.verifying` - `None` when no verifier is
+  declared.
+- The `__SPECIFICATION__` of a State which cannot be represented using json schema is no longer
+  kept next to a `__SERIALIZABLE__` flag: both are derived from the one specification the class
+  holds, if any. Reading them behaves as before - `__SPECIFICATION__` raises a `TypeError` for such
+  a class. `__ALIASES__` is gone, `__ALLOWED_FIELDS__` is a mapping of each key an attribute can be
+  given under to its name.
+- The JSON schema of a State is made to agree with the validation of a JSON document - it no longer
+  refuses what the State accepts, and refuses more of what the State refuses. Where it was relied on:
+  - `required` lists an attribute only when it can't be left out. One accepting `Missing` - `Any`,
+    `object`, `X | Missing`, an unspecialized type parameter - is no longer listed, which is also
+    how `inspect.signature` of the class reads it. An annotation holding a `Validator` or a
+    `Verifier`, at any level, is never taken as accepting `Missing`, as either may refuse it.
+    `Missing` is not an alternative of a union
+    anymore (it was `"type": "null"`, which validation refuses): `int | Missing` is `integer`.
+  - A fixed tuple states `minItems` and `maxItems`, a tuple with an unbounded part `minItems` for
+    the elements around it.
+  - A set no longer states `uniqueItems`, which refused a document with a repeated element that is
+    read as a set all the same.
+  - `datetime`, `time` and `timedelta` no longer state a `format` - they are written without an
+    offset, or with a sign when negative, which `date-time`, `time` and `duration` don't allow - and
+    `Path` no longer states `format: path`, which is no standard format.
+  - A mapping with keys other than `str` states `propertyNames` for `int`, `bool`, `UUID`, enum and
+    `Literal` keys.
+  - A `Literal` of enum members is written as their values.
+- A `Literal` holding a value with no JSON form - a plain `Enum` member or `bytes` - leaves the State
+  without a schema, where `json_schema()` failed with a bare `TypeError` on the raw value and
+  `serializable=True` accepted the class. With `serializable=True` such a class is refused when it
+  is created.
+- `NotRequired[T]` on an attribute of a State which has no default is refused with a `TypeError`
+  when the class is created. It was listed neither as required in the schema nor accepted as
+  omitted by validation, which still required the value.
+
+- **Breaking:** validation of the plain types is stricter, and no string is parsed into a number
+  anymore:
+  - `bool` accepts `True`/`False`, the ints `0` and `1`, the floats `0.0`, `-0.0` and `1.0` and
+    `"true"`/`"false"` in any case. Any other int (`2`, `-1`) was `True` before, and is refused now,
+    as is any other string and any other float.
+  - `int` accepts an int (not a `bool`) and a float which is a whole number up to 2**53, and refuses
+    every string, where `"5"` was read as `5` (and `"1_0"`, `" 1 "` and the digits of any script
+    with it). Floats which are not whole numbers, `NaN`, infinities and those beyond 2**53 are
+    refused. `float` refuses strings - `"nan"`, `"inf"`, `"1_0.0"` and `"1.5"` were read before.
+  - `IntEnum` refuses `bool` (`True` was read as the member of `1`) and numeric strings (`"1"`), and
+    reads a float which is a whole number up to 2**53 as the int it equals, as `int` does (`1.0` is
+    the member of `1`). A member is read by its value first, by its name second - a value always wins
+    over a name. A `StrEnum` reads the same way. An `int` `Literal` reads such a float as the int
+    too (`Literal[1]` given `1.0` holds `1`), including the int values of `IntEnum` members within
+    it, and a float never matches a `bool` literal.
+  - A union reads a whole float as it reads its int: the alternatives which take the float as it is
+    win first, then the alternatives which take the int as it is, then the conversions in the order
+    they are declared. `bool | int` gives `1` for `1.0` and `IntEnum | int` gives `1`, not a member.
+    The int only chooses the alternative - it validates the value as given, so a `Validator` of it
+    receives the float.
+  - `Set[T]` accepts sets and sequences (`list`, `tuple`) only, and refuses mappings, dict views,
+    generators, iterators, `str` and `bytes` - and `collections.abc.Set` implementations other than
+    the built-in `set` and `frozenset`.
+  - `date` refuses a `datetime`, which is an instance of it. `datetime | date` and `date | datetime`
+    read an ISO string as the first alternative which reads it - `"2026-01-02"` is a `datetime`
+    for the first, a `date` for the second.
+  - `bool | int` and `int | bool` keep `1` an `int` and `True` a `bool`: a value which is accepted as
+    it is wins over one which would convert, whichever is declared first. Of `bool | IntEnum` a
+    `1` and a `1.0` are read as `True`, while an `IntEnum` member is kept.
+- **Breaking:** the keys of a mapping are read from the spelling `to_json` and `to_basic_object`
+  write them as, and from no other: `int` keys as canonical decimal integers (no sign `+`, spaces,
+  underscores, leading zeros or other scripts), `float` keys as JSON numbers, `bool` keys as
+  `"true"`/`"false"` (lowercase), `None` as `"null"`, a `Literal` key as the spelling of its value,
+  an enum key as a value, a number or a name, and the infinities and `NaN` of `float` keys as the
+  `"inf"`, `"-inf"` and `"nan"` written for them (not the `Infinity`/`NaN` of `json.dumps`). A
+  `float` key beyond what a float holds (`"1e400"`) is refused.
+  Two keys which convert to one (`Mapping[int, str]` given `{"1": "a", 1: "b"}`) raise a
+  `ValidationError` at the second, where it replaced the first silently.
+- **Breaking:** the JSON Schema agrees: `bool` is `anyOf` a boolean, `0`/`1` and the words in any
+  case; an `IntEnum` is `anyOf` its values and the names of its members, a `StrEnum` takes the names
+  next to the values; `propertyNames` of `int`, `float`, `bool`, `None`, `Literal` and enum keys
+  state the exact spellings.
+- **Breaking:** a mutable plain default - a `list`, `dict`, `set` or `bytearray`, or a subclass of
+  them, also as `Default(value)` - raises `TypeError` when the class is created, as every instance
+  would share it. Use `DefaultFactory(list)`, `Default(factory=...)` or an immutable value
+  (`()`, `frozenset()`, `Map()`).
+- **Breaking:** the JSON a State writes and reads is strict. `to_json` - the native writer, with
+  `indent` and with a custom encoder class alike - raises `ValueError` for an infinite or `NaN`
+  float value wherever it is: an attribute, an `Any`, a nested container, a set or the value of a
+  mapping, where `Infinity` and `NaN` were written, which no strict JSON parser reads.
+  `from_json` and `from_json_array` refuse the constants `NaN`, `Infinity` and `-Infinity` and a
+  number beyond what a float holds (`1e400`) anywhere in the document, a key skipped by
+  `ignore_extra` included. A custom `decoder` class is given `parse_float` and `parse_constant`
+  hooks which do that, and has to accept and keep them; a decoder overriding `decode` refuses them
+  itself or not at all. Float mapping keys keep the `"inf"`, `"-inf"` and `"nan"` spellings both
+  ways. `to_mapping`, `to_basic_object` and `from_mapping` work on Python values and keep infinite
+  and `NaN` floats.
+- **Breaking:** `Map` and `Meta` write and read JSON strictly. `to_json` writes compact JSON, with
+  no space after `,` and `:`, and raises `ValueError` for an infinite or `NaN` float value, where
+  `Infinity` and `NaN` were written. `from_json` refuses the constants `NaN`, `Infinity` and
+  `-Infinity` and a number beyond what a float holds (`1e400`) with `ValueError`. The keys are
+  still written by `json.dumps` as they are, unlike the keys of a State.
+- **Breaking:** a `bool` variant is no `int` variant, and a `datetime` variant no `date` variant, to
+  the variance of a generic State: `Box[bool]` is not a subclass of `Box[int]` - also through union
+  arguments, `Box[int | None]` - and `Box(value=True)` is not an instance of `Box[int]`, so a
+  `Box[int]` attribute refuses a `Box[bool]` instance. Neither direction relates `bool` and `int`
+  for a contravariant parameter. Instances, subclass checks and mappings agree now, and round trip.
+- `to_json` and `to_basic_object` raise `ValueError` for a mapping holding two keys of different
+  types which are written the same (`{1: "a", "1": "b"}`, `{True: 1, "true": 2}`), where one of
+  them was kept silently, or both written for `to_json` natively. `str` keys which only differ as
+  lone surrogates are not covered.
+- `==` of a State with something which is no State returns `NotImplemented`, so the other operand
+  decides (`instance == mock.ANY` is true). Two States of different classes are still never equal.
+- A `Callable[P, R]` attribute of a specialization (`Handler[[int], bool]`) is checked against the
+  signature it was given, as `Callable[[int], bool]` is, and a type parameter which is not
+  specialized and has constraints takes any one of them (`class Con[T: (int, str)]` refuses
+  `1.5`). Such an attribute is no longer left out of `required` and the signature.
+- The hash of an instance agrees with `==`: equal instances holding a `Map`, a `UserDict` or a
+  mapping proxy and a `dict`, a `frozenset` or a dict view and a `set`, a `UserList` and a `list`,
+  `bytes`, a `bytearray` and a `memoryview`, alone or within tuples, lists and mappings, hash the
+  same. **Behaviour change:** the hash of an instance holding a `list`, `dict`, `set` or
+  `bytearray` (under `Any`, `object` or a custom attribute) now takes what it holds into account,
+  so it changes when that is mutated and a `set` or `dict` holding the instance no longer finds it
+  - it was left out before. Typed attributes convert those to immutable values; prefer them. A value held anywhere in an instance which raises while it is hashed - an instance
+  which is not initialized above all, or an object with a `__hash__` raising `TypeError` - raises;
+  only a value with `__hash__ = None` is left out.
+
+### Fixed
+
+- A `bool` attribute given a `str` subclass whose `lower` returns something else than a `str` crashed
+  the interpreter, as the validation called the `lower` of the value and read its result as text. The
+  text is compared as it is stored now, ignoring the case of ASCII letters, with no code of the value
+  running - the spellings accepted are the same. A `datetime`, `date`, `time` or `Path` subclass whose
+  `isoformat` or `as_posix` returns no `str` made `to_json` write garbage or crash, and
+  `to_basic_object` return what it returned; both raise a `TypeError` now.
+- Reading JSON ran code of the user while the document was still being read, and again when the
+  document was refused and read once more. A State was taken to run none whatever its fields held,
+  so a `Validator`, a `Verifier`, a default factory or an `__init__` of a State nested in a tuple, a
+  set, a `TypedDict` or a union ran in the middle of the read - for a document which then failed on
+  an attribute after it, twice. Whether reading a class runs code of the user is told in one place
+  from its plan - it is constructed natively, and every attribute is validated without code of the
+  user and has a default which is always the same - and the attributes which do are kept as the
+  document spells them until it has been read through, whatever they nest. A document which is not
+  JSON runs no such code now, one which is accepted runs it exactly once, in the order of the
+  attributes rather than the order of the keys, and one which is refused runs exactly what
+  `cls.validate(json.loads(text))` runs, and never any more. The failure of that code is reported at
+  its attribute the way validating the instance reports it - `from_json_array` words it
+  `from json array` as before - rather than by reading the document again with the standard library.
+- A key which is not an attribute, validated into a State through the general path, left no error set
+  when the hook reporting it returned instead of raising, and `signature_fits` dropped the error of a
+  flag whose truth value failed. Both are reported.
+- Within a free-threaded interpreter a class was reachable, through `__subclasses__` or the garbage
+  collector, before its plan was installed, and another thread could read the plan or the size of
+  its instances while they were being written. The plan and the call of the class are published once
+  everything they need is written, and read with a load which pairs with it. Nothing changes for an
+  interpreter with the GIL.
+- A recursive `type` alias, `type Json = Mapping[str, Json] | int`, compiled the alias again for each
+  level of nesting a validated document reached, so the memory used grew with the deepest one. The
+  alias within itself refers to the alias, which has one compiled description whatever the depth.
+- Converting an iterable which is not a `Sequence`, a `set` under `Any` say, or a mapping which is not a `dict`, walked the
+  object itself while the elements were converted, which failed with a `RuntimeError` for one which
+  was changed meanwhile, by the conversion or by another thread. It is walked from a snapshot.
+- Reading the first path of an attribute from several threads at once - `Model._.field` or
+  `Model._.items[0]` on a free-threaded build - could give each of them a path of its own, so paths
+  of the same attribute were not identical. The first one made is kept and given to all.
+- The variances of the parameters of a generic State are published as a whole when worked out, where
+  they were filled in place, and a thread reading them meanwhile could find a part of them.
+- `to_mapping()` turned a `bytearray` or a `memoryview` into a list of integers, where `bytes` stays
+  as it is - bytes-like values are all kept as they are, the way `to_basic_object()` encodes all of
+  them as base64.
+- `typing.ReadOnly` (PEP 705), in a `TypedDict` or on an attribute, failed with
+  `Unsupported annotation of 'typing.ReadOnly[int]'`. It is resolved as the type it qualifies and
+  changes nothing in the schema.
+- A State with an attribute accepting `Missing` listed it in the `required` of its schema, where
+  `from_json("{}")` accepted it left out.
+- A `Literal` of enum members put the members themselves in the schema, which can't be written as
+  JSON.
+- `isinstance` against a specialization (`Box[date]`, `Box[Set[int]]`) agrees with validation: a
+  `datetime` is no `date`, and only a `set` or `frozenset` is a `Set`.
+- A `float` given an int too large for it is a `ValidationError` with a `ValueError` cause, where
+  the cause was an `OverflowError`.
+- An `IntEnum` key is read as a member, then as the number of a member, then as a name - an enum
+  with a member named like the value of another read the wrong member before.
+- A `None` key of a mapping is read back (`Mapping[None, int]` round trips), and so is a `Literal`
+  key written as a number (`Mapping[Literal["a", 1], int]`).
+- A State built from a list whose elements were converted into objects the garbage collector tracks -
+  a custom class with a `validate`, through `Sequence[X]`, `tuple[X, ...]` or a fixed tuple, by the
+  constructor, `validate`, `updating` or `from_json` - was left untracked itself, so reference
+  cycles through it were never collected. It is tracked now - earlier releases leaked the same way.
+- `AttributePath` (`State._.x`) no longer asserts the annotation of an attribute with `isinstance`:
+  reading and updating a `Literal`, `Any` or `X | Missing` attribute raised `TypeError`, and an
+  update refused a value which construction converts (an `int` for a `float`) with an
+  `AssertionError`, which `python -O` skipped, so it behaved differently. An update validates as
+  construction does, and its `ValidationError` names the whole path from the root (`.inner.x`,
+  `.many[0].x`). A value given to an object which is no State along the path, a dataclass, is taken
+  as its own `__replace__` or assignment takes it. `AssertionError` remains for a root, or a subject
+  along the path, of the wrong type.
+- Free-threading: a `set` changed by another thread while it was given for validation raised
+  `Set changed size during iteration`. It is copied under its lock before it is iterated.
+- JSON Schema: the `$anchor` names are unique in the whole document. Two recursive aliases of one
+  shape (`int | Sequence[...]`) and same-named recursive classes of different modules shared one,
+  and a `$ref` resolved to the wrong subschema. A recursive State embedded several times is defined
+  once and referenced, and `tuple[()]` is `{"type": "array", "maxItems": 0}`, which was invalid
+  against the metaschema. `ArraySpecification` gained `maxItems`.
+- `x: int = Missing` raises a `TypeError` saying the attribute defaults to `Missing`, which its
+  annotation does not accept, and to annotate it with `| Missing`, where it blamed `NotRequired`.
+- `Literal[..., Missing]` attributes can be omitted, as validating `Missing` against them
+  succeeds: they are no longer `required` in the signature of the class. Whether an attribute can
+  be omitted is read from the compiled validation itself now, where it was worked out again
+  beside it.
+- A key which is an `int` or a `float` of a class with a `__str__` of its own - a mixed-in
+  `class E(int, Enum)` - is spelled as the plain number (`"1"`) in `to_basic_object` and
+  `to_json`, as `json.dumps` spells it, where it was spelled by `str()` (`"E.A"`). `IntEnum` and
+  `StrEnum` keys are spelled as before.
+- A `State` holding another one in a set, a `frozenset` or another container the extension does not
+  walk itself is converted by `to_mapping` as it is within a tuple, list or mapping: an override of
+  `to_mapping` on the nested class is not called in any of them, where it was called in those only.
+
 ## 0.65.1
 
 ### Fixed

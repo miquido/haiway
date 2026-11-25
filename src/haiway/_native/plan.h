@@ -12,6 +12,26 @@
  */
 #define FAST_MAX_FIELDS 64
 
+/* what is told of code of the user running while a value is read: never, or not told yet */
+enum {
+    PURITY_UNKNOWN = 0,
+    PURITY_PURE,
+    PURITY_IMPURE,
+};
+
+/* what is known of the default of an attribute - each is a refinement of the one before it */
+typedef enum {
+    DEFAULT_COMPUTED,        /* a different value may come every time */
+    DEFAULT_CONSTANT,        /* the very same value every time, not kept */
+    DEFAULT_CACHED_ACYCLIC,  /* constant and kept validated, which can never be part of a cycle */
+    DEFAULT_CACHED_CYCLIC    /* constant and kept validated, which may be part of one */
+} DefaultKind;
+
+typedef struct {
+    DefaultKind kind;
+    PyObject *value;  /* the validated default - NULL exactly when `kind` is not one of the cached, set by `cache_default` only */
+} DefaultState;
+
 typedef struct {
     PyObject *name;
     PyObject *alias;  /* NULL when there is none */
@@ -19,12 +39,12 @@ typedef struct {
     Py_ssize_t name_length;
     const char *alias_utf8;  /* NULL when there is no alias */
     Py_ssize_t alias_length;
-    const char *json_key;    /* the key as json spells it, with the colon - `"key": ` */
+    const char *json_key;    /* the key as json spells it, with the colon - `"key":` */
     Py_ssize_t json_key_length;
     Spec *spec;       /* owned by the spec object the plan tuple holds */
     PyObject *default_value;  /* () -> the validated default */
-    PyObject *cached;  /* the validated default, when it is a constant nothing can change - NULL otherwise */
-    int cached_acyclic;  /* whether the cached default can never be part of a cycle - settled once */
+    DefaultState default_state;
+    int pure;         /* PURITY_* of the spec of the attribute - told when first asked, see `field_pure` */
     PyMemberDef member;  /* what the descriptor of the attribute reads */
 } FieldPlan;
 
@@ -46,6 +66,7 @@ typedef struct CompiledPlan {
     size_t key_mask;
     int validates_itself;  /* whether the class declares a `validate` of its own - a document is not read around it */
     int native_copy;  /* whether `__deepcopy__` is the native one - a class overriding it is copied through it */
+    int pure;  /* PURITY_* of the class - told when first asked, see `plan_pure` */
     Py_ssize_t count;
     FieldPlan fields[];
 } CompiledPlan;
@@ -97,6 +118,14 @@ field_for_bytes(CompiledPlan *plan, const char *text, Py_ssize_t length)
 /* the key of an attribute as json spells it, followed by the colon - defined with the json writer */
 static PyObject *json_key_bytes(PyObject *key);
 
+/* the error of an instance with no value bound - one made with `__new__` and not initialized yet,
+ * which is not one holding Missing: it is never read as that */
+static void
+not_initialized(PyTypeObject *type)
+{
+    PyErr_Format(PyExc_TypeError, "%s is not initialized", type->tp_name);
+}
+
 /* the compiled plan of a class, or the error of there being none */
 static inline CompiledPlan *
 plan_or_error(PyTypeObject *type)
@@ -112,11 +141,38 @@ validate_field(FieldPlan *field, CompiledPlan *plan, PyObject *value, int ignore
     return validate_spec(plan->state, field->spec, value, ignore_extra);
 }
 
+static inline int
+field_constant(const FieldPlan *field)
+{
+    return field->default_state.kind != DEFAULT_COMPUTED;
+}
+
+/* the validated default kept for the attribute - NULL when it is not kept */
+static inline PyObject *
+field_cached(const FieldPlan *field)
+{
+    return field->default_state.value;
+}
+
+/* whether the value is the cached default, which can never be part of a cycle */
+static inline int
+is_cached_acyclic(const FieldPlan *field, PyObject *value)
+{
+    return field->default_state.kind == DEFAULT_CACHED_ACYCLIC && value == field->default_state.value;
+}
+
+static inline void
+cache_default(FieldPlan *field, PyObject *validated, int acyclic)
+{
+    field->default_state.kind = acyclic ? DEFAULT_CACHED_ACYCLIC : DEFAULT_CACHED_CYCLIC;
+    field->default_state.value = validated;
+}
+
 /* the default of an attribute which was not given, validated */
 static inline PyObject *
 field_default(FieldPlan *field)
 {
-    if (field->cached != NULL) return Py_NewRef(field->cached);
+    if (field_cached(field) != NULL) return Py_NewRef(field_cached(field));
     return PyObject_CallNoArgs(field->default_value);
 }
 
@@ -307,7 +363,7 @@ finish_construction(PyObject *self)
     PyObject **items = ITEMS(self);
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *value = items[i];
-        if (value == NULL || (value == plan->fields[i].cached && plan->fields[i].cached_acyclic)) continue;
+        if (value == NULL || is_cached_acyclic(&plan->fields[i], value)) continue;
         if (settle(plan->state, value, 0)) return;
     }
     PyObject_GC_UnTrack(self);
@@ -332,7 +388,7 @@ finish_update(PyObject *self, PyObject *source)
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *value = items[i];
         if (value == NULL || value == carried[i]) continue;
-        if (value == plan->fields[i].cached && plan->fields[i].cached_acyclic) continue;
+        if (is_cached_acyclic(&plan->fields[i], value)) continue;
         if (settle(plan->state, value, 0)) return;
     }
     PyObject_GC_UnTrack(self);
@@ -342,12 +398,175 @@ static PyObject *struct_vectorcall(PyObject *callable, PyObject *const *args, si
 static PyObject *struct_new(PyTypeObject *type, PyObject *args, PyObject *kwargs);
 static int struct_init(PyObject *obj, PyObject *args, PyObject *kwargs);
 
+/* whether the class is constructed here - one declaring a `__new__` or an `__init__` of
+ * its own takes over, whenever it is given one */
+static inline int
+constructs_natively(PyTypeObject *type)
+{
+    return type->tp_new == struct_new && type->tp_init == struct_init;
+}
+
+/*
+ * Whether reading a value runs code of the user - a validator, a verifier, a class
+ * validating itself, a default which is computed, a constructor of the class's own. What
+ * is pure is read from a document as it is met, since nothing of the user can see it
+ * refused later; the rest waits until the document is known to be right. This is the one
+ * place telling it: a spec is pure when it runs no code of its own and nothing it holds
+ * does, and a class when it is constructed here and every attribute is a pure spec with a
+ * default which is the same every time - the two facts about an attribute are kept apart,
+ * as a value which is given needs only the first, and one which is not given both. A class
+ * refers to others, and to itself, so the classes already met are remembered - which is also
+ * what lets a cycle end, taken as pure until a part of it says otherwise. Nothing is remembered
+ * of a part which could not be told because a class has no plan yet, so it is asked again. A
+ * graph reaching more classes than can be remembered is told impure, which is what is
+ * remembered of it, as it was told no other way - and it is told once.
+ */
+#define PURITY_VISITED 64
+
+typedef struct {
+    PyTypeObject *types[PURITY_VISITED];
+    Py_ssize_t count;
+    int unplanned;  /* a class without a plan was met - the answer may change once it has one */
+    int overflowed;  /* too many classes were met - everything not seen is taken as impure */
+} Visited;
+
+static int plan_pure(PyTypeObject *type, Visited *visited);
+
+static int
+spec_pure(Spec *spec, Visited *visited)
+{
+    if (spec->validating != NULL || spec->verifying != NULL) return 0;
+    switch (spec->kind) {
+    case SPEC_CUSTOM:
+    case SPEC_CUSTOM_STATE:
+    case SPEC_ALIAS:
+        return 0;
+    case SPEC_STATE:
+        return plan_pure((PyTypeObject *)spec->base, visited);
+    default:
+        break;
+    }
+    for (Py_ssize_t i = 0; i < spec->count; i++) {
+        if (!spec_pure(spec->children[i], visited)) return 0;
+    }
+    return 1;
+}
+
+static int
+plan_pure(PyTypeObject *type, Visited *visited)
+{
+    CompiledPlan *plan = PLAN_OF(type);
+    if (plan != NULL) {
+        int known = LOAD_RELAXED(&plan->pure);
+        if (known != PURITY_UNKNOWN) return known == PURITY_PURE;
+    }
+    for (Py_ssize_t i = 0; i < visited->count; i++) {
+        if (visited->types[i] == type) return 1;
+    }
+    if (plan == NULL) {
+        visited->unplanned = 1;
+        return 0;
+    }
+    if (visited->count == PURITY_VISITED) {
+        visited->overflowed = 1;
+        return 0;
+    }
+    int root = visited->count == 0;
+    visited->types[visited->count++] = type;
+    int pure = constructs_natively(type);
+    for (Py_ssize_t i = 0; pure && i < plan->count; i++) {
+        pure = field_constant(&plan->fields[i]) && spec_pure(plan->fields[i].spec, visited);
+    }
+    /* an impure class is so for good, a pure one is only where it was asked about first,
+     * as the others it met were taken as pure for the sake of the cycles. Where the walk was
+     * cut short it is impure, which is told for the class it started from only - the others
+     * were cut short by where they were met */
+    if (!visited->unplanned && (root || (!pure && !visited->overflowed))) {
+        STORE_RELAXED(&plan->pure, pure ? PURITY_PURE : PURITY_IMPURE);
+    }
+    return pure;
+}
+
+/* kept out of its callers - the classes it looks at are remembered in a frame of their own,
+ * which would otherwise be part of every level a document is read through */
+static Py_NO_INLINE int
+field_pure_told(FieldPlan *field)
+{
+    Visited visited = {{NULL}, 0, 0, 0};
+    int pure = spec_pure(field->spec, &visited);
+    if (!visited.unplanned) STORE_RELAXED(&field->pure, pure ? PURITY_PURE : PURITY_IMPURE);
+    return pure;
+}
+
+/* whether validating a value given for an attribute of a class runs no code of the user -
+ * told once. Whether its default is the same every time is `constant`, not told here */
+static inline int
+field_pure(FieldPlan *field)
+{
+    int known = LOAD_RELAXED(&field->pure);
+    if (known != PURITY_UNKNOWN) return known == PURITY_PURE;
+    return field_pure_told(field);
+}
+
+/*
+ * Whether validating the default of an attribute of a class which is being given its plan
+ * runs no code of the user - the class itself, which has no plan yet, is taken as pure, as it
+ * is for the classes which refer to themselves - so the validated default can be kept - `declared` is the default
+ * as it was declared. It does when the spec is pure, but also when the spec is not and the
+ * default is accepted as it is, by an alternative which is a State or is pure, with every
+ * alternative before it refusing it without code of the user: `None` or an instance for
+ * `Checked | None`, whatever code `Checked` has to build one from a mapping. A default the
+ * spec would have to convert is not, nor is one of a spec with code of its own on the value.
+ * Nothing of the user is run to tell, and the declared default is never validated for it.
+ */
+static int
+cacheable_default(ModuleState *state, PyTypeObject *type, Spec *spec, PyObject *declared)
+{
+    Visited visited = {{type}, 1, 0, 0};
+    if (spec_pure(spec, &visited)) return 1;
+    if (spec->validating != NULL || spec->verifying != NULL) return 0;
+    PyObject *value = PyObject_CallNoArgs(declared);
+    if (value == NULL) return PyErr_ExceptionMatches(PyExc_Exception) ? (PyErr_Clear(), 0) : -1;
+    int accepted = 0;
+    if (spec->kind == SPEC_STATE) {
+        accepted = spec_check(state, spec, value);
+        if (accepted < 0) {
+            Py_DECREF(value);
+            if (!PyErr_ExceptionMatches(PyExc_Exception)) return -1;
+            PyErr_Clear();
+            return 0;
+        }
+    } else if (spec->kind == SPEC_UNION) {
+        for (Py_ssize_t i = 0; i < spec->count && accepted == 0; i++) {
+            Spec *alternative = spec->children[i];
+            Visited alone = {{type}, 1, 0, 0};
+            int plain = (alternative->kind == SPEC_STATE && alternative->validating == NULL
+                         && alternative->verifying == NULL)
+                || spec_pure(alternative, &alone);
+            if (!plain) break;  /* what it checks, or does with the value, may be code of the user */
+            int r = spec_check(state, alternative, value);
+            if (r > 0) accepted = 1;
+            else if (r < 0) break;
+            else continue;
+        }
+        if (accepted == 0 && PyErr_Occurred()) {
+            if (!PyErr_ExceptionMatches(PyExc_Exception)) {
+                Py_DECREF(value);
+                return -1;
+            }
+            PyErr_Clear();
+        }
+    }
+    Py_DECREF(value);
+    return accepted;
+}
+
 /* the entries of the plan handed over by Python, one for each attribute */
 #define E_NAME(e) PyTuple_GET_ITEM((e), 0)
 #define E_ALIAS(e) PyTuple_GET_ITEM((e), 1)
 #define E_SPEC(e) PyTuple_GET_ITEM((e), 2)
 #define E_DEFAULT(e) PyTuple_GET_ITEM((e), 3)
-#define E_CONSTANT(e) PyTuple_GET_ITEM((e), 4)
+#define E_CONSTANT(e) PyTuple_GET_ITEM((e), 4)  /* what gives the default as it is declared, None unless it is the same every time */
 
 /*
  * The values of an instance live right after its header, sized by its plan - which holds
@@ -445,6 +664,9 @@ validates_itself(ModuleState *state, PyTypeObject *type)
  *
  *   (name, alias, spec, default, constant)
  *
+ * where `constant` is None, or what gives the default as it was declared when that is the
+ * same every time.
+ *
  * `spec` is the compiled description of the annotation, `default` what is called for
  * the validated default of an attribute which was not given, and `constant` whether it
  * is the same every time - the validated default of such an attribute is kept here when
@@ -477,7 +699,8 @@ compile_plan(PyObject *mod, PyObject *args)
         PyObject *entry = PyTuple_GET_ITEM(entries, i);
         if (!PyTuple_Check(entry) || PyTuple_GET_SIZE(entry) != 5 || !PyUnicode_CheckExact(E_NAME(entry))
             || (E_ALIAS(entry) != Py_None && !PyUnicode_CheckExact(E_ALIAS(entry)))
-            || !Py_IS_TYPE(E_SPEC(entry), state->spec_type) || !PyBool_Check(E_CONSTANT(entry))) {
+            || !Py_IS_TYPE(E_SPEC(entry), state->spec_type)
+            || (E_CONSTANT(entry) != Py_None && !PyCallable_Check(E_CONSTANT(entry)))) {
             PyErr_SetString(PyExc_TypeError, "compile_plan expects entries of (name, alias, spec, default, constant)");
             return NULL;
         }
@@ -494,6 +717,7 @@ compile_plan(PyObject *mod, PyObject *args)
     plan->cached = NULL;
     plan->key_slots = NULL;
     plan->native_copy = 1;
+    plan->pure = PURITY_UNKNOWN;
     plan->validates_itself = 0;
     plan->count = n;
     plan->names = PyTuple_New(2 * n);
@@ -518,8 +742,9 @@ compile_plan(PyObject *mod, PyObject *args)
         field->alias = E_ALIAS(entry) == Py_None ? NULL : E_ALIAS(entry);
         field->spec = ((SpecObject *)E_SPEC(entry))->spec;
         field->default_value = E_DEFAULT(entry);
-        field->cached = NULL;
-        field->cached_acyclic = 0;
+        field->default_state.kind = E_CONSTANT(entry) != Py_None ? DEFAULT_CONSTANT : DEFAULT_COMPUTED;
+        field->default_state.value = NULL;
+        field->pure = PURITY_UNKNOWN;
         PyTuple_SET_ITEM(plan->names, 2 * i, Py_NewRef(field->name));
         PyTuple_SET_ITEM(plan->names, 2 * i + 1, Py_NewRef(field->alias != NULL ? field->alias : Py_None));
         /* the spellings point into the strings, which the plan holds */
@@ -553,7 +778,9 @@ compile_plan(PyObject *mod, PyObject *args)
         Py_DECREF(position);
         if (failed) goto fail;
 
-        if (E_CONSTANT(entry) == Py_True && field->spec->pure) {
+        int cacheable = field_constant(field) ? cacheable_default(state, type, field->spec, E_CONSTANT(entry)) : 0;
+        if (cacheable < 0) goto fail;
+        if (cacheable) {
             PyObject *validated = PyObject_CallNoArgs(field->default_value);
             if (validated == NULL) {
                 if (!PyErr_ExceptionMatches(PyExc_Exception)) goto fail;
@@ -562,8 +789,7 @@ compile_plan(PyObject *mod, PyObject *args)
                 failed = PyList_Append(plan->cached, validated) < 0;
                 Py_DECREF(validated);
                 if (failed) goto fail;
-                field->cached = validated;  /* the list holds it */
-                field->cached_acyclic = !settle(state, validated, 0);
+                cache_default(field, validated, !settle(state, validated, 0));  /* the list holds it */
             }
         }
     }
@@ -614,10 +840,13 @@ compile_plan(PyObject *mod, PyObject *args)
     PyType_Modified(type);
 
     /* the size of an instance, and the call of the class - which tells by itself a class
-     * taking over its construction, or one with more attributes than the fast path matches */
+     * taking over its construction, or one with more attributes than the fast path matches.
+     * The class can be reached already, through `__subclasses__` or the collector - so what
+     * a reader of the plan needs is written first, and the plan is published after it, the
+     * call of the class last, which finds the plan itself */
     type->tp_basicsize = (Py_ssize_t)sizeof(PyObject) + n * (Py_ssize_t)sizeof(PyObject *);
-    PLAN_OF(type) = plan;
-    type->tp_vectorcall = struct_vectorcall;
+    PUBLISH_PLAN(type, plan);
+    PUBLISH_VECTORCALL(type, struct_vectorcall);
     Py_RETURN_NONE;
 
 fail:

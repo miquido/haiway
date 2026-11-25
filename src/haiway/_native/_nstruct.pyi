@@ -1,36 +1,36 @@
-from typing import Any, Self
+from typing import Any, Final, Self
 
-SPEC_ANY: int
-SPEC_NONE: int
-SPEC_MISSING: int
-SPEC_LITERAL: int
-SPEC_BOOL: int
-SPEC_INT: int
-SPEC_FLOAT: int
-SPEC_STR: int
-SPEC_BYTES: int
-SPEC_UUID: int
-SPEC_DATETIME: int
-SPEC_DATE: int
-SPEC_TIME: int
-SPEC_TIMEDELTA: int
-SPEC_PATH: int
-SPEC_STR_ENUM: int
-SPEC_INT_ENUM: int
-SPEC_TUPLE: int
-SPEC_OPEN_TUPLE: int
-SPEC_SEQUENCE: int
-SPEC_SET: int
-SPEC_MAPPING: int
-SPEC_META: int
-SPEC_TYPED_DICT: int
-SPEC_STATE: int
-SPEC_CUSTOM_STATE: int
-SPEC_CUSTOM: int
-SPEC_FUNCTION: int
-SPEC_UNION: int
-SPEC_VALIDABLE: int
-SPEC_ALIAS: int
+SPEC_ANY: Final[int]
+SPEC_NONE: Final[int]
+SPEC_MISSING: Final[int]
+SPEC_LITERAL: Final[int]
+SPEC_BOOL: Final[int]
+SPEC_INT: Final[int]
+SPEC_FLOAT: Final[int]
+SPEC_STR: Final[int]
+SPEC_BYTES: Final[int]
+SPEC_UUID: Final[int]
+SPEC_DATETIME: Final[int]
+SPEC_DATE: Final[int]
+SPEC_TIME: Final[int]
+SPEC_TIMEDELTA: Final[int]
+SPEC_PATH: Final[int]
+SPEC_STR_ENUM: Final[int]
+SPEC_INT_ENUM: Final[int]
+SPEC_TUPLE: Final[int]
+SPEC_OPEN_TUPLE: Final[int]
+SPEC_SEQUENCE: Final[int]
+SPEC_SET: Final[int]
+SPEC_MAPPING: Final[int]
+SPEC_META: Final[int]
+SPEC_TYPED_DICT: Final[int]
+SPEC_STATE: Final[int]
+SPEC_CUSTOM_STATE: Final[int]
+SPEC_CUSTOM: Final[int]
+SPEC_FUNCTION: Final[int]
+SPEC_UNION: Final[int]
+SPEC_VALIDABLE: Final[int]
+SPEC_ALIAS: Final[int]
 
 class StructMeta(type): ...
 
@@ -54,6 +54,9 @@ def signature_fits(
 ) -> bool: ...
 def validate(spec: Spec, value: Any, /) -> Any: ...
 def check(spec: Spec, value: Any, /) -> bool: ...
+def accepts_missing(spec: Spec, /) -> bool: ...
+def key_spelling(key: Any, /) -> str | None: ...
+def spelled_once(spelled: set[Any], key: Any, /) -> None: ...
 def validate_instance[Instance: Struct](
     cls: type[Instance],
     value: Any,

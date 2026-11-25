@@ -54,7 +54,10 @@ annotations. If a value fails validation, an exception will be raised.
 Use the `Default` helpers when a field needs to be computed lazily or resolved from the environment:
 `Default` takes a literal or a `factory`, `DefaultFactory` calls a function with arguments and
 `DefaultEnv` reads an environment variable. Each returns a `DefaultValue` container that the State
-runtime resolves while creating each instance:
+runtime resolves while creating each instance. A plain default is one value shared by every
+instance, so a mutable one - a `list`, `dict`, `set` or `bytearray`, or a subclass of them, also
+given as `Default([])` - is refused when the class is created: use `DefaultFactory(list)` or
+`Default(factory=...)`, or an immutable value (`()`, `frozenset()`, `Map()`):
 
 ```python
 from datetime import UTC, datetime
@@ -132,7 +135,8 @@ Supported annotations include:
   validation runs. It always receives the raw input, including for nested State attributes and for
   custom classes providing their own `validate`, which validate the value afterwards.
 - `Verifier(callable)` — applies an additional check after the base attribute has been validated and
-  typed.
+  typed. It has to **return the value** - what it returns is what the attribute holds, so a verifier
+  which only checks and returns nothing stores `None`. Raise to reject.
 - `Sensitive` — marks the attribute as carrying a secret or personal data. `str()`, `repr()`, and
   `format_str` render `<redacted>` instead of the value, which keeps it out of logs and
   observability backends. The class and `Sensitive()` mark the attribute alike; pass a custom marker
@@ -142,8 +146,20 @@ Marking an attribute sensitive covers rendering only: attribute access, `to_mapp
 the generated JSON schema all keep working on the real value, so persistence and outgoing requests
 are unaffected. Review those call sites separately when handling secrets.
 
-`typing.NotRequired[T]` is most useful inside `TypedDict` definitions embedded in State fields. For
-regular State attributes, prefer an explicit default when a field may be omitted.
+Several `Validator`s, or several `Verifier`s, of one attribute compose in the order they are
+declared: each is given what the previous one returned, and a failure of any stops the rest and is
+reported at the position of the attribute. Validators all run before the base validation, verifiers
+all after it - writing a verifier before a validator changes nothing. Declarations nested through
+`Annotated` or a `type` alias read inner first: given `type Checked = Annotated[int, Validator(a)]`,
+`Annotated[Checked, Validator(b)]` runs `a` and then `b`.
+
+`typing.NotRequired[T]` belongs to `TypedDict` definitions embedded in State fields. It is refused
+with a `TypeError` on an attribute of a State itself, which has no default - validation would still
+require the value, so the annotation would promise what the class does not do. Give the attribute a
+default, or accept `Missing` (`int | Missing`), to make it optional.
+
+`typing.ReadOnly` (PEP 705) is accepted in a `TypedDict` and on an attribute and is resolved as the
+type it qualifies - it only matters to a type checker, as State attributes are immutable anyway.
 
 ### Structured Metadata with `Meta`
 
@@ -213,9 +229,14 @@ Each specialization is a distinct class - `Container[int]` is not `Container[str
 relation between the arguments is preserved: `Container[Dog]` is a subclass of `Container[Animal]`
 when `Dog` inherits from `Animal`, also through nested arguments such as
 `Container[Container[Dog]]`. `isinstance(Container(value=1), Container[int])` checks the held values
-of an unspecialized instance against the arguments.
+of an unspecialized instance against the arguments. The relation is the one validation keeps, not
+the one of the language: a `bool` is no `int` and a `datetime` no `date` to an annotation, so
+`Container[bool]` is not a subclass of `Container[int]` and `Container(value=True)` is no instance
+of it.
 
-Bounds and constraints of the type parameters are checked when the class is specialized:
+Bounds and constraints of the type parameters are checked when the class is specialized. A class
+which is not specialized takes a parameter for its bound, or for any one of its constraints
+(`class Con[T: (int, str)]` accepts an `int` or a `str` and refuses `1.5`):
 
 ```python
 class Shelf[T: Animal](State):
@@ -245,7 +266,9 @@ because `second` is a `str`. A parameter without a default stands for its bound,
 
 A `TypeVarTuple` binds the arguments the other parameters leave over, and each position of a
 `tuple[*Ts]` attribute is validated against its own argument. A `ParamSpec` is given the signature
-it stands for, written as a list of types or as `...`:
+it stands for, written as a list of types or as `...`, and a `Callable[P, R]` attribute then has to
+be given a callable taking those arguments - `Handler[[int], bool](call=lambda: True)` is refused as
+`Callable[[int], bool]` is:
 
 ```python
 class Row[*Ts](State):
@@ -387,25 +410,45 @@ You can convert a State instance to a dictionary using the `to_mapping` method:
 user_dict = user.to_mapping()
 # {"id": UUID('...'), "name": "Alice Smith", "email": None, "created_at": datetime(...)}
 
-# For nested conversion
-user_dict = user.to_mapping(recursive=True)
+# Only the State itself is converted, the nested ones are kept as they are
+user_dict = user.to_mapping(recursive=False)
 ```
 
-This is useful for serialization or when you need to work with plain dictionaries.
+The conversion is recursive by default (`recursive=True`): nested States and the States within
+collections become mappings as well, while the values which are not States - `UUID`, `datetime`,
+`bytes` - are kept as they are. This is useful for serialization or when you need to work with plain
+dictionaries.
 
 When working with external payloads, use the complementary helpers:
 
-- `State.from_mapping(mapping)` — accepts both attribute names and aliases. A key which is neither
-  is refused, in nested States and TypedDicts as well; see `ignore_extra` below.
-- `State.from_json(payload)` / `State.from_json_array(payload)` — decode JSON strings into State
-  instances (or tuples of instances). Validation errors are converted into informative exceptions.
+- `State.from_mapping(value, /, *, ignore_extra=False)` — accepts both attribute names and aliases.
+  A key which is neither is refused, in nested States and TypedDicts as well; see `ignore_extra`
+  below. A State refuses such a key the same way wherever it is given - the constructor,
+  `updating()`, `validate` and the decoding helpers - with `Unexpected attribute 'x' for Name`
+  (`Unexpected attributes 'a', 'b' for Name` for several of them in the constructor and
+  `updating()`).
+- `State.from_json(value, /, decoder=json.JSONDecoder, *, ignore_extra=False)` /
+  `State.from_json_array(...)` of the same parameters — decode a JSON `str` or `bytes` into a State
+  instance (or a sequence of instances). `decoder` is a `json.JSONDecoder` class, and a custom one
+  is read through the standard library. Validation errors are converted into informative exceptions.
 - `state.to_json(indent=2)` — encode a State instance to JSON using the same alias behaviour as
-  `to_mapping`.
+  `to_mapping`. Without `indent` the JSON is compact, with no space after `,` and `:`.
+- The JSON State writes and reads is strict. A float value which is infinite or `NaN` is not JSON,
+  so `to_json` raises `ValueError` for it wherever it is - an attribute, an `Any`, a nested
+  container - and `from_json` and `from_json_array` refuse the constants `NaN`, `Infinity` and
+  `-Infinity`, and a number beyond what a float holds (`1e400`), wherever they are, a key skipped by
+  `ignore_extra` included. A custom `decoder` is given the `parse_float` and `parse_constant` which
+  refuse them - it has to accept both and leave them as they are, and one which overrides `decode`
+  refuses them itself or not at all. Float mapping _keys_ keep the spelling `"inf"`, `"-inf"` and
+  `"nan"`, and refuse a number beyond what a float holds as well. `to_mapping`, `to_basic_object`
+  and `from_mapping` work on Python values and keep such floats.
 - `state.to_basic_object()` — convert to a mapping of JSON-compatible values, in memory. Where
   `to_mapping` keeps the live `UUID`, `datetime` or `bytes` values, this encodes every leaf and key
-  to the spelling validation reads back, so the result round trips through `from_mapping`. An
-  attribute with no basic spelling - a plain `Enum`, a `Decimal` - raises `TypeError` naming the
-  path and the type. See [Converting to Basic Values](types.md#converting-to-basic-values).
+  to the spelling validation reads back, so the result round trips through `from_mapping` - bar the
+  mapping keys which spell alike once encoded, which can't be told apart afterwards. An attribute
+  with no basic spelling - a plain `Enum`, a `Decimal` - raises `TypeError` naming the path and the
+  type. See [Converting to Basic Values](types.md#converting-to-basic-values), also for the
+  limitation.
 - `State.validate(value)` — coerce an instance or compatible mapping into the target State type.
   This is handy when accepting heterogeneous inputs.
 
@@ -461,17 +504,46 @@ accepts `customer` or `customer_id` when instantiating, and `invoice.to_mapping(
 State classes perform thorough type validation for all supported Python types:
 
 - **Basic Types**: int, str, bool, float, bytes
+  - **bool** accepts `True`/`False`, the ints `0` and `1`, the floats `0.0`, `-0.0` and `1.0` and
+    the strings `"true"`/`"false"` in any case; any other int (`2`, `-1`), any other float, any
+    other string (`"1"`, `"yes"`) is refused.
+  - **int** accepts an int (not a `bool`) and a float which is a whole number up to 2\*\*53 (read as
+    an int); strings are never parsed, and non-integral floats, `NaN`, infinities and larger floats
+    are refused. **float** accepts an int (not a `bool`) and a float, and refuses strings.
+  - **StrEnum/IntEnum** read a member, then the raw value (a `str`; an `int` which is not a `bool`,
+    or for an `IntEnum` a float which is a whole number up to 2\*\*53, read as that int), then the
+    name of a member - so a value always wins over a name. A numeric string is no value of an
+    `IntEnum`.
+  - **Literal** of ints reads the same whole float as the int it equals (`Literal[1]` given `1.0` is
+    `1`); a float never matches a `bool` literal. In a union the alternative which takes the value
+    as it is wins first, so `float | IntEnum` given `1.0` stays a float.
+  - **Mapping keys** are strings in JSON, so they are read from the spelling they are written as,
+    and from no other: `int` keys as canonical decimal integers (`"-12"`, not `"+1"`, `"01"`,
+    `" 1"`, `"1_0"`), `float` keys as JSON numbers or as `"inf"`, `"-inf"` and `"nan"` (the spelling
+    `float.__repr__` gives them, which `json.dumps` spells `"Infinity"`, `"-Infinity"` and `"NaN"`
+    for a key - those are refused), `bool` keys as `"true"`/`"false"`, `None` as `"null"`, `Literal`
+    keys as the spelling of the literal, enum keys as a value, a number or a name. Two keys which
+    convert to the same one are refused (`Mapping[int, str]` given `{"1": "a", 1: "b"}`), and so are
+    two keys which are written the same by `to_json` and `to_basic_object` (`{1: "a", "1": "b"}`
+    raises `ValueError`).
 - **Container Types**:
   - **Sequence[T]**: sequence-like inputs are normalized to immutable tuples
   - **Mapping[K, V]**: mappings are validated recursively and converted to immutable `Map` values
-  - **Set[T]**: set-like inputs are normalized to immutable frozensets
+  - **Set[T]**: sets and sequences (a `list` or `tuple`, which is what a JSON array is) are
+    normalized to immutable frozensets - a mapping, a dict view, a generator, an iterator and
+    `str`/`bytes` are refused
   - **tuple[T, ...]**: Fixed or variable-length tuples
-- **Special Types**: UUID, datetime, date, time, timedelta, timezone, Path, re.Pattern
+- **Special Types**: UUID, datetime, date, time, timedelta, Path - a `datetime` is not accepted for
+  `date`; for `datetime | date` an ISO string is read as the first alternative which reads it
+  (`datetime.fromisoformat` reads a date alone), so declare `date | datetime` to get a `date` back.
+  `timezone` and `re.Pattern` are accepted as well, but have no JSON form and no JSON Schema: a
+  State holding one is not serializable (`to_json` raises, `json_schema()` raises `TypeError`)
 - **Union Types**: str | None, int | float
 - **Literal Types**: Literal["a", "b", "c"] - a value has to be of the type of the literal it is
-  equal to, so `Literal[1]` refuses `True` and `1.0`. A plain `str` or `int` and a `StrEnum` or
-  `IntEnum` member equal to it stand for each other, and the literal itself is what gets stored:
-  `Literal[Color.RED]` reads `"red"` as `Color.RED`, `Literal["red"]` reads `Color.RED` as `"red"`
+  equal to, so `Literal[1]` refuses `True`, while a whole float such as `1.0` is read as the int it
+  holds. A plain `str` or `int` and a `StrEnum` or `IntEnum` member equal to it stand for each
+  other, and the literal itself is what gets stored: `Literal[Color.RED]` reads `"red"` as
+  `Color.RED`, `Literal["red"]` reads `Color.RED` as `"red"`
 - **Enum Types**: Enum, StrEnum, and IntEnum
 - **Callable Types**: Function types and Protocol interfaces
 - **TypedDict**: Validates structure with Required/NotRequired fields. A key the TypedDict does not
@@ -580,21 +652,63 @@ A few validation details matter in practice:
 
 ### JSON Schema Generation
 
-Every State exposes a JSON Schema fragment through the `__SPECIFICATION__` attribute. Call
-`State.json_schema(indent=2)` when you need a ready-to-serialize schema definition:
+A State with a JSON schema exposes it through the `__SPECIFICATION__` attribute, and one without
+raises a `TypeError` on reading it. Call `State.json_schema(indent=2)` when you need a
+ready-to-serialize schema definition:
 
 ```python
 schema = Invoice.json_schema(indent=2)
 ```
 
-Besides the primitives, the schema covers the standard value types: `UUID`, `datetime`, `date`,
-`time`, `timedelta` and `Path` (as strings with a `format`), `bytes` (a base64 string,
-`contentEncoding`) and sets (arrays with `uniqueItems`). A `timedelta` is spelled as an ISO 8601
-duration such as `P1DT2H3M4.5S`; years and months are refused because their length depends on the
-calendar date. Aliases and descriptions propagate into the schema automatically, and any custom
-`Specification` overrides are respected. If a State cannot be represented as JSON Schema (for
-example, when it holds callables), `json_schema(required=True)` raises a `TypeError` so you can
+Besides the primitives, the schema covers the standard value types: `UUID` and `date` (strings with
+a `format`), `datetime`, `time`, `timedelta` and `Path` (plain strings), `bytes` (a base64 string,
+`contentEncoding`) and sets (arrays). A `timedelta` is spelled as an ISO 8601 duration such as
+`P1DT2H3M4.5S`, with a leading `-` when negative; years and months are refused because their length
+depends on the calendar date. Aliases and descriptions propagate into the schema automatically, and
+any custom `Specification` overrides are respected. If a State cannot be represented as JSON Schema
+(for example, when it holds callables), `json_schema(required=True)` raises a `TypeError` so you can
 detect unsupported shapes early.
+
+The schema is made to agree with validation of a JSON document: it accepts every document the State
+writes, and refuses what the State refuses wherever JSON Schema can say so. Where it can't, it is
+the looser of the two - a document which passes the schema can still fail validation, and that is
+what validation is for. The other way around, the State reads a few spellings besides the one it
+writes, which the schema leaves out: the Python names of aliased attributes, and the other forms of
+a `UUID` and a `date`. What it leaves unsaid is on purpose:
+
+- An attribute is `required` when it can't be left out: it has no default and doesn't accept
+  `Missing`. An attribute annotated `Any`, `object` or `X | Missing` can be omitted from the input,
+  and is not listed - unless a `Validator` or a `Verifier` is declared on it, which may refuse
+  `Missing`.
+- `Missing` has no JSON value, so it is not an alternative of a union - `int | Missing` is an
+  integer, which may be left out of the object.
+- A `format` is only claimed when everything written fits it - not for `datetime` and `time`, which
+  are written without an offset when they have none, and not for `timedelta`, which is written with
+  a sign when negative.
+- Sets don't claim `uniqueItems` - elements which differ may be written the same way, and a repeated
+  one is read as a set all the same.
+- A fixed tuple has exactly its length (`minItems` and `maxItems`). A tuple with an unbounded part
+  has `minItems` for the elements around it, and takes what follows its leading elements as any of
+  the types after them, as a schema can't tell the elements at the end from those in the middle.
+- JSON Schema compares numbers by value, so it can't tell `1` from `1.0`, and the State reads a
+  whole float as the int it equals for an `int`, an `IntEnum`, an int `Literal` and a `bool`. What
+  remains is the bound: the `int` schema accepts whole floats beyond 2\*\*53, which the State
+  refuses, and so do the schemas of an `IntEnum` or a `Literal` holding a value beyond it. A number
+  beyond what a float holds (`1e400`) passes a `number` schema, and the pattern of a `float` key,
+  while the State refuses it.
+- A `UUID` and a `date` are read with `UUID(...)` and `date.fromisoformat`, which take more
+  spellings than the `uuid` and `date` formats: hex digits without hyphens, braces or the
+  `urn:uuid:` prefix for a `UUID`, the basic (`20240102`) and week (`2025-W01-1`) forms for a
+  `date`. A validator asserting `format` refuses those, the State writes the canonical form alone.
+- The keys of a mapping which are not strings constrain `propertyNames` to the way they are spelled
+  where that can be told - `int`, `float`, `bool`, `None`, `UUID`, enum and `Literal` keys - with
+  the exact spellings written. `bool` is described as a boolean, `0`, `1` or `true`/`false` in any
+  case, an `IntEnum` as its values or the names of its members.
+- A `Literal` of enum members is written as their values, and one of values with no JSON form (a
+  plain `Enum` member, `bytes`) leaves the State without a schema.
+- Both the name of an attribute and its alias are accepted as input, while the schema names the
+  alias alone, as `additionalProperties` is off. A document using the Python names of aliased
+  attributes passes validation and not the schema.
 
 A State can describe itself with the `description` class keyword. It is kept on the type as
 `__DESCRIPTION__` and written into its schema, so it survives `python -OO` (which strips docstrings)
@@ -631,7 +745,8 @@ class SerializableInvoice(State, serializable=True):
 
 Every `State` subclass exposes an `AttributePath` builder via the class attribute `_`. Paths let you
 read or update deeply nested values without manually rebuilding intermediate objects, and they work
-with the same validation rules as regular constructors.
+with the same validation rules as regular constructors: an update which validation refuses raises
+`ValidationError` naming the whole path from the root (`.profile.name`, `.roles[0]`).
 
 ```python
 from collections.abc import Mapping, Sequence
@@ -660,7 +775,7 @@ assert renamed.profile.name == "Alicia"
 
 # Combine with AttributeRequirement to assert invariants
 AttributeRequirement.equal(
-    value="admin",
+    "admin",
     path=User._.roles[0],
 ).check(renamed)
 ```
@@ -770,8 +885,10 @@ user4 = user.updating(address=new_address)
 ### Native Storage
 
 A compiled extension stores the attributes of a State inline in the instance, validates every
-built-in annotation without calling back into Python, and converts to mappings and JSON natively.
-The immutability is real - an attribute can't be rebound through `object.__setattr__` either, and an
+built-in annotation, and converts to mappings and JSON natively. It calls into Python for a few
+values it doesn't make itself: decoding `bytes` from base64, parsing a `timedelta` or an ISO
+`datetime`, `date` or `time`, constructing a `UUID` or a `Path`, and validating `Meta`. The
+immutability is real - an attribute can't be rebound through `object.__setattr__` either, and an
 instance has no `__dict__` or `__weakref__`. Calling `__init__` a second time on an instance raises.
 The class is just as fixed: once it is created, assigning or deleting one of its attributes raises
 `TypeError`, so neither a method nor the descriptor of an attribute can be replaced. Declare
@@ -784,10 +901,39 @@ Keeping many instances alive therefore adds nothing for the collector to walk. O
 value, such as a `list` in an `Any` attribute, stays tracked, so a cycle through it is still
 collected.
 
-What runs Python is the code of the user alone: a `Validator`, a `Verifier`, a class validating
-itself, a default factory. `ValidationError` reports a failure at its position the same way for
-every kind. When reading JSON, such code runs once the whole document is known to be right, so a
-document refused for something else never runs it.
+An instance whose `__init__` did not run - made with `__new__`, or by a constructor of the class
+which never delegated - holds no values at all, which is not the same as holding `Missing`. Reading
+an attribute of it raises `AttributeError`, while `to_mapping`, `to_basic_object`, `to_json`,
+`hash`, `==` of two instances, `copy.deepcopy` and `updating` raise `TypeError` saying the instance
+is not initialized, rather than leaving the attributes out. An instance another thread is
+initializing is read either whole or not at all, so `to_json` of it never returns some of the
+attributes only.
+
+Two instances which are equal have the same hash, for the containers the language compares equal to
+one of another kind: a `Map`, a `UserDict` or a mapping proxy equal to the `dict` of its items, a
+`frozenset` or a dict view equal to a `set`, a `UserList` equal to a `list`, `bytes`, a `bytearray`
+and a `memoryview` equal to each other, held alone or within tuples, lists and mappings. The hash of
+such a container is that of the hashable it is rebuilt as, so **it changes when a `list`, `dict`,
+`set` or `bytearray` an instance holds is mutated** - a `set` or `dict` holding the instance no
+longer finds it. A mutable value is only held by an `Any`, an `object` or a custom attribute; a
+typed attribute (`Sequence`, `Mapping`, `Set`) converts it to an immutable `tuple`, `Map` or
+`frozenset`, so prefer those, or immutable values. Any other value with no hash of its own
+(`__hash__` is `None`) is left out of the hash, which can only be consistent with its equality if
+nothing equal to it is hashed; any other failure to hash a value is raised as it is. Comparing with
+something which is no State leaves the answer to it (`instance == mock.ANY` is true); another State
+class is never equal.
+
+Apart from the values it doesn't make itself, what runs Python is the code of the user: a
+`Validator`, a `Verifier`, a class validating itself, a default factory, an `__init__` of the class
+itself. `ValidationError` reports a failure at its position the same way for every kind. When
+reading JSON, such code runs only once the whole document has been read - an attribute which can run
+it, whatever it nests it in (a tuple, a set, a `TypedDict`, a union or a sequence), is kept as the
+document spells it until then, while everything which runs none of it is checked on the way. A
+document which is not JSON never runs it. One which is accepted runs it exactly once, in the order
+of the attributes, which is not always the order of the keys. One which is refused runs exactly what
+validating the same document as a mapping runs, `cls.validate(json.loads(text))`, and never any
+more: the code which ran before the first failure is not run again by the document being read once
+more. The failure is reported at its position, the way validating the instance reports it.
 
 `to_json`, `from_json` and `from_json_array` read and write the JSON natively, without the
 intermediate Python objects - for the default `json.JSONEncoder` and `json.JSONDecoder`, and with no

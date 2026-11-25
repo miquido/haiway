@@ -14,7 +14,7 @@ from types import (
     ModuleType,
     WrapperDescriptorType,
 )
-from typing import TYPE_CHECKING, Any, Final, Literal, final
+from typing import Any, Final, Literal, final
 from weakref import WeakKeyDictionary
 
 from haiway._native import nstruct
@@ -52,7 +52,6 @@ from haiway.attributes.annotations import (
     UnionAttribute,
     UUIDAttribute,
     ValidableAttribute,
-    _no_verify,  # pyright: ignore[reportPrivateUsage]
 )
 from haiway.attributes.attribute import Attribute
 from haiway.types.frozen import same_copy, same_deepcopy
@@ -76,52 +75,38 @@ __all__ = (
 # repeats them.
 
 
-def _constants(prefix: str) -> Mapping[str, int]:
-    return {
-        name.removeprefix(prefix): getattr(nstruct, name)
-        for name in dir(nstruct)
-        if name.startswith(prefix)
-    }
-
-
-if TYPE_CHECKING:
-    # what a type checker sees - the values at runtime are the ones of the extension
-
-    class Kind(IntEnum):
-        ANY = 0
-        NONE = 1
-        MISSING = 2
-        LITERAL = 3
-        BOOL = 4
-        INT = 5
-        FLOAT = 6
-        STR = 7
-        BYTES = 8
-        UUID = 9
-        DATETIME = 10
-        DATE = 11
-        TIME = 12
-        TIMEDELTA = 13
-        PATH = 14
-        STR_ENUM = 15
-        INT_ENUM = 16
-        TUPLE = 17
-        OPEN_TUPLE = 18
-        SEQUENCE = 19
-        SET = 20
-        MAPPING = 21
-        META = 22
-        TYPED_DICT = 23
-        STATE = 24
-        CUSTOM_STATE = 25
-        CUSTOM = 26
-        FUNCTION = 27
-        UNION = 28
-        VALIDABLE = 29
-        ALIAS = 30
-
-else:
-    Kind = IntEnum("Kind", dict(_constants("SPEC_")))
+class Kind(IntEnum):
+    ANY = nstruct.SPEC_ANY
+    NONE = nstruct.SPEC_NONE
+    MISSING = nstruct.SPEC_MISSING
+    LITERAL = nstruct.SPEC_LITERAL
+    BOOL = nstruct.SPEC_BOOL
+    INT = nstruct.SPEC_INT
+    FLOAT = nstruct.SPEC_FLOAT
+    STR = nstruct.SPEC_STR
+    BYTES = nstruct.SPEC_BYTES
+    UUID = nstruct.SPEC_UUID
+    DATETIME = nstruct.SPEC_DATETIME
+    DATE = nstruct.SPEC_DATE
+    TIME = nstruct.SPEC_TIME
+    TIMEDELTA = nstruct.SPEC_TIMEDELTA
+    PATH = nstruct.SPEC_PATH
+    STR_ENUM = nstruct.SPEC_STR_ENUM
+    INT_ENUM = nstruct.SPEC_INT_ENUM
+    TUPLE = nstruct.SPEC_TUPLE
+    OPEN_TUPLE = nstruct.SPEC_OPEN_TUPLE
+    SEQUENCE = nstruct.SPEC_SEQUENCE
+    SET = nstruct.SPEC_SET
+    MAPPING = nstruct.SPEC_MAPPING
+    META = nstruct.SPEC_META
+    TYPED_DICT = nstruct.SPEC_TYPED_DICT
+    STATE = nstruct.SPEC_STATE
+    CUSTOM_STATE = nstruct.SPEC_CUSTOM_STATE
+    CUSTOM = nstruct.SPEC_CUSTOM
+    FUNCTION = nstruct.SPEC_FUNCTION
+    UNION = nstruct.SPEC_UNION
+    VALIDABLE = nstruct.SPEC_VALIDABLE
+    ALIAS = nstruct.SPEC_ALIAS
 
 
 # The description of an annotation the extension compiles into its spec:
@@ -148,9 +133,8 @@ _LEAVES: Final[Mapping[type[Any], Kind]] = {
 }
 
 
-def _verifying(annotation: Any) -> Any:
-    verifying: Any = getattr(annotation, "verifying", _no_verify)
-    return None if verifying is _no_verify else verifying
+def _verifying(annotation: AttributeAnnotation) -> Any:
+    return annotation.metadata.verifying
 
 
 def is_plain_state(cls: Any, /) -> bool:
@@ -687,7 +671,8 @@ def _entry(field: Attribute) -> tuple[Any, ...]:
         sys.intern(field.alias) if field.alias is not None else None,
         field.spec,
         field._validated_default,  # pyright: ignore[reportPrivateUsage]
-        field.default.constant,
+        # what gives the default as declared, for the extension to tell whether it can be kept
+        field.default if field.default.constant else None,
     )
 
 
@@ -815,7 +800,6 @@ class TypeHooks:
     mapping: type[Any]
     sequence: type[Any]
     set: type[Any]
-    iterable: type[Any]
     uuid: type[Any]
     safe_uuid: type[Any]
     datetime: type[Any]
@@ -830,7 +814,6 @@ class TypeHooks:
     __slots__ = (
         "date",
         "datetime",
-        "iterable",
         "mapping",
         "meta",
         "partial",
@@ -854,7 +837,6 @@ class TypeHooks:
         mapping: type[Any],
         sequence: type[Any],
         set: type[Any],  # noqa: A002  # read by this name by the extension
-        iterable: type[Any],
         uuid: type[Any],
         safe_uuid: type[Any],
         datetime: type[Any],
@@ -870,7 +852,6 @@ class TypeHooks:
         self.mapping = mapping
         self.sequence = sequence
         self.set = set
-        self.iterable = iterable
         self.uuid = uuid
         self.safe_uuid = safe_uuid
         self.datetime = datetime

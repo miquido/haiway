@@ -9,6 +9,7 @@ import pytest
 
 from haiway import Map, State, ValidationError
 from haiway._native import nstruct
+from haiway.attributes.native import Kind
 
 # The paths of the native extension the rest of the suite does not reach - found with
 # `make coverage-native`. Allocation failures are left out, they can't be caused here.
@@ -139,6 +140,9 @@ def test_configure_only_once() -> None:
         nstruct.configure(object(), object(), object())
 
 
+_UNTYPED: Any = nstruct  # the entry points called with what their stubs refuse
+
+
 @pytest.mark.parametrize(
     "call",
     (
@@ -150,6 +154,8 @@ def test_configure_only_once() -> None:
         lambda: nstruct.validate(object(), 1),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.check(object(), 1),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.compile_spec(()),
+        lambda: _UNTYPED.accepts_missing(object()),
+        lambda: _UNTYPED.spelled_once(set()),
     ),
 )
 def test_internal_entry_points_refuse_what_they_are_not_given(call: Any) -> None:
@@ -228,3 +234,42 @@ def test_from_json_passes_on_an_error_of_a_flag(position: int) -> None:
     arguments[position] = Undecidable()
     with pytest.raises(RuntimeError, match="undecidable"):
         nstruct.from_json(*arguments)
+
+
+def test_kind_names_every_kind_the_extension_exports() -> None:
+    exported: dict[str, int] = {
+        name.removeprefix("SPEC_"): getattr(nstruct, name)
+        for name in dir(nstruct)
+        if name.startswith("SPEC_")
+    }
+
+    assert exported == {kind.name: kind.value for kind in Kind}
+
+
+def test_spelled_once_takes_a_spelling_in_once() -> None:
+    spelled: set[Any] = set()
+    nstruct.spelled_once(spelled, "a")
+    nstruct.spelled_once(spelled, "b")
+
+    with pytest.raises(ValueError, match="same once spelled"):
+        nstruct.spelled_once(spelled, "a")
+
+    assert spelled == {"a", "b"}
+
+
+@pytest.mark.parametrize("container", (frozenset({"a"}), ["a"], {"a": 1}, None))
+def test_spelled_once_refuses_what_is_not_a_set(container: Any) -> None:
+    with pytest.raises(TypeError, match="spelled_once expects a set"):
+        _UNTYPED.spelled_once(container, "b")
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    ((None, "null"), (True, "true"), (7, "7"), (float("-inf"), "-inf"), ("a", None), (b"a", None)),
+    ids=repr,
+)
+def test_key_spelling_covers_the_keys_without_a_text_of_their_own(
+    key: Any,
+    expected: str | None,
+) -> None:
+    assert nstruct.key_spelling(key) == expected

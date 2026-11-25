@@ -22,6 +22,7 @@ from typing import (
 )
 
 from haiway.attributes.annotations import AttributeAnnotation, ObjectAttribute
+from haiway.attributes.validation import ValidationError
 from haiway.types import Missing
 
 __all__ = ("AttributePath",)
@@ -141,7 +142,6 @@ class PropertyAttributePathComponent:
         key: str | None = None,
     ) -> None:
         root_origin: Any = _unaliased_origin(root)
-        attribute_origin: Any = _unaliased_origin(attribute)
 
         def access(
             subject: Root,
@@ -159,10 +159,6 @@ class PropertyAttributePathComponent:
 
             resolved: Any = getattr(subject, name)
 
-            assert isinstance(resolved, attribute_origin), (  # nosec: B101
-                f"AttributePath pointing to unexpected value of"
-                f" '{type(resolved).__name__}' instead of '{attribute.__name__}' for '{name}'"
-            )
             return resolved
 
         def assigning(
@@ -178,11 +174,6 @@ class PropertyAttributePathComponent:
             assert hasattr(subject, name), (  # nosec: B101
                 f"AttributePath pointing to attribute '{name}'"
                 f" which is not available in subject '{type(subject).__name__}'"
-            )
-
-            assert isinstance(value, attribute_origin), (  # nosec: B101
-                f"AttributePath assigning unexpected value of "
-                f"'{type(value).__name__}' instead of '{attribute.__name__}' for '{name}'"
             )
 
             if _replaceable(subject):
@@ -335,7 +326,6 @@ class SequenceItemAttributePathComponent:
         index: int,
     ) -> None:
         root_origin: Any = _unaliased_origin(root)
-        attribute_origin: Any = _unaliased_origin(attribute)
 
         def access(
             subject: Root,
@@ -348,10 +338,6 @@ class SequenceItemAttributePathComponent:
 
             resolved: Any = subject.__getitem__(index)
 
-            assert isinstance(resolved, attribute_origin), (  # nosec: B101
-                f"AttributePath pointing to unexpected value of "
-                f"'{type(resolved).__name__}' instead of '{attribute.__name__}' for '{index}'"
-            )
             return resolved
 
         def assigning(
@@ -362,10 +348,6 @@ class SequenceItemAttributePathComponent:
             assert isinstance(subject, root_origin), (  # nosec: B101
                 f"AttributePath used on unexpected root of "
                 f"'{type(subject).__name__}' instead of '{root.__name__}' for '{index}'"
-            )
-            assert isinstance(value, attribute_origin), (  # nosec: B101
-                f"AttributePath assigning to unexpected value of "
-                f"'{type(value).__name__}' instead of '{attribute.__name__}' for '{index}'"
             )
 
             temp_list: list[Any] = list(subject)
@@ -503,7 +485,6 @@ class MappingItemAttributePathComponent:
         key: str | int,
     ) -> None:
         root_origin: Any = _unaliased_origin(root)
-        attribute_origin: Any = _unaliased_origin(attribute)
 
         def access(
             subject: Root,
@@ -516,10 +497,6 @@ class MappingItemAttributePathComponent:
 
             resolved: Any = subject.__getitem__(key)
 
-            assert isinstance(resolved, attribute_origin), (  # nosec: B101
-                f"AttributePath pointing to unexpected value of "
-                f"'{type(resolved).__name__}' instead of '{attribute.__name__}' for '{key}'"
-            )
             return resolved
 
         def assigning(
@@ -530,10 +507,6 @@ class MappingItemAttributePathComponent:
             assert isinstance(subject, root_origin), (  # nosec: B101
                 f"AttributePath used on unexpected root of "
                 f"'{type(subject).__name__}' instead of '{root.__name__}' for '{key}'"
-            )
-            assert isinstance(value, attribute_origin), (  # nosec: B101
-                f"AttributePath assigning to unexpected value of "
-                f"'{type(value).__name__}' instead of '{attribute.__name__}' for '{key}'"
             )
 
             temp_dict: dict[Any, Any] = dict(subject)
@@ -918,8 +891,8 @@ class AttributePath[Root, Attribute]:
             ),
             attribute=annotation,
         )
-        children[name] = extended
-        return extended
+        # the first of several threads to get here decides, all of them get its path
+        return children.setdefault(name, extended)
 
     def __getitem__(
         self,
@@ -958,11 +931,16 @@ class AttributePath[Root, Attribute]:
 
         extended: AttributePath[Root, Any] = _extended_by_item(self, key)
         # the keys of items are whatever the code indexes with, so what is kept is bounded -
-        # the attributes of a class are not, they can't outgrow its annotations
+        # the attributes of a class are not, they can't outgrow its annotations. the bound
+        # is checked before keeping, so threads keeping at the same time may overshoot it
+        # by their number - it is there to stop growth, not to be exact. below it, the first
+        # path kept for an item is the one every thread gets
         if len(children) < _ITEM_PATHS_KEPT:
-            children[item] = extended
+            return children.setdefault(item, extended)
 
-        return extended
+        # past the bound nothing more is kept and each use may make a path of its own - an
+        # item kept by another thread meanwhile is still the one given when it is found
+        return children.get(item, extended)
 
     @overload
     def __call__(
@@ -1006,8 +984,14 @@ class AttributePath[Root, Attribute]:
         Raises
         ------
         AssertionError
-            If ``root``, ``updated``, or the resolved value does not match the
-            path type annotations.
+            If ``root``, or a subject along the path, is not of the type the
+            path declares for it or lacks the attribute it names.
+        ValidationError
+            If ``updated`` is refused by the validation of the State attribute
+            it replaces - reported at its whole path from ``root``. Values
+            given to other objects along the path, such as dataclasses, are
+            taken as their own ``__replace__`` or attribute assignment takes
+            them.
         AttributeError
             If an attribute component cannot be resolved on the current
             subject.
@@ -1026,10 +1010,12 @@ class AttributePath[Root, Attribute]:
         )
 
         if updated is not Missing:
-            assert isinstance(updated, _unaliased_origin(self.__attribute__)), (  # nosec: B101
-                f"AttributePath '{self.__repr__()}' assigning to unexpected value of "
-                f"'{type(updated).__name__}' instead of '{self.__attribute__.__name__}'"
-            )
+            if not self.__components__:  # the path is the root itself - it is what replaces it
+                assert isinstance(updated, _unaliased_origin(self.__root__)), (  # nosec: B101
+                    f"AttributePath '{self.__repr__()}' used with unexpected value of "
+                    f"'{type(updated).__name__}' instead of '{self.__root__.__name__}'"
+                )
+                return updated
 
             resolved: Any = root
             updates_stack: deque[tuple[Any, AttributePathComponent]] = deque()
@@ -1040,10 +1026,20 @@ class AttributePath[Root, Attribute]:
             updated_value: Any = updated
             while updates_stack:
                 subject, component = updates_stack.pop()
-                updated_value = component.assigning(
-                    subject,
-                    value=updated_value,
-                )
+                try:
+                    updated_value = component.assigning(
+                        subject,
+                        value=updated_value,
+                    )
+
+                except ValidationError as exc:
+                    # the failure is reported from the subject updated - the components
+                    # leading to it complete its path from the root
+                    error: ValidationError = exc
+                    for _, outer in reversed(updates_stack):
+                        error = error.prefixed(_segment(outer))
+
+                    raise error from exc.cause
 
             return updated_value
 
@@ -1052,12 +1048,12 @@ class AttributePath[Root, Attribute]:
             for component in self.__components__:
                 resolved = component.access(resolved)
 
-            assert isinstance(resolved, _unaliased_origin(self.__attribute__)), (  # nosec: B101
-                f"AttributePath '{self.__repr__()}' pointing to unexpected value of "
-                f"'{type(resolved).__name__}' instead of '{self.__attribute__.__name__}'"
-            )
-
             return resolved
+
+
+def _segment(component: AttributePathComponent, /) -> str:
+    # the spelling of a component within a path - the one `path_str` gives it
+    return component.path_str("_")[1:]
 
 
 _ITEM_PATHS_KEPT: Final[int] = 256

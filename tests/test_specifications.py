@@ -5,10 +5,11 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from haiway import (
     Description,
-    Missing,
+    Map,
     Specification,
     State,
     TypeSpecification,
+    Verifier,
 )
 from haiway.attributes.annotations import (
     BoolAttribute,
@@ -61,7 +62,11 @@ def test_specifications() -> None:
         "type": "number",
     }
     assert type_specification(BoolAttribute()) == {
-        "type": "boolean",
+        "anyOf": [
+            {"type": "boolean"},
+            {"enum": [0, 1]},
+            {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
+        ]
     }
     assert type_specification(NoneAttribute()) == {
         "type": "null",
@@ -90,6 +95,8 @@ def test_specifications() -> None:
         "type": "array",
         "prefixItems": [{"type": "string"}, {"type": "string"}],
         "items": False,
+        "minItems": 2,
+        "maxItems": 2,
     }
     assert type_specification(
         MappingAttribute(
@@ -125,7 +132,13 @@ def test_basic_specification() -> None:
             "str_value": {"type": "string"},
             "int_value": {"type": "integer"},
             "float_value": {"type": "number"},
-            "bool_value": {"type": "boolean"},
+            "bool_value": {
+                "anyOf": [
+                    {"type": "boolean"},
+                    {"enum": [0, 1]},
+                    {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
+                ]
+            },
             "none_value": {"type": "null"},
             "list_value": {"type": "array", "items": {"type": "string"}},
             "dict_value": {"type": "object", "additionalProperties": {"type": "string"}},
@@ -153,7 +166,7 @@ def test_parametrized_specification() -> None:
         "properties": {
             "param": {"type": ANY_TYPES},
         },
-        "required": ["param"],
+        "required": [],  # unspecialized, it accepts `Missing`
         "additionalProperties": False,
     }
     assert TestModel[str].__SPECIFICATION__ == {
@@ -367,7 +380,7 @@ def test_recursive_state_references_use_identifier_from_every_container() -> Non
     class Node(State):
         alone: Node | None = None
         listed: Sequence[Node] = ()
-        mapped: Mapping[str, Node] = {}
+        mapped: Mapping[str, Node] = Map()
 
     specification = Node.__SPECIFICATION__
     properties = specification["properties"]  # pyright: ignore[reportTypedDictNotRequiredAccess]
@@ -442,7 +455,7 @@ def test_literal_of_mixed_types_names_only_the_values() -> None:
 
 def test_union_of_the_same_type_names_it_once() -> None:
     class Example(State):
-        value: Missing | None = None
+        value: Annotated[None, Verifier(lambda value: None)] | None = None
 
     # a type can be named only once within a list of types
     assert properties_of(Example)["value"] == {"type": "null"}  # pyright: ignore[reportTypedDictNotRequiredAccess]

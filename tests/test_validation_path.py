@@ -67,8 +67,7 @@ def test_nested_object_path_joins_attributes() -> None:
 
     assert exception.value.path == (".middle", ".leaf", ".number")
     assert str(exception.value) == (
-        "Validation of .middle.leaf.number failed:"
-        " 'str' value is not matching expected format of 'int'"
+        "Validation of .middle.leaf.number failed: 'str' is not matching expected type of 'int'"
     )
 
 
@@ -129,7 +128,7 @@ def test_cause_is_the_original_error() -> None:
     with raises(ValidationError) as exception:
         Root(**root_payload(middle=middle_payload(leaf={"number": "invalid"})))
 
-    assert isinstance(exception.value.cause, ValueError)
+    assert isinstance(exception.value.cause, TypeError)
     # a single error, chained from what actually failed rather than from the
     # enclosing report of it
     assert exception.value.__cause__ is exception.value.cause

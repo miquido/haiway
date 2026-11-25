@@ -1,10 +1,13 @@
+import json
 import re
 from collections.abc import Callable, Mapping, MutableMapping, MutableSequence, Sequence
+from enum import Enum
 from typing import (
     Any,
     cast,
 )
 
+from haiway._native import nstruct
 from haiway.attributes.annotations import (
     AliasAttribute,
     AnyAttribute,
@@ -36,11 +39,13 @@ from haiway.attributes.annotations import (
     UUIDAttribute,
     ValidableAttribute,
 )
-from haiway.types import TypeSpecification
+from haiway.types import Missing, TypeSpecification
+from haiway.types.basic import basic_key
 
 __all__ = (
     "object_specification",
     "type_specification",
+    "unique_anchors",
 )
 
 
@@ -56,9 +61,11 @@ def type_specification(
     if specification is None:
         return None
 
-    return _with_description(
-        specification,
-        description=annotation.description,
+    return unique_anchors(
+        _with_description(
+            specification,
+            description=annotation.metadata.description,
+        )
     )
 
 
@@ -111,7 +118,7 @@ def object_specification(
 
         properties[key] = _with_description(
             element_specification,
-            description=element.description,
+            description=element.metadata.description,
         )
 
         if element_required:
@@ -160,7 +167,7 @@ def _specification(
 ) -> TypeSpecification | None:
     # an explicitly declared specification is used as it stands, wherever it is
     # declared - the attribute of an object and the element of a container alike
-    if declared := annotation.specification:
+    if declared := annotation.metadata.specification:
         return declared
 
     key: int = id(annotation)
@@ -264,17 +271,30 @@ def _prepare_specification_of_none(
 def _prepare_specification_of_missing(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
-) -> TypeSpecification:
-    return {
-        "type": "null",
-    }
+) -> TypeSpecification | None:
+    # `Missing` stands for a value which was not provided, there is no JSON
+    # value for it - an attribute accepting it can be left out, which is what
+    # `required` of the object tells
+    return None
 
 
 def _prepare_specification_of_literal(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
-) -> TypeSpecification:
-    values: Sequence[Any] = list(cast(LiteralAttribute, annotation).values)
+) -> TypeSpecification | None:
+    values: list[Any] = []
+    for element in cast(LiteralAttribute, annotation).values:
+        if element is Missing:
+            continue  # it has no JSON value, the attribute accepting it can be left out
+
+        json_value: Any = _literal_json_value(element)
+        if json_value is _NO_JSON_FORM:
+            return None
+
+        values.append(json_value)
+
+    if not values:
+        return None  # nothing but `Missing`
 
     # `bool` is checked before `int` - it is a subclass of it, while a JSON
     # boolean is not a JSON integer, so a schema naming one refuses the other
@@ -301,6 +321,30 @@ def _prepare_specification_of_literal(
     return {
         "enum": values,
     }
+
+
+_NO_JSON_FORM: object = object()
+
+
+def _literal_json_value(
+    value: Any,
+    /,
+) -> Any:
+    # a member of an enum is read as its value, which is what both the encoder
+    # writes and the decoder accepts - when it equals the member, an enum which
+    # does not is not read from a JSON value at all
+    if isinstance(value, Enum):
+        json_value: Any = value.value
+        if json_value == value and isinstance(json_value, str | int):
+            return json_value
+
+        return _NO_JSON_FORM
+
+    # `bytes` is written as base64 text, which is not read back as the literal
+    if value is None or isinstance(value, str | int):
+        return value
+
+    return _NO_JSON_FORM
 
 
 def _prepare_specification_of_sequence(
@@ -333,10 +377,11 @@ def _prepare_specification_of_set(
     if items_specification is None:
         return None
 
+    # no `uniqueItems` - elements which differ may be written the same way, and a
+    # document repeating one is read as a set all the same
     return {
         "type": "array",
         "items": items_specification,
-        "uniqueItems": True,
     }
 
 
@@ -352,10 +397,135 @@ def _prepare_specification_of_mapping(
     if properties_specification is None:
         return None
 
+    names_specification: TypeSpecification | None = _key_specification(
+        cast(MappingAttribute, annotation).keys,
+    )
+    if names_specification is None:
+        return {
+            "type": "object",
+            "additionalProperties": properties_specification,
+        }
+
     return {
         "type": "object",
+        "propertyNames": names_specification,
         "additionalProperties": properties_specification,
     }
+
+
+# the spellings a key is read from - exactly the ones it is written as, see `basic_key` and the
+# reader of keys of the extension (`spec.h`), which these patterns restate - they can't be
+# derived from `nstruct.key_spelling`, which tells the spelling of a key and not what is read
+_INTEGER_KEY: str = r"^(0|-?[1-9][0-9]*)$"
+_NUMBER_KEY: str = r"^(-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?|-?inf|nan)$"
+_BOOLEAN_KEY: str = r"^(true|false)$"
+_NULL_KEY: str = r"^null$"
+
+
+def _key_specification(
+    keys: AttributeAnnotation,
+    /,
+) -> TypeSpecification | None:
+    # a key is a string in a JSON object, read the way the annotation reads one - a
+    # specification is made where its spelling can be told, and where it can't nothing
+    # is better than one refusing what is accepted
+    while isinstance(keys, AliasAttribute):
+        keys = keys.resolved
+
+    match keys:
+        case IntegerAttribute():
+            return {"type": "string", "pattern": _INTEGER_KEY}
+
+        case FloatAttribute():
+            return {"type": "string", "pattern": _NUMBER_KEY}
+
+        case BoolAttribute():
+            return {"type": "string", "pattern": _BOOLEAN_KEY}
+
+        case NoneAttribute():
+            return {"type": "string", "pattern": _NULL_KEY}
+
+        case UUIDAttribute():
+            return {"type": "string", "format": "uuid"}
+
+        case _:
+            return _named_key_specification(keys)
+
+
+def _named_key_specification(
+    keys: AttributeAnnotation,
+    /,
+) -> TypeSpecification | None:
+    match keys:
+        case StrEnumAttribute():
+            # read by its value or by the name of a member
+            return {
+                "type": "string",
+                "enum": _distinct(
+                    [
+                        *(member.value for member in keys.base),
+                        *keys.base.__members__,
+                    ]
+                ),
+            }
+
+        case IntEnumAttribute():
+            # the number of a member spelled as a key, or the name of one
+            return {
+                "type": "string",
+                "enum": _distinct(
+                    [
+                        *(_integer_key(member.value) for member in keys.base),
+                        *keys.base.__members__,
+                    ]
+                ),
+            }
+
+        case LiteralAttribute():
+            names: list[str] = []
+            for element in keys.values:
+                spelled: str | None = _literal_key(_literal_json_value(element))
+                if spelled is None:
+                    return None  # no spelling to tell
+
+                names.append(spelled)
+
+            if not names:
+                return None
+
+            return {"type": "string", "enum": _distinct(names)}
+
+        case _:
+            return None
+
+
+def _integer_key(
+    value: int,
+    /,
+) -> str:
+    spelled: str | None = nstruct.key_spelling(value)
+    assert spelled is not None  # nosec: B101 - every int has a spelling
+
+    return spelled
+
+
+def _literal_key(
+    value: Any,
+    /,
+) -> str | None:
+    # the key a literal is written as - and read from
+    spelled: Any = basic_key(value, strict=False)
+    if isinstance(spelled, str):
+        return spelled
+
+    return None
+
+
+def _distinct(
+    values: Sequence[Any],
+    /,
+) -> list[Any]:
+    return list(dict.fromkeys(values))
 
 
 def _prepare_specification_of_meta(
@@ -385,10 +555,18 @@ def _prepare_specification_of_tuple(
 
         elements_specification.append(element_specification)
 
+    if not elements_specification:  # `tuple[()]` - `prefixItems` can't be empty
+        return {
+            "type": "array",
+            "maxItems": 0,
+        }
+
     return {
         "type": "array",
         "prefixItems": elements_specification,
         "items": False,
+        "minItems": len(elements_specification),
+        "maxItems": len(elements_specification),
     }
 
 
@@ -428,7 +606,18 @@ def _prepare_specification_of_open_tuple(
         rest_specification[0] if len(rest_specification) == 1 else {"anyOf": rest_specification}
     )
 
+    # the elements which have to be there - a schema can't tell where the ones at the
+    # end are, though the number of them is known
+    minimum: int = len(open_tuple.leading) + len(open_tuple.trailing)
+
     if not leading_specification:
+        if minimum:
+            return {
+                "type": "array",
+                "items": items_specification,
+                "minItems": minimum,
+            }
+
         return {
             "type": "array",
             "items": items_specification,
@@ -438,6 +627,7 @@ def _prepare_specification_of_open_tuple(
         "type": "array",
         "prefixItems": leading_specification,
         "items": items_specification,
+        "minItems": minimum,
     }
 
 
@@ -474,6 +664,9 @@ def _prepare_specification_of_union(
     compressed_alternatives: list[str] = []
     compressible: bool = True
     for argument in cast(UnionAttribute, annotation).alternatives:
+        if isinstance(argument, MissingAttribute):
+            continue  # it has no JSON value, the attribute accepting it can be left out
+
         specification: TypeSpecification | None = _specification(
             argument,
             recursion_guard=recursion_guard,
@@ -488,10 +681,16 @@ def _prepare_specification_of_union(
 
         elif compressed_type not in compressed_alternatives:
             # a type can be named only once within a list of types, while the
-            # alternatives can name it more than once - i.e. `None | Missing`
+            # alternatives can name it more than once - i.e. `int | Annotated[int, ...]`
             compressed_alternatives.append(compressed_type)
 
-    if alternatives and compressible:
+    if not alternatives:
+        return None  # nothing but `Missing`
+
+    if len(alternatives) == 1:  # `Missing` left out, what remains is the union itself
+        return alternatives[0]
+
+    if compressible:
         if len(compressed_alternatives) == 1:  # alternatives of one and the same type
             return cast(
                 TypeSpecification,
@@ -519,8 +718,14 @@ def _prepare_specification_of_bool(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
+    # a boolean, the numbers 0 and 1 and the words in any case - which has to be spelled
+    # out, as a pattern of JSON Schema has no flag to ignore it
     return {
-        "type": "boolean",
+        "anyOf": [
+            {"type": "boolean"},
+            {"enum": [0, 1]},
+            {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
+        ],
     }
 
 
@@ -555,9 +760,16 @@ def _prepare_specification_of_str_enum(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
+    # read by its value or by the name of a member
+    members: type[Enum] = cast(StrEnumAttribute, annotation).base
     return {
         "type": "string",
-        "enum": [member.value for member in cast(StrEnumAttribute, annotation).base],
+        "enum": _distinct(
+            [
+                *(member.value for member in members),
+                *members.__members__,
+            ]
+        ),
     }
 
 
@@ -565,9 +777,13 @@ def _prepare_specification_of_int_enum(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
+    # read by its value, an int, or by the name of a member - never by the number as text
+    members: type[Enum] = cast(IntEnumAttribute, annotation).base
     return {
-        "type": "integer",
-        "enum": [int(member.value) for member in cast(IntEnumAttribute, annotation).base],
+        "anyOf": [
+            {"type": "integer", "enum": [int(member.value) for member in members]},
+            {"type": "string", "enum": list(members.__members__)},
+        ],
     }
 
 
@@ -607,7 +823,6 @@ def _prepare_specification_of_datetime(
 ) -> TypeSpecification:
     return {
         "type": "string",
-        "format": "date-time",
     }
 
 
@@ -617,7 +832,6 @@ def _prepare_specification_of_time(
 ) -> TypeSpecification:
     return {
         "type": "string",
-        "format": "time",
     }
 
 
@@ -627,7 +841,6 @@ def _prepare_specification_of_timedelta(
 ) -> TypeSpecification:
     return {
         "type": "string",
-        "format": "duration",
     }
 
 
@@ -637,7 +850,6 @@ def _prepare_specification_of_path(
 ) -> TypeSpecification:
     return {
         "type": "string",
-        "format": "path",
     }
 
 
@@ -677,7 +889,7 @@ def _prepare_specification_of_typed_dict(
 
         properties[key] = specification
 
-        if not element.required:
+        if not element.metadata.required:
             continue
 
         required.append(key)
@@ -693,7 +905,8 @@ def _prepare_specification_of_typed_dict(
 def _state_specification(
     annotation: AttributeAnnotation,
 ) -> TypeSpecification | None:
-    specification = cast(TypeSpecification | None, annotation.base.__SPECIFICATION__)
+    # as the class holds it - its anchors are made unique once in the whole document
+    specification = cast(TypeSpecification | None, annotation.base.__JSON_SPECIFICATION__)
     if specification is not None and annotation.description and "description" in specification:
         # the description of the attribute is more specific than the one of its type
         return cast(
@@ -732,6 +945,118 @@ def _with_anchor(
             "$anchor": anchor,
         },
     )
+
+
+def unique_anchors(
+    specification: TypeSpecification,
+    /,
+) -> TypeSpecification:
+    # an anchor is named after its type, which other types can share - two recursive
+    # aliases of the same shape, two classes of one name in different modules - while
+    # an anchor names one subschema of the whole document. A definition met again is
+    # referred to instead of repeated, and another one under a taken name is renamed,
+    # with the references within it - a reference to a definition is generated within it,
+    # or to one whose name is unique in the document
+    anchors: _Anchors = _Anchors()
+    anchors.reserve(specification)
+    return cast(TypeSpecification, anchors.renamed(specification, {}))
+
+
+class _Anchors:
+    __slots__ = ("emitted", "first", "reserved")
+
+    def __init__(self) -> None:
+        # the first definition under each anchor - its json with the names the references
+        # out of it are bound to - and the name it got
+        self.first: MutableMapping[str, tuple[str, str]] = {}
+        self.emitted: set[str] = set()
+        # every name the document spells - a renamed definition takes none of them, so a
+        # reference to a name given once keeps reaching its definition wherever it is
+        self.reserved: set[str] = set()
+
+    def reserve(self, node: Any) -> None:
+        if isinstance(node, list):
+            for element in cast(list[Any], node):
+                self.reserve(element)
+
+        elif isinstance(node, dict):
+            entries: dict[str, Any] = cast(dict[str, Any], node)
+            if isinstance(anchor := entries.get("$anchor"), str):
+                self.reserved.add(anchor)
+
+            for key, value in entries.items():
+                if key in _ANCHOR_VALUES:
+                    continue
+
+                if key in _ANCHOR_NAMED and isinstance(value, dict):
+                    for element in cast(dict[str, Any], value).values():
+                        self.reserve(element)
+
+                else:
+                    self.reserve(value)
+
+    def renamed(self, node: Any, scope: Mapping[str, str]) -> Any:
+        if isinstance(node, list):
+            return [self.renamed(element, scope) for element in cast(list[Any], node)]
+
+        if not isinstance(node, dict):
+            return node
+
+        entries: dict[str, Any] = cast(dict[str, Any], node)
+        anchor: Any = entries.get("$anchor")
+        if isinstance(anchor, str):
+            # bool and int are told apart, as their json is - and a definition is the same
+            # one only when the references out of it lead to the same definitions as well
+            identity: str = json.dumps([entries, sorted(scope.items())], sort_keys=True)
+            if (met := self.first.get(anchor)) is not None and met[0] == identity:
+                return {"$ref": f"#{met[1]}"}
+
+            scope = {**scope, anchor: self.named(anchor, identity)}
+
+        result: dict[str, Any] = {
+            key: self.renamed_entry(key, value, scope) for key, value in entries.items()
+        }
+        if isinstance(anchor, str):
+            result["$anchor"] = scope[anchor]
+
+        reference: Any = entries.get("$ref")
+        if isinstance(reference, str) and reference.startswith("#"):
+            result["$ref"] = f"#{scope.get(reference[1:], reference[1:])}"
+
+        return result
+
+    def named(self, anchor: str, identity: str) -> str:
+        unique: str = anchor
+        if unique in self.emitted:
+            suffix: int = 2
+            unique = f"{anchor}_{suffix}"
+            while unique in self.emitted or unique in self.reserved:
+                suffix += 1
+                unique = f"{anchor}_{suffix}"
+
+        self.emitted.add(unique)
+        self.first.setdefault(anchor, (identity, unique))
+        return unique
+
+    def renamed_entry(self, key: str, value: Any, scope: Mapping[str, str]) -> Any:
+        if key in _ANCHOR_VALUES:
+            return value
+
+        if key in _ANCHOR_NAMED and isinstance(value, dict):
+            # keys are names of attributes, not keywords - each value is a schema
+            return {
+                name: self.renamed(element, scope)
+                for name, element in cast(dict[str, Any], value).items()
+            }
+
+        return self.renamed(value, scope)
+
+
+# the values of a user, not schemas - left as they are
+_ANCHOR_VALUES: frozenset[str] = frozenset(("enum", "const", "default", "examples"))
+_ANCHOR_NAMED: frozenset[str] = frozenset(
+    ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas")
+)
 
 
 _ANCHOR_DISALLOWED: re.Pattern[str] = re.compile(r"[^-A-Za-z0-9._]")

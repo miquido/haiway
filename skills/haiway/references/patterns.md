@@ -52,8 +52,13 @@ class Invoice(State):
 ```
 
 - Construction validates and coerces: `lines=["a"]` is stored as `("a",)`, a `Mapping` as an
-  immutable `Map`, a `Set` as `frozenset`. A failure raises `ValidationError` naming the path
+  immutable `Map`, a `Set` as `frozenset`. Types are strict: an `int` or `float` is never parsed from
+  a string, a `bool` takes `0`/`1` (`0.0`/`1.0` too) and `"true"`/`"false"` only, mapping keys are read from the spelling
+  JSON writes them as, and a mutable plain default (`= []`, `= {}`) is refused - use
+  `DefaultFactory(list)`. A failure raises `ValidationError` naming the path
   (`Validation of .total_cents failed: ...`); it is not a `ValueError`.
+- `to_json` raises `ValueError` for an `inf` or `nan` float value and `from_json` refuses `NaN`,
+  `Infinity` and numbers beyond a double (`1e400`) - JSON is strict; `to_mapping` keeps such floats.
 - Change with `invoice.updating(total_cents=...)`, which returns a new instance.
 - Serialize with `to_mapping()`/`to_json()`, read with `from_mapping()`/`from_json()`/`validate()`.
   Keys which are not attributes are refused, nested and in a `TypedDict` too; `from_mapping`,

@@ -183,6 +183,27 @@ def test_to_mapping_non_recursive_keeps_nested_instances() -> None:
     assert RICH.to_mapping(recursive=False)["nested"] is RICH.nested
 
 
+@mark.parametrize("recursive", [True, False])
+@mark.parametrize(
+    "value",
+    [
+        param(b"ab", id="bytes"),
+        param(bytearray(b"ab"), id="bytearray"),
+        param(memoryview(b"ab"), id="memoryview"),
+    ],
+)
+def test_to_mapping_keeps_bytes_like_values_as_leaves(value: Any, recursive: bool) -> None:
+    class Holder(State):
+        payload: Any
+        nested: tuple[Any, ...] = ()
+
+    mapping = Holder(payload=value, nested=(value,)).to_mapping(recursive=recursive)
+
+    assert mapping["payload"] is value
+    assert mapping["nested"][0] is value
+    assert Holder(payload=value).to_basic_object()["payload"] == "YWI="
+
+
 def test_to_mapping_uses_aliases_as_keys() -> None:
     class Aliased(State):
         identifier: Annotated[str, Alias("id")]
@@ -278,7 +299,7 @@ def test_to_mapping_copies_mutable_values() -> None:
 
 
 def test_from_mapping_is_validation() -> None:
-    assert Point.from_mapping({"x": "1", "y": 2}) == Point(x=1, y=2)
+    assert Point.from_mapping({"x": 1.0, "y": 2}) == Point(x=1, y=2)
 
     with raises(TypeError):
         Point.from_mapping({"x": 1, "y": 2, "z": 3})
@@ -456,10 +477,12 @@ def test_json_schema_formats_of_standard_types() -> None:
     properties = json.loads(Formatted.json_schema())["properties"]
 
     assert properties["identifier"]["format"] == "uuid"
-    assert properties["created"]["format"] == "date-time"
     assert properties["day"]["format"] == "date"
-    assert properties["moment"]["format"] == "time"
-    assert properties["location"]["format"] == "path"
+    # the output of these is not always what the format describes - a naive
+    # datetime or time has no offset, which RFC 3339 requires
+    assert properties["created"] == {"type": "string"}
+    assert properties["moment"] == {"type": "string"}
+    assert properties["location"] == {"type": "string"}
     assert properties["nested"]["properties"]["x"] == {"type": "integer"}
 
 
@@ -476,14 +499,13 @@ def test_json_schema_of_bytes_is_a_base64_string() -> None:
 
 
 @mark.parametrize("annotation", [Set[int], frozenset[int], set[int]])
-def test_json_schema_of_sets_is_an_array_of_unique_items(annotation: Any) -> None:
+def test_json_schema_of_sets_is_an_array(annotation: Any) -> None:
     class Holder(State, serializable=True):
         items: annotation  # pyright: ignore[reportInvalidTypeForm]
 
     assert json.loads(Holder.json_schema())["properties"]["items"] == {
         "type": "array",
         "items": {"type": "integer"},
-        "uniqueItems": True,
     }
 
     holder = Holder(items={1, 2})  # pyright: ignore[reportCallIssue]
@@ -583,13 +605,14 @@ def test_timedelta_refuses_other_types(value: Any) -> None:
         Holder(span=value)  # pyright: ignore[reportArgumentType]
 
 
-def test_json_schema_of_timedelta_is_a_duration_string() -> None:
+def test_json_schema_of_timedelta_is_a_string() -> None:
     class Holder(State, serializable=True):
         span: timedelta
 
+    # not `format: duration` - a negative one is written with a sign, which the
+    # duration of RFC 3339 has none of
     assert json.loads(Holder.json_schema())["properties"]["span"] == {
         "type": "string",
-        "format": "duration",
     }
 
 
@@ -641,7 +664,7 @@ def test_serializable_flag_requires_schema() -> None:
         value: int
 
     assert Fine.__SERIALIZABLE__ is True
-    assert Fine(value=1).to_json() == '{"value": 1}'
+    assert Fine(value=1).to_json() == '{"value":1}'
 
 
 def test_recursive_state_has_schema_with_reference() -> None:

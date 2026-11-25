@@ -727,6 +727,8 @@ signature_fits_native(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
         PyErr_SetString(PyExc_TypeError, "signature_fits(parameters, expected, extensible)");
         return NULL;
     }
+    int extensible = PyObject_IsTrue(args[2]);
+    if (extensible < 0) return NULL;
     Py_ssize_t taking_count = 0, expected_count = 0;
     Parameter *taking = signature_parameters(args[0], 0, 0, &taking_count);
     if (taking == NULL) return NULL;
@@ -735,7 +737,7 @@ signature_fits_native(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
         PyMem_RawFree(taking);
         return NULL;
     }
-    int r = signature_fits(taking, taking_count, expected, expected_count, PyObject_IsTrue(args[2]) > 0);
+    int r = signature_fits(taking, taking_count, expected, expected_count, extensible);
     PyMem_RawFree(taking);
     PyMem_RawFree(expected);
     if (r < 0) return NULL;

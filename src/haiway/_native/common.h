@@ -21,8 +21,9 @@
  * supporting the free-threaded interpreter is a declaration away (`Py_mod_gil`): it keeps
  * its state per module, never holds a borrowed reference into a container another thread
  * could change, validates snapshots of what it is given, and reads the plan and the values
- * of an instance freely, since both are written once before anything else can see them.
- * New code has to keep to that. The file is one translation unit made of the headers
+ * of an instance with a load which pairs with the release store that publishes them - a class
+ * can be reached before its plan is installed, and an instance before all of its values are
+ * bound. New code has to keep to that. The file is one translation unit made of the headers
  * below, in order.
  */
 
@@ -52,7 +53,6 @@ typedef struct {
     PyObject *mapping;           /* collections.abc.Mapping */
     PyObject *sequence;          /* collections.abc.Sequence */
     PyObject *set;               /* collections.abc.Set */
-    PyObject *iterable;          /* collections.abc.Iterable */
     PyObject *uuid;              /* uuid.UUID */
     PyObject *safe_uuid;         /* uuid.SafeUUID - what a UUID holds besides its number */
     PyObject *datetime;
@@ -69,7 +69,6 @@ typedef struct {
     PyObject *str_isoformat;
     PyObject *str_as_posix;
     PyObject *str_type_name;
-    PyObject *str_lower;
     PyObject *str_fromisoformat;
     PyObject *str_validate;
     PyObject *str_int;
@@ -98,7 +97,36 @@ typedef struct {
     struct CompiledPlan *plan;  /* NULL until the class is given one */
 } StructMetaObject;
 
-#define PLAN_OF(type) (((StructMetaObject *)(type))->plan)
+#define PLAN_SLOT(type) (((StructMetaObject *)(type))->plan)
+
+/*
+ * What a class is given is published with a release store, once all of it is written, and
+ * read with an acquire load - a thread which finds the plan finds the size of the instances
+ * and everything it points to. The same holds for the values of an instance, bound by one
+ * thread while another may already hold the instance. Without the GIL these are atomics,
+ * with it they are the plain accesses they were.
+ */
+#ifdef Py_GIL_DISABLED
+#if !defined(__GNUC__) && !defined(__clang__)
+#error "the free-threaded build needs a compiler with the __atomic builtins"
+#endif
+/* the atomics of CPython are not public for an extension - these are what they compile to */
+#define LOAD_ACQUIRE(slot) __atomic_load_n((slot), __ATOMIC_ACQUIRE)
+#define STORE_RELEASE(slot, value) __atomic_store_n((slot), (value), __ATOMIC_RELEASE)
+#define LOAD_RELAXED(slot) __atomic_load_n((slot), __ATOMIC_RELAXED)
+#define STORE_RELAXED(slot, value) __atomic_store_n((slot), (value), __ATOMIC_RELAXED)
+#else
+#define LOAD_ACQUIRE(slot) (*(slot))
+#define STORE_RELEASE(slot, value) (*(slot) = (value))
+#define LOAD_RELAXED(slot) (*(slot))
+#define STORE_RELAXED(slot, value) (*(slot) = (value))
+#endif
+
+#define PLAN_OF(type) LOAD_ACQUIRE(&PLAN_SLOT(type))
+#define PUBLISH_PLAN(type, plan) STORE_RELEASE(&PLAN_SLOT(type), (plan))
+#define PUBLISH_VECTORCALL(type, call) STORE_RELEASE(&(type)->tp_vectorcall, (call))
+#define ITEM_LOAD(items, i) LOAD_ACQUIRE(&(items)[i])
+#define ITEM_STORE(items, i, value) STORE_RELEASE(&(items)[i], (value))
 
 /* the values of an instance follow the object header, as many as its class holds */
 #define ITEMS(o) ((PyObject **)(((char *)(o)) + sizeof(PyObject)))

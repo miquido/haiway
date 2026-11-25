@@ -34,9 +34,6 @@ from typing import (
     is_typeddict,
 )
 
-import typing_extensions
-from typing_extensions import is_typeddict as is_typeddict_ext  # keep this particular import
-
 from haiway import types as haiway_types
 from haiway.attributes.generics import (
     is_open_type_argument,
@@ -57,12 +54,13 @@ from haiway.types import (
     Specification,
     TypeSpecification,
 )
-from haiway.types.frozen import same_copy, same_deepcopy
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = (
     "AliasAttribute",
     "AnyAttribute",
     "AttributeAnnotation",
+    "AttributeMetadata",
     "BoolAttribute",
     "BytesAttribute",
     "CallableSignature",
@@ -100,14 +98,20 @@ __all__ = (
 )
 
 
+def _slot_names(
+    self: object,
+    /,
+) -> tuple[str, ...]:
+    return getattr(type(self), "__slots__", ())
+
+
 def _record_text(
     self: object,
 ) -> str:
     # built from the values a record holds rather than its address - recursion
     # keys are made of these, so equal records have to read the same
-    slots: tuple[str, ...] = getattr(type(self), "__slots__", ())
     fields: str = ", ".join(
-        f"{name}: {getattr(self, name)}" for name in slots if not name.startswith("_")
+        f"{name}: {getattr(self, name)}" for name in _slot_names(self) if not name.startswith("_")
     )
     return f"{type(self).__name__}({fields})"
 
@@ -120,6 +124,8 @@ class NotRequired:
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
 
     def __init__(
         self,
@@ -183,6 +189,9 @@ class AttributeAnnotation(Protocol):
     def type_name(self) -> str: ...
 
     @property
+    def metadata(self) -> AttributeMetadata: ...
+
+    @property
     def base(self) -> Any: ...
 
     @property
@@ -210,8 +219,276 @@ class AttributeAnnotation(Protocol):
     ) -> AttributeAnnotation: ...
 
 
-def _no_verify[Type](value: Type) -> Type:
-    return value
+@final
+class _Composition:
+    # several validators, or verifiers, of one attribute - run one after another, each
+    # given what the previous one returned. a failure is not caught here, it reaches
+    # the validation which called the composition as the one of the callable it is
+    __slots__ = ("steps",)
+
+    steps: tuple[Validating[Any], ...]
+
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
+    __repr__ = _record_text
+    __str__ = _record_text
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        steps: tuple[Validating[Any], ...],
+        /,
+    ) -> None:
+        object.__setattr__(self, "steps", steps)
+
+    def __call__(
+        self,
+        value: Any,
+    ) -> Any:
+        for step in self.steps:
+            value = step(value)
+
+        return value
+
+
+def _composed(
+    steps: Sequence[Validating[Any]],
+    /,
+) -> Validating[Any] | None:
+    # a single step is kept as it is, it needs no composition to run
+    match len(steps):
+        case 0:
+            return None
+
+        case 1:
+            return steps[0]
+
+        case _:
+            return _Composition(tuple(steps))
+
+
+@final
+class AttributeMetadata:
+    """
+    What an attribute is declared with besides its type.
+
+    The one place the metadata of an ``Annotated`` is read: every attribute annotation
+    holds one and is annotated through it.
+
+    Attributes
+    ----------
+    alias : str | None
+        Key the attribute is provided and rendered under instead of its name.
+    description : str | None
+        Description of the attribute.
+    verifying : Verifying[Any] | None
+        What runs on the value once it is validated - all of the declared verifiers,
+        in the order they were declared as one.
+    required : bool
+        Whether the attribute has to be provided.
+    specification : TypeSpecification | None
+        Declared specification overriding the generated one.
+    meta : Meta
+        Metadata attached to the attribute.
+    redaction : str | None
+        Text to render instead of the value of a sensitive attribute.
+    """
+
+    alias: str | None
+    description: str | None
+    verifying: Verifying[Any] | None
+    required: bool
+    specification: TypeSpecification | None
+    meta: Meta
+    redaction: str | None
+    __slots__ = (
+        "alias",
+        "description",
+        "meta",
+        "redaction",
+        "required",
+        "specification",
+        "verifying",
+    )
+
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
+    __repr__ = _record_text
+    __str__ = _record_text
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    def __init__(
+        self,
+        *,
+        alias: str | None = None,
+        description: str | None = None,
+        verifying: Verifying[Any] | None = None,
+        required: bool = True,
+        specification: TypeSpecification | None = None,
+        meta: Meta = Meta.empty,
+        redaction: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "alias", alias)
+        object.__setattr__(self, "description", description)
+        object.__setattr__(self, "verifying", verifying)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "specification", specification)
+        object.__setattr__(self, "meta", meta)
+        object.__setattr__(self, "redaction", redaction)
+
+    def annotated(  # noqa: C901
+        self,
+        annotations: Sequence[Any],
+    ) -> tuple[AttributeMetadata, Validating[Any] | None]:
+        """
+        The metadata with the given annotations applied, in the order they are given.
+
+        The last of an alias, description, specification, meta or sensitivity wins.
+        Validators and verifiers do not replace one another - the ones already held
+        run first, the given ones after them, in order they are given.
+
+        Parameters
+        ----------
+        annotations : Sequence[Any]
+            Metadata of an ``Annotated``.
+
+        Returns
+        -------
+        tuple[AttributeMetadata, Validating[Any] | None]
+            The resulting metadata, and the validators given, composed - those run on
+            the value before it is validated, which is not a part of the metadata
+            of the attribute but of the annotation wrapping it.
+        """
+        alias: str | None = self.alias
+        description: str | None = self.description
+        required: bool = self.required
+        specification: TypeSpecification | None = self.specification
+        meta: Meta = self.meta
+        redaction: str | None = self.redaction
+        validators: list[Validating[Any]] = []
+        verifiers: list[Verifying[Any]] = [] if self.verifying is None else [self.verifying]
+
+        for annotation in annotations:
+            if isinstance(annotation, str):
+                description = annotation
+
+            elif isinstance(annotation, Description):
+                description = annotation.description
+
+            elif isinstance(annotation, Alias):
+                alias = annotation.name
+
+            elif isinstance(annotation, Specification):
+                specification = annotation.specification
+
+            elif isinstance(annotation, NotRequired):
+                required = False
+
+            elif isinstance(annotation, Verifier):
+                verifiers.append(cast(Verifier[Any], annotation).verifier)
+
+            elif isinstance(annotation, Validator):
+                validators.append(cast(Validator[Any], annotation).validator)
+
+            elif isinstance(annotation, Meta):
+                meta = annotation
+
+            elif isinstance(annotation, Sensitive):
+                redaction = annotation.redaction
+
+        return (
+            AttributeMetadata(
+                alias=alias,
+                description=description,
+                verifying=_composed(verifiers),
+                required=required,
+                specification=specification,
+                meta=meta,
+                redaction=redaction,
+            ),
+            _composed(validators),
+        )
+
+
+_DEFAULT_METADATA: Final[AttributeMetadata] = AttributeMetadata()
+_MISSING_METADATA: Final[AttributeMetadata] = AttributeMetadata(required=False)
+
+
+class _MetadataAnnotation:
+    # what every annotation which holds its metadata shares - the way it is read, and
+    # annotated. the annotation itself can't change, annotating makes another one
+    __slots__ = ()
+
+    metadata: AttributeMetadata
+
+    __copy__ = same_copy
+    __deepcopy__ = same_deepcopy
+    __repr__ = _record_text
+    __str__ = _record_text
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
+
+    @property
+    def alias(self) -> str | None:
+        return self.metadata.alias
+
+    @property
+    def description(self) -> str | None:
+        return self.metadata.description
+
+    @property
+    def specification(self) -> TypeSpecification | None:
+        return self.metadata.specification
+
+    @property
+    def meta(self) -> Meta:
+        return self.metadata.meta
+
+    @property
+    def redaction(self) -> str | None:
+        return self.metadata.redaction
+
+    @property
+    def required(self) -> bool:
+        return self.metadata.required
+
+    def annotated(
+        self,
+        annotations: Sequence[Any],
+    ) -> AttributeAnnotation:
+        if not annotations:
+            # every class holding metadata is a complete annotation, this one is not
+            return cast(AttributeAnnotation, self)  # nothing to apply
+
+        metadata: AttributeMetadata
+        validating: Validating[Any] | None
+        metadata, validating = self.metadata.annotated(annotations)
+        attribute: AttributeAnnotation = self._with_metadata(metadata)
+        if validating is None:
+            return attribute
+
+        return ValidableAttribute(
+            validating=validating,
+            attribute=attribute,
+        )
+
+    def _with_metadata(
+        self,
+        metadata: AttributeMetadata,
+    ) -> Any:
+        # the same annotation holding other metadata
+        cls: type[Any] = type(self)
+        annotation: Any = object.__new__(cls)
+        for slot in _slot_names(self):
+            object.__setattr__(
+                annotation,
+                slot,
+                metadata if slot == "metadata" else getattr(self, slot),
+            )
+
+        return annotation
 
 
 def _iterable_snapshot(value: Any) -> Any:
@@ -226,123 +503,26 @@ def _iterable_snapshot(value: Any) -> Any:
 
 
 @final
-class AnyAttribute:
+class AnyAttribute(_MetadataAnnotation):
     type_name: Literal["Any"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["Any"] = "Any",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> Any:
         return typing.Any
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
 
 
 class _AliasTarget:
@@ -369,6 +549,8 @@ class AliasAttribute:
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
 
     def __init__(
         self,
@@ -378,10 +560,10 @@ class AliasAttribute:
         annotations: Sequence[Annotation] = (),
         _target: _AliasTarget | None = None,
     ) -> None:
-        self.type_alias = type_alias
-        self.module = module
-        self.annotations = annotations
-        self._target = _AliasTarget() if _target is None else _target
+        object.__setattr__(self, "type_alias", type_alias)
+        object.__setattr__(self, "module", module)
+        object.__setattr__(self, "annotations", annotations)
+        object.__setattr__(self, "_target", _AliasTarget() if _target is None else _target)
 
     @property
     def _resolved(self) -> AttributeAnnotation | None:
@@ -397,15 +579,16 @@ class AliasAttribute:
         return self._resolved.base
 
     @property
-    def alias(self) -> str | None:
+    def metadata(self) -> AttributeMetadata:
         if self._resolved is None:
-            for annotation in self.annotations:
-                if isinstance(annotation, Alias):
-                    return annotation.name
+            # not known yet - what is declared on the alias itself
+            return _DEFAULT_METADATA.annotated(self.annotations)[0]
 
-            return self.type_alias
+        return self._resolved.metadata
 
-        alias: str | None = self._resolved.alias
+    @property
+    def alias(self) -> str | None:
+        alias: str | None = self.metadata.alias
         if alias is not None:
             return alias
 
@@ -413,57 +596,23 @@ class AliasAttribute:
 
     @property
     def description(self) -> str | None:
-        if self._resolved is None:
-            for annotation in self.annotations:
-                if isinstance(annotation, str):
-                    return annotation
-
-                elif isinstance(annotation, Description):
-                    return annotation.description
-
-            return None
-
-        return self._resolved.description
+        return self.metadata.description
 
     @property
     def specification(self) -> TypeSpecification | None:
-        if self._resolved is None:
-            for annotation in self.annotations:
-                if isinstance(annotation, Specification):
-                    return annotation.specification
-
-            return None
-
-        return self._resolved.specification
+        return self.metadata.specification
 
     @property
     def meta(self) -> Meta:
-        if self._resolved is None:
-            for annotation in self.annotations:
-                if isinstance(annotation, Meta):
-                    return annotation
-
-            return Meta.empty
-
-        return self._resolved.meta
+        return self.metadata.meta
 
     @property
     def redaction(self) -> str | None:
-        if self._resolved is None:
-            for annotation in self.annotations:
-                if isinstance(annotation, Sensitive):
-                    return annotation.redaction
-
-            return None
-
-        return self._resolved.redaction
+        return self.metadata.redaction
 
     @property
     def required(self) -> bool:
-        if self._resolved is None:
-            return not any(isinstance(annotation, NotRequired) for annotation in self.annotations)
-
-        return self._resolved.required
+        return self.metadata.required
 
     def annotated(
         self,
@@ -502,1722 +651,343 @@ class AliasAttribute:
 
 
 @final
-class MissingAttribute:
+class MissingAttribute(_MetadataAnnotation):
     type_name: Literal["Missing"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["Missing"] = "Missing",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = False,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _MISSING_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> Any:  # the sentinel - it is its own type
         return haiway_types.Missing
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class NoneAttribute:
+class NoneAttribute(_MetadataAnnotation):
     type_name: Literal["None"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["None"] = "None",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> None:
         return None
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class LiteralAttribute:
+class LiteralAttribute(_MetadataAnnotation):
     base: Any
     values: Sequence[Any]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "values",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         base: Any,
         values: Sequence[Any],
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.base = base
-        self.values = values
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def type_name(self) -> str:
         return f"Literal[{', '.join(repr(value) for value in self.values)}]"
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class BoolAttribute:
+class BoolAttribute(_MetadataAnnotation):
     type_name: Literal["bool"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["bool"] = "bool",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[bool]:
         return bool
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class IntegerAttribute:
+class IntegerAttribute(_MetadataAnnotation):
     type_name: Literal["int"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["int"] = "int",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[int]:
         return int
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class FloatAttribute:
+class FloatAttribute(_MetadataAnnotation):
     type_name: Literal["float"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["float"] = "float",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[float]:
         return float
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class BytesAttribute:
+class BytesAttribute(_MetadataAnnotation):
     type_name: Literal["bytes"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["bytes"] = "bytes",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[bytes]:
         return bytes
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class UUIDAttribute:
+class UUIDAttribute(_MetadataAnnotation):
     type_name: Literal["UUID"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["UUID"] = "UUID",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[uuid.UUID]:
         return uuid.UUID
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class StringAttribute:
+class StringAttribute(_MetadataAnnotation):
     type_name: Literal["str"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["str"] = "str",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[str]:
         return str
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class DatetimeAttribute:
+class DatetimeAttribute(_MetadataAnnotation):
     type_name: Literal["datetime"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["datetime"] = "datetime",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[datetime.datetime]:
         return datetime.datetime
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class DateAttribute:
+class DateAttribute(_MetadataAnnotation):
     type_name: Literal["date"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["date"] = "date",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[datetime.date]:
         return datetime.date
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class TimedeltaAttribute:
+class TimedeltaAttribute(_MetadataAnnotation):
     type_name: Literal["timedelta"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["timedelta"] = "timedelta",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[datetime.timedelta]:
         return datetime.timedelta
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class TimeAttribute:
+class TimeAttribute(_MetadataAnnotation):
     type_name: Literal["time"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["time"] = "time",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[datetime.time]:
         return datetime.time
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class PathAttribute:
+class PathAttribute(_MetadataAnnotation):
     type_name: Literal["Path"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["Path"] = "Path",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[pathlib.Path]:
         return pathlib.Path
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class TupleAttribute:
+class TupleAttribute(_MetadataAnnotation):
     type_name: Literal["tuple"]
     base: type[Sequence[Any]]
     values: Sequence[AttributeAnnotation]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
         "values",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
@@ -2225,131 +995,30 @@ class TupleAttribute:
         type_name: Literal["tuple"] = "tuple",
         base: type[Sequence[Any]],
         values: Sequence[AttributeAnnotation],
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.base = base
-        self.values = values
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "metadata", metadata)
 
 
 @final
-class OpenTupleAttribute:
+class OpenTupleAttribute(_MetadataAnnotation):
     type_name: Literal["tuple"]
     base: type[Sequence[Any]]
     leading: Sequence[AttributeAnnotation]
     variadic: AttributeAnnotation
     trailing: Sequence[AttributeAnnotation]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
         "leading",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "trailing",
         "type_name",
         "variadic",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
@@ -2359,133 +1028,28 @@ class OpenTupleAttribute:
         leading: Sequence[AttributeAnnotation],
         variadic: AttributeAnnotation,
         trailing: Sequence[AttributeAnnotation],
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.base = base
-        self.leading = leading
-        self.variadic = variadic
-        self.trailing = trailing
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    leading=self.leading,
-                    variadic=self.variadic,
-                    trailing=self.trailing,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    leading=self.leading,
-                    variadic=self.variadic,
-                    trailing=self.trailing,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "leading", leading)
+        object.__setattr__(self, "variadic", variadic)
+        object.__setattr__(self, "trailing", trailing)
+        object.__setattr__(self, "metadata", metadata)
 
 
 @final
-class SequenceAttribute:
+class SequenceAttribute(_MetadataAnnotation):
     type_name: Literal["Sequence"]
     base: type[Sequence[Any]]
     values: AttributeAnnotation
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
         "values",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
@@ -2493,127 +1057,26 @@ class SequenceAttribute:
         type_name: Literal["Sequence"] = "Sequence",
         base: type[Sequence[Any]],
         values: AttributeAnnotation,
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.base = base
-        self.values = values
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "metadata", metadata)
 
 
 @final
-class SetAttribute:
+class SetAttribute(_MetadataAnnotation):
     type_name: Literal["Set"]
     base: type[Set[Any]]
     values: AttributeAnnotation
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
         "values",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
@@ -2621,129 +1084,28 @@ class SetAttribute:
         type_name: Literal["Set"] = "Set",
         base: type[Set[Any]],
         values: AttributeAnnotation,
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.base = base
-        self.values = values
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "metadata", metadata)
 
 
 @final
-class MappingAttribute:
+class MappingAttribute(_MetadataAnnotation):
     type_name: Literal["Mapping"]
     base: type[Mapping[Any, Any]]
     keys: AttributeAnnotation
     values: AttributeAnnotation
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
         "keys",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
         "values",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
@@ -2752,219 +1114,36 @@ class MappingAttribute:
         base: type[Mapping[Any, Any]],
         keys: AttributeAnnotation,
         values: AttributeAnnotation,
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.base = base
-        self.keys = keys
-        self.values = values
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    keys=self.keys,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    keys=self.keys,
-                    values=self.values,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "keys", keys)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "metadata", metadata)
 
 
 @final
-class MetaAttribute:
+class MetaAttribute(_MetadataAnnotation):
     type_name: Literal["Meta"]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
+        "metadata",
         "type_name",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         type_name: Literal["Meta"] = "Meta",
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.type_name = type_name
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "type_name", type_name)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def base(self) -> type[haiway_types.Meta]:
         return haiway_types.Meta
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
 
 
 @final
@@ -2977,6 +1156,8 @@ class ValidableAttribute:
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
 
     def __init__(
         self,
@@ -2984,8 +1165,8 @@ class ValidableAttribute:
         attribute: AttributeAnnotation,
         validating: Validating[Any],
     ) -> None:
-        self.attribute = attribute
-        self.validating = validating
+        object.__setattr__(self, "attribute", attribute)
+        object.__setattr__(self, "validating", validating)
 
     @property
     def type_name(self) -> str:
@@ -2994,6 +1175,10 @@ class ValidableAttribute:
     @property
     def base(self) -> Any:
         return self.attribute.base
+
+    @property
+    def metadata(self) -> AttributeMetadata:
+        return self.attribute.metadata
 
     @property
     def alias(self) -> str | None:
@@ -3066,8 +1251,8 @@ def _attribute_redaction(  # noqa: PLR0911
     visited_aliases: set[tuple[str, str]],
 ) -> str | None:
     # the marker on the attribute itself, including the one delegated by wrapping annotations
-    if annotation.redaction is not None:
-        return annotation.redaction
+    if annotation.metadata.redaction is not None:
+        return annotation.metadata.redaction
 
     # otherwise it can still be nested within the structure of the attribute
     match annotation:
@@ -3127,34 +1312,17 @@ def _any_redaction(
 
 
 @final
-class ObjectAttribute:
+class ObjectAttribute(_MetadataAnnotation):
     base: Any
     parameters: Sequence[AttributeAnnotation]
     attributes: Mapping[str, AttributeAnnotation]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "attributes",
         "base",
-        "description",
-        "meta",
+        "metadata",
         "parameters",
-        "redaction",
-        "required",
-        "specification",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
@@ -3162,133 +1330,30 @@ class ObjectAttribute:
         base: Any,
         parameters: Sequence[AttributeAnnotation] = (),
         attributes: Mapping[str, AttributeAnnotation],
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.base = base
-        self.parameters = parameters
-        self.attributes = attributes
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "parameters", parameters)
+        object.__setattr__(self, "attributes", attributes)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def type_name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    parameters=self.parameters,
-                    attributes=self.attributes,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    parameters=self.parameters,
-                    attributes=self.attributes,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class TypedDictAttribute:
+class TypedDictAttribute(_MetadataAnnotation):
     base: Any
     parameters: Sequence[AttributeAnnotation]
     attributes: Mapping[str, AttributeAnnotation]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "attributes",
         "base",
-        "description",
-        "meta",
+        "metadata",
         "parameters",
-        "redaction",
-        "required",
-        "specification",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
@@ -3296,150 +1361,35 @@ class TypedDictAttribute:
         base: Any,
         parameters: Sequence[AttributeAnnotation] = (),
         attributes: Mapping[str, AttributeAnnotation],
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.base = base
-        self.parameters = parameters
-        self.attributes = attributes
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "parameters", parameters)
+        object.__setattr__(self, "attributes", attributes)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def type_name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    parameters=self.parameters,
-                    attributes=self.attributes,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    parameters=self.parameters,
-                    attributes=self.attributes,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class FunctionAttribute:
+class FunctionAttribute(_MetadataAnnotation):
     base: Any
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
-        "verifying",
+        "metadata",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         base: Any,
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.base = base
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def type_name(self) -> str:
@@ -3457,76 +1407,6 @@ class FunctionAttribute:
             ``None`` when the annotation accepts any call.
         """
         return _function_signature(self.base)
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
 
 
 @final
@@ -3551,6 +1431,8 @@ class CallableSignature:
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
 
     def __init__(
         self,
@@ -3558,8 +1440,8 @@ class CallableSignature:
         arguments: int,
         extensible: bool,
     ) -> None:
-        self.arguments = arguments
-        self.extensible = extensible
+        object.__setattr__(self, "arguments", arguments)
+        object.__setattr__(self, "extensible", extensible)
 
 
 @final
@@ -3586,6 +1468,8 @@ class ProtocolSignature:
     __deepcopy__ = same_deepcopy
     __repr__ = _record_text
     __str__ = _record_text
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
 
     def __init__(
         self,
@@ -3594,18 +1478,16 @@ class ProtocolSignature:
         parameters: Sequence[inspect.Parameter],
         extensible: bool,
     ) -> None:
-        self.protocol = protocol
-        self.parameters = parameters
-        self.extensible = extensible
+        object.__setattr__(self, "protocol", protocol)
+        object.__setattr__(self, "parameters", parameters)
+        object.__setattr__(self, "extensible", extensible)
 
 
 type FunctionSignature = CallableSignature | ProtocolSignature
 
 
 def _unpacked(argument: Any, /) -> bool:
-    return get_origin(argument) in (typing.Unpack, typing_extensions.Unpack) or getattr(
-        argument, "__unpacked__", False
-    )
+    return get_origin(argument) is typing.Unpack or getattr(argument, "__unpacked__", False)
 
 
 def _function_signature(
@@ -3628,7 +1510,7 @@ def _function_signature(
         fixed: int = sum(1 for argument in listed if not _unpacked(argument))
         return _callable_signature(fixed, extensible=fixed < len(listed))
 
-    if get_origin(signature) in (typing.Concatenate, typing_extensions.Concatenate):
+    if get_origin(signature) is typing.Concatenate:
         # the last argument of Concatenate is the ParamSpec
         return _callable_signature(len(get_args(signature)) - 1, extensible=True)
 
@@ -3706,503 +1588,103 @@ def _protocol_signature(
 
 
 @final
-class UnionAttribute:
+class UnionAttribute(_MetadataAnnotation):
     base: Any
     alternatives: Sequence[AttributeAnnotation]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "alternatives",
         "base",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
-        "verifying",
+        "metadata",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         base: Any,
         alternatives: Sequence[AttributeAnnotation] = (),
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.base = base
-        self.alternatives = alternatives
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "alternatives", alternatives)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def type_name(self) -> str:
         return "|".join(alt.type_name for alt in self.alternatives)
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    alternatives=self.alternatives,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    alternatives=self.alternatives,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class CustomAttribute:
+class CustomAttribute(_MetadataAnnotation):
     base: Any
     parameters: Sequence[AttributeAnnotation]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
-        "meta",
+        "metadata",
         "parameters",
-        "redaction",
-        "required",
-        "specification",
-        "verifying",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         base: Any,
         parameters: Sequence[AttributeAnnotation] = (),
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.base = base
-        self.parameters = parameters
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "parameters", parameters)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def type_name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    parameters=self.parameters,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    parameters=self.parameters,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class StrEnumAttribute:
+class StrEnumAttribute(_MetadataAnnotation):
     base: type[enum.StrEnum]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
-        "verifying",
+        "metadata",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         base: type[enum.StrEnum],
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.base = base
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def type_name(self) -> str:
         return self.base.__qualname__
 
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
-
 
 @final
-class IntEnumAttribute:
+class IntEnumAttribute(_MetadataAnnotation):
     base: type[enum.IntEnum]
-    alias: str | None
-    description: str | None
-    verifying: Verifying[Any]
-    required: bool
-    specification: TypeSpecification | None
-    meta: Meta
-    redaction: str | None
+    metadata: AttributeMetadata
     __slots__ = (
-        "alias",
         "base",
-        "description",
-        "meta",
-        "redaction",
-        "required",
-        "specification",
-        "verifying",
+        "metadata",
     )
-
-    __copy__ = same_copy
-    __deepcopy__ = same_deepcopy
-    __repr__ = _record_text
-    __str__ = _record_text
 
     def __init__(
         self,
         *,
         base: type[enum.IntEnum],
-        alias: str | None = None,
-        description: str | None = None,
-        verifying: Verifying[Any] = _no_verify,
-        required: bool = True,
-        specification: TypeSpecification | None = None,
-        meta: Meta = Meta.empty,
-        redaction: str | None = None,
+        metadata: AttributeMetadata = _DEFAULT_METADATA,
     ) -> None:
-        self.base = base
-        self.alias = alias
-        self.description = description
-        self.verifying = verifying
-        self.required = required
-        self.specification = specification
-        self.meta = meta
-        self.redaction = redaction
+        object.__setattr__(self, "base", base)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def type_name(self) -> str:
         return self.base.__qualname__
-
-    def annotated(  # noqa: C901
-        self,
-        annotations: Sequence[Any],
-    ) -> AttributeAnnotation:
-        if annotations:
-            alias: str | None = self.alias
-            description: str | None = self.description
-            verifying: Verifying[Any] = self.verifying
-            required: bool = self.required
-            specification: TypeSpecification | None = self.specification
-            validating: Validating[Any] | None = None
-            meta: Meta = self.meta
-            redaction: str | None = self.redaction
-
-            for annotation in annotations:
-                if isinstance(annotation, str):
-                    description = annotation
-
-                elif isinstance(annotation, Description):
-                    description = annotation.description
-
-                elif isinstance(annotation, Alias):
-                    alias = annotation.name
-
-                elif isinstance(annotation, Specification):
-                    specification = annotation.specification
-
-                elif isinstance(annotation, NotRequired):
-                    required = False
-
-                elif isinstance(annotation, Verifier):
-                    verifying = cast(Verifier[Any], annotation).verifier
-
-                elif isinstance(annotation, Validator):
-                    validating = cast(Validator[Any], annotation).validator
-
-                elif isinstance(annotation, Meta):
-                    meta = annotation
-
-                elif isinstance(annotation, Sensitive):
-                    redaction = annotation.redaction
-
-            if validating is None:
-                return self.__class__(
-                    base=self.base,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                )
-
-            return ValidableAttribute(
-                validating=validating,
-                attribute=self.__class__(
-                    base=self.base,
-                    alias=alias,
-                    description=description,
-                    verifying=verifying,
-                    required=required,
-                    specification=specification,
-                    meta=meta,
-                    redaction=redaction,
-                ),
-            )
-
-        return self
 
 
 @final
@@ -4450,7 +1932,7 @@ def _unpacked_tuple(argument: Any, /) -> Sequence[Any] | None:
     if get_origin(argument) is typing.Unpack:
         unpacked = get_args(argument)[0]
         visited: set[int] = set()
-        while isinstance(unpacked, typing.TypeAliasType | typing_extensions.TypeAliasType):
+        while isinstance(unpacked, typing.TypeAliasType):
             if id(unpacked) in visited:
                 return None  # an alias of itself stands for nothing
 
@@ -4868,7 +2350,7 @@ def _alias_references(
 
 
 def _alias_scope(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     /,
     localns: Mapping[str, Any] | None,
 ) -> Mapping[str, Any]:
@@ -4890,7 +2372,7 @@ def _alias_scope(
 
 
 def _alias_value(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     /,
 ) -> Any:
     try:
@@ -4914,7 +2396,7 @@ def _alias_value(
 
 
 def _resolve_alias_value(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     value: Any,
     /,
     *,
@@ -4952,7 +2434,7 @@ def _resolve_alias_value(
 
 
 def _resolve_generic_type_alias(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     *,
     arguments: Sequence[Any],
     localns: Mapping[str, Any] | None,
@@ -5023,7 +2505,7 @@ def _resolve_generic_type_alias(
 
 
 def _resolve_type_alias(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     *,
     arguments: Sequence[Any] = (),
     localns: Mapping[str, Any] | None,
@@ -5089,6 +2571,61 @@ def _resolve_type_alias(
     return resolved_attribute
 
 
+def _unspecialized_type(
+    parameter: TypeVar,
+    /,
+) -> Any:
+    # what a parameter which is not given an argument stands for: its bound, any one of
+    # its constraints, or anything
+    if parameter.__bound__ is not None:
+        return parameter.__bound__
+
+    if parameter.__constraints__:
+        return typing.Union[parameter.__constraints__]  # noqa: UP007  # built from a tuple
+
+    return Any
+
+
+def _specialized_callable(
+    annotation: Any,
+    resolved_parameters: Mapping[str, AttributeAnnotation],
+    /,
+) -> Any:
+    # a `Callable` taking the parameters of a `ParamSpec` is read as the one taking what
+    # the specialization gave it - the signature is checked the same way a plain one is
+    arguments: tuple[Any, ...] = get_args(annotation)
+    if not arguments:
+        return annotation
+
+    signature: Any = arguments[0]
+    leading: list[Any] = []
+    if get_origin(signature) is typing.Concatenate:
+        *leading, signature = get_args(signature)
+
+    if not isinstance(signature, typing.ParamSpec):
+        return annotation
+
+    given: AttributeAnnotation | None = resolved_parameters.get(signature.__name__)
+    if given is None:
+        return annotation  # not specialized - it takes any call
+
+    taken: Any = given.base
+    if isinstance(taken, tuple):
+        specialized: Any = [*leading, *cast(tuple[Any, ...], taken)]
+
+    elif not leading and (taken is Ellipsis or isinstance(taken, typing.ParamSpec)):
+        specialized = taken
+
+    elif taken is Ellipsis or isinstance(taken, typing.ParamSpec):
+        specialized = typing.Concatenate[*leading, taken]
+
+    else:
+        return annotation
+
+    callable_type: Any = collections_abc.Callable
+    return callable_type[specialized, *arguments[1:]]
+
+
 def _resolved_alias_arguments(
     arguments: Sequence[Any],
     resolved_parameters: Mapping[str, AttributeAnnotation],
@@ -5101,7 +2638,7 @@ def _resolved_alias_arguments(
                 resolved.append(parameter.base)
 
             else:
-                resolved.append(argument.__bound__ or Any)
+                resolved.append(_unspecialized_type(argument))
 
         elif isinstance(argument, typing.ParamSpec):
             # the signature it stands for, `...` while the class is not specialized
@@ -5158,7 +2695,7 @@ def _resolve_generic_alias(  # noqa: PLR0911
         # checked by the shape of its signature, whatever its type arguments
         return FunctionAttribute(base=annotation)
 
-    if isinstance(origin_type, typing.TypeAliasType | typing_extensions.TypeAliasType):
+    if isinstance(origin_type, typing.TypeAliasType):
         return _resolve_type_alias(
             origin_type,
             arguments=get_args(annotation),
@@ -5376,7 +2913,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
         case types.NoneType | None:
             return NONE_ATTRIBUTE
 
-        case typeddict if is_typeddict(typeddict) or is_typeddict_ext(typeddict):
+        case typeddict if any(check(typeddict) for check in _TYPEDDICT_CHECKS):
             return _resolve_typeddict(
                 typeddict,
                 arguments=get_args(annotation),
@@ -5389,7 +2926,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
         case haiway_types.Missing:
             return MISSING_ATTRIBUTE
 
-        case typing.Any | typing_extensions.Any:
+        case typing.Any:
             return ANY_ATTRIBUTE
 
         case haiway_types.Meta:
@@ -5440,10 +2977,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             | collections_abc.MutableMapping
             | typing.Mapping
             | typing.MutableMapping
-            | typing_extensions.Mapping
-            | typing_extensions.MutableMapping
             | typing.Dict  # noqa: UP006
-            | typing_extensions.Dict
         ):
             keys_annotation: Any
             values_annotation: Any
@@ -5482,9 +3016,6 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             | typing.Set  # noqa: UP006
             | typing.MutableSet
             | typing.FrozenSet  # noqa: UP006
-            | typing_extensions.Set
-            | typing_extensions.MutableSet
-            | typing_extensions.FrozenSet
         ):
             values_annotation: Any
             match get_args(annotation):
@@ -5505,7 +3036,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 ),
             )
 
-        case builtins.tuple | typing.Tuple | typing_extensions.Tuple:  # noqa: UP006
+        case builtins.tuple | typing.Tuple:  # noqa: UP006
             match get_args(annotation):
                 case () if annotation in (builtins.tuple, typing.Tuple):  # noqa: UP006
                     # not parametrized at all, which is any tuple - `tuple[()]` is the empty one
@@ -5541,10 +3072,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             | collections_abc.MutableSequence
             | typing.Sequence
             | typing.MutableSequence
-            | typing_extensions.Sequence
-            | typing_extensions.MutableSequence
             | typing.List  # noqa: UP006
-            | typing_extensions.List
         ):
             values_annotation: Any
             match get_args(annotation):
@@ -5570,8 +3098,6 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             | collections_abc.Iterable
             | typing.Collection
             | typing.Iterable
-            | typing_extensions.Collection
-            | typing_extensions.Iterable
         ):
             values_annotation: Any
             match get_args(annotation):
@@ -5625,21 +3151,31 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             )
 
 
+def _typeddict_checks() -> tuple[Callable[[object], bool], ...]:
+    # typing_extensions makes TypedDicts of its own - an optional dependency, so when it is not
+    # installed no annotation can be one of them
+    try:
+        import typing_extensions  # noqa: PLC0415
+
+    except ImportError:
+        return (is_typeddict,)
+
+    return (is_typeddict, typing_extensions.is_typeddict)
+
+
+_TYPEDDICT_CHECKS: Final[tuple[Callable[[object], bool], ...]] = _typeddict_checks()
+
 # the special forms which only wrap their arguments - resolved by their own cases, never
 # specialized as a generic is
 _PARAMETER_WRAPPING_FORMS: Final[frozenset[Any]] = frozenset(
     (
         typing.Annotated,
-        typing_extensions.Annotated,
         typing.Union,
-        typing_extensions.Union,
         types.UnionType,
         typing.Required,
-        typing_extensions.Required,
         typing.NotRequired,
-        typing_extensions.NotRequired,
         typing.Final,
-        typing_extensions.Final,
+        typing.ReadOnly,
     )
 )
 
@@ -5683,7 +3219,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case None:
             return NONE_ATTRIBUTE
 
-        case typing.Union | types.UnionType | typing_extensions.Union:
+        case typing.Union | types.UnionType:
             return UnionAttribute(
                 base=annotation,
                 alternatives=tuple(
@@ -5698,7 +3234,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 ),
             )
 
-        case typing.TypeAliasType | typing_extensions.TypeAliasType:
+        case typing.TypeAliasType:
             return _resolve_type_alias(
                 annotation,
                 localns=localns,
@@ -5707,7 +3243,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 recursion_guard=recursion_guard,
             )
 
-        case typing.Annotated | typing_extensions.Annotated:
+        case typing.Annotated:
             annotation_args: Sequence[Any] = get_args(annotation)
             attribute: AttributeAnnotation = resolve_attribute(
                 annotation_args[0],
@@ -5718,32 +3254,32 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
             )
             return attribute.annotated(_annotation_markers(annotation_args[1:]))
 
-        case typing.TypeVar | typing_extensions.TypeVar:
+        case typing.TypeVar:
             if resolved := resolved_parameters.get(annotation.__name__):
                 return resolved
 
             return resolve_attribute(
-                annotation.__bound__ or Any,
+                _unspecialized_type(annotation),
                 localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
                 recursion_guard=recursion_guard,
             )
 
-        case typing.Literal | typing_extensions.Literal:
+        case typing.Literal:
             return _resolve_literal(annotation)
 
-        case collections_abc.Callable | typing.Callable | typing_extensions.Callable:  # pyright: ignore[reportUnknownMemberType]
-            return FunctionAttribute(base=annotation)
+        case collections_abc.Callable | typing.Callable:  # pyright: ignore[reportUnknownMemberType]
+            return FunctionAttribute(base=_specialized_callable(annotation, resolved_parameters))
 
-        case typing.Self | typing_extensions.Self:  # pyright: ignore[reportUnknownMemberType]
+        case typing.Self:  # pyright: ignore[reportUnknownMemberType]
             if self_attribute := recursion_guard.get("Self"):
                 return self_attribute
 
             else:
                 raise RuntimeError(f"Unresolved Self annotation: {annotation}")
 
-        case typing.Required | typing_extensions.Required:
+        case typing.Required:
             attribute: AttributeAnnotation = resolve_attribute(
                 get_args(annotation)[0],
                 localns=localns,
@@ -5754,7 +3290,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 
             return attribute
 
-        case typing.NotRequired | typing_extensions.NotRequired:
+        case typing.NotRequired:
             attribute: AttributeAnnotation = resolve_attribute(
                 get_args(annotation)[0],
                 localns=localns,
@@ -5768,7 +3304,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 
             return attribute
 
-        case typing.Optional | typing_extensions.Optional:
+        case typing.Optional:
             return UnionAttribute(
                 base=annotation,
                 alternatives=(
@@ -5783,7 +3319,10 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 ),
             )
 
-        case typing.Final | typing_extensions.Final:
+        # a qualifier of a TypedDict key which only tells a type checker the key is not
+        # to be assigned, it changes nothing about the value - State attributes are
+        # immutable already
+        case typing.Final | typing.ReadOnly:
             return resolve_attribute(
                 get_args(annotation)[0],
                 localns=localns,
@@ -5792,7 +3331,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 recursion_guard=recursion_guard,
             )
 
-        case typing.ForwardRef | typing_extensions.ForwardRef:
+        case typing.ForwardRef:
             return _resolve_forward_reference(
                 _evaluate_forward_ref(
                     annotation,

@@ -8,9 +8,12 @@ from haiway.types import (
     Missing,
     TypeSpecification,
 )
-from haiway.types.frozen import same_copy, same_deepcopy
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = ("Attribute",)
+
+# bound once, the attributes are made for each of the attributes of each class
+_bind = object.__setattr__
 
 
 @final
@@ -20,9 +23,13 @@ class Attribute:
     default: DefaultValue
     spec: Any
     redaction: str | None
+    alias: str | None
+    key: str
     __slots__ = (
+        "alias",
         "annotation",
         "default",
+        "key",
         "name",
         "redaction",
         "spec",
@@ -37,22 +44,17 @@ class Attribute:
         spec: Any,
         redaction: str | None = None,
     ) -> None:
-        self.name = name
-        self.annotation = annotation
-        self.default = default
-        self.spec = spec
-        self.redaction = redaction
-
-    @property
-    def alias(self) -> str | None:
-        return self.annotation.alias
-
-    @property
-    def key(self) -> str:
-        # the name this attribute is keyed by when rendered or serialized - the
-        # alias when one was declared, the declared name otherwise
-        alias: str | None = self.annotation.alias
-        return alias if alias is not None else self.name
+        _bind(self, "name", name)
+        _bind(self, "annotation", annotation)
+        _bind(self, "default", default)
+        _bind(self, "spec", spec)
+        _bind(self, "redaction", redaction)
+        # read for each rendering and whenever the class is worked with - held, not asked
+        # of the annotation each time. the key is the name this attribute is rendered or
+        # serialized under: the alias when one was declared, the declared name otherwise
+        alias: str | None = annotation.alias
+        _bind(self, "alias", alias)
+        _bind(self, "key", alias if alias is not None else name)
 
     @property
     def description(self) -> str | None:
@@ -60,7 +62,9 @@ class Attribute:
 
     @property
     def required(self) -> bool:
-        return self.annotation.required and not self.default.available
+        # an attribute can be left out when it has a default or when its spec accepts
+        # `Missing` - it is what both the schema and the signature derive from
+        return not self.default.available and not nstruct.accepts_missing(self.spec)
 
     @property
     def specification(self) -> TypeSpecification | None:
@@ -93,3 +97,5 @@ class Attribute:
 
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion

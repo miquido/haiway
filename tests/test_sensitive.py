@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 import pytest
 
-from haiway import LoggerObservability, Sensitive, State, ctx
+from haiway import LoggerObservability, Map, Sensitive, State, ctx
 from haiway.utils.formatting import format_str
 
 
@@ -102,7 +102,7 @@ def test_sensitivity_survives_union_annotations() -> None:
 def test_sensitivity_survives_container_annotations() -> None:
     class Containers(State):
         secrets: Sequence[Annotated[str, Sensitive()]] = ()
-        mapped: Mapping[str, Annotated[str, Sensitive(redaction="<token>")]] = {}
+        mapped: Mapping[str, Annotated[str, Sensitive(redaction="<token>")]] = Map()
 
     containers = Containers(secrets=("seq-SECRET",), mapped={"key": "map-SECRET"})
 
@@ -143,7 +143,7 @@ def test_sensitive_marker_class_survives_nested_annotations() -> None:
     class Nested(State):
         optional: Annotated[str | None, Sensitive] = None
         listed: Sequence[Annotated[str, Sensitive]] = ()
-        mapped: Mapping[str, Annotated[str, Sensitive]] = {}
+        mapped: Mapping[str, Annotated[str, Sensitive]] = Map()
 
     assert _redactions(Nested) == {
         "optional": "<redacted>",

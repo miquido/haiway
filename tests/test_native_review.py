@@ -35,7 +35,8 @@ class Literals(State):
     [
         ("number", True),  # True == 1
         ("number", False),  # False == 0
-        ("number", 1.0),
+        ("number", 1.5),
+        ("flag", 1.0),
         ("flag", 1),
         ("text", Color.RED),  # a member, but equal to none of the literals
     ],

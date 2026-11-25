@@ -72,6 +72,7 @@ class StringSpecification(AnchoredSpecification, total=False):
         ]
     ]
     contentEncoding: NotRequired[Literal["base64"]]
+    pattern: NotRequired[str]
     description: NotRequired[str]
 
 
@@ -120,6 +121,8 @@ class ArraySpecification(AnchoredSpecification, total=False):
     type: Required[Literal["array"]]
     items: NotRequired[TypeSpecification]
     uniqueItems: NotRequired[bool]
+    minItems: NotRequired[int]
+    maxItems: NotRequired[int]
     description: NotRequired[str]
 
 
@@ -128,6 +131,8 @@ class TupleSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["array"]]
     prefixItems: Required[Sequence[TypeSpecification]]
     items: Required[Literal[False]]
+    minItems: Required[int]
+    maxItems: Required[int]
     description: NotRequired[str]
 
 
@@ -136,6 +141,7 @@ class OpenTupleSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["array"]]
     prefixItems: Required[Sequence[TypeSpecification]]
     items: Required[TypeSpecification]
+    minItems: NotRequired[int]
     description: NotRequired[str]
 
 
@@ -143,6 +149,7 @@ class OpenTupleSpecification(AnchoredSpecification, total=False):
 class DictSpecification(AnchoredSpecification, total=False):
     type: Required[Literal["object"]]
     additionalProperties: Required[TypeSpecification]
+    propertyNames: NotRequired[TypeSpecification]
     required: NotRequired[Sequence[str]]
     description: NotRequired[str]
 
