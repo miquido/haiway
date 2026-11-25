@@ -12,7 +12,7 @@ from typing import Annotated, Any
 
 import pytest
 
-from haiway import Default, State, ValidationError, Validator
+from haiway import Default, Map, State, ValidationError, Validator
 from haiway._native import nstruct
 from haiway.attributes.state import StateMeta
 
@@ -635,13 +635,13 @@ class _Given(State):
 
 
 class _Converted(State):
-    # the list is converted by the pure alternative, so what is kept is what it converts to
-    child: _Checked | Sequence[int] | None = _declared([1, 2])
+    # the range is converted by the pure alternative, so what is kept is what it converts to
+    child: _Checked | Sequence[int] | None = _declared(range(1, 3))
 
 
 class _Mapped(State):
     # a mapping is built into `_Checked` by code of the user, so it is built every time
-    child: _Checked | None = _declared({"x": 1})
+    child: _Checked | None = _declared(Map({"x": 1}))
 
 
 class _Validated(State):

@@ -75,7 +75,13 @@ from haiway.types import (
     Missing,
     TypeSpecification,
 )
-from haiway.types.basic import basic_key, basic_value, parse_duration
+from haiway.types.basic import (
+    basic_key,
+    basic_value,
+    parse_duration,
+    refuse_colliding_keys,
+    spelled_once,
+)
 from haiway.types.guards import is_iterable, is_mapping
 
 __all__ = ("State",)
@@ -239,6 +245,9 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         declared_defaults: Mapping[str, Any] = {
             key: namespace.pop(key) for key in names if key in namespace
         }
+        for key, default in declared_defaults.items():
+            _refuse_mutable_default(name, key, default)
+
         defaults.update(declared_defaults)
         # resolved again, now that no declared default can answer for a type of
         # the same name - see the note on the names above
@@ -744,6 +753,28 @@ def _declared_fields(
             )
 
     return fields
+
+
+# what a default can't be - one value is kept by the class and given to every instance, so
+# changing it in one of them would change it in all
+_MUTABLE_DEFAULTS: Final[tuple[type[Any], ...]] = (list, dict, set, bytearray)
+
+
+def _refuse_mutable_default(
+    name: str,
+    attribute: str,
+    value: DefaultValue | Any | Missing,
+    /,
+) -> None:
+    # a `Default(value)` is the same plain default, only a factory makes one for each instance
+    plain: Any = value() if isinstance(value, DefaultValue) and value.constant else value
+    kind: str = type(plain).__name__
+    if isinstance(plain, _MUTABLE_DEFAULTS):
+        raise TypeError(
+            f"{name}.{attribute} declares a mutable {kind} as its default,"
+            " which every instance would share - declare it with DefaultFactory or"
+            " Default(factory=...) to make one for each of them"
+        )
 
 
 def _resolve_default(
@@ -1675,8 +1706,10 @@ def _basic_items(
     path: tuple[str, ...],
 ) -> Generator[Any]:
     # a snapshot, as `_basic_elements` walks one
+    spelled: set[Any] = set()
     for key, element in tuple(mapping.items()):
         key_basic: Any = basic_key(key, strict=strict, path=path)
+        spelled_once(spelled, key_basic)
         yield (
             key_basic,
             _basic_mapping(
@@ -1783,12 +1816,12 @@ native.configure(
         basic_value=_basic_fallback,
         basic_key=_basic_key_fallback,
         recursive=_recursive_mapping,
+        colliding_keys=refuse_colliding_keys,
     ),
     native.TypeHooks(
         mapping=Mapping,
         sequence=Sequence,
         set=Set,
-        iterable=Iterable,
         uuid=UUID,
         safe_uuid=SafeUUID,
         datetime=datetime,

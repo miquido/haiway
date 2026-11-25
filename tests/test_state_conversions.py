@@ -247,7 +247,7 @@ class _Enums(State):
     [
         ({"color": "red", "level": 2, "lenient": "known"}, (_Color.RED, _Level.HIGH)),
         ({"color": "GREEN", "level": "LOW", "lenient": "KNOWN"}, (_Color.GREEN, _Level.LOW)),
-        ({"color": _Color.RED, "level": "2", "lenient": "known"}, (_Color.RED, _Level.HIGH)),
+        ({"color": _Color.RED, "level": "HIGH", "lenient": "known"}, (_Color.RED, _Level.HIGH)),
     ],
 )
 def test_enum_members_by_value_name_and_missing(

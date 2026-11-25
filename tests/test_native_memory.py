@@ -403,7 +403,7 @@ def test_refused_classes_do_not_leak() -> None:
 
 class _Frozen(State):
     tags: Sequence[str] = ()
-    scores: Mapping[str, int] = {}
+    scores: Mapping[str, int] = Default(factory=Map)
     unique: Set[int] = frozenset()
     leaves: Sequence[Leaf] = ()
     nested: Sequence[Sequence[int]] = ()

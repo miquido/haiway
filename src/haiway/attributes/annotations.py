@@ -2576,6 +2576,61 @@ def _resolve_type_alias(
     return resolved_attribute
 
 
+def _unspecialized_type(
+    parameter: TypeVar,
+    /,
+) -> Any:
+    # what a parameter which is not given an argument stands for: its bound, any one of
+    # its constraints, or anything
+    if parameter.__bound__ is not None:
+        return parameter.__bound__
+
+    if parameter.__constraints__:
+        return typing.Union[parameter.__constraints__]  # noqa: UP007  # built from a tuple
+
+    return Any
+
+
+def _specialized_callable(
+    annotation: Any,
+    resolved_parameters: Mapping[str, AttributeAnnotation],
+    /,
+) -> Any:
+    # a `Callable` taking the parameters of a `ParamSpec` is read as the one taking what
+    # the specialization gave it - the signature is checked the same way a plain one is
+    arguments: tuple[Any, ...] = get_args(annotation)
+    if not arguments:
+        return annotation
+
+    signature: Any = arguments[0]
+    leading: list[Any] = []
+    if get_origin(signature) in (typing.Concatenate, typing_extensions.Concatenate):
+        *leading, signature = get_args(signature)
+
+    if not isinstance(signature, typing.ParamSpec):
+        return annotation
+
+    given: AttributeAnnotation | None = resolved_parameters.get(signature.__name__)
+    if given is None:
+        return annotation  # not specialized - it takes any call
+
+    taken: Any = given.base
+    if isinstance(taken, tuple):
+        specialized: Any = [*leading, *cast(tuple[Any, ...], taken)]
+
+    elif not leading and (taken is Ellipsis or isinstance(taken, typing.ParamSpec)):
+        specialized = taken
+
+    elif taken is Ellipsis or isinstance(taken, typing.ParamSpec):
+        specialized = typing.Concatenate[*leading, taken]
+
+    else:
+        return annotation
+
+    callable_type: Any = collections_abc.Callable
+    return callable_type[specialized, *arguments[1:]]
+
+
 def _resolved_alias_arguments(
     arguments: Sequence[Any],
     resolved_parameters: Mapping[str, AttributeAnnotation],
@@ -2588,7 +2643,7 @@ def _resolved_alias_arguments(
                 resolved.append(parameter.base)
 
             else:
-                resolved.append(argument.__bound__ or Any)
+                resolved.append(_unspecialized_type(argument))
 
         elif isinstance(argument, typing.ParamSpec):
             # the signature it stands for, `...` while the class is not specialized
@@ -3212,7 +3267,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 return resolved
 
             return resolve_attribute(
-                annotation.__bound__ or Any,
+                _unspecialized_type(annotation),
                 localns=localns,
                 module=module,
                 resolved_parameters=resolved_parameters,
@@ -3223,7 +3278,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
             return _resolve_literal(annotation)
 
         case collections_abc.Callable | typing.Callable | typing_extensions.Callable:  # pyright: ignore[reportUnknownMemberType]
-            return FunctionAttribute(base=annotation)
+            return FunctionAttribute(base=_specialized_callable(annotation, resolved_parameters))
 
         case typing.Self | typing_extensions.Self:  # pyright: ignore[reportUnknownMemberType]
             if self_attribute := recursion_guard.get("Self"):

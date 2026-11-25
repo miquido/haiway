@@ -3,7 +3,7 @@ import re
 from collections.abc import Generator, Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from uuid import UUID
 
 from haiway.types.guards import is_bytes_like, is_iterable, is_mapping
@@ -224,18 +224,35 @@ def basic_key(
             return other
 
 
+def refuse_colliding_keys() -> NoReturn:
+    raise ValueError("Keys of a mapping are the same once spelled as keys of json")
+
+
+def spelled_once(
+    spelled: set[Any],
+    key: Any,
+    /,
+) -> None:
+    if key in spelled:
+        refuse_colliding_keys()
+
+    spelled.add(key)
+
+
 def _basic_items(
     mapping: Mapping[Any, Any],
     /,
     strict: bool,
     path: tuple[str, ...],
 ) -> Generator[Any]:
+    spelled: set[Any] = set()
     for key, value in mapping.items():
         key_basic: Any = basic_key(
             key,
             strict=strict,
             path=path,
         )
+        spelled_once(spelled, key_basic)
 
         yield (
             key_basic,

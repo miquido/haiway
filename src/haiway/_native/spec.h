@@ -411,8 +411,20 @@ report_at_key(ModuleState *state, PyObject *key, int quoted)
 
 /* ---------------------------------------------------------- checks */
 
+/*
+ * What a validation is asked for besides the spec and the value. A key of a mapping is read
+ * from the text json spells it as: `int`, `float`, `bool`, `None`, a literal and an enum
+ * accept the spelling `basic_key` writes them as - which no other value is accepted as. The
+ * flag is kept for the alternatives of a union, the target of an alias and what a validator
+ * gives, and dropped for everything nested in a container.
+ */
+enum {
+    VALIDATE_IGNORE_EXTRA = 1,
+    VALIDATE_AS_KEY = 2,
+};
+
 static int spec_check(ModuleState *state, Spec *spec, PyObject *value);
-static PyObject *validate_spec(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra);
+static PyObject *validate_spec(ModuleState *state, Spec *spec, PyObject *value, int flags);
 static PyObject *undeclared_key(Spec *spec, PyObject *entries);
 
 static inline int
@@ -506,20 +518,17 @@ sequence_snapshot(ModuleState *state, PyObject *value, int *owned)
     return PySequence_Tuple(value);
 }
 
-/* the elements of a value as a tuple, for what is accepted as a set: a snapshot of the
- * set, or of any other iterable - NULL without an error for what is not iterable */
+/* the elements of a value as a tuple, for what is accepted as a set: a snapshot of a set,
+ * or what is accepted as a sequence - NULL without an error for anything else, the mappings
+ * and the views of them, the generators and the iterators among it */
 static PyObject *
-iterable_snapshot(ModuleState *state, PyObject *value, int *owned)
+set_snapshot(ModuleState *state, PyObject *value, int *owned)
 {
-    if (PyTuple_CheckExact(value)) {
-        *owned = 0;
-        return Py_NewRef(value);
+    if (PyAnySet_Check(value)) {
+        *owned = 1;
+        return PySequence_Tuple(value);
     }
-    *owned = 1;
-    if (PyList_CheckExact(value) || PyAnySet_Check(value)) return PySequence_Tuple(value);
-    int r = PyObject_IsInstance(value, state->iterable);
-    if (r <= 0) return NULL;
-    return PySequence_Tuple(value);
+    return sequence_snapshot(state, value, owned);
 }
 
 /*
@@ -590,7 +599,7 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
     case SPEC_BOOL:
         return PyBool_Check(value);
     case SPEC_INT:
-        return PyLong_Check(value);
+        return PyLong_Check(value);  /* a bool is an int to the language, and so to the instances of a variant */
     case SPEC_FLOAT:
         return PyFloat_Check(value);
     case SPEC_STR:
@@ -601,8 +610,12 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
         return PyObject_IsInstance(value, state->uuid);
     case SPEC_DATETIME:
         return PyObject_IsInstance(value, state->datetime);
-    case SPEC_DATE:
+    case SPEC_DATE: {
+        /* a datetime is a date for the language, and none for the annotation */
+        int r = PyObject_IsInstance(value, state->datetime);
+        if (r != 0) return r > 0 ? 0 : r;
         return PyObject_IsInstance(value, state->date);
+    }
     case SPEC_TIME:
         return PyObject_IsInstance(value, state->time);
     case SPEC_TIMEDELTA:
@@ -654,11 +667,10 @@ spec_check_unbounded(ModuleState *state, Spec *spec, PyObject *value)
         return r;
     }
     case SPEC_SET: {
-        int r = PyAnySet_Check(value) ? 1 : PyObject_IsInstance(value, state->set);
-        if (r <= 0) return r;
+        if (!PyAnySet_Check(value)) return 0;
         PyObject *items = PySequence_Tuple(value);
         if (items == NULL) return -1;
-        r = check_elements(state, spec->children[0], items);
+        int r = check_elements(state, spec->children[0], items);
         Py_DECREF(items);
         return r;
     }
@@ -867,8 +879,13 @@ validate_enum_str(ModuleState *state, Spec *spec, PyObject *value)
     return enum_error(state, spec, value, 0, PyErr_GetRaisedException());
 }
 
+static PyObject *validate_key_integer(PyObject *value);
+
+/* a member of an enum of ints - by its value when given an int, by its name when given a
+ * str, and by the number a key spells its value as when `as_key`. A bool is no int here -
+ * `True` would find the member of 1 */
 static PyObject *
-validate_enum_int(ModuleState *state, Spec *spec, PyObject *value)
+validate_enum_int(ModuleState *state, Spec *spec, PyObject *value, int as_key)
 {
     if (PyLong_Check(value)) {
         PyObject *member;
@@ -880,26 +897,21 @@ validate_enum_int(ModuleState *state, Spec *spec, PyObject *value)
         if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
         return enum_error(state, spec, value, 0, PyErr_GetRaisedException());
     }
-    /* a str - the name of a member, or the number of one */
+    /* a str - for a key the number of a member, which is its value, then the name of one */
+    if (as_key) {
+        PyObject *number = validate_key_integer(value);
+        if (number != NULL) {
+            PyObject *member = validate_enum_int(state, spec, number, 0);
+            Py_DECREF(number);
+            if (member != NULL) return member;
+        }
+        if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
+        PyErr_Clear();
+    }
     PyObject *converted = PyObject_GetItem(spec->base, value);
     if (converted != NULL) return converted;
     if (!PyErr_ExceptionMatches(PyExc_KeyError)) return NULL;
-    PyObject *cause = PyErr_GetRaisedException();
-    PyObject *number = PyLong_FromUnicodeObject(value, 10);
-    if (number != NULL) {
-        converted = PyObject_CallOneArg(spec->base, number);
-        Py_DECREF(number);
-        if (converted != NULL) {
-            Py_DECREF(cause);
-            return converted;
-        }
-    }
-    if (!PyErr_ExceptionMatches(PyExc_Exception)) {
-        Py_DECREF(cause);
-        return NULL;
-    }
-    PyErr_Clear();
-    return enum_error(state, spec, value, 1, cause);
+    return enum_error(state, spec, value, 1, PyErr_GetRaisedException());
 }
 
 static PyObject *struct_validate_value(ModuleState *state, PyObject *cls, PyObject *value, int ignore_extra);
@@ -952,7 +964,7 @@ validate_mapping(ModuleState *state, Spec *spec, PyObject *value, int ignore_ext
     PyObject *item;
     Py_ssize_t position = 0;
     while (PyDict_Next(source, &position, &key, &item)) {
-        PyObject *checked_key = validate_spec(state, spec->children[0], key, ignore_extra);
+        PyObject *checked_key = validate_spec(state, spec->children[0], key, ignore_extra | VALIDATE_AS_KEY);
         PyObject *checked_item = checked_key == NULL ? NULL : validate_spec(state, spec->children[1], item, ignore_extra);
         if (checked_item == NULL) {
             report_at_key(state, key, 0);
@@ -965,7 +977,18 @@ validate_mapping(ModuleState *state, Spec *spec, PyObject *value, int ignore_ext
                 rekeyed = PyDict_New();
                 failed = rekeyed == NULL || copy_entries_before(result != NULL ? result : source, key, rekeyed) < 0;
             }
-            if (!failed) failed = PyDict_SetItem(rekeyed, checked_key, checked_item) < 0;
+            if (!failed) {
+                /* two keys converted to one - the second would silently replace the first */
+                int present = PyDict_Contains(rekeyed, checked_key);
+                if (present > 0) {
+                    PyErr_Format(PyExc_ValueError, "Key converts to '%S', which another key converted to already", checked_key);
+                    Py_DECREF(checked_key);
+                    Py_DECREF(checked_item);
+                    report_at_key(state, key, 0);
+                    goto fail;
+                }
+                failed = present < 0 || PyDict_SetItem(rekeyed, checked_key, checked_item) < 0;
+            }
         } else if (checked_item != item) {
             if (result == NULL) {
                 result = PyDict_New();
@@ -1105,7 +1128,7 @@ gather_error(PyObject **errors)
 #define UNION_BITS 64
 
 static PyObject *
-validate_union(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
+validate_union(ModuleState *state, Spec *spec, PyObject *value, int flags)
 {
     PyObject *errors = NULL;  /* made with the first one - most values are accepted without any */
     /* each alternative is attempted once - the second pass leaves out what the first one
@@ -1141,7 +1164,7 @@ validate_union(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra
             } else if (ATTEMPTED(i)) {
                 continue;
             }
-            PyObject *validated = validate_spec(state, alternative, value, ignore_extra);
+            PyObject *validated = validate_spec(state, alternative, value, flags);
             if (validated != NULL) {
                 PyMem_Free(attempted);
                 Py_XDECREF(errors);
@@ -1206,13 +1229,145 @@ equals_ignoring_case(PyObject *text, const char *word)
     return 1;
 }
 
-static PyObject *
-validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
+/* whether a str is the ASCII word, in exactly that case */
+static int
+equals_word(PyObject *text, const char *word)
 {
+    Py_ssize_t length = (Py_ssize_t)strlen(word);
+    if (PyUnicode_GET_LENGTH(text) != length || !PyUnicode_IS_ASCII(text)) return 0;
+    return memcmp(PyUnicode_DATA(text), word, (size_t)length) == 0;
+}
+
+/*
+ * The spellings a key is read from: the ones `basic_key` writes, and no other. The text is
+ * checked character by character before anything converts it - the conversions of the
+ * language take signs, spaces, underscores and the digits of every script.
+ */
+static int
+is_canonical_integer(const char *text, Py_ssize_t length)
+{
+    Py_ssize_t i = length > 0 && text[0] == '-' ? 1 : 0;
+    if (i >= length) return 0;
+    if (text[i] == '0') return length == 1;  /* no leading zero, and no minus zero */
+    for (; i < length; i++) {
+        if (text[i] < '0' || text[i] > '9') return 0;
+    }
+    return 1;
+}
+
+static Py_ssize_t
+skip_digits(const char *text, Py_ssize_t length, Py_ssize_t at)
+{
+    while (at < length && text[at] >= '0' && text[at] <= '9') at++;
+    return at;
+}
+
+/* a number as json spells it */
+static int
+is_json_number(const char *text, Py_ssize_t length)
+{
+    Py_ssize_t i = length > 0 && text[0] == '-' ? 1 : 0;
+    if (i >= length) return 0;
+    if (text[i] == '0') {
+        i++;
+    } else if (text[i] >= '1' && text[i] <= '9') {
+        i = skip_digits(text, length, i);
+    } else {
+        return 0;
+    }
+    if (i < length && text[i] == '.') {
+        Py_ssize_t digits = skip_digits(text, length, i + 1);
+        if (digits == i + 1) return 0;
+        i = digits;
+    }
+    if (i < length && (text[i] == 'e' || text[i] == 'E')) {
+        i++;
+        if (i < length && (text[i] == '+' || text[i] == '-')) i++;
+        Py_ssize_t digits = skip_digits(text, length, i);
+        if (digits == i) return 0;
+        i = digits;
+    }
+    return i == length;
+}
+
+/* the text of an ASCII str, NULL for any other */
+static const char *
+ascii_text(PyObject *text, Py_ssize_t *length)
+{
+    if (!PyUnicode_IS_ASCII(text)) return NULL;
+    return PyUnicode_AsUTF8AndSize(text, length);
+}
+
+static PyObject *
+validate_key_integer(PyObject *value)
+{
+    Py_ssize_t length;
+    const char *text = ascii_text(value, &length);
+    if (text == NULL && PyErr_Occurred()) return NULL;
+    if (text != NULL && is_canonical_integer(text, length)) {
+        PyObject *converted = PyLong_FromString(text, NULL, 10);
+        if (converted != NULL) return converted;
+        if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
+    }
+    return value_error_from("'str' value is not matching expected format of 'int'");
+}
+
+static PyObject *
+validate_key_float(PyObject *value)
+{
+    Py_ssize_t length;
+    const char *text = ascii_text(value, &length);
+    if (text == NULL && PyErr_Occurred()) return NULL;
+    if (text != NULL && is_json_number(text, length)) {
+        char *end;
+        double number = PyOS_string_to_double(text, &end, NULL);  /* beyond the range it is infinite */
+        if (number == -1.0 && PyErr_Occurred()) {
+            if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
+        } else if (end == text + length) {
+            return PyFloat_FromDouble(number);
+        }
+    }
+    return value_error_from("'str' value is not matching expected format of 'float'");
+}
+
+/* a literal read from the text a key spells it as, when it is no str itself - a new
+ * reference, NULL without an error for none */
+static PyObject *
+literal_spelled_as(PyObject *literals, PyObject *value)
+{
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(literals); i++) {
+        PyObject *literal = PyTuple_GET_ITEM(literals, i);
+        int equal;
+        if (literal == Py_None) {
+            equal = equals_word(value, "null");
+        } else if (literal == Py_True) {
+            equal = equals_word(value, "true");
+        } else if (literal == Py_False) {
+            equal = equals_word(value, "false");
+        } else if (PyLong_Check(literal)) {
+            PyObject *spelled = PyLong_Type.tp_repr(literal);  /* the digits, whatever an enum prints */
+            if (spelled == NULL) return NULL;
+            equal = PyUnicode_Compare(spelled, value) == 0;
+            Py_DECREF(spelled);
+            if (PyErr_Occurred()) return NULL;
+        } else {
+            continue;
+        }
+        if (equal) return Py_NewRef(literal);
+    }
+    return NULL;
+}
+
+static PyObject *
+validate_kind(ModuleState *state, Spec *spec, PyObject *value, int flags)
+{
+    int ignore_extra = flags & VALIDATE_IGNORE_EXTRA;  /* nested values are no keys */
+    int as_key = flags & VALIDATE_AS_KEY;
     switch (spec->kind) {
     case SPEC_ANY:
         return Py_NewRef(value);
     case SPEC_NONE:
+        if (as_key && PyUnicode_Check(value) && equals_word(value, "null")) return Py_NewRef(Py_None);
         return value == Py_None ? Py_NewRef(value) : type_error("None", value);
     case SPEC_MISSING:
         return value == state->missing ? Py_NewRef(value) : type_error("Missing", value);
@@ -1221,6 +1376,10 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
         int r = literal_match(spec->data, value, &accepted);
         if (r < 0) return NULL;
         if (r) return accepted;
+        if (as_key && PyUnicode_Check(value)) {
+            accepted = literal_spelled_as(spec->data, value);
+            if (accepted != NULL || PyErr_Occurred()) return accepted;
+        }
         PyObject *spelled = PyObject_CallOneArg(state->literal_values, spec->data);
         if (spelled == NULL) return NULL;
         PyObject *reported = reported_type(value);
@@ -1233,14 +1392,18 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
     }
     case SPEC_BOOL:
         if (PyBool_Check(value)) return Py_NewRef(value);
-        if (PyLong_Check(value)) {
-            int r = PyObject_IsTrue(value);
-            if (r < 0) return NULL;
-            return PyBool_FromLong(r);
+        if (PyLong_CheckExact(value)) {  /* 0 and 1, which json carries a flag as at times */
+            int overflow;
+            long number = PyLong_AsLongAndOverflow(value, &overflow);
+            if (number == -1 && PyErr_Occurred()) return NULL;
+            if (!overflow && (number == 0 || number == 1)) return PyBool_FromLong(number);
+            PyErr_SetString(PyExc_ValueError, "'int' value is not matching any of expected values [0, 1]");
+            return NULL;
         }
         if (PyUnicode_Check(value)) {
-            if (equals_ignoring_case(value, "true")) return Py_NewRef(Py_True);
-            if (equals_ignoring_case(value, "false")) return Py_NewRef(Py_False);
+            /* a key is spelled as json does, a value in any case */
+            if (as_key ? equals_word(value, "true") : equals_ignoring_case(value, "true")) return Py_NewRef(Py_True);
+            if (as_key ? equals_word(value, "false") : equals_ignoring_case(value, "false")) return Py_NewRef(Py_False);
             PyErr_SetString(PyExc_ValueError, "'str' value is not matching any of expected values [True, False]");
             return NULL;
         }
@@ -1249,30 +1412,27 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
         if (PyBool_Check(value)) return type_error("int", value);
         if (PyLong_Check(value)) return Py_NewRef(value);
         if (PyFloat_Check(value)) {
+            /* json writes a whole number as a float at times - up to the last one a float
+             * holds without gaps */
             double number = PyFloat_AsDouble(value);
             if (number == -1.0 && PyErr_Occurred()) return NULL;
-            if (isfinite(number) && floor(number) == number) return PyLong_FromDouble(number);
+            if (isfinite(number) && floor(number) == number && fabs(number) <= 9007199254740992.0) {
+                return PyLong_FromDouble(number);
+            }
             return type_error("int", value);
         }
-        if (PyUnicode_Check(value)) {
-            /* json spells every mapping key as a str, so an `int` key encodes to one - it
-             * has to be readable back the same way */
-            PyObject *converted = PyLong_FromUnicodeObject(value, 10);
-            if (converted != NULL) return converted;
-            if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
-            return value_error_from("'str' value is not matching expected format of 'int'");
-        }
+        if (as_key && PyUnicode_Check(value)) return validate_key_integer(value);
         return type_error("int", value);
     case SPEC_FLOAT:
         if (PyBool_Check(value)) return type_error("float", value);
         if (PyFloat_Check(value)) return Py_NewRef(value);
-        if (PyLong_Check(value)) return PyNumber_Float(value);
-        if (PyUnicode_Check(value)) {
-            PyObject *converted = PyFloat_FromString(value);
+        if (PyLong_Check(value)) {
+            PyObject *converted = PyNumber_Float(value);
             if (converted != NULL) return converted;
-            if (!PyErr_ExceptionMatches(PyExc_Exception)) return NULL;
-            return value_error_from("'str' value is not matching expected format of 'float'");
+            if (!PyErr_ExceptionMatches(PyExc_OverflowError)) return NULL;
+            return value_error_from("'int' value is too large to be a 'float'");
         }
+        if (as_key && PyUnicode_Check(value)) return validate_key_float(value);
         return type_error("float", value);
     case SPEC_STR:
         return PyUnicode_Check(value) ? Py_NewRef(value) : type_error("str", value);
@@ -1305,7 +1465,10 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
         return type_error("datetime", value);
     }
     case SPEC_DATE: {
-        int r = PyObject_IsInstance(value, state->date);
+        int r = PyObject_IsInstance(value, state->datetime);  /* a datetime is no date */
+        if (r < 0) return NULL;
+        if (r) return type_error("date", value);
+        r = PyObject_IsInstance(value, state->date);
         if (r < 0) return NULL;
         if (r) return Py_NewRef(value);
         if (PyUnicode_Check(value)) {
@@ -1370,7 +1533,9 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
         int r = PyObject_IsInstance(value, spec->base);
         if (r < 0) return NULL;
         if (r) return Py_NewRef(value);
-        if (PyLong_Check(value) || PyUnicode_Check(value)) return validate_enum_int(state, spec, value);
+        if (!PyBool_Check(value) && (PyLong_Check(value) || PyUnicode_Check(value))) {
+            return validate_enum_int(state, spec, value, as_key);
+        }
         return type_error_of(spec->base, value);
     }
     case SPEC_TUPLE: {
@@ -1415,7 +1580,7 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
     case SPEC_SET: {
         if (is_text_like(value)) return type_error("Set", value);
         int owned;
-        PyObject *items = iterable_snapshot(state, value, &owned);
+        PyObject *items = set_snapshot(state, value, &owned);
         if (items == NULL) return PyErr_Occurred() ? NULL : type_error("Set", value);
         /* the snapshot of a frozenset is not changed in place - it would hide a converted
          * element, and the frozenset itself would be returned with it unconverted */
@@ -1484,12 +1649,12 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
         return NULL;
     }
     case SPEC_UNION:
-        return validate_union(state, spec, value, ignore_extra);
+        return validate_union(state, spec, value, flags);
     case SPEC_VALIDABLE:
-        return validate_spec(state, spec->children[0], value, ignore_extra);  /* `validating` ran already */
+        return validate_spec(state, spec->children[0], value, flags);  /* `validating` ran already */
     case SPEC_ALIAS: {
         Spec *target = alias_target(state, spec);
-        return target == NULL ? NULL : validate_spec(state, target, value, ignore_extra);
+        return target == NULL ? NULL : validate_spec(state, target, value, flags);
     }
     default:
         PyErr_Format(PyExc_TypeError, "unknown spec kind %d", spec->kind);
@@ -1498,14 +1663,14 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
 }
 
 static PyObject *
-validate_spec_unbounded(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
+validate_spec_unbounded(ModuleState *state, Spec *spec, PyObject *value, int flags)
 {
     PyObject *raw = value;
     if (spec->validating != NULL) {
         raw = PyObject_CallOneArg(spec->validating, value);
         if (raw == NULL) return NULL;
     }
-    PyObject *result = validate_kind(state, spec, raw, ignore_extra);
+    PyObject *result = validate_kind(state, spec, raw, flags);
     if (raw != value) Py_DECREF(raw);
     if (result != NULL && spec->verifying != NULL) {
         PyObject *verified = PyObject_CallOneArg(spec->verifying, result);
@@ -1517,11 +1682,11 @@ validate_spec_unbounded(ModuleState *state, Spec *spec, PyObject *value, int ign
 
 /* the value a spec accepts for the one given - a new reference, NULL with the error set */
 static PyObject *
-validate_spec(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
+validate_spec(ModuleState *state, Spec *spec, PyObject *value, int flags)
 {
-    if (!spec->nested) return validate_spec_unbounded(state, spec, value, ignore_extra);  /* a leaf recurses into nothing */
+    if (!spec->nested) return validate_spec_unbounded(state, spec, value, flags);  /* a leaf recurses into nothing */
     if (Py_EnterRecursiveCall(" while validating a value")) return NULL;
-    PyObject *result = validate_spec_unbounded(state, spec, value, ignore_extra);
+    PyObject *result = validate_spec_unbounded(state, spec, value, flags);
     Py_LeaveRecursiveCall();
     return result;
 }

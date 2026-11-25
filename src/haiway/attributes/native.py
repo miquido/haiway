@@ -14,7 +14,7 @@ from types import (
     ModuleType,
     WrapperDescriptorType,
 )
-from typing import TYPE_CHECKING, Any, Final, Literal, final
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, final
 from weakref import WeakKeyDictionary
 
 from haiway._native import nstruct
@@ -788,7 +788,8 @@ class ConversionHooks:
     basic_value: Callable[[Any, bool, tuple[str, ...]], Any]
     basic_key: Callable[[Any, bool, tuple[str, ...]], Any]
     recursive: Callable[[Any], Any]
-    __slots__ = ("basic_key", "basic_value", "map", "recursive")
+    colliding_keys: Callable[[], NoReturn]
+    __slots__ = ("basic_key", "basic_value", "colliding_keys", "map", "recursive")
 
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
@@ -800,11 +801,13 @@ class ConversionHooks:
         basic_value: Callable[[Any, bool, tuple[str, ...]], Any],
         basic_key: Callable[[Any, bool, tuple[str, ...]], Any],
         recursive: Callable[[Any], Any],
+        colliding_keys: Callable[[], NoReturn],
     ) -> None:
         self.map = map
         self.basic_value = basic_value
         self.basic_key = basic_key
         self.recursive = recursive
+        self.colliding_keys = colliding_keys
 
 
 @final
@@ -814,7 +817,6 @@ class TypeHooks:
     mapping: type[Any]
     sequence: type[Any]
     set: type[Any]
-    iterable: type[Any]
     uuid: type[Any]
     safe_uuid: type[Any]
     datetime: type[Any]
@@ -829,7 +831,6 @@ class TypeHooks:
     __slots__ = (
         "date",
         "datetime",
-        "iterable",
         "mapping",
         "meta",
         "partial",
@@ -853,7 +854,6 @@ class TypeHooks:
         mapping: type[Any],
         sequence: type[Any],
         set: type[Any],  # noqa: A002  # read by this name by the extension
-        iterable: type[Any],
         uuid: type[Any],
         safe_uuid: type[Any],
         datetime: type[Any],
@@ -869,7 +869,6 @@ class TypeHooks:
         self.mapping = mapping
         self.sequence = sequence
         self.set = set
-        self.iterable = iterable
         self.uuid = uuid
         self.safe_uuid = safe_uuid
         self.datetime = datetime

@@ -77,10 +77,10 @@ def _holder(annotation: Any) -> type[Holder[Any]]:
 
 
 ACCEPTED: list[tuple[Any, Any, Any]] = [
-    (int, "3", 3),
+    (int, 3, 3),
     (int, 3.0, 3),
     (float, 3, 3.0),
-    (float, "1.5", 1.5),
+    (float, 1.5, 1.5),
     (bool, 1, True),
     (bool, 0, False),
     (bool, "TRUE", True),
@@ -96,26 +96,26 @@ ACCEPTED: list[tuple[Any, Any, Any]] = [
     (Mode, "SLOW", Mode.SLOW),
     (Level, 1, Level.LOW),
     (Level, "HIGH", Level.HIGH),
-    (Level, "1", Level.LOW),
+    (Level, 1, Level.LOW),
     (Literal["a", "b"], "a", "a"),
-    (Sequence[int], ["1", 2], (1, 2)),
+    (Sequence[int], [1.0, 2], (1, 2)),
     (Sequence[int], (1, 2), (1, 2)),
     (tuple[int, str], [1, "a"], (1, "a")),
     (Set[int], [1, 1, 2], frozenset({1, 2})),
-    (Mapping[str, int], {"a": "1"}, Map({"a": 1})),
+    (Mapping[str, int], {"a": 1.0}, Map({"a": 1})),
     (Mapping[str, int], Map({"a": 1}), Map({"a": 1})),
     (int | None, None, None),
-    (int | None, "3", 3),
+    (int | None, 3.0, 3),
     (str | float | int, 3, 3),
-    (Settings, {"a": "1"}, Map({"a": 1})),
+    (Settings, {"a": 1.0}, Map({"a": 1})),
     (Settings, {"a": 1, "b": "x"}, Map({"a": 1, "b": "x"})),
-    (Inner, {"x": "1"}, Inner(x=1)),
+    (Inner, {"x": 1.0}, Inner(x=1)),
     (Selfish, 2, Selfish(value=4)),
     (Meta, {"kind": "x"}, Meta.of(kind="x")),
     (Annotated[int, Validator(_halve)], 4, 2),
     (Annotated[int, Verifier(_positive)], 1, 1),
     (Tree, [1, [2, [3]]], (1, (2, (3,)))),
-    (Holder[int], {"value": "1"}, Holder[int](value=1)),
+    (Holder[int], {"value": 1.0}, Holder[int](value=1)),
 ]
 
 
@@ -129,9 +129,9 @@ def test_accepted_values_are_converted_the_same(annotation: Any, value: Any, exp
 
 REFUSED: list[tuple[Any, Any, str]] = [
     (int, True, ".value failed: 'bool' is not matching expected type of 'int'"),
-    (int, "x", ".value failed: 'str' value is not matching expected format of 'int'"),
+    (int, "x", ".value failed: 'str' is not matching expected type of 'int'"),
     (int, 1.5, ".value failed: 'float' is not matching expected type of 'int'"),
-    (float, "x", ".value failed: 'str' value is not matching expected format of 'float'"),
+    (float, "x", ".value failed: 'str' is not matching expected type of 'float'"),
     (
         bool,
         "no",
@@ -184,7 +184,7 @@ REFUSED: list[tuple[Any, Any, str]] = [
     (
         Sequence[int],
         [1, "x"],
-        ".value[1] failed: 'str' value is not matching expected format of 'int'",
+        ".value[1] failed: 'str' is not matching expected type of 'int'",
     ),
     (
         tuple[int, str],
@@ -201,16 +201,16 @@ REFUSED: list[tuple[Any, Any, str]] = [
     (
         Mapping[str, int],
         {"a": "x"},
-        ".value[a] failed: 'str' value is not matching expected format of 'int'",
+        ".value[a] failed: 'str' is not matching expected type of 'int'",
     ),
     (Settings, {}, '.value["a"] failed: "Value for \'a\' is required"'),
     (
         Settings,
         {"a": "x"},
-        ".value[\"a\"] failed: 'str' value is not matching expected format of 'int'",
+        ".value[\"a\"] failed: 'str' is not matching expected type of 'int'",
     ),
     (Settings, 1, f".value failed: 'int' is not matching expected type of '{Settings}'"),
-    (Inner, {"x": "y"}, ".value.x failed: 'str' value is not matching expected format of 'int'"),
+    (Inner, {"x": "y"}, ".value.x failed: 'str' is not matching expected type of 'int'"),
     (Inner, 1, f".value failed: 'int' is not matching expected type of '{Inner}'"),
     (Meta, 1, ".value failed: 'int' is not matching expected type of 'Meta'"),
     (Callable[[], None], 1, ".value failed: 'int' is not matching expected function type"),
@@ -312,8 +312,8 @@ def test_validator_sees_the_raw_value_before_the_annotation() -> None:
         return value
 
     holder = _holder(Annotated[int, Validator(recording)])
-    assert holder(value="3").value == 3  # pyright: ignore[reportCallIssue, reportAttributeAccessIssue]
-    assert seen == ["3"]
+    assert holder(value=3.0).value == 3  # pyright: ignore[reportCallIssue, reportAttributeAccessIssue]
+    assert seen == [3.0]
 
 
 def test_mapping_validation_accepts_the_mapping_it_was_given() -> None:
@@ -333,27 +333,27 @@ def test_function_arguments_validate_the_same() -> None:
         return value + sum(other)
 
     function = Function(add)
-    assert function("3", ["1", 2]) == 6  # pyright: ignore[reportArgumentType]
+    assert function(3.0, [1.0, 2]) == 6  # pyright: ignore[reportArgumentType]
 
     with pytest.raises(ValidationError) as exc:
         function("x")  # pyright: ignore[reportArgumentType]
 
     assert str(exc.value) == (
-        "Validation of .value failed: 'str' value is not matching expected format of 'int'"
+        "Validation of .value failed: 'str' is not matching expected type of 'int'"
     )
 
 
 @pytest.mark.parametrize(
     ("annotation", "given", "expected"),
     [
-        (Set[int], frozenset({"1", "2"}), frozenset({1, 2})),
+        (Set[int], frozenset({1.0, 2.0}), frozenset({1, 2})),
         (
             Set[UUID],
             frozenset({"12345678-1234-5678-1234-567812345678"}),
             frozenset({UUID("12345678-1234-5678-1234-567812345678")}),
         ),
         (Set[Mode], frozenset({"fast"}), frozenset({Mode.FAST})),
-        (Set[int], {"3"}, frozenset({3})),
+        (Set[int], {3.0}, frozenset({3})),
     ],
 )
 def test_set_elements_are_converted_whatever_set_holds_them(

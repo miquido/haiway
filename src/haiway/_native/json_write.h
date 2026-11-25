@@ -271,6 +271,22 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
                 status = JSON_BAIL;  /* spelled as a key by the standard library */
                 break;
             }
+            if (!text) {
+                /* spelled as the str which another key may be as well - which json.dumps writes
+                 * twice, and any reader keeps one of */
+                PyObject *spelled = PyLong_Type.tp_repr(key);
+                if (spelled == NULL) {
+                    status = JSON_ERROR;
+                    break;
+                }
+                int taken = PyDict_Contains(source, spelled);
+                Py_DECREF(spelled);
+                if (taken != 0) {
+                    if (taken > 0) report_colliding_keys(state);
+                    status = JSON_ERROR;
+                    break;
+                }
+            }
             if (!first && !buffer_put(buffer, ", ", 2)) status = JSON_ERROR;
             else if (text ? !write_string(buffer, key) : !write_quoted_int(buffer, key)) status = JSON_ERROR;
             else if (!buffer_put(buffer, ": ", 2)) status = JSON_ERROR;

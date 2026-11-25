@@ -49,11 +49,11 @@ typedef struct {
     PyObject *basic_value;       /* (value, strict, path) -> basic value, what is not handled here */
     PyObject *basic_key;         /* (key, strict, path) -> str key */
     PyObject *recursive;         /* (value) -> mapping, what is not handled here */
+    PyObject *colliding_keys;    /* () -> NoReturn, raises for keys spelled alike */
     /* types */
     PyObject *mapping;           /* collections.abc.Mapping */
     PyObject *sequence;          /* collections.abc.Sequence */
     PyObject *set;               /* collections.abc.Set */
-    PyObject *iterable;          /* collections.abc.Iterable */
     PyObject *uuid;              /* uuid.UUID */
     PyObject *safe_uuid;         /* uuid.SafeUUID - what a UUID holds besides its number */
     PyObject *datetime;
@@ -81,6 +81,10 @@ typedef struct {
     PyObject *str_args;
     PyObject *str_keywords;
     PyObject *deepcopy;          /* copy.deepcopy */
+    /* what json.loads reads the constants as - one object for every occurrence, in any document */
+    PyObject *nan;
+    PyObject *positive_infinity;
+    PyObject *negative_infinity;
 } ModuleState;
 
 struct CompiledPlan;

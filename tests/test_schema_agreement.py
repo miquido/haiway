@@ -309,8 +309,18 @@ def test_set_accepts_what_its_schema_describes() -> None:
 @pytest.mark.parametrize(
     ("key", "accepted", "refused"),
     [
-        (int, ["1", "-1", "01", "+1", " 1", "1_000", chr(0x661)], ["x", "", "a1", "-", "--1"]),
-        (bool, ["true", "false", "True", "TRUE", "False"], ["1", "yes", "", "x"]),
+        (
+            int,
+            ["0", "1", "-1", "250"],
+            ["01", "+1", " 1", "1_000", chr(0x661), "-0", "x", "", "a1", "-", "--1"],
+        ),
+        (
+            float,
+            ["0", "1", "-1.5", "1e5", "2.5E-3"],
+            ["nan", "inf", "+1", ".5", "1.", "01", " 1", ""],
+        ),
+        (bool, ["true", "false"], ["True", "TRUE", "False", "1", "yes", "", "x"]),
+        (None, ["null"], ["None", "", "x"]),
         (Color, ["red", "blue"], ["x", "green", ""]),
         (Literal["a", "b"], ["a", "b"], ["c", ""]),
     ],
@@ -332,7 +342,7 @@ def test_mapping_keys_are_constrained_to_their_spelling(
     assert not any(matches(text) for text in refused), names
 
 
-@pytest.mark.parametrize("key", [str, Any, float, None, bytes])
+@pytest.mark.parametrize("key", [str, Any, bytes])
 def test_mapping_keys_without_a_spelling_are_not_constrained(key: Any) -> None:
     assert "propertyNames" not in property_of(mapping_of(key))
 

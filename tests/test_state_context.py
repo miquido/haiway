@@ -123,7 +123,7 @@ async def test_specializations_of_a_generic_are_separate_states() -> None:
 @pytest.mark.asyncio
 async def test_validated_and_decoded_instances_are_stored_as_they_are() -> None:
     decoded = Settings.from_json('{"name": "json", "limit": 3}')
-    validated = Box[int].validate({"value": "4"})
+    validated = Box[int].validate({"value": 4.0})
     async with ctx.scope("test", decoded, validated):
         assert ctx.state(Settings) is decoded
         assert ctx.state(Box[int]) is validated

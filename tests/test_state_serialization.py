@@ -299,7 +299,7 @@ def test_to_mapping_copies_mutable_values() -> None:
 
 
 def test_from_mapping_is_validation() -> None:
-    assert Point.from_mapping({"x": "1", "y": 2}) == Point(x=1, y=2)
+    assert Point.from_mapping({"x": 1.0, "y": 2}) == Point(x=1, y=2)
 
     with raises(TypeError):
         Point.from_mapping({"x": 1, "y": 2, "z": 3})

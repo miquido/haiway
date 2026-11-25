@@ -5,6 +5,7 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from haiway import (
     Description,
+    Map,
     Specification,
     State,
     TypeSpecification,
@@ -61,7 +62,11 @@ def test_specifications() -> None:
         "type": "number",
     }
     assert type_specification(BoolAttribute()) == {
-        "type": "boolean",
+        "anyOf": [
+            {"type": "boolean"},
+            {"enum": [0, 1]},
+            {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
+        ]
     }
     assert type_specification(NoneAttribute()) == {
         "type": "null",
@@ -127,7 +132,13 @@ def test_basic_specification() -> None:
             "str_value": {"type": "string"},
             "int_value": {"type": "integer"},
             "float_value": {"type": "number"},
-            "bool_value": {"type": "boolean"},
+            "bool_value": {
+                "anyOf": [
+                    {"type": "boolean"},
+                    {"enum": [0, 1]},
+                    {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
+                ]
+            },
             "none_value": {"type": "null"},
             "list_value": {"type": "array", "items": {"type": "string"}},
             "dict_value": {"type": "object", "additionalProperties": {"type": "string"}},
@@ -369,7 +380,7 @@ def test_recursive_state_references_use_identifier_from_every_container() -> Non
     class Node(State):
         alone: Node | None = None
         listed: Sequence[Node] = ()
-        mapped: Mapping[str, Node] = {}
+        mapped: Mapping[str, Node] = Map()
 
     specification = Node.__SPECIFICATION__
     properties = specification["properties"]  # pyright: ignore[reportTypedDictNotRequiredAccess]

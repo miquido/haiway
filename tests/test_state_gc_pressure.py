@@ -6,20 +6,20 @@ from typing import Any, NotRequired, Required, Self, TypedDict
 
 import pytest
 
-from haiway import Default, State, ValidationError
+from haiway import Default, Map, State, ValidationError
 
 
 class _Tree(State):
     value: int = 0
-    kids: Mapping[str, Self] = {}
+    kids: Mapping[str, Self] = Map()
 
 
 class _Flat(State):
-    kids: Mapping[str, int] = {}
+    kids: Mapping[str, int] = Map()
 
 
 class _IntKeys(State):
-    kids: Mapping[int, int] = {}
+    kids: Mapping[int, int] = Map()
 
 
 class _Key:
@@ -53,15 +53,15 @@ class _InterruptingKey(_Key):
 
 
 class _InterruptingKeys(State):
-    kids: Mapping[_InterruptingKey, int] = {}
+    kids: Mapping[_InterruptingKey, int] = Map()
 
 
 class _ObjectKeys(State):
-    kids: Mapping[_Key, int] = {}
+    kids: Mapping[_Key, int] = Map()
 
 
 class _UnprintableKeys(State):
-    kids: Mapping[_UnprintableKey, int] = {}
+    kids: Mapping[_UnprintableKey, int] = Map()
 
 
 class _Optional(State):
@@ -195,7 +195,7 @@ def test_key_which_cannot_be_printed_does_not_replace_the_failure(
         _ENTRY_POINTS[entry](_UnprintableKeys, "kids", {_UnprintableKey("1"): "x"})
 
     assert tuple(raised.value.path) == (".kids", "[<unprintable>]")
-    assert isinstance(raised.value.__cause__, ValueError)
+    assert isinstance(raised.value.__cause__, TypeError)
     assert unraisable == []
 
 

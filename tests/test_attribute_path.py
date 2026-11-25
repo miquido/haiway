@@ -5,7 +5,7 @@ from typing import Annotated, Any, TypedDict, cast
 import pytest
 from pytest import raises
 
-from haiway import Alias, AttributePath, State
+from haiway import Alias, AttributePath, Map, State
 
 
 class SequenceState(State):
@@ -367,7 +367,7 @@ class _SerializedRoot(State):
     optional: _SerializedLeaf | None = None
     items: Annotated[Sequence[_SerializedLeaf], Alias("its")] = ()
     pair: tuple[_SerializedLeaf, ...] = ()
-    mapping: Mapping[str, _SerializedLeaf] = {}
+    mapping: Mapping[str, _SerializedLeaf] = Map()
     typed: _SerializedTyped | None = None
     aliased: _SerializedLeaves = ()
 
@@ -413,7 +413,7 @@ def test_serialized_components_keep_python_components_untouched() -> None:
 
 class _SerializedFixedTuple(State):
     pair: tuple[_SerializedLeaf, Annotated[_SerializedLeaf, Alias("second")]]
-    by_int: Mapping[int, _SerializedLeaf] = {}
+    by_int: Mapping[int, _SerializedLeaf] = Map()
 
 
 def _resolved_in_mapping(

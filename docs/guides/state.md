@@ -54,7 +54,10 @@ annotations. If a value fails validation, an exception will be raised.
 Use the `Default` helpers when a field needs to be computed lazily or resolved from the environment:
 `Default` takes a literal or a `factory`, `DefaultFactory` calls a function with arguments and
 `DefaultEnv` reads an environment variable. Each returns a `DefaultValue` container that the State
-runtime resolves while creating each instance:
+runtime resolves while creating each instance. A plain default is one value shared by every
+instance, so a mutable one - a `list`, `dict`, `set` or `bytearray`, or a subclass of them, also
+given as `Default([])` - is refused when the class is created: use `DefaultFactory(list)` or
+`Default(factory=...)`, or an immutable value (`()`, `frozenset()`, `Map()`):
 
 ```python
 from datetime import UTC, datetime
@@ -228,7 +231,9 @@ when `Dog` inherits from `Animal`, also through nested arguments such as
 `Container[Container[Dog]]`. `isinstance(Container(value=1), Container[int])` checks the held values
 of an unspecialized instance against the arguments.
 
-Bounds and constraints of the type parameters are checked when the class is specialized:
+Bounds and constraints of the type parameters are checked when the class is specialized. A class
+which is not specialized takes a parameter for its bound, or for any one of its constraints
+(`class Con[T: (int, str)]` accepts an `int` or a `str` and refuses `1.5`):
 
 ```python
 class Shelf[T: Animal](State):
@@ -258,7 +263,9 @@ because `second` is a `str`. A parameter without a default stands for its bound,
 
 A `TypeVarTuple` binds the arguments the other parameters leave over, and each position of a
 `tuple[*Ts]` attribute is validated against its own argument. A `ParamSpec` is given the signature
-it stands for, written as a list of types or as `...`:
+it stands for, written as a list of types or as `...`, and a `Callable[P, R]` attribute then has to
+be given a callable taking those arguments - `Handler[[int], bool](call=lambda: True)` is refused as
+`Callable[[int], bool]` is:
 
 ```python
 class Row[*Ts](State):
@@ -485,14 +492,33 @@ accepts `customer` or `customer_id` when instantiating, and `invoice.to_mapping(
 State classes perform thorough type validation for all supported Python types:
 
 - **Basic Types**: int, str, bool, float, bytes
+  - **bool** accepts `True`/`False`, the ints `0` and `1` and the strings `"true"`/`"false"` in any
+    case; any other int (`2`, `-1`), any other string (`"1"`, `"yes"`) and floats are refused.
+  - **int** accepts an int (not a `bool`) and a float which is a whole number up to 2\*\*53 (read as
+    an int); strings are never parsed, and non-integral floats, `NaN`, infinities and larger floats
+    are refused. **float** accepts an int (not a `bool`) and a float, and refuses strings.
+  - **StrEnum/IntEnum** read a member, then the raw value (a `str`; an `int` which is not a `bool`),
+    then the name of a member - so a value always wins over a name. A numeric string is no value of
+    an `IntEnum`.
+  - **Mapping keys** are strings in JSON, so they are read from the spelling they are written as,
+    and from no other: `int` keys as canonical decimal integers (`"-12"`, not `"+1"`, `"01"`,
+    `" 1"`, `"1_0"`), `float` keys as JSON numbers, `bool` keys as `"true"`/`"false"`, `None` as
+    `"null"`, `Literal` keys as the spelling of the literal, enum keys as a value, a number or a
+    name. Two keys which convert to the same one are refused (`Mapping[int, str]` given
+    `{"1": "a", 1: "b"}`), and so are two keys which are written the same by `to_json` and
+    `to_basic_object` (`{1: "a", "1": "b"}` raises `ValueError`).
 - **Container Types**:
   - **Sequence[T]**: sequence-like inputs are normalized to immutable tuples
   - **Mapping[K, V]**: mappings are validated recursively and converted to immutable `Map` values
-  - **Set[T]**: set-like inputs are normalized to immutable frozensets
+  - **Set[T]**: sets and sequences (a `list` or `tuple`, which is what a JSON array is) are
+    normalized to immutable frozensets - a mapping, a dict view, a generator, an iterator and
+    `str`/`bytes` are refused
   - **tuple[T, ...]**: Fixed or variable-length tuples
-- **Special Types**: UUID, datetime, date, time, timedelta, Path - `timezone` and `re.Pattern` are
-  accepted as well, but have no JSON form and no JSON Schema: a State holding one is not
-  serializable (`to_json` raises, `json_schema()` raises `TypeError`)
+- **Special Types**: UUID, datetime, date, time, timedelta, Path - a `datetime` is not accepted for
+  `date`; for `datetime | date` an ISO string is read as the first alternative which reads it
+  (`datetime.fromisoformat` reads a date alone), so declare `date | datetime` to get a `date` back.
+  `timezone` and `re.Pattern` are accepted as well, but have no JSON form and no JSON Schema: a
+  State holding one is not serializable (`to_json` raises, `json_schema()` raises `TypeError`)
 - **Union Types**: str | None, int | float
 - **Literal Types**: Literal["a", "b", "c"] - a value has to be of the type of the literal it is
   equal to, so `Literal[1]` refuses `True` and `1.0`. A plain `str` or `int` and a `StrEnum` or
@@ -643,8 +669,14 @@ schema names the form which is written. What it leaves unsaid is on purpose:
 - A fixed tuple has exactly its length (`minItems` and `maxItems`). A tuple with an unbounded part
   has `minItems` for the elements around it, and takes what follows its leading elements as any of
   the types after them, as a schema can't tell the elements at the end from those in the middle.
+- JSON Schema compares numbers by value, so it can't tell `1` from `1.0`: the schemas of `bool`
+  (`0`, `1`), of an `IntEnum` and of `int` accept `1.0` where the State refuses it for a `bool` or
+  an `IntEnum`, and the `int` schema accepts whole floats beyond 2\*\*53 which the State refuses.
+  The schema accepts more than the State, never less.
 - The keys of a mapping which are not strings constrain `propertyNames` to the way they are spelled
-  where that can be told - `int`, `bool`, `UUID`, enum and `Literal` keys.
+  where that can be told - `int`, `float`, `bool`, `None`, `UUID`, enum and `Literal` keys - with
+  the exact spellings written. `bool` is described as a boolean, `0`, `1` or `true`/`false` in any
+  case, an `IntEnum` as its values or the names of its members.
 - A `Literal` of enum members is written as their values, and one of values with no JSON form (a
   plain `Enum` member, `bytes`) leaves the State without a schema.
 - Both the name of an attribute and its alias are accepted as input, while the schema names the
@@ -850,6 +882,20 @@ an attribute of it raises `AttributeError`, while `to_mapping`, `to_basic_object
 is not initialized, rather than leaving the attributes out. An instance another thread is
 initializing is read either whole or not at all, so `to_json` of it never returns some of the
 attributes only.
+
+Two instances which are equal have the same hash, for the containers the language compares equal to
+one of another kind: a `Map`, a `UserDict` or a mapping proxy equal to the `dict` of its items, a
+`frozenset` or a dict view equal to a `set`, a `UserList` equal to a `list`, `bytes`, a `bytearray`
+and a `memoryview` equal to each other, held alone or within tuples, lists and mappings. The hash of
+such a container is that of the hashable it is rebuilt as, so **it changes when a `list`, `dict`,
+`set` or `bytearray` an instance holds is mutated** - a `set` or `dict` holding the instance no
+longer finds it. A mutable value is only held by an `Any`, an `object` or a custom attribute; a
+typed attribute (`Sequence`, `Mapping`, `Set`) converts it to an immutable `tuple`, `Map` or
+`frozenset`, so prefer those, or immutable values. Any other value with no hash of its own
+(`__hash__` is `None`) is left out of the hash, which can only be consistent with its equality if
+nothing equal to it is hashed; any other failure to hash a value is raised as it is. Comparing with
+something which is no State leaves the answer to it (`instance == mock.ANY` is true); another State
+class is never equal.
 
 Apart from the values it doesn't make itself, what runs Python is the code of the user: a
 `Validator`, a `Verifier`, a class validating itself, a default factory, an `__init__` of the class

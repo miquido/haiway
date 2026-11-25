@@ -133,8 +133,9 @@ configure(PyObject *mod, PyObject *args)
         || !bind_hook(conversion, "basic_value", &state->basic_value)
         || !bind_hook(conversion, "basic_key", &state->basic_key)
         || !bind_hook(conversion, "recursive", &state->recursive)
+        || !bind_hook(conversion, "colliding_keys", &state->colliding_keys)
         || !bind_hook(types, "mapping", &state->mapping) || !bind_hook(types, "sequence", &state->sequence)
-        || !bind_hook(types, "set", &state->set) || !bind_hook(types, "iterable", &state->iterable)
+        || !bind_hook(types, "set", &state->set)
         || !bind_hook(types, "uuid", &state->uuid) || !bind_hook(types, "safe_uuid", &state->safe_uuid)
         || !bind_hook(types, "datetime", &state->datetime)
         || !bind_hook(types, "date", &state->date) || !bind_hook(types, "time", &state->time)
@@ -245,6 +246,13 @@ module_exec(PyObject *module)
     state->deepcopy = PyObject_GetAttrString(copy, "deepcopy");
     Py_DECREF(copy);
     if (state->deepcopy == NULL) return -1;
+    PyObject *decoder = PyImport_ImportModule("json.decoder");
+    if (decoder == NULL) return -1;
+    state->nan = PyObject_GetAttrString(decoder, "NaN");
+    state->positive_infinity = PyObject_GetAttrString(decoder, "PosInf");
+    state->negative_infinity = PyObject_GetAttrString(decoder, "NegInf");
+    Py_DECREF(decoder);
+    if (state->nan == NULL || state->positive_infinity == NULL || state->negative_infinity == NULL) return -1;
 
     if (PyModule_AddObjectRef(module, "StructMeta", (PyObject *)state->meta_type) < 0
         || PyModule_AddObjectRef(module, "Struct", (PyObject *)state->struct_type) < 0
@@ -259,13 +267,13 @@ module_exec(PyObject *module)
     V(meta_type) V(struct_type) V(spec_type) \
     V(missing) V(check) V(report) V(unexpected) V(describe) V(parameters) V(enum_values) V(literal_values) \
     V(b64decode) V(parse_duration) V(exception_group) \
-    V(map) V(basic_value) V(basic_key) V(recursive) \
-    V(mapping) V(sequence) V(set) V(iterable) V(uuid) V(safe_uuid) V(datetime) V(date) V(time) V(timedelta) \
+    V(map) V(basic_value) V(basic_key) V(recursive) V(colliding_keys) \
+    V(mapping) V(sequence) V(set) V(uuid) V(safe_uuid) V(datetime) V(date) V(time) V(timedelta) \
     V(temporal) V(path) V(pathlike) V(meta) V(partial) V(placeholder) \
     V(str_isoformat) V(str_as_posix) V(str_type_name) \
     V(str_fromisoformat) V(str_validate) V(str_int) V(str_code) V(str_defaults) V(str_kwdefaults) \
     V(str_call) V(str_func) V(str_args) V(str_keywords) \
-    V(deepcopy)
+    V(deepcopy) V(nan) V(positive_infinity) V(negative_infinity)
 
 static int
 module_traverse(PyObject *module, visitproc visit, void *arg)

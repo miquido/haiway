@@ -67,6 +67,60 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   when the class is created. It was listed neither as required in the schema nor accepted as
   omitted by validation, which still required the value.
 
+- **Breaking:** validation of the plain types is stricter, and no string is parsed into a number
+  anymore:
+  - `bool` accepts `True`/`False`, the ints `0` and `1` and `"true"`/`"false"` in any case. Any other
+    int (`2`, `-1`) was `True` before, and is refused now, as is any other string and a float.
+  - `int` accepts an int (not a `bool`) and a float which is a whole number up to 2**53, and refuses
+    every string, where `"5"` was read as `5` (and `"1_0"`, `" 1 "` and the digits of any script
+    with it). Floats which are not whole numbers, `NaN`, infinities and those beyond 2**53 are
+    refused. `float` refuses strings - `"nan"`, `"inf"`, `"1_0.0"` and `"1.5"` were read before.
+  - `IntEnum` refuses `bool` (`True` was read as the member of `1`) and numeric strings (`"1"`). A
+    member is read by its value first, by its name second - a value always wins over a name. A
+    `StrEnum` reads the same way.
+  - `Set[T]` accepts sets and sequences (`list`, `tuple`) only, and refuses mappings, dict views,
+    generators, iterators, `str` and `bytes` - and `collections.abc.Set` implementations other than
+    the built-in `set` and `frozenset`.
+  - `date` refuses a `datetime`, which is an instance of it. `datetime | date` and `date | datetime`
+    read an ISO string as the first alternative which reads it - `"2026-01-02"` is a `datetime`
+    for the first, a `date` for the second.
+  - `bool | int` and `int | bool` keep `1` an `int` and `True` a `bool`: a value which is accepted as
+    it is wins over one which would convert, whichever is declared first. Of `bool | IntEnum` a
+    `1` is read as `True`, while an `IntEnum` member is kept.
+- **Breaking:** the keys of a mapping are read from the spelling `to_json` and `to_basic_object`
+  write them as, and from no other: `int` keys as canonical decimal integers (no sign `+`, spaces,
+  underscores, leading zeros or other scripts), `float` keys as JSON numbers, `bool` keys as
+  `"true"`/`"false"` (lowercase), `None` as `"null"`, a `Literal` key as the spelling of its value,
+  an enum key as a value, a number or a name. `NaN` and infinities as float keys are not read.
+  Two keys which convert to one (`Mapping[int, str]` given `{"1": "a", 1: "b"}`) raise a
+  `ValidationError` at the second, where it replaced the first silently.
+- **Breaking:** the JSON Schema agrees: `bool` is `anyOf` a boolean, `0`/`1` and the words in any
+  case; an `IntEnum` is `anyOf` its values and the names of its members, a `StrEnum` takes the names
+  next to the values; `propertyNames` of `int`, `float`, `bool`, `None`, `Literal` and enum keys
+  state the exact spellings.
+- **Breaking:** a mutable plain default - a `list`, `dict`, `set` or `bytearray`, or a subclass of
+  them, also as `Default(value)` - raises `TypeError` when the class is created, as every instance
+  would share it. Use `DefaultFactory(list)`, `Default(factory=...)` or an immutable value
+  (`()`, `frozenset()`, `Map()`).
+- `to_json` and `to_basic_object` raise `ValueError` for a mapping holding two keys which are
+  written the same (`{1: "a", "1": "b"}`, `{True: 1, "true": 2}`), where one of them was kept
+  silently, or both written for `to_json` natively.
+- `==` of a State with something which is no State returns `NotImplemented`, so the other operand
+  decides (`instance == mock.ANY` is true). Two States of different classes are still never equal.
+- A `Callable[P, R]` attribute of a specialization (`Handler[[int], bool]`) is checked against the
+  signature it was given, as `Callable[[int], bool]` is, and a type parameter which is not
+  specialized and has constraints takes any one of them (`class Con[T: (int, str)]` refuses
+  `1.5`). Such an attribute is no longer left out of `required` and the signature.
+- The hash of an instance agrees with `==`: equal instances holding a `Map`, a `UserDict` or a
+  mapping proxy and a `dict`, a `frozenset` or a dict view and a `set`, a `UserList` and a `list`,
+  `bytes`, a `bytearray` and a `memoryview`, alone or within tuples, lists and mappings, hash the
+  same. **Behaviour change:** the hash of an instance holding a `list`, `dict`, `set` or
+  `bytearray` (under `Any`, `object` or a custom attribute) now takes what it holds into account,
+  so it changes when that is mutated and a `set` or `dict` holding the instance no longer finds it
+  - it was left out before. Typed attributes convert those to immutable values; prefer them. A value held anywhere in an instance which raises while it is hashed - an instance
+  which is not initialized above all, or an object with a `__hash__` raising `TypeError` - raises;
+  only a value with `__hash__ = None` is left out.
+
 ### Fixed
 
 - A `bool` attribute given a `str` subclass whose `lower` returns something else than a `str` crashed
@@ -117,6 +171,17 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   `from_json("{}")` accepted it left out.
 - A `Literal` of enum members put the members themselves in the schema, which can't be written as
   JSON.
+- A `NaN` or an infinity read by the native JSON reader is the very object the standard library
+  gives (`json.decoder.NaN`, `PosInf`, `NegInf`), so `Set[float]` read from `[NaN, NaN]` holds one
+  element, as it does from `json.loads`.
+- `isinstance` against a specialization (`Box[date]`, `Box[Set[int]]`) agrees with validation: a
+  `datetime` is no `date`, and only a `set` or `frozenset` is a `Set`.
+- A `float` given an int too large for it is a `ValidationError` with a `ValueError` cause, where
+  the cause was an `OverflowError`.
+- An `IntEnum` key is read as a member, then as the number of a member, then as a name - an enum
+  with a member named like the value of another read the wrong member before.
+- A `None` key of a mapping is read back (`Mapping[None, int]` round trips), and so is a `Literal`
+  key written as a number (`Mapping[Literal["a", 1], int]`).
 
 ## 0.65.1
 

@@ -199,6 +199,17 @@ dict_source(PyObject *value)
     return NULL;
 }
 
+/* the keys of a mapping which are spelled alike - raised by Python, which spells the error */
+static void
+report_colliding_keys(ModuleState *state)
+{
+    PyObject *raised = PyObject_CallNoArgs(state->colliding_keys);
+    if (raised != NULL) {
+        Py_DECREF(raised);
+        PyErr_SetString(PyExc_ValueError, "colliding_keys did not raise");
+    }
+}
+
 static PyObject *basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNode *node, PyObject *prefix);
 
 static PyObject *
@@ -296,6 +307,12 @@ basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNod
                 key_basic = PyObject_CallFunction(state->basic_key, "OOO", key, strict ? Py_True : Py_False, path);
                 Py_DECREF(path);
                 if (key_basic == NULL) goto items_fail;
+            }
+            int taken = PyDict_Contains(result, key_basic);  /* two keys spelled alike */
+            if (taken != 0) {
+                if (taken > 0) report_colliding_keys(state);
+                Py_DECREF(key_basic);
+                goto items_fail;
             }
             PathNode step = {node, key_basic, 0};
             PyObject *converted = basic_convert(state, item, strict, &step, prefix);

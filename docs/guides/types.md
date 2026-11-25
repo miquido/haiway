@@ -49,7 +49,7 @@ is traversed, into `Map` and `tuple` instances. Mapping keys go through the same
 spelled the way JSON spells them - a `str` result is used as is, `int` and `float` become
 `str(key)`, and `bool` and `None` become `"true"`, `"false"` and `"null"`. That is the spelling
 `json.dumps` gives those keys on its own, so payloads which already encoded keep the output they
-had.
+had. Two keys which are spelled the same - `{1: "a", "1": "b"}` - raise `ValueError`.
 
 ```python
 from collections.abc import Mapping

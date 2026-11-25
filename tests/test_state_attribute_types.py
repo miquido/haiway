@@ -19,6 +19,7 @@ from pytest import mark, param, raises
 
 from haiway import (
     Alias,
+    Default,
     Description,
     Meta,
     Missing,
@@ -83,16 +84,14 @@ def make_state(
 # (annotation, accepted raw value, expected validated value)
 ACCEPTED: Sequence[Any] = (
     param(bool, True, True, id="bool"),
-    param(bool, 5, True, id="bool-from-int"),
+    param(bool, 1, True, id="bool-from-int"),
     param(bool, 0, False, id="bool-from-zero"),
     param(bool, "TRUE", True, id="bool-from-str"),
     param(bool, "false", False, id="bool-from-false-str"),
     param(int, 3, 3, id="int"),
-    param(int, "5", 5, id="int-from-str"),
     param(int, 2.0, 2, id="int-from-float"),
     param(float, 1.5, 1.5, id="float"),
     param(float, 2, 2.0, id="float-from-int"),
-    param(float, "1.5", 1.5, id="float-from-str"),
     param(str, "text", "text", id="str"),
     param(bytes, b"hi", b"hi", id="bytes"),
     param(bytes, "aGk=", b"hi", id="bytes-from-base64"),
@@ -114,19 +113,18 @@ ACCEPTED: Sequence[Any] = (
     param(Level, Level.LOW, Level.LOW, id="int-enum"),
     param(Level, 2, Level.HIGH, id="int-enum-from-value"),
     param(Level, "HIGH", Level.HIGH, id="int-enum-from-name"),
-    param(Level, "2", Level.HIGH, id="int-enum-from-str-value"),
     param(Literal["a", 1], "a", "a", id="literal-str"),
     param(Literal["a", 1], 1, 1, id="literal-int"),
     param(None, None, None, id="none"),
     param(Any, object, object, id="any"),
     param(tuple[int, str], (1, "a"), (1, "a"), id="tuple"),
-    param(tuple[int, str], ["1", "a"], (1, "a"), id="tuple-from-list"),
+    param(tuple[int, str], [1.0, "a"], (1, "a"), id="tuple-from-list"),
     param(tuple[int, ...], [1, 2], (1, 2), id="variadic-tuple"),
-    param(Sequence[int], [1, "2"], (1, 2), id="sequence"),
+    param(Sequence[int], [1, 2.0], (1, 2), id="sequence"),
     param(list[int], [1, 2], (1, 2), id="list-becomes-immutable"),
     param(Set[int], [1, 1, 2], frozenset({1, 2}), id="set"),
     param(frozenset[int], {1}, frozenset({1}), id="frozenset"),
-    param(Mapping[str, int], {"a": "1"}, {"a": 1}, id="mapping"),
+    param(Mapping[str, int], {"a": 1.0}, {"a": 1}, id="mapping"),
     param(dict[str, int], {"a": 1}, {"a": 1}, id="dict"),
     param(int | str, "x", "x", id="union-str"),
     param(int | str, 3, 3, id="union-int"),
@@ -134,9 +132,9 @@ ACCEPTED: Sequence[Any] = (
     param(Payload, {"name": "n"}, {"name": "n"}, id="typed-dict"),
     param(Callable[[str], int], len, len, id="callable"),
     param(Runner, IMPL, IMPL, id="protocol"),
-    param(Numbers, [1, "2"], (1, 2), id="alias"),
+    param(Numbers, [1, 2.0], (1, 2), id="alias"),
     param(Tree, [1, [2, 3]], (1, (2, 3)), id="recursive-alias"),
-    param(Box[int], {"value": "5"}, Box[int](value=5), id="nested-state"),
+    param(Box[int], {"value": 5.0}, Box[int](value=5), id="nested-state"),
     param(Box[int], Box[int](value=1), Box[int](value=1), id="nested-state-instance"),
     param(Meta, Meta.of({"a": 1}), Meta.of({"a": 1}), id="meta"),
     param(int | Missing, 1, 1, id="optional-missing"),
@@ -145,13 +143,17 @@ ACCEPTED: Sequence[Any] = (
 # (annotation, rejected raw value)
 REJECTED: Sequence[Any] = (
     param(bool, 1.5, id="bool-float"),
+    param(bool, 5, id="bool-other-int"),
+    param(bool, "1", id="bool-numeric-str"),
     param(bool, "x", id="bool-str"),
     param(bool, None, id="bool-none"),
     param(int, True, id="int-bool"),
     param(int, "x", id="int-str"),
+    param(int, "5", id="int-numeric-str"),
     param(int, None, id="int-none"),
     param(float, True, id="float-bool"),
     param(float, "x", id="float-str"),
+    param(float, "1.5", id="float-numeric-str"),
     param(str, 1, id="str-int"),
     param(bytes, 5, id="bytes-int"),
     param(UUID, "nope", id="uuid-str"),
@@ -169,6 +171,8 @@ REJECTED: Sequence[Any] = (
     param(Mode, 5, id="str-enum-int"),
     param(Level, 9, id="int-enum-int"),
     param(Level, "NOPE", id="int-enum-str"),
+    param(Level, "2", id="int-enum-numeric-str"),
+    param(Level, True, id="int-enum-bool"),
     param(Level, 1.5, id="int-enum-float"),
     param(Literal["a", 1], "b", id="literal"),
     param(None, 1, id="none"),
@@ -210,7 +214,7 @@ def test_updating_converts_accepted_values(
     raw: Any,
     expected: Any,
 ) -> None:
-    state = make_state(annotation, value=expected)().updating(value=raw)  # pyright: ignore[reportCallIssue]
+    state = make_state(annotation, value=Default(factory=lambda: expected))().updating(value=raw)  # pyright: ignore[reportCallIssue]
 
     assert getattr(state, "value") == expected  # noqa: B009
 
@@ -438,7 +442,7 @@ def test_annotated_attribute_with_default_is_not_required(
 ) -> None:
     state_type: Any = make_state(
         Annotated[annotation, Specification({"type": "string"})],
-        value=raw,
+        value=Default(factory=lambda: raw),
     )
 
     assert state_type().value == expected
@@ -508,7 +512,7 @@ def test_missing_union_clears_attribute() -> None:
 def test_not_required_typed_dict_key_is_optional() -> None:
     state_type: Any = make_state(Payload)
 
-    assert state_type(value={"name": "n", "count": "3"}).value == {"name": "n", "count": 3}
+    assert state_type(value={"name": "n", "count": 3.0}).value == {"name": "n", "count": 3}
     assert state_type(value={"name": "n"}).value == {"name": "n"}
 
 
@@ -571,7 +575,7 @@ def test_validator_sees_raw_mapping_ahead_of_state_validation() -> None:
     state_type: Any = make_state(Annotated[Inner, Validator(from_number)])
 
     assert state_type(value=5).value == Inner(number=5)
-    assert state_type(value={"number": "6"}).value == Inner(number=6)
+    assert state_type(value={"number": 6.0}).value == Inner(number=6)
     assert state_type(value=Inner(number=7)).value == Inner(number=7)
 
     with raises(ValidationError):

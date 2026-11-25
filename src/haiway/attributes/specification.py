@@ -38,6 +38,7 @@ from haiway.attributes.annotations import (
     ValidableAttribute,
 )
 from haiway.types import TypeSpecification
+from haiway.types.basic import basic_key
 
 __all__ = (
     "object_specification",
@@ -401,8 +402,11 @@ def _prepare_specification_of_mapping(
     }
 
 
-_INTEGER_KEY: str = r"^\s*[+-]?[^\x00-\x2f\x3a-\x7f]"
-_BOOLEAN_KEY: str = r"^(?:[tT][rR][uU][eE]|[fF][aA][lL][sS][eE])$"
+# the spellings a key is read from - exactly the ones it is written as, see `basic_key`
+_INTEGER_KEY: str = r"^(0|-?[1-9][0-9]*)$"
+_NUMBER_KEY: str = r"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"
+_BOOLEAN_KEY: str = r"^(true|false)$"
+_NULL_KEY: str = r"^null$"
 
 
 def _key_specification(
@@ -411,9 +415,7 @@ def _key_specification(
 ) -> TypeSpecification | None:
     # a key is a string in a JSON object, read the way the annotation reads one - a
     # specification is made where its spelling can be told, and where it can't nothing
-    # is better than one refusing what is accepted. an integer is read by `int`, which
-    # takes the digits of any script, spaces, a sign and underscores - the pattern asks
-    # for the first character of a number, which is as much as is told safely
+    # is better than one refusing what is accepted
     while isinstance(keys, AliasAttribute):
         keys = keys.resolved
 
@@ -421,8 +423,14 @@ def _key_specification(
         case IntegerAttribute():
             return {"type": "string", "pattern": _INTEGER_KEY}
 
+        case FloatAttribute():
+            return {"type": "string", "pattern": _NUMBER_KEY}
+
         case BoolAttribute():
             return {"type": "string", "pattern": _BOOLEAN_KEY}
+
+        case NoneAttribute():
+            return {"type": "string", "pattern": _NULL_KEY}
 
         case UUIDAttribute():
             return {"type": "string", "format": "uuid"}
@@ -440,33 +448,61 @@ def _named_key_specification(
             # read by its value or by the name of a member
             return {
                 "type": "string",
-                "enum": [
-                    *(member.value for member in keys.base),
-                    *(member.name for member in keys.base),
-                ],
+                "enum": _distinct(
+                    [
+                        *(member.value for member in keys.base),
+                        *(member.name for member in keys.base),
+                    ]
+                ),
             }
 
         case IntEnumAttribute():
+            # the number of a member spelled as a key, or the name of one
             return {
-                "anyOf": [
-                    {"type": "string", "enum": [member.name for member in keys.base]},
-                    {"type": "string", "pattern": _INTEGER_KEY},
-                ],
+                "type": "string",
+                "enum": _distinct(
+                    [
+                        *(str(int(member.value)) for member in keys.base),
+                        *(member.name for member in keys.base),
+                    ]
+                ),
             }
 
         case LiteralAttribute():
-            names: list[str] = [
-                value
-                for value in (_literal_json_value(element) for element in keys.values)
-                if isinstance(value, str)
-            ]
+            names: list[str] = []
+            for element in keys.values:
+                spelled: str | None = _literal_key(_literal_json_value(element))
+                if spelled is None:
+                    return None  # no spelling to tell
+
+                names.append(spelled)
+
             if not names:
                 return None
 
-            return {"type": "string", "enum": names}
+            return {"type": "string", "enum": _distinct(names)}
 
         case _:
             return None
+
+
+def _literal_key(
+    value: Any,
+    /,
+) -> str | None:
+    # the key a literal is written as - and read from
+    spelled: Any = basic_key(value, strict=False)
+    if isinstance(spelled, str):
+        return spelled
+
+    return None
+
+
+def _distinct(
+    values: Sequence[Any],
+    /,
+) -> list[Any]:
+    return list(dict.fromkeys(values))
 
 
 def _prepare_specification_of_meta(
@@ -653,8 +689,14 @@ def _prepare_specification_of_bool(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
+    # a boolean, the numbers 0 and 1 and the words in any case - which has to be spelled
+    # out, as a pattern of JSON Schema has no flag to ignore it
     return {
-        "type": "boolean",
+        "anyOf": [
+            {"type": "boolean"},
+            {"enum": [0, 1]},
+            {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
+        ],
     }
 
 
@@ -689,9 +731,16 @@ def _prepare_specification_of_str_enum(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
+    # read by its value or by the name of a member
+    members: type[Enum] = cast(StrEnumAttribute, annotation).base
     return {
         "type": "string",
-        "enum": [member.value for member in cast(StrEnumAttribute, annotation).base],
+        "enum": _distinct(
+            [
+                *(member.value for member in members),
+                *(member.name for member in members),
+            ]
+        ),
     }
 
 
@@ -699,9 +748,13 @@ def _prepare_specification_of_int_enum(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
+    # read by its value, an int, or by the name of a member - never by the number as text
+    members: type[Enum] = cast(IntEnumAttribute, annotation).base
     return {
-        "type": "integer",
-        "enum": [int(member.value) for member in cast(IntEnumAttribute, annotation).base],
+        "anyOf": [
+            {"type": "integer", "enum": [int(member.value) for member in members]},
+            {"type": "string", "enum": [member.name for member in members]},
+        ],
     }
 
 

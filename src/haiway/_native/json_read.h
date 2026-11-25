@@ -430,10 +430,10 @@ decode_any_unbounded(Decoder *d)
     case 't': return match_word(d, "true", 4) ? Py_NewRef(Py_True) : NULL;
     case 'f': return match_word(d, "false", 5) ? Py_NewRef(Py_False) : NULL;
     case 'n': return match_word(d, "null", 4) ? Py_NewRef(Py_None) : NULL;
-    case 'N': return match_word(d, "NaN", 3) ? PyFloat_FromDouble(Py_NAN) : NULL;
-    case 'I': return match_word(d, "Infinity", 8) ? PyFloat_FromDouble(Py_HUGE_VAL) : NULL;
+    case 'N': return match_word(d, "NaN", 3) ? Py_NewRef(d->state->nan) : NULL;
+    case 'I': return match_word(d, "Infinity", 8) ? Py_NewRef(d->state->positive_infinity) : NULL;
     case '-':
-        if (match_word(d, "-Infinity", 9)) return PyFloat_FromDouble(-Py_HUGE_VAL);
+        if (match_word(d, "-Infinity", 9)) return Py_NewRef(d->state->negative_infinity);
         return decode_number(d);
     default:
         return decode_number(d);
@@ -847,7 +847,7 @@ decode_mapping(Decoder *d, Spec *spec)
             skip_whitespace(d);
             PyObject *key = decode_string(d);
             if (key == NULL) goto fail;
-            PyObject *checked_key = validate_spec(d->state, spec->children[0], key, d->ignore_extra);
+            PyObject *checked_key = validate_spec(d->state, spec->children[0], key, d->ignore_extra | VALIDATE_AS_KEY);
             Py_DECREF(key);
             if (checked_key == NULL) {
                 decline_failure();

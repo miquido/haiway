@@ -349,8 +349,10 @@ def test_repeated_key_keeps_the_last_value() -> None:
 
 
 def test_numbers_which_need_a_conversion_are_still_converted() -> None:
-    assert Inner.from_json('{"number": "7"}').number == 7
     assert Inner.from_json('{"number": 7.0}').number == 7
+
+    with pytest.raises(ValueError, match="expected type of 'int'"):
+        Inner.from_json('{"number": "7"}')
 
 
 def test_bytes_in_the_encodings_json_loads_detects() -> None:

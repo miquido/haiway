@@ -115,7 +115,7 @@ def test_specialization_with_unhashable_argument_is_not_cached() -> None:
     first = Box[Annotated[int, {"unhashable": 1}]]  # pyright: ignore[reportInvalidTypeForm]
     second = Box[Annotated[int, {"unhashable": 1}]]  # pyright: ignore[reportInvalidTypeForm]
 
-    assert first(value="1").value == 1
+    assert first(value=1.0).value == 1
     assert first is not second
     assert Box[int] is Box[int]
 
@@ -145,7 +145,7 @@ def test_instances_of_different_variants_are_not_equal() -> None:
 
 
 def test_variant_validates_values_against_its_arguments() -> None:
-    assert Box[int](value="5").value == 5  # pyright: ignore[reportArgumentType]
+    assert Box[int](value=5.0).value == 5  # pyright: ignore[reportArgumentType]
 
     with raises(ValidationError):
         Box[int](value="x")  # pyright: ignore[reportArgumentType]
@@ -164,14 +164,14 @@ def test_unspecialized_generic_accepts_any_value() -> None:
 def test_updating_validates_against_arguments() -> None:
     box = Box[int](value=1)
 
-    assert box.updating(value="3").value == 3  # pyright: ignore[reportArgumentType]
+    assert box.updating(value=3.0).value == 3  # pyright: ignore[reportArgumentType]
 
     with raises(ValidationError):
         box.updating(value="x")
 
 
 def test_validate_converts_mapping_into_exact_variant() -> None:
-    box = Box[int].validate({"value": "7"})
+    box = Box[int].validate({"value": 7.0})
 
     assert type(box) is Box[int]
     assert box.value == 7

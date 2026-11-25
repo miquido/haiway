@@ -442,7 +442,7 @@ def test_str_enum_attribute_accepts_value_and_name() -> None:
         _validate(annotation, "green")
 
 
-def test_int_enum_attribute_accepts_value_name_and_stringified_value() -> None:
+def test_int_enum_attribute_accepts_value_and_name_but_not_stringified_value() -> None:
     class Priority(enum.IntEnum):
         LOW = 1
         HIGH = 2
@@ -455,7 +455,9 @@ def test_int_enum_attribute_accepts_value_name_and_stringified_value() -> None:
     annotation = attribute_of(Example, "priority")
     assert _validate(annotation, 1) is Priority.LOW
     assert _validate(annotation, "HIGH") is Priority.HIGH
-    assert _validate(annotation, "2") is Priority.HIGH
+    with pytest.raises(ValueError):
+        _validate(annotation, "2")
+
     with pytest.raises(ValueError):
         _validate(annotation, "Missing")
 

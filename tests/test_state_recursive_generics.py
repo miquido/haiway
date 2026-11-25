@@ -6,7 +6,7 @@ from typing import Annotated, Any, Generic, NamedTuple, Self, TypeVar, TypeVarTu
 
 import pytest
 
-from haiway import State, ValidationError
+from haiway import Map, State, ValidationError
 from haiway._native import nstruct
 
 
@@ -32,12 +32,12 @@ class OptSelf[V](State):
 
 class MapTree[K, V](State):
     value: V
-    children: Mapping[K, MapTree[K, V]] = {}
+    children: Mapping[K, MapTree[K, V]] = Map()
 
 
 class MapSelf[K, V](State):
     value: V
-    children: Mapping[K, Self] = {}
+    children: Mapping[K, Self] = Map()
 
 
 class VarTree[*Ts](State):
@@ -281,7 +281,7 @@ def test_unspecialized_class_resolves_through_its_defaults() -> None:
 
 
 def test_bound_is_enforced_on_the_unspecialized_class() -> None:
-    nested: Mapping[str, Any] = {"children": [{"value": 2}]}
+    nested: Mapping[str, Any] = {"children": [{"value": 1}]}
     invalid: Mapping[str, Any] = {"children": [{"value": "x"}]}
     unspecialized: Any = BoundTree
     specialized: Any = BoundTree[bool]
