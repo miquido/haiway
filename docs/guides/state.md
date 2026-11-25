@@ -679,6 +679,10 @@ spellings besides the one it writes, which the schema leaves out: a `bool` from 
 attributes, and the other forms of a `UUID` and a `date`. A `bool` is `{"type": "boolean"}` and an
 enum lists its values alone. What it leaves unsaid is on purpose:
 
+- Every object of a State or a `TypedDict` is closed (`additionalProperties: false`), nested ones
+  too, as strict structured outputs expect. A `Mapping` is the open object its keys make it, with
+  `additionalProperties` holding the schema of its values, and `Any` or `object` accepts any JSON
+  value - a State holding one can't be used where every object has to be closed.
 - An attribute is `required` when it can't be left out: it has no default and doesn't accept
   `Missing`. An attribute annotated `Any`, `object` or `X | Missing` can be omitted from the input,
   and is not listed - unless a `Validator` or a `Verifier` is declared on it, which may refuse
