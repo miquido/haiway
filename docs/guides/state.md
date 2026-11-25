@@ -607,8 +607,8 @@ A few validation details matter in practice:
 ### JSON Schema Generation
 
 A State with a JSON schema exposes it through the `__SPECIFICATION__` attribute, and one without
-raises a `TypeError` on reading it. Call
-`State.json_schema(indent=2)` when you need a ready-to-serialize schema definition:
+raises a `TypeError` on reading it. Call `State.json_schema(indent=2)` when you need a
+ready-to-serialize schema definition:
 
 ```python
 schema = Invoice.json_schema(indent=2)
@@ -850,17 +850,17 @@ is not initialized, rather than leaving the attributes out. An instance another 
 initializing is read either whole or not at all, so `to_json` of it never returns some of the
 attributes only.
 
-Apart from the values it doesn't make itself, what runs Python is the code of the user: a `Validator`, a `Verifier`, a class validating
-itself, a default factory, an `__init__` of the class itself. `ValidationError` reports a failure at
-its position the same way for every kind. When reading JSON, such code runs only once the whole
-document has been read - an attribute which can run it, whatever it nests it in (a tuple, a set, a
-`TypedDict`, a union or a sequence), is kept as the document spells it until then, while everything
-which runs none of it is checked on the way. A document which is not JSON never runs it. One which
-is accepted runs it exactly once, in the order of the attributes, which is not always the order of
-the keys. One which is refused runs exactly what validating the same document as a mapping runs,
-`cls.validate(json.loads(text))`, and never any more: the code which ran before the first failure is
-not run again by the document being read once more. The failure is reported at its position, the way
-validating the instance reports it.
+Apart from the values it doesn't make itself, what runs Python is the code of the user: a
+`Validator`, a `Verifier`, a class validating itself, a default factory, an `__init__` of the class
+itself. `ValidationError` reports a failure at its position the same way for every kind. When
+reading JSON, such code runs only once the whole document has been read - an attribute which can run
+it, whatever it nests it in (a tuple, a set, a `TypedDict`, a union or a sequence), is kept as the
+document spells it until then, while everything which runs none of it is checked on the way. A
+document which is not JSON never runs it. One which is accepted runs it exactly once, in the order
+of the attributes, which is not always the order of the keys. One which is refused runs exactly what
+validating the same document as a mapping runs, `cls.validate(json.loads(text))`, and never any
+more: the code which ran before the first failure is not run again by the document being read once
+more. The failure is reported at its position, the way validating the instance reports it.
 
 `to_json`, `from_json` and `from_json_array` read and write the JSON natively, without the
 intermediate Python objects - for the default `json.JSONEncoder` and `json.JSONDecoder`, and with no
