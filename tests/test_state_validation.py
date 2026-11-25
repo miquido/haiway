@@ -569,13 +569,7 @@ def test_unpacked_tuple_json_schema() -> None:
         "prefixItems": [
             {"type": "string"},
             {"type": "integer"},
-            {
-                "anyOf": [
-                    {"type": "boolean"},
-                    {"enum": [0, 1]},
-                    {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
-                ]
-            },
+            {"type": "boolean"},
             {"type": "string"},
         ],
         "items": False,

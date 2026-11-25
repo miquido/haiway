@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -479,9 +480,16 @@ def test_json_schema_formats_of_standard_types() -> None:
     assert properties["identifier"]["format"] == "uuid"
     assert properties["day"]["format"] == "date"
     # the output of these is not always what the format describes - a naive
-    # datetime or time has no offset, which RFC 3339 requires
-    assert properties["created"] == {"type": "string"}
-    assert properties["moment"] == {"type": "string"}
+    # datetime or time has no offset, which RFC 3339 requires - a pattern of
+    # what is written stands in for it
+    assert "format" not in properties["created"]
+    assert "format" not in properties["moment"]
+    assert re.fullmatch(properties["created"]["pattern"], "2026-01-02T03:04:05")
+    assert re.fullmatch(properties["created"]["pattern"], "2026-01-02T03:04:05.000006+00:00")
+    assert not re.fullmatch(properties["created"]["pattern"], "2026-01-02")
+    assert re.fullmatch(properties["moment"]["pattern"], "03:04:05")
+    assert re.fullmatch(properties["moment"]["pattern"], "03:04:05.000006-05:30")
+    assert not re.fullmatch(properties["moment"]["pattern"], "03:04")
     assert properties["location"] == {"type": "string"}
     assert properties["nested"]["properties"]["x"] == {"type": "integer"}
 
@@ -490,10 +498,11 @@ def test_json_schema_of_bytes_is_a_base64_string() -> None:
     class Holder(State, serializable=True):
         data: bytes
 
-    assert json.loads(Holder.json_schema())["properties"]["data"] == {
-        "type": "string",
-        "contentEncoding": "base64",
-    }
+    schema = json.loads(Holder.json_schema())["properties"]["data"]
+    assert schema["type"] == "string"
+    assert schema["contentEncoding"] == "base64"
+    assert all(re.fullmatch(schema["pattern"], text) for text in ("", "aGk=", "aGkh", "aA=="))
+    assert not any(re.fullmatch(schema["pattern"], text) for text in ("!", "aGk", "aGk==", "a-_="))
     assert Holder.from_json(Holder(data=b"hi").to_json()) == Holder(data=b"hi")
     assert json.loads(Holder(data=b"hi").to_json()) == {"data": "aGk="}
 
@@ -609,11 +618,14 @@ def test_json_schema_of_timedelta_is_a_string() -> None:
     class Holder(State, serializable=True):
         span: timedelta
 
-    # not `format: duration` - a negative one is written with a sign, which the
-    # duration of RFC 3339 has none of
-    assert json.loads(Holder.json_schema())["properties"]["span"] == {
-        "type": "string",
-    }
+    # not `format: duration` - a negative one is written with a sign and a fractional one with a
+    # fraction, which the duration of RFC 3339 has none of - a pattern of what is written instead
+    schema = json.loads(Holder.json_schema())["properties"]["span"]
+    assert "format" not in schema
+    for text in ("PT0S", "P1D", "P1DT2H3M4.5S", "-PT5S", "PT0.000001S", "PT3M", "P2DT1H"):
+        assert re.fullmatch(schema["pattern"], text), text
+    for text in ("", "P", "PT", "P1DT", "PT5", "P1W", "P1Y", "+PT5S", "PT1.1234567S", "5"):
+        assert not re.fullmatch(schema["pattern"], text), text
 
 
 def test_timedelta_is_spelled_inside_collections_and_mappings() -> None:

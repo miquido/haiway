@@ -426,9 +426,9 @@ def _key_specification(
     keys: AttributeAnnotation,
     /,
 ) -> TypeSpecification | None:
-    # a key is a string in a JSON object, read the way the annotation reads one - a
-    # specification is made where its spelling can be told, and where it can't nothing
-    # is better than one refusing what is accepted
+    # a key is a string in a JSON object - a specification names the spelling it is
+    # written as where that can be told, and where it can't nothing is better than one
+    # refusing what is written
     while isinstance(keys, AliasAttribute):
         keys = keys.resolved
 
@@ -446,7 +446,7 @@ def _key_specification(
             return {"type": "string", "pattern": _NULL_KEY}
 
         case UUIDAttribute():
-            return {"type": "string", "format": "uuid"}
+            return {"type": "string", "format": "uuid", "pattern": _UUID}
 
         case _:
             return _named_key_specification(keys)
@@ -458,27 +458,15 @@ def _named_key_specification(
 ) -> TypeSpecification | None:
     match keys:
         case StrEnumAttribute():
-            # read by its value or by the name of a member
             return {
                 "type": "string",
-                "enum": _distinct(
-                    [
-                        *(member.value for member in keys.base),
-                        *keys.base.__members__,
-                    ]
-                ),
+                "enum": _distinct([member.value for member in keys.base]),
             }
 
         case IntEnumAttribute():
-            # the number of a member spelled as a key, or the name of one
             return {
                 "type": "string",
-                "enum": _distinct(
-                    [
-                        *(_integer_key(member.value) for member in keys.base),
-                        *keys.base.__members__,
-                    ]
-                ),
+                "enum": _distinct([_integer_key(member.value) for member in keys.base]),
             }
 
         case LiteralAttribute():
@@ -718,14 +706,8 @@ def _prepare_specification_of_bool(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
-    # a boolean, the numbers 0 and 1 and the words in any case - which has to be spelled
-    # out, as a pattern of JSON Schema has no flag to ignore it
     return {
-        "anyOf": [
-            {"type": "boolean"},
-            {"enum": [0, 1]},
-            {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
-        ],
+        "type": "boolean",
     }
 
 
@@ -760,16 +742,9 @@ def _prepare_specification_of_str_enum(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
-    # read by its value or by the name of a member
-    members: type[Enum] = cast(StrEnumAttribute, annotation).base
     return {
         "type": "string",
-        "enum": _distinct(
-            [
-                *(member.value for member in members),
-                *members.__members__,
-            ]
-        ),
+        "enum": _distinct([member.value for member in cast(StrEnumAttribute, annotation).base]),
     }
 
 
@@ -777,14 +752,26 @@ def _prepare_specification_of_int_enum(
     annotation: AttributeAnnotation,
     recursion_guard: MutableMapping[int, _RecursionGuard],
 ) -> TypeSpecification:
-    # read by its value, an int, or by the name of a member - never by the number as text
     members: type[Enum] = cast(IntEnumAttribute, annotation).base
     return {
-        "anyOf": [
-            {"type": "integer", "enum": [int(member.value) for member in members]},
-            {"type": "string", "enum": list(members.__members__)},
-        ],
+        "type": "integer",
+        "enum": _distinct([int(member.value) for member in members]),
     }
+
+
+# the spellings a value is written as - see `basic_value`, `format_duration` and the writer of
+# the extension (`convert.h`), which these patterns restate. They are what a value is written as
+# alone, while the State reads more - a `format` is claimed only where it fits every spelling
+# written, which a datetime or time with no offset, or a negative or fractional duration, doesn't
+_UUID: str = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+_BASE64: str = r"^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+_CLOCK: str = r"([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{6})?"
+_OFFSET: str = r"([+-]([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]{6})?)?)?"
+_DATETIME: str = r"^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T" + _CLOCK + _OFFSET + "$"
+_TIME: str = "^" + _CLOCK + _OFFSET + "$"
+_SECONDS: str = r"[0-9]+(\.[0-9]{1,6})?S"
+_DURATION_TIME: str = rf"T([0-9]+H([0-9]+M)?({_SECONDS})?|[0-9]+M({_SECONDS})?|{_SECONDS})"
+_DURATION: str = rf"^-?P([0-9]+D({_DURATION_TIME})?|{_DURATION_TIME})$"
 
 
 def _prepare_specification_of_bytes(
@@ -794,6 +781,7 @@ def _prepare_specification_of_bytes(
     return {
         "type": "string",
         "contentEncoding": "base64",
+        "pattern": _BASE64,
     }
 
 
@@ -804,6 +792,7 @@ def _prepare_specification_of_uuid(
     return {
         "type": "string",
         "format": "uuid",
+        "pattern": _UUID,
     }
 
 
@@ -823,6 +812,7 @@ def _prepare_specification_of_datetime(
 ) -> TypeSpecification:
     return {
         "type": "string",
+        "pattern": _DATETIME,
     }
 
 
@@ -832,6 +822,7 @@ def _prepare_specification_of_time(
 ) -> TypeSpecification:
     return {
         "type": "string",
+        "pattern": _TIME,
     }
 
 
@@ -841,6 +832,7 @@ def _prepare_specification_of_timedelta(
 ) -> TypeSpecification:
     return {
         "type": "string",
+        "pattern": _DURATION,
     }
 
 

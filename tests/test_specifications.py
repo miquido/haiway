@@ -61,13 +61,7 @@ def test_specifications() -> None:
     assert type_specification(FloatAttribute()) == {
         "type": "number",
     }
-    assert type_specification(BoolAttribute()) == {
-        "anyOf": [
-            {"type": "boolean"},
-            {"enum": [0, 1]},
-            {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
-        ]
-    }
+    assert type_specification(BoolAttribute()) == {"type": "boolean"}
     assert type_specification(NoneAttribute()) == {
         "type": "null",
     }
@@ -132,13 +126,7 @@ def test_basic_specification() -> None:
             "str_value": {"type": "string"},
             "int_value": {"type": "integer"},
             "float_value": {"type": "number"},
-            "bool_value": {
-                "anyOf": [
-                    {"type": "boolean"},
-                    {"enum": [0, 1]},
-                    {"type": "string", "pattern": "^([Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])$"},
-                ]
-            },
+            "bool_value": {"type": "boolean"},
             "none_value": {"type": "null"},
             "list_value": {"type": "array", "items": {"type": "string"}},
             "dict_value": {"type": "object", "additionalProperties": {"type": "string"}},

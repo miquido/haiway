@@ -661,21 +661,28 @@ schema = Invoice.json_schema(indent=2)
 ```
 
 Besides the primitives, the schema covers the standard value types: `UUID` and `date` (strings with
-a `format`), `datetime`, `time`, `timedelta` and `Path` (plain strings), `bytes` (a base64 string,
-`contentEncoding`) and sets (arrays). A `timedelta` is spelled as an ISO 8601 duration such as
-`P1DT2H3M4.5S`, with a leading `-` when negative; years and months are refused because their length
-depends on the calendar date. Aliases and descriptions propagate into the schema automatically, and
-any custom `Specification` overrides are respected. If a State cannot be represented as JSON Schema
-(for example, when it holds callables), `json_schema(required=True)` raises a `TypeError` so you can
-detect unsupported shapes early.
+a `format`), `datetime`, `time` and `timedelta` (strings with a `pattern` of their spelling), `Path`
+(a plain string), `bytes` (a base64 string, `contentEncoding` and a `pattern`) and sets (arrays). A
+`timedelta` is spelled as an ISO 8601 duration such as `P1DT2H3M4.5S`, with a leading `-` when
+negative; years and months are refused because their length depends on the calendar date. Aliases
+and descriptions propagate into the schema automatically, and any custom `Specification` overrides
+are respected. If a State cannot be represented as JSON Schema (for example, when it holds
+callables), `json_schema(required=True)` raises a `TypeError` so you can detect unsupported shapes
+early.
 
-The schema is made to agree with validation of a JSON document: it accepts every document the State
-writes, and refuses what the State refuses wherever JSON Schema can say so. Where it can't, it is
-the looser of the two - a document which passes the schema can still fail validation, and that is
-what validation is for. The other way around, the State reads a few spellings besides the one it
-writes, which the schema leaves out: the Python names of aliased attributes, and the other forms of
-a `UUID` and a `date`. What it leaves unsaid is on purpose:
+The schema is strict: it describes the form the State writes, regardless of what decoding is lenient
+about. It accepts every document the State writes, and refuses what the State refuses wherever JSON
+Schema can say so. Where it can't, it is the looser of the two - a document which passes the schema
+can still fail validation, and that is what validation is for. The other way around, the State reads
+spellings besides the one it writes, which the schema leaves out: a `bool` from `0`, `1` or
+`"true"`/`"false"` in any case, an enum member from its name, the Python names of aliased
+attributes, and the other forms of a `UUID` and a `date`. A `bool` is `{"type": "boolean"}` and an
+enum lists its values alone. What it leaves unsaid is on purpose:
 
+- Every object of a State or a `TypedDict` is closed (`additionalProperties: false`), nested ones
+  too, as strict structured outputs expect. A `Mapping` is the open object its keys make it, with
+  `additionalProperties` holding the schema of its values, and `Any` or `object` accepts any JSON
+  value - a State holding one can't be used where every object has to be closed.
 - An attribute is `required` when it can't be left out: it has no default and doesn't accept
   `Missing`. An attribute annotated `Any`, `object` or `X | Missing` can be omitted from the input,
   and is not listed - unless a `Validator` or a `Verifier` is declared on it, which may refuse
@@ -684,26 +691,30 @@ a `UUID` and a `date`. What it leaves unsaid is on purpose:
   integer, which may be left out of the object.
 - A `format` is only claimed when everything written fits it - not for `datetime` and `time`, which
   are written without an offset when they have none, and not for `timedelta`, which is written with
-  a sign when negative.
+  a sign when negative and with a fraction of a second. A `pattern` of the written spelling stands
+  in for it: `2026-01-02T03:04:05` with microseconds and an offset when there are any, `03:04:05`
+  likewise, and the duration `P1DT2H3M4.5S` with a leading `-` when negative. `bytes` is a padded
+  base64 pattern besides `contentEncoding`, which validators don't check, and a `UUID` the lowercase
+  hyphenated pattern besides its `format`.
 - Sets don't claim `uniqueItems` - elements which differ may be written the same way, and a repeated
   one is read as a set all the same.
 - A fixed tuple has exactly its length (`minItems` and `maxItems`). A tuple with an unbounded part
   has `minItems` for the elements around it, and takes what follows its leading elements as any of
   the types after them, as a schema can't tell the elements at the end from those in the middle.
 - JSON Schema compares numbers by value, so it can't tell `1` from `1.0`, and the State reads a
-  whole float as the int it equals for an `int`, an `IntEnum`, an int `Literal` and a `bool`. What
-  remains is the bound: the `int` schema accepts whole floats beyond 2\*\*53, which the State
-  refuses, and so do the schemas of an `IntEnum` or a `Literal` holding a value beyond it. A number
-  beyond what a float holds (`1e400`) passes a `number` schema, and the pattern of a `float` key,
-  while the State refuses it.
+  whole float as the int it equals for an `int`, an `IntEnum` and an int `Literal`. What remains is
+  the bound: the `int` schema accepts whole floats beyond 2\*\*53, which the State refuses, and so
+  do the schemas of an `IntEnum` or a `Literal` holding a value beyond it. A number beyond what a
+  float holds (`1e400`) passes a `number` schema, and the pattern of a `float` key, while the State
+  refuses it.
 - A `UUID` and a `date` are read with `UUID(...)` and `date.fromisoformat`, which take more
   spellings than the `uuid` and `date` formats: hex digits without hyphens, braces or the
   `urn:uuid:` prefix for a `UUID`, the basic (`20240102`) and week (`2025-W01-1`) forms for a
-  `date`. A validator asserting `format` refuses those, the State writes the canonical form alone.
+  `date`. The schema refuses those, the State writes the canonical form alone - and so it does for a
+  `datetime` given as a date alone or a `time` without seconds, which the State reads.
 - The keys of a mapping which are not strings constrain `propertyNames` to the way they are spelled
   where that can be told - `int`, `float`, `bool`, `None`, `UUID`, enum and `Literal` keys - with
-  the exact spellings written. `bool` is described as a boolean, `0`, `1` or `true`/`false` in any
-  case, an `IntEnum` as its values or the names of its members.
+  the exact spellings written, so an enum key is spelled as its values.
 - A `Literal` of enum members is written as their values, and one of values with no JSON form (a
   plain `Enum` member, `bytes`) leaves the State without a schema.
 - Both the name of an attribute and its alias are accepted as input, while the schema names the
