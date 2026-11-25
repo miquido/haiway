@@ -693,7 +693,8 @@ a `UUID` and a `date`. What it leaves unsaid is on purpose:
   whole float as the int it equals for an `int`, an `IntEnum`, an int `Literal` and a `bool`. What
   remains is the bound: the `int` schema accepts whole floats beyond 2\*\*53, which the State
   refuses, and so do the schemas of an `IntEnum` or a `Literal` holding a value beyond it. A number
-  beyond what a float holds (`1e400`) passes a `number` schema, while the State refuses it.
+  beyond what a float holds (`1e400`) passes a `number` schema, and the pattern of a `float` key,
+  while the State refuses it.
 - A `UUID` and a `date` are read with `UUID(...)` and `date.fromisoformat`, which take more
   spellings than the `uuid` and `date` formats: hex digits without hyphens, braces or the
   `urn:uuid:` prefix for a `UUID`, the basic (`20240102`) and week (`2025-W01-1`) forms for a
