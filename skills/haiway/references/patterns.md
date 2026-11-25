@@ -70,8 +70,11 @@ class Invoice(State):
   `class Invoice(State, description="...")` - stored as `__DESCRIPTION__`, written into the schema and
   kept under `python -OO`, unlike a docstring. A `Description` on the attribute holding it wins.
 - `json_schema()` is strict: it names the form a State writes (`bool` is `{"type": "boolean"}`, an
-  enum lists its values), while `from_json` still converts other spellings (`1`, `"TRUE"`, a member
-  name). Don't widen a schema to match decoding.
+  enum lists its values, `datetime`/`time`/`timedelta`/`bytes`/`UUID` carry a `pattern` of their
+  written spelling), while `from_json` still converts other spellings (`1`, `"TRUE"`, a member
+  name, a date alone for a `datetime`). Don't widen a schema to match decoding. State and
+  `TypedDict` objects are closed (`additionalProperties: false`); `Mapping` and `Any` are open, so
+  avoid them in States meant for strict structured outputs.
 - A `State` with attributes cannot be subclassed. Share attributes by holding an instance, type a
   variant with a generic (`class Page[T](State)`), share behavior with an attribute-less base.
 - States cannot be pickled and the class cannot be patched after creation.
