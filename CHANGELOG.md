@@ -2,6 +2,53 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.66.0
+
+### Fixed
+
+- A `bool` attribute given a `str` subclass whose `lower` returns something else than a `str` crashed
+  the interpreter, as the validation called the `lower` of the value and read its result as text. The
+  text is compared as it is stored now, ignoring the case of ASCII letters, with no code of the value
+  running - the spellings accepted are the same. A `datetime`, `date`, `time` or `Path` subclass whose
+  `isoformat` or `as_posix` returns no `str` made `to_json` write garbage or crash, and
+  `to_basic_object` return what it returned; both raise a `TypeError` now.
+- Reading JSON ran code of the user while the document was still being read, and again when the
+  document was refused and read once more. A State was taken to run none whatever its fields held,
+  so a `Validator`, a `Verifier`, a default factory or an `__init__` of a State nested in a tuple, a
+  set, a `TypedDict` or a union ran in the middle of the read - for a document which then failed on
+  an attribute after it, twice. Whether reading a class runs code of the user is told in one place
+  from its plan - it is constructed natively, and every attribute is validated without code of the
+  user and has a default which is always the same - and the attributes which do are kept as the
+  document spells them until it has been read through, whatever they nest. A document which is not
+  JSON runs no such code now, one which is accepted runs it exactly once, in the order of the
+  attributes rather than the order of the keys, and one which is refused runs exactly what
+  `cls.validate(json.loads(text))` runs, and never any more. The failure of that code is reported at
+  its attribute the way validating the instance reports it - `from_json_array` words it
+  `from json array` as before - rather than by reading the document again with the standard library.
+- A key which is not an attribute, validated into a State through the general path, left no error set
+  when the hook reporting it returned instead of raising, and `signature_fits` dropped the error of a
+  flag whose truth value failed. Both are reported.
+- Within a free-threaded interpreter a class was reachable, through `__subclasses__` or the garbage
+  collector, before its plan was installed, and another thread could read the plan or the size of
+  its instances while they were being written. The plan and the call of the class are published once
+  everything they need is written, and read with a load which pairs with it. Nothing changes for an
+  interpreter with the GIL.
+- A recursive `type` alias, `type Json = Mapping[str, Json] | int`, compiled the alias again for each
+  level of nesting a validated document reached, so the memory used grew with the deepest one. The
+  alias within itself refers to the alias, which has one compiled description whatever the depth.
+- Converting an iterable which is not a `Sequence`, a `set` under `Any` say, or a mapping which is not a `dict`, walked the
+  object itself while the elements were converted, which failed with a `RuntimeError` for one which
+  was changed meanwhile, by the conversion or by another thread. It is walked from a snapshot.
+
+### Changed
+
+- An instance which was never initialized - made with `__new__`, or with an `__init__` which did not
+  delegate - raises `TypeError: ... is not initialized` for `to_json`, `to_mapping`,
+  `to_basic_object`, `hash`, `==` of two instances and `copy.deepcopy`, as `updating` always did.
+  They treated it as an instance with no attributes before: it was written as `{}`, hashed and
+  compared equal to every other one. This also keeps another thread from reading an instance which
+  is being initialized while only some of its attributes are bound: it reads all of them, or raises.
+
 ## 0.65.1
 
 ### Fixed

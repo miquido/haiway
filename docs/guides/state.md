@@ -784,10 +784,25 @@ Keeping many instances alive therefore adds nothing for the collector to walk. O
 value, such as a `list` in an `Any` attribute, stays tracked, so a cycle through it is still
 collected.
 
+An instance whose `__init__` did not run - made with `__new__`, or by a constructor of the class
+which never delegated - holds no values at all, which is not the same as holding `Missing`. Reading
+an attribute of it raises `AttributeError`, while `to_mapping`, `to_basic_object`, `to_json`,
+`hash`, `==` of two instances, `copy.deepcopy` and `updating` raise `TypeError` saying the instance
+is not initialized, rather than leaving the attributes out. An instance another thread is
+initializing is read either whole or not at all, so `to_json` of it never returns some of the
+attributes only.
+
 What runs Python is the code of the user alone: a `Validator`, a `Verifier`, a class validating
-itself, a default factory. `ValidationError` reports a failure at its position the same way for
-every kind. When reading JSON, such code runs once the whole document is known to be right, so a
-document refused for something else never runs it.
+itself, a default factory, an `__init__` of the class itself. `ValidationError` reports a failure at
+its position the same way for every kind. When reading JSON, such code runs only once the whole
+document has been read - an attribute which can run it, whatever it nests it in (a tuple, a set, a
+`TypedDict`, a union or a sequence), is kept as the document spells it until then, while everything
+which runs none of it is checked on the way. A document which is not JSON never runs it. One which
+is accepted runs it exactly once, in the order of the attributes, which is not always the order of
+the keys. One which is refused runs exactly what validating the same document as a mapping runs,
+`cls.validate(json.loads(text))`, and never any more: the code which ran before the first failure is
+not run again by the document being read once more. The failure is reported at its position, the way
+validating the instance reports it.
 
 `to_json`, `from_json` and `from_json_array` read and write the JSON natively, without the
 intermediate Python objects - for the default `json.JSONEncoder` and `json.JSONDecoder`, and with no

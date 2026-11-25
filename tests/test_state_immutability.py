@@ -409,8 +409,14 @@ def test_instance_which_skipped_init_is_safe_to_inspect() -> None:
     with pytest.raises(AttributeError):
         _ = instance.value
 
-    assert instance == Skipping()
-    assert isinstance(hash(instance), int)
+    # nothing is bound, so there is nothing to tell it equal or to hash it by
+    with pytest.raises(TypeError, match="not initialized"):
+        _ = instance == Skipping()
+
+    with pytest.raises(TypeError, match="not initialized"):
+        hash(instance)
+
+    assert instance == instance  # noqa: PLR0124
 
 
 def test_hashing_a_deeply_nested_state_does_not_overflow_the_stack() -> None:

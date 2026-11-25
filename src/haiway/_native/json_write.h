@@ -173,8 +173,12 @@ write_struct_json(Buffer *buffer, PyObject *self)
     if (!buffer_putc(buffer, '{')) return JSON_ERROR;
     int first = 1;
     for (Py_ssize_t i = 0; i < plan->count; i++) {
-        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
-        if (value == NULL || value == buffer->state->missing) continue;
+        PyObject *value = ITEM_LOAD(ITEMS(self), i);  /* bound once, for good - read as it is */
+        if (value == NULL) {
+            not_initialized(Py_TYPE(self));
+            return JSON_ERROR;
+        }
+        if (value == buffer->state->missing) continue;
         FieldPlan *field = &plan->fields[i];
         if (!first && !buffer_put(buffer, ", ", 2)) return JSON_ERROR;
         first = 0;

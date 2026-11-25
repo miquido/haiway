@@ -1345,6 +1345,11 @@ class State(nstruct.Struct, metaclass=StateMeta):
                 cls=decoder,
             )
 
+        except ValidationError as exc:
+            # an element read natively was refused by its validation - the way it is when
+            # the array is read here, and each element validated after it
+            raise ValueError(f"Failed to decode {cls.__name__} from json array: {exc}") from exc
+
         except Exception as exc:
             raise ValueError(f"Failed to decode {cls.__name__} from json: {exc}") from exc
 
@@ -1646,7 +1651,8 @@ def _basic_items(
     strict: bool,
     path: tuple[str, ...],
 ) -> Generator[Any]:
-    for key, element in mapping.items():
+    # a snapshot, as `_basic_elements` walks one
+    for key, element in tuple(mapping.items()):
         key_basic: Any = basic_key(key, strict=strict, path=path)
         yield (
             key_basic,
@@ -1666,7 +1672,9 @@ def _basic_elements(
     strict: bool,
     path: tuple[str, ...],
 ) -> Generator[Any]:
-    for index, element in enumerate(value):
+    # a snapshot - converting an element runs code of the user, and the iterable could be
+    # changed by it, or by another thread, while it is walked
+    for index, element in enumerate(tuple(value)):
         yield _basic_mapping(
             element,
             strict=strict,

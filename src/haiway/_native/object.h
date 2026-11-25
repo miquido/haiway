@@ -51,6 +51,8 @@ missing_of(PyObject *self)
     return plan == NULL ? NULL : plan->state->missing;
 }
 
+static Py_hash_t struct_hash(PyObject *self);
+
 /* the values of an instance are read as they are wherever code runs on them - every one
  * is bound once, for good, so nothing that code does can let go of it */
 static Py_hash_t
@@ -61,11 +63,16 @@ struct_hash_unbounded(PyObject *self)
     PyObject *missing = missing_of(self);
     Py_uhash_t acc = (Py_uhash_t)(uintptr_t)Py_TYPE(self) * 1000003UL;
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *value = items[i];
-        if (value == NULL || value == missing) continue;  /* Missing never takes part */
+        PyObject *value = ITEM_LOAD(items, i);
+        if (value == NULL) {
+            not_initialized(Py_TYPE(self));
+            return -1;
+        }
+        if (value == missing) continue;  /* Missing never takes part */
         Py_hash_t h = PyObject_Hash(value);
         if (h == -1) {
-            if (!PyErr_ExceptionMatches(PyExc_TypeError)) return -1;
+            /* an instance which is not initialized is not unhashable - it fails to be hashed */
+            if (!PyErr_ExceptionMatches(PyExc_TypeError) || Py_TYPE(value)->tp_hash == struct_hash) return -1;
             PyErr_Clear();  /* unhashable values are skipped */
             continue;
         }
@@ -96,10 +103,10 @@ struct_richcompare(PyObject *a, PyObject *b, int op)
         } else {
             Py_ssize_t n = ITEM_COUNT(a);
             for (Py_ssize_t i = 0; i < n && eq; i++) {
-                PyObject *x = ITEMS(a)[i], *y = ITEMS(b)[i];
-                if (x == NULL || y == NULL) {  /* never initialized */
-                    eq = (x == y);
-                    continue;
+                PyObject *x = ITEM_LOAD(ITEMS(a), i), *y = ITEM_LOAD(ITEMS(b), i);
+                if (x == NULL || y == NULL) {  /* not initialized - nothing to tell it equal by */
+                    not_initialized(Py_TYPE(a));
+                    return NULL;
                 }
                 /* not an identity shortcut - a NaN is not equal to itself */
                 PyObject *r = PyObject_RichCompare(x, y, Py_EQ);
@@ -145,7 +152,7 @@ structmeta_dealloc(PyObject *self)
 {
     PyTypeObject *metatype = Py_TYPE(self);
     CompiledPlan *plan = PLAN_OF(self);
-    PLAN_OF(self) = NULL;
+    PLAN_SLOT(self) = NULL;
     PyType_Type.tp_dealloc(self);  /* clears the class, its descriptors with it */
     plan_free(plan);
     Py_DECREF(metatype);

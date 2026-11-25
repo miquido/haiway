@@ -319,7 +319,7 @@ _ANY: Any = nstruct.compile_spec((nstruct.SPEC_ANY, None, None, None, None, None
 
 
 def _entry(name: str) -> tuple[Any, ...]:
-    return (sys.intern(name), None, _ANY, lambda: None, False)
+    return (sys.intern(name), None, _ANY, lambda: None, None)
 
 
 @pytest.mark.parametrize(
@@ -654,7 +654,7 @@ def test_a_plan_failing_while_it_is_compiled_does_not_leak() -> None:
         cls: Any = nstruct.StructMeta("Failing", (nstruct.Struct,), {"__slots__": ()})
         entries = (
             _entry("first"),
-            (sys.intern("second"), None, _ANY, _interrupting_default, True),
+            (sys.intern("second"), None, _ANY, _interrupting_default, lambda: None),
         )
         _interrupted(lambda: nstruct.compile_plan(cls, entries, ("first", "second")))
         with pytest.raises(TypeError, match="never given a plan"):
@@ -873,7 +873,13 @@ def test_native_json_reads_what_the_standard_library_reads(seed: int) -> None:
         documents.append(mutated.encode("utf-8", "surrogatepass") if encoded else mutated)
 
     for document in documents:
-        native: Any = nstruct.from_json(Rich, document, False, False)
+        native: Any
+        try:
+            native = nstruct.from_json(Rich, document, False, False)
+
+        except ValidationError:  # refused by the code of the user it had run - not read again
+            native = None
+
         expected: State | None = _oracle(Rich, document)
         if native is not None:  # read natively - exactly what the standard library reads
             assert _same(native, expected), document
@@ -916,7 +922,13 @@ def test_native_json_skips_what_the_standard_library_reads(seed: int) -> None:
         except Exception:
             expected = None
 
-        native: Any = nstruct.from_json(Rich, document, False, True)
+        native: Any
+        try:
+            native = nstruct.from_json(Rich, document, False, True)
+
+        except ValidationError:  # refused by the code of the user it had run - not read again
+            native = None
+
         if native is not None:  # read natively - exactly what the standard library reads
             assert _same(native, expected), document
 

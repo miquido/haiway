@@ -48,7 +48,6 @@ enum {
 
 typedef struct Spec {
     int kind;
-    int pure;               /* no code of the user runs, and the result is immutable */
     int nested;             /* validates other specs, or instances - guarded against recursion */
     PyObject *annotation;   /* the annotation - its type_name and base word the errors */
     PyObject *base;
@@ -59,6 +58,11 @@ typedef struct Spec {
     Py_ssize_t leading;     /* an open tuple: how many of the children come before the repeated one */
     struct Spec **children;
     Signature *signature;   /* a function: the calls it has to accept, NULL for any */
+    /* an alias met while the target of another is compiled, neither of them owned: the alias
+     * whose target it is within, and the one of those standing for the very same annotation -
+     * which is what it refers back to, so a recursive alias has one target, whatever the depth */
+    struct Spec *enclosing;
+    struct Spec *linked;
 } Spec;
 
 static void
@@ -155,7 +159,7 @@ spec_shaped(ModuleState *state, Spec *spec, Py_ssize_t children)
 }
 
 static Spec *
-spec_compile(ModuleState *state, PyObject *description)
+spec_compile(ModuleState *state, PyObject *description, Spec *enclosing)
 {
     if (!PyTuple_Check(description) || PyTuple_GET_SIZE(description) != 7 || !PyLong_Check(D_KIND(description))
         || !PyTuple_Check(D_CHILDREN(description))) {
@@ -216,19 +220,20 @@ spec_compile(ModuleState *state, PyObject *description)
         }
     }
     spec->count = room;  /* the target of an alias counts from the start, NULL until published */
-    /* a function stays pure - reading the signature of an unusual callable may run its code,
-     * but nothing read from JSON is callable, and a default is validated only once */
-    spec->pure = spec->validating == NULL && spec->verifying == NULL && spec->kind != SPEC_CUSTOM
-        && spec->kind != SPEC_CUSTOM_STATE && spec->kind != SPEC_ALIAS;
+    if (spec->kind == SPEC_ALIAS) {
+        spec->enclosing = enclosing;
+        for (Spec *outer = enclosing; outer != NULL && spec->linked == NULL; outer = outer->enclosing) {
+            if (outer->annotation == spec->annotation) spec->linked = outer;
+        }
+    }
     spec->nested = n > 0 || spec->kind == SPEC_ALIAS || spec->kind == SPEC_STATE || spec->kind == SPEC_CUSTOM_STATE
         || spec->kind == SPEC_CUSTOM || spec->kind == SPEC_META;
     for (Py_ssize_t i = 0; i < n; i++) {
-        spec->children[i] = spec_compile(state, PyTuple_GET_ITEM(children, i));
+        spec->children[i] = spec_compile(state, PyTuple_GET_ITEM(children, i), enclosing);
         if (spec->children[i] == NULL) {
             spec_free(spec);
             return NULL;
         }
-        if (!spec->children[i]->pure) spec->pure = 0;
     }
     return spec;
 }
@@ -273,7 +278,7 @@ static PyObject *
 compile_spec(PyObject *mod, PyObject *description)
 {
     ModuleState *state = module_state(mod);
-    Spec *spec = spec_compile(state, description);
+    Spec *spec = spec_compile(state, description, NULL);
     if (spec == NULL) return NULL;
     PyObject *self = state->spec_type->tp_alloc(state->spec_type, 0);
     if (self == NULL) {
@@ -456,6 +461,9 @@ literal_match(PyObject *literals, PyObject *value, PyObject **accepted)
 static Spec *
 alias_target(ModuleState *state, Spec *spec)
 {
+    /* one referring back to an alias it is within has the target of that - which is compiled
+     * before anything within it can be validated */
+    if (spec->linked != NULL) return alias_target(state, spec->linked);
     /* published once and never replaced - read and published within a critical section
      * of the alias, which a build with the GIL compiles to nothing, so a target seen here
      * is seen whole */
@@ -468,7 +476,7 @@ alias_target(ModuleState *state, Spec *spec)
      * alias again, a recursive one */
     PyObject *description = PyObject_CallOneArg(state->describe, spec->annotation);
     if (description == NULL) return NULL;
-    Spec *compiled = spec_compile(state, description);
+    Spec *compiled = spec_compile(state, description, spec);
     Py_DECREF(description);
     if (compiled == NULL) return NULL;
     Spec *published;
@@ -1180,6 +1188,24 @@ fail:
 #undef ATTEMPT
 #undef UNION_BITS
 
+/* whether a str spells the lowercase ASCII word in any case - read off its data, since the
+ * `lower` of a subclass is code of the user, whose result is not to be trusted. No character
+ * outside of ASCII lowers to an ASCII letter of a word which is compared with here */
+static int
+equals_ignoring_case(PyObject *text, const char *word)
+{
+    Py_ssize_t length = (Py_ssize_t)strlen(word);
+    if (PyUnicode_GET_LENGTH(text) != length) return 0;
+    int kind = PyUnicode_KIND(text);
+    const void *data = PyUnicode_DATA(text);
+    for (Py_ssize_t i = 0; i < length; i++) {
+        Py_UCS4 c = PyUnicode_READ(kind, data, i);
+        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+        if (c != (Py_UCS4)word[i]) return 0;
+    }
+    return 1;
+}
+
 static PyObject *
 validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
 {
@@ -1213,13 +1239,8 @@ validate_kind(ModuleState *state, Spec *spec, PyObject *value, int ignore_extra)
             return PyBool_FromLong(r);
         }
         if (PyUnicode_Check(value)) {
-            PyObject *lowered = PyObject_CallMethodNoArgs(value, state->str_lower);
-            if (lowered == NULL) return NULL;
-            int is_true = PyUnicode_CompareWithASCIIString(lowered, "true") == 0;
-            int is_false = !is_true && PyUnicode_CompareWithASCIIString(lowered, "false") == 0;
-            Py_DECREF(lowered);
-            if (is_true) return Py_NewRef(Py_True);
-            if (is_false) return Py_NewRef(Py_False);
+            if (equals_ignoring_case(value, "true")) return Py_NewRef(Py_True);
+            if (equals_ignoring_case(value, "false")) return Py_NewRef(Py_False);
             PyErr_SetString(PyExc_ValueError, "'str' value is not matching any of expected values [True, False]");
             return NULL;
         }

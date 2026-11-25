@@ -229,7 +229,7 @@ module_exec(PyObject *module)
 
     if (intern(&state->str_isoformat, "isoformat") < 0 || intern(&state->str_as_posix, "as_posix") < 0
         || intern(&state->str_type_name, "type_name") < 0
-        || intern(&state->str_lower, "lower") < 0 || intern(&state->str_fromisoformat, "fromisoformat") < 0
+        || intern(&state->str_fromisoformat, "fromisoformat") < 0
         || intern(&state->str_validate, "validate") < 0 || intern(&state->str_int, "int") < 0
         || intern(&state->str_code, "__code__") < 0 || intern(&state->str_defaults, "__defaults__") < 0
         || intern(&state->str_kwdefaults, "__kwdefaults__") < 0 || intern(&state->str_call, "__call__") < 0
@@ -262,7 +262,7 @@ module_exec(PyObject *module)
     V(map) V(basic_value) V(basic_key) V(recursive) \
     V(mapping) V(sequence) V(set) V(iterable) V(uuid) V(safe_uuid) V(datetime) V(date) V(time) V(timedelta) \
     V(temporal) V(path) V(pathlike) V(meta) V(partial) V(placeholder) \
-    V(str_isoformat) V(str_as_posix) V(str_type_name) V(str_lower) \
+    V(str_isoformat) V(str_as_posix) V(str_type_name) \
     V(str_fromisoformat) V(str_validate) V(str_int) V(str_code) V(str_defaults) V(str_kwdefaults) \
     V(str_call) V(str_func) V(str_args) V(str_keywords) \
     V(deepcopy)

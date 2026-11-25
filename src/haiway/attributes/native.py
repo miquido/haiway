@@ -687,7 +687,8 @@ def _entry(field: Attribute) -> tuple[Any, ...]:
         sys.intern(field.alias) if field.alias is not None else None,
         field.spec,
         field._validated_default,  # pyright: ignore[reportPrivateUsage]
-        field.default.constant,
+        # what gives the default as declared, for the extension to tell whether it can be kept
+        field.default if field.default.constant else None,
     )
 
 

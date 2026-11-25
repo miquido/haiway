@@ -142,6 +142,19 @@ time_spelling(PyObject *value)
     return PyUnicode_FromStringAndSize(text, length);
 }
 
+/* the spelling a method gives, which is code of the user for a subclass - so that it is a
+ * str is checked rather than assumed, as what reads it reads the text of a str */
+static PyObject *
+spelled_by_method(PyObject *value, PyObject *method)
+{
+    PyObject *spelled = PyObject_CallMethodNoArgs(value, method);
+    if (spelled == NULL || PyUnicode_Check(spelled)) return spelled;
+    PyErr_Format(PyExc_TypeError, "%U of '%s' returned non-str (type %s)", method, Py_TYPE(value)->tp_name,
+                 Py_TYPE(spelled)->tp_name);
+    Py_DECREF(spelled);
+    return NULL;
+}
+
 /* the spelling of a value which has one of its own, a new reference - NULL with no error for none */
 static PyObject *
 native_spelling(ModuleState *state, PyObject *value)
@@ -164,11 +177,11 @@ native_spelling(ModuleState *state, PyObject *value)
     if (r == 0) r = instance_of(value, state->date);
     if (r == 0) r = instance_of(value, state->time);
     if (r < 0) return NULL;
-    if (r) return PyObject_CallMethodNoArgs(value, state->str_isoformat);
+    if (r) return spelled_by_method(value, state->str_isoformat);
 
     r = instance_of(value, state->path);
     if (r < 0) return NULL;
-    if (r) return PyObject_CallMethodNoArgs(value, state->str_as_posix);
+    if (r) return spelled_by_method(value, state->str_as_posix);
 
     return NULL;
 }
@@ -206,8 +219,13 @@ basic_struct(ModuleState *state, PyObject *self, int strict, PathNode *node, PyO
     if (result == NULL) return NULL;
     Py_ssize_t n = plan->count;
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
-        if (value == NULL || value == state->missing) continue;
+        PyObject *value = ITEM_LOAD(ITEMS(self), i);  /* bound once, for good - read as it is */
+        if (value == NULL) {
+            not_initialized(Py_TYPE(self));
+            Py_DECREF(result);
+            return NULL;
+        }
+        if (value == state->missing) continue;
         FieldPlan *field = &plan->fields[i];
         PyObject *key = field_key(field);
         PathNode step = {node, key, 0};
@@ -357,8 +375,13 @@ recursive_struct(ModuleState *state, PyObject *self, int recursive)
     if (result == NULL) return NULL;
     Py_ssize_t n = plan->count;
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *value = ITEMS(self)[i];  /* bound once, for good - read as it is */
-        if (value == NULL || value == state->missing) continue;
+        PyObject *value = ITEM_LOAD(ITEMS(self), i);  /* bound once, for good - read as it is */
+        if (value == NULL) {
+            not_initialized(Py_TYPE(self));
+            Py_DECREF(result);
+            return NULL;
+        }
+        if (value == state->missing) continue;
         PyObject *key = field_key(&plan->fields[i]);
         PyObject *converted = recursive ? recursive_convert(state, value) : Py_NewRef(value);
         if (converted == NULL || PyDict_SetItem(result, key, converted) < 0) {

@@ -8,8 +8,14 @@
  * raises the error with its position. A document which is right is read once.
  *
  * What runs code of the user - a validator, a verifier, a class validating itself, a
- * default which is computed - is kept pending and run once the whole document is known
- * to be right, so a document refused for something else never runs it.
+ * default which is computed, a constructor of the class's own - is kept pending, as the
+ * document spells it, and run once the whole document is known to be right, in the order
+ * of the attributes, so a document refused for something else never runs it. Whether an
+ * attribute runs any is told by `field_pure`, with everything it nests, in one place: a
+ * class holding such code nested in a tuple is as pending as one in a sequence. The one
+ * thing which is not left to the standard library is a failure of that code, or of what
+ * is validated with it: it has run, and reading the document again would run it again, so
+ * the failure is reported where it is, the way validating the instance reports it.
  */
 
 typedef struct {
@@ -53,6 +59,30 @@ add_pending(Decoder *d, PyObject *owner, Py_ssize_t index, Spec *spec, PyObject 
     item->spec = spec;
     item->value = value;
     return 1;
+}
+
+/*
+ * What was kept for an instance, in the order of its attributes - which is the order they
+ * are validated in when the document is not read here, so the code of the user runs in the
+ * same order, and the first which fails is the same one. Only an instance holding code of
+ * the user keeps anything pending, so what lies after `mark` is its own, but for the
+ * instances read within it, whose attributes are all of them told without any.
+ */
+static void
+sort_pending(Decoder *d, Py_ssize_t mark, PyObject *owner)
+{
+    for (Py_ssize_t i = mark; i < d->pending_count; i++) {
+        if (d->pending[i].owner != owner) return;
+    }
+    for (Py_ssize_t i = mark + 1; i < d->pending_count; i++) {
+        Pending item = d->pending[i];
+        Py_ssize_t at = i;
+        while (at > mark && d->pending[at - 1].index > item.index) {
+            d->pending[at] = d->pending[at - 1];
+            at--;
+        }
+        d->pending[at] = item;
+    }
 }
 
 /*
@@ -676,7 +706,7 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
             skip_whitespace(d);
 
             FieldPlan *field = &plan->fields[index];
-            if (field->spec->pure) {
+            if (field_pure(field)) {
                 PyObject *value = decode_spec(d, field->spec);
                 if (value == NULL) goto fail;
                 items[index] = value;
@@ -709,12 +739,22 @@ decode_struct_unbounded(Decoder *d, PyTypeObject *type)
         FieldPlan *field = &plan->fields[i];
         if (field->cached != NULL) {
             items[i] = Py_NewRef(field->cached);
+        } else if (field_pure(field)) {
+            /* the same every time, with nothing of the user to validate it - one which fails
+             * is a missing attribute, which refuses the document before any code has run */
+            PyObject *validated = field_default(field);
+            if (validated == NULL) {
+                decline_failure();
+                goto fail;
+            }
+            items[i] = validated;
         } else {
             /* the default is computed - once the document is known to be right */
             if (!add_pending(d, self, i, NULL, NULL)) goto fail;
         }
     }
     if (given != stack) PyMem_Free(given);
+    if (d->pending_count > pending_mark + 1) sort_pending(d, pending_mark, self);
     /* an instance with a value bound later - of its own, or of one within it - is let go
      * of by the collector once all of them are bound, after those within it, which are
      * kept for it before it, being read first. Before then it holds them unfinished */
@@ -1029,7 +1069,10 @@ decode_spec(Decoder *d, Spec *spec)
     return validated != NULL ? validated : decline_failure();
 }
 
-/* what was kept pending, in the order it was read - 0 declining when any of it fails */
+/* what was kept pending, in the order of the attributes - 1 when all of it is applied, and -1 with
+ * the failure of the first which fails, reported at its attribute as validating the instance
+ * reports it: the code which ran for the ones before it is not to run again, by the document
+ * being read once more */
 static int
 apply_pending(Decoder *d)
 {
@@ -1043,9 +1086,9 @@ apply_pending(Decoder *d)
             validated = field_default(&PLAN_OF(Py_TYPE(item->owner))->fields[item->index]);
         }
         if (validated == NULL) {
-            if (!PyErr_ExceptionMatches(PyExc_Exception)) return -1;
-            decline_failure();
-            return 0;
+            PyTypeObject *type = Py_TYPE(item->owner);
+            report_failure(d->state, type, NULL, PLAN_OF(type)->fields[item->index].name);
+            return -1;
         }
         PyObject **slot = &ITEMS(item->owner)[item->index];
         Py_XSETREF(*slot, validated);
@@ -1096,7 +1139,8 @@ validates_itself_native(PyObject *mod, PyObject *cls)
     return PyBool_FromLong(own);
 }
 
-/* from_json(cls, text, array, ignore_extra) - an instance, or None when the standard library has to read it */
+/* from_json(cls, text, array, ignore_extra) - an instance, or None when the standard library has to read it - or the
+ * failure of the code of the user which the document ran, which is not read again */
 static PyObject *
 from_json_native(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
 {
