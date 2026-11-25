@@ -228,3 +228,26 @@ def test_from_json_passes_on_an_error_of_a_flag(position: int) -> None:
     arguments[position] = Undecidable()
     with pytest.raises(RuntimeError, match="undecidable"):
         nstruct.from_json(*arguments)
+
+
+def test_spelled_once_takes_a_spelling_in_once() -> None:
+    spelled: set[Any] = set()
+    nstruct.spelled_once(spelled, "a")
+    nstruct.spelled_once(spelled, "b")
+
+    with pytest.raises(ValueError, match="same once spelled"):
+        nstruct.spelled_once(spelled, "a")
+
+    assert spelled == {"a", "b"}
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    ((None, "null"), (True, "true"), (7, "7"), (float("-inf"), "-inf"), ("a", None), (b"a", None)),
+    ids=repr,
+)
+def test_key_spelling_covers_the_keys_without_a_text_of_their_own(
+    key: Any,
+    expected: str | None,
+) -> None:
+    assert nstruct.key_spelling(key) == expected

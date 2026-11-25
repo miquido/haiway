@@ -133,7 +133,6 @@ configure(PyObject *mod, PyObject *args)
         || !bind_hook(conversion, "basic_value", &state->basic_value)
         || !bind_hook(conversion, "basic_key", &state->basic_key)
         || !bind_hook(conversion, "recursive", &state->recursive)
-        || !bind_hook(conversion, "colliding_keys", &state->colliding_keys)
         || !bind_hook(types, "mapping", &state->mapping) || !bind_hook(types, "sequence", &state->sequence)
         || !bind_hook(types, "set", &state->set)
         || !bind_hook(types, "uuid", &state->uuid) || !bind_hook(types, "safe_uuid", &state->safe_uuid)
@@ -199,6 +198,9 @@ static PyMethodDef module_methods[] = {
     {"signature_fits", (PyCFunction)(void (*)(void))signature_fits_native, METH_FASTCALL, NULL},
     {"validate", (PyCFunction)(void (*)(void))validate_native, METH_FASTCALL, NULL},
     {"check", (PyCFunction)(void (*)(void))check_native, METH_FASTCALL, NULL},
+    {"accepts_missing", accepts_missing_native, METH_O, NULL},
+    {"key_spelling", key_spelling_native, METH_O, NULL},
+    {"spelled_once", (PyCFunction)(void (*)(void))spelled_once_native, METH_FASTCALL, NULL},
     {"validate_instance", (PyCFunction)(void (*)(void))validate_instance_native, METH_FASTCALL, NULL},
     {"compile_plan", compile_plan, METH_VARARGS, NULL},
     {"to_json", to_json_native, METH_O, NULL},
@@ -260,7 +262,7 @@ module_exec(PyObject *module)
     V(meta_type) V(struct_type) V(spec_type) \
     V(missing) V(check) V(report) V(unexpected) V(describe) V(parameters) V(enum_values) V(literal_values) \
     V(b64decode) V(parse_duration) V(exception_group) \
-    V(map) V(basic_value) V(basic_key) V(recursive) V(colliding_keys) \
+    V(map) V(basic_value) V(basic_key) V(recursive) \
     V(mapping) V(sequence) V(set) V(uuid) V(safe_uuid) V(datetime) V(date) V(time) V(timedelta) \
     V(temporal) V(path) V(pathlike) V(meta) V(partial) V(placeholder) \
     V(str_isoformat) V(str_as_posix) V(str_type_name) \

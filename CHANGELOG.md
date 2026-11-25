@@ -241,6 +241,13 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   against the metaschema. `ArraySpecification` gained `maxItems`.
 - `x: int = Missing` raises a `TypeError` saying the attribute defaults to `Missing`, which its
   annotation does not accept, and to annotate it with `| Missing`, where it blamed `NotRequired`.
+- `Literal[..., Missing]` attributes can be omitted, as validating `Missing` against them
+  succeeds: they are no longer `required` in the signature of the class. Whether an attribute can
+  be omitted is read from the compiled validation itself now, where it was worked out again
+  beside it.
+- A `State` holding another one in a set, a `frozenset` or another container the extension does not
+  walk itself is converted by `to_mapping` as it is within a tuple, list or mapping: an override of
+  `to_mapping` on the nested class is not called in any of them, where it was called in those only.
 
 ## 0.65.1
 

@@ -1,15 +1,7 @@
 from typing import Any, final
 
 from haiway._native import nstruct
-from haiway.attributes.annotations import (
-    AliasAttribute,
-    AnyAttribute,
-    AttributeAnnotation,
-    CustomAttribute,
-    MissingAttribute,
-    UnionAttribute,
-    ValidableAttribute,
-)
+from haiway.attributes.annotations import AttributeAnnotation
 from haiway.attributes.specification import type_specification
 from haiway.types import (
     DefaultValue,
@@ -22,74 +14,6 @@ __all__ = ("Attribute",)
 
 # bound once, the attributes are made for each of the attributes of each class
 _bind = object.__setattr__
-
-
-# whether the annotation validates `Missing`, which is what omitting a value yields. neither
-# a validator nor a verifier of the annotation is asked - a validator receives the raw input
-# and a verifier the validated value, either may refuse `Missing` or replace it, which is
-# why an annotation holding one, at any level, is not considered omittable
-def _accepts_missing(
-    annotation: AttributeAnnotation,
-    /,
-    visited: set[int] | None = None,
-) -> bool:
-    match annotation:
-        case AnyAttribute() | MissingAttribute():
-            return not _may_refuse_missing(annotation)
-
-        case UnionAttribute() | AliasAttribute():
-            return _accepts_missing_within(annotation, visited if visited is not None else set())
-
-        case CustomAttribute():
-            return not _may_refuse_missing(annotation) and _custom_accepts_missing(annotation)
-
-        case _:
-            return False  # what most are
-
-
-def _accepts_missing_within(
-    annotation: UnionAttribute | AliasAttribute,
-    /,
-    visited: set[int],
-) -> bool:
-    if id(annotation) in visited or _may_refuse_missing(annotation):
-        # a recursive alias accepts it only through itself, code of the user may refuse it
-        return False
-
-    visited.add(id(annotation))
-    if isinstance(annotation, UnionAttribute):
-        return any(
-            _accepts_missing(alternative, visited) for alternative in annotation.alternatives
-        )
-
-    return _accepts_missing(annotation.resolved, visited)
-
-
-def _custom_accepts_missing(
-    annotation: CustomAttribute,
-    /,
-) -> bool:
-    # `object` and the like - a class validating on its own is asked to
-    return not hasattr(annotation.base, "validate") and _is_instance(Missing, annotation.base)
-
-
-def _may_refuse_missing(
-    annotation: AttributeAnnotation,
-    /,
-) -> bool:
-    return isinstance(annotation, ValidableAttribute) or annotation.metadata.verifying is not None
-
-
-def _is_instance(
-    value: Any,
-    base: Any,
-    /,
-) -> bool:
-    try:
-        return isinstance(value, base)
-
-    except TypeError:  # not a class instances can be checked against
-        return False
 
 
 @final
@@ -138,9 +62,9 @@ class Attribute:
 
     @property
     def required(self) -> bool:
-        # an attribute can be left out when it has a default or when it accepts
+        # an attribute can be left out when it has a default or when its spec accepts
         # `Missing` - it is what both the schema and the signature derive from
-        return not self.default.available and not _accepts_missing(self.annotation)
+        return not self.default.available and not nstruct.accepts_missing(self.spec)
 
     @property
     def specification(self) -> TypeSpecification | None:

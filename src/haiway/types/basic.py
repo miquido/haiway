@@ -3,9 +3,10 @@ import re
 from collections.abc import Generator, Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 from uuid import UUID
 
+from haiway._native import nstruct
 from haiway.types.guards import is_bytes_like, is_iterable, is_mapping
 from haiway.types.map import Map
 
@@ -197,35 +198,25 @@ def basic_key(
 ) -> Any:
     # never strict - an unsupported key is reported as a key below instead of as
     # a value from within the conversion
-    match basic_value(key, strict=False, path=path):
-        case str() as basic:
-            # a `datetime` key keeps the ISO 'T' this way, where `str()` of it
-            # would spell a space
-            return basic
+    basic: Any = basic_value(key, strict=False, path=path)
 
-        case None:
-            return "null"
+    # a `datetime` key keeps the ISO 'T' this way, where `str()` of it would spell
+    # a space
+    if isinstance(basic, str):
+        return basic
 
-        # `bool` before `int` - it is a subclass of it, and `str()` would spell
-        # it "True"/"False" instead of the "true"/"false" of json
-        case bool() as basic:
-            return "true" if basic else "false"
+    # `None`, a `bool`, an `int` and a `float` are spelled by the extension, which
+    # spells them natively for the keys of a `State` - once, for every conversion
+    spelled: str | None = nstruct.key_spelling(basic)
+    if spelled is not None:
+        return spelled
 
-        case int() | float() as basic:
-            return str(basic)
+    if strict:
+        raise TypeError(
+            f"Can't convert '{_reported_type(key)}' to a basic object key{_reported_path(path)}"
+        )
 
-        case other:
-            if strict:
-                raise TypeError(
-                    f"Can't convert '{_reported_type(key)}' to a basic object"
-                    f" key{_reported_path(path)}"
-                )
-
-            return other
-
-
-def refuse_colliding_keys() -> NoReturn:
-    raise ValueError("Keys of a mapping are the same once spelled as keys of json")
+    return basic
 
 
 def spelled_once(
@@ -233,10 +224,7 @@ def spelled_once(
     key: Any,
     /,
 ) -> None:
-    if key in spelled:
-        refuse_colliding_keys()
-
-    spelled.add(key)
+    nstruct.spelled_once(spelled, key)
 
 
 def _basic_items(

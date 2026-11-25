@@ -49,7 +49,6 @@ typedef struct {
     PyObject *basic_value;       /* (value, strict, path) -> basic value, what is not handled here */
     PyObject *basic_key;         /* (key, strict, path) -> str key */
     PyObject *recursive;         /* (value) -> mapping, what is not handled here */
-    PyObject *colliding_keys;    /* () -> NoReturn, raises for keys spelled alike */
     /* types */
     PyObject *mapping;           /* collections.abc.Mapping */
     PyObject *sequence;          /* collections.abc.Sequence */

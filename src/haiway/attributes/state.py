@@ -79,7 +79,6 @@ from haiway.types.basic import (
     basic_key,
     basic_value,
     parse_duration,
-    refuse_colliding_keys,
     spelled_once,
 )
 from haiway.types.guards import is_iterable, is_mapping
@@ -1813,7 +1812,8 @@ def _recursive_mapping(  # noqa: PLR0911
         return cast(Any, value)  # a leaf as it is
 
     elif isinstance(value, State):
-        return value.to_mapping(recursive=True)
+        # converted by the extension, as it converts a State within any other container
+        return nstruct.to_mapping(value, True)
 
     elif _is_dataclass_instance(value):
         return {
@@ -1822,10 +1822,12 @@ def _recursive_mapping(  # noqa: PLR0911
         }
 
     elif is_mapping(value):
-        return {key: _recursive_mapping(element) for key, element in value.items()}
+        # snapshots - converting an element runs code, and the container could be
+        # changed by it, or by another thread, while it is walked
+        return {key: _recursive_mapping(element) for key, element in tuple(value.items())}
 
     elif is_iterable(value):
-        return [_recursive_mapping(element) for element in value]
+        return [_recursive_mapping(element) for element in tuple(value)]
 
     elif hasattr(value, "to_mapping") and callable(value.to_mapping):
         return value.to_mapping()
@@ -1879,7 +1881,6 @@ native.configure(
         basic_value=_basic_fallback,
         basic_key=_basic_key_fallback,
         recursive=_recursive_mapping,
-        colliding_keys=refuse_colliding_keys,
     ),
     native.TypeHooks(
         mapping=Mapping,

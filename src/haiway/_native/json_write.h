@@ -212,13 +212,6 @@ write_int(Buffer *buffer, PyObject *value)
     return write_text_of(buffer, PyLong_Type.tp_repr(value));
 }
 
-/* an int key - quoted, as the standard library spells it */
-static int
-write_quoted_int(Buffer *buffer, PyObject *key)
-{
-    return buffer_putc(buffer, '"') && write_int(buffer, key) == JSON_OK && buffer_putc(buffer, '"');
-}
-
 static int
 write_json_unbounded(Buffer *buffer, PyObject *value)
 {
@@ -270,26 +263,28 @@ write_json_unbounded(Buffer *buffer, PyObject *value)
                 status = JSON_BAIL;  /* spelled as a key by the standard library */
                 break;
             }
+            PyObject *spelled = NULL;
             if (!text) {
                 /* spelled as the str which another key may be as well - which json.dumps writes
                  * twice, and any reader keeps one of */
-                PyObject *spelled = PyLong_Type.tp_repr(key);
+                spelled = key_spelling(key);
                 if (spelled == NULL) {
                     status = JSON_ERROR;
                     break;
                 }
                 int taken = PyDict_Contains(source, spelled);
-                Py_DECREF(spelled);
                 if (taken != 0) {
-                    if (taken > 0) report_colliding_keys(state);
+                    Py_DECREF(spelled);
+                    if (taken > 0) report_colliding_keys();
                     status = JSON_ERROR;
                     break;
                 }
             }
             if (!first && !buffer_putc(buffer, ',')) status = JSON_ERROR;
-            else if (text ? !write_string(buffer, key) : !write_quoted_int(buffer, key)) status = JSON_ERROR;
+            else if (!write_string(buffer, text ? key : spelled)) status = JSON_ERROR;
             else if (!buffer_putc(buffer, ':')) status = JSON_ERROR;
-            else status = write_json(buffer, item);
+            Py_XDECREF(spelled);
+            if (status == JSON_OK) status = write_json(buffer, item);
             first = 0;
         }
         Py_DECREF(source);

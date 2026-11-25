@@ -1800,3 +1800,82 @@ check_native(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
     return PyBool_FromLong(r);
 }
 
+
+/* ------------------------------------------- omitting a value */
+
+typedef struct MissingWalk {
+    struct MissingWalk *outer;
+    Spec *spec;
+} MissingWalk;
+
+/*
+ * Whether a spec validates `Missing`, which is what omitting a value yields - 1, 0, or -1 with an
+ * error set. Nothing which could refuse it is asked: a validator receives the raw value and a
+ * verifier the validated one, either may refuse `Missing` or replace it - so a spec holding one
+ * does not accept it, and neither does one validating itself, a class with a `validate` of its own
+ * included. The walk stays within the unions and the aliases, which an alias referring back to
+ * itself may only leave through another alternative.
+ */
+static int
+spec_accepts_missing(ModuleState *state, Spec *spec, MissingWalk *outer)
+{
+    if (spec->validating != NULL || spec->verifying != NULL) return 0;
+    for (MissingWalk *walked = outer; walked != NULL; walked = walked->outer) {
+        if (walked->spec == spec) return 0;
+    }
+    switch (spec->kind) {
+    case SPEC_ANY:
+    case SPEC_MISSING:
+        return 1;
+    case SPEC_LITERAL: {
+        PyObject *accepted;
+        int r = literal_match(spec->data, state->missing, &accepted);
+        if (r > 0) Py_DECREF(accepted);
+        return r;
+    }
+    case SPEC_CUSTOM: {
+        PyObject *validate;
+        if (PyObject_GetOptionalAttr(spec->base, state->str_validate, &validate) < 0) return -1;
+        if (validate != NULL) {
+            Py_DECREF(validate);
+            return 0;
+        }
+        int r = PyObject_IsInstance(state->missing, spec->base);
+        if (r < 0 && PyErr_ExceptionMatches(PyExc_TypeError)) {  /* not a class a value can be checked against */
+            PyErr_Clear();
+            return 0;
+        }
+        return r;
+    }
+    case SPEC_UNION: {
+        MissingWalk walk = {outer, spec};
+        for (Py_ssize_t i = 0; i < spec->count; i++) {
+            int r = spec_accepts_missing(state, spec->children[i], &walk);
+            if (r != 0) return r;
+        }
+        return 0;
+    }
+    case SPEC_ALIAS: {
+        Spec *target = alias_target(state, spec);
+        if (target == NULL) return -1;
+        MissingWalk walk = {outer, spec};
+        return spec_accepts_missing(state, target, &walk);
+    }
+    default:
+        return 0;
+    }
+}
+
+/* accepts_missing(spec) - whether omitting a value is accepted, nothing of the user asked */
+static PyObject *
+accepts_missing_native(PyObject *mod, PyObject *spec_object)
+{
+    ModuleState *state = module_state(mod);
+    Spec *spec = spec_of(state, spec_object);
+    if (spec == NULL) return NULL;
+    if (Py_EnterRecursiveCall(" while checking for Missing")) return NULL;
+    int r = spec_accepts_missing(state, spec, NULL);
+    Py_LeaveRecursiveCall();
+    if (r < 0) return NULL;
+    return PyBool_FromLong(r);
+}

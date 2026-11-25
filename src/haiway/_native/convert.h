@@ -199,15 +199,56 @@ dict_source(PyObject *value)
     return NULL;
 }
 
-/* the keys of a mapping which are spelled alike - raised by Python, which spells the error */
+/* the keys of a mapping which are spelled alike - the one rule of it, whoever walks the mapping */
 static void
-report_colliding_keys(ModuleState *state)
+report_colliding_keys(void)
 {
-    PyObject *raised = PyObject_CallNoArgs(state->colliding_keys);
-    if (raised != NULL) {
-        Py_DECREF(raised);
-        PyErr_SetString(PyExc_ValueError, "colliding_keys did not raise");
+    PyErr_SetString(PyExc_ValueError, "Keys of a mapping are the same once spelled as keys of json");
+}
+
+/*
+ * The spelling of a key as a key of json, for the keys which have no text of their own - a bool,
+ * None, an int or a float, an enum of one of those included. NULL without an error for any other
+ * key, which is spelled by the basic conversion of its value. An int is spelled as `json.dumps`
+ * spells it, a float as `repr` does - the infinities and nan included, which json has no number
+ * for, but a key has the text of.
+ */
+static PyObject *
+key_spelling(PyObject *key)
+{
+    if (key == Py_None) return PyUnicode_FromString("null");
+    if (key == Py_True) return PyUnicode_FromString("true");
+    if (key == Py_False) return PyUnicode_FromString("false");
+    if (PyLong_Check(key)) return PyLong_Type.tp_repr(key);
+    if (PyFloat_Check(key)) return PyFloat_Type.tp_repr(key);
+    return NULL;
+}
+
+/* key_spelling(key) - the spelling, or None for a key which has none of its own */
+static PyObject *
+key_spelling_native(PyObject *mod, PyObject *key)
+{
+    PyObject *spelled = key_spelling(key);
+    if (spelled == NULL && !PyErr_Occurred()) Py_RETURN_NONE;
+    return spelled;
+}
+
+/* spelled_once(spelled, key) - takes the spelling of a key in, raises when it was taken already */
+static PyObject *
+spelled_once_native(PyObject *mod, PyObject *const *args, Py_ssize_t nargs)
+{
+    if (nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "spelled_once expects a set and a key");
+        return NULL;
     }
+    int taken = PySet_Contains(args[0], args[1]);
+    if (taken < 0) return NULL;
+    if (taken) {
+        report_colliding_keys();
+        return NULL;
+    }
+    if (PySet_Add(args[0], args[1]) < 0) return NULL;
+    Py_RETURN_NONE;
 }
 
 static PyObject *basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNode *node, PyObject *prefix);
@@ -298,19 +339,20 @@ basic_convert_unbounded(ModuleState *state, PyObject *value, int strict, PathNod
             PyObject *key_basic;
             if (PyUnicode_CheckExact(key)) {
                 key_basic = Py_NewRef(key);
-            } else if (PyLong_CheckExact(key)) {  /* spelled the way `basic_key` does, natively */
-                key_basic = PyObject_Str(key);
-                if (key_basic == NULL) goto items_fail;
             } else {
-                PyObject *path = path_tuple(node, prefix);
-                if (path == NULL) goto items_fail;
-                key_basic = PyObject_CallFunction(state->basic_key, "OOO", key, strict ? Py_True : Py_False, path);
-                Py_DECREF(path);
-                if (key_basic == NULL) goto items_fail;
+                key_basic = key_spelling(key);
+                if (key_basic == NULL) {
+                    if (PyErr_Occurred()) goto items_fail;
+                    PyObject *path = path_tuple(node, prefix);
+                    if (path == NULL) goto items_fail;
+                    key_basic = PyObject_CallFunction(state->basic_key, "OOO", key, strict ? Py_True : Py_False, path);
+                    Py_DECREF(path);
+                    if (key_basic == NULL) goto items_fail;
+                }
             }
             int taken = PyDict_Contains(result, key_basic);  /* two keys spelled alike */
             if (taken != 0) {
-                if (taken > 0) report_colliding_keys(state);
+                if (taken > 0) report_colliding_keys();
                 Py_DECREF(key_basic);
                 goto items_fail;
             }

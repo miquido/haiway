@@ -1,5 +1,7 @@
 import enum
-from collections.abc import Set
+import json
+from collections.abc import Mapping, Set
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -287,3 +289,113 @@ def test_states_from_dicts_through_unions_and_sequences() -> None:
     assert outer.inner == _Inner(value=1)
     assert outer.items == (_Inner(value=2),)
     assert _Outer.from_mapping({"inner": None}).inner is None
+
+
+class _Overriding(State):
+    value: int
+
+    def to_mapping(self, recursive: bool = True) -> Mapping[str, Any]:
+        return {"overridden": True}
+
+
+class _Nesting(State):
+    nested: Any
+
+
+@pytest.mark.parametrize(
+    "container",
+    (
+        lambda leaf: (leaf,),
+        lambda leaf: [leaf],
+        lambda leaf: {leaf},
+        lambda leaf: frozenset((leaf,)),
+        lambda leaf: {"key": leaf},
+    ),
+    ids=("tuple", "list", "set", "frozenset", "mapping"),
+)
+def test_nested_state_converts_the_same_in_every_container(container: Any) -> None:
+    # the extension converts a State, an override of `to_mapping` included, in one way
+    # whichever container holds it - the ones it walks itself and the ones it hands over
+    converted: Any = _Nesting(nested=container(_Overriding(value=1))).to_mapping()["nested"]
+
+    assert converted in ([{"value": 1}], {"key": {"value": 1}})
+
+
+class _AnyKeyed(State):
+    values: Any
+
+
+_KEYS: tuple[Any, ...] = (
+    1,
+    -(2**70),
+    True,
+    False,
+    None,
+    1.5,
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    _Level.HIGH,
+    _Color.RED,
+    UUID(int=1),
+    Path("/tmp/key"),
+    datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
+    date(2026, 1, 2),
+    time(3, 4, 5),
+    "text",
+)
+
+
+class _Encoder(json.JSONEncoder):
+    pass
+
+
+@pytest.mark.parametrize("key", _KEYS, ids=repr)
+def test_every_kind_of_key_is_spelled_the_same_by_each_conversion(key: Any) -> None:
+    holder = _AnyKeyed(values={key: 1})
+    spelled: str = basic_key(key)
+
+    assert tuple(holder.to_basic_object()["values"]) == (spelled,)
+    assert tuple(json.loads(holder.to_json())["values"]) == (spelled,)
+    # written by the encoder of the standard library from the basic object
+    assert tuple(json.loads(holder.to_json(indent=2))["values"]) == (spelled,)
+    assert tuple(json.loads(holder.to_json(encoder_class=_Encoder))["values"]) == (spelled,)
+    # within a container which is converted by the fallback of the extension
+    nested = _AnyKeyed(values={"inner": ({key: 1},)})
+    assert tuple(nested.to_basic_object()["values"]["inner"][0]) == (spelled,)
+    # the fallback of Python, which no value of a `State` reaches natively
+    assert tuple(_dataclass_keyed({key: 1}).to_basic_object()["values"]["values"]) == (spelled,)
+
+
+@dataclass(frozen=True)
+class _KeyedDataclass:
+    values: Any
+
+
+def _dataclass_keyed(values: Mapping[Any, Any]) -> _AnyKeyed:
+    return _AnyKeyed(values=_KeyedDataclass(values=values))
+
+
+@pytest.mark.parametrize(
+    "keys",
+    (
+        {1: "a", "1": "b"},
+        {True: "a", "true": "b"},
+        {None: "a", "null": "b"},
+        {1.5: "a", "1.5": "b"},
+        {float("inf"): "a", "inf": "b"},
+        {_Level.LOW: "a", "1": "b"},
+    ),
+    ids=repr,
+)
+def test_keys_spelled_alike_collide_in_each_conversion(keys: Any) -> None:
+    for holder in (
+        _AnyKeyed(values=keys),
+        _AnyKeyed(values=({"k": keys},)),
+        _dataclass_keyed(keys),
+    ):
+        with pytest.raises(ValueError, match="same once spelled"):
+            holder.to_basic_object()
+
+        with pytest.raises(ValueError):
+            holder.to_json()

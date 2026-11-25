@@ -14,7 +14,7 @@ from types import (
     ModuleType,
     WrapperDescriptorType,
 )
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, final
+from typing import Any, Final, Literal, final
 from weakref import WeakKeyDictionary
 
 from haiway._native import nstruct
@@ -75,52 +75,38 @@ __all__ = (
 # repeats them.
 
 
-def _constants(prefix: str) -> Mapping[str, int]:
-    return {
-        name.removeprefix(prefix): getattr(nstruct, name)
-        for name in dir(nstruct)
-        if name.startswith(prefix)
-    }
-
-
-if TYPE_CHECKING:
-    # what a type checker sees - the values at runtime are the ones of the extension
-
-    class Kind(IntEnum):
-        ANY = 0
-        NONE = 1
-        MISSING = 2
-        LITERAL = 3
-        BOOL = 4
-        INT = 5
-        FLOAT = 6
-        STR = 7
-        BYTES = 8
-        UUID = 9
-        DATETIME = 10
-        DATE = 11
-        TIME = 12
-        TIMEDELTA = 13
-        PATH = 14
-        STR_ENUM = 15
-        INT_ENUM = 16
-        TUPLE = 17
-        OPEN_TUPLE = 18
-        SEQUENCE = 19
-        SET = 20
-        MAPPING = 21
-        META = 22
-        TYPED_DICT = 23
-        STATE = 24
-        CUSTOM_STATE = 25
-        CUSTOM = 26
-        FUNCTION = 27
-        UNION = 28
-        VALIDABLE = 29
-        ALIAS = 30
-
-else:
-    Kind = IntEnum("Kind", dict(_constants("SPEC_")))
+class Kind(IntEnum):
+    ANY = nstruct.SPEC_ANY
+    NONE = nstruct.SPEC_NONE
+    MISSING = nstruct.SPEC_MISSING
+    LITERAL = nstruct.SPEC_LITERAL
+    BOOL = nstruct.SPEC_BOOL
+    INT = nstruct.SPEC_INT
+    FLOAT = nstruct.SPEC_FLOAT
+    STR = nstruct.SPEC_STR
+    BYTES = nstruct.SPEC_BYTES
+    UUID = nstruct.SPEC_UUID
+    DATETIME = nstruct.SPEC_DATETIME
+    DATE = nstruct.SPEC_DATE
+    TIME = nstruct.SPEC_TIME
+    TIMEDELTA = nstruct.SPEC_TIMEDELTA
+    PATH = nstruct.SPEC_PATH
+    STR_ENUM = nstruct.SPEC_STR_ENUM
+    INT_ENUM = nstruct.SPEC_INT_ENUM
+    TUPLE = nstruct.SPEC_TUPLE
+    OPEN_TUPLE = nstruct.SPEC_OPEN_TUPLE
+    SEQUENCE = nstruct.SPEC_SEQUENCE
+    SET = nstruct.SPEC_SET
+    MAPPING = nstruct.SPEC_MAPPING
+    META = nstruct.SPEC_META
+    TYPED_DICT = nstruct.SPEC_TYPED_DICT
+    STATE = nstruct.SPEC_STATE
+    CUSTOM_STATE = nstruct.SPEC_CUSTOM_STATE
+    CUSTOM = nstruct.SPEC_CUSTOM
+    FUNCTION = nstruct.SPEC_FUNCTION
+    UNION = nstruct.SPEC_UNION
+    VALIDABLE = nstruct.SPEC_VALIDABLE
+    ALIAS = nstruct.SPEC_ALIAS
 
 
 # The description of an annotation the extension compiles into its spec:
@@ -788,8 +774,7 @@ class ConversionHooks:
     basic_value: Callable[[Any, bool, tuple[str, ...]], Any]
     basic_key: Callable[[Any, bool, tuple[str, ...]], Any]
     recursive: Callable[[Any], Any]
-    colliding_keys: Callable[[], NoReturn]
-    __slots__ = ("basic_key", "basic_value", "colliding_keys", "map", "recursive")
+    __slots__ = ("basic_key", "basic_value", "map", "recursive")
 
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
@@ -801,13 +786,11 @@ class ConversionHooks:
         basic_value: Callable[[Any, bool, tuple[str, ...]], Any],
         basic_key: Callable[[Any, bool, tuple[str, ...]], Any],
         recursive: Callable[[Any], Any],
-        colliding_keys: Callable[[], NoReturn],
     ) -> None:
         self.map = map
         self.basic_value = basic_value
         self.basic_key = basic_key
         self.recursive = recursive
-        self.colliding_keys = colliding_keys
 
 
 @final
