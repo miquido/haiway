@@ -918,8 +918,8 @@ class AttributePath[Root, Attribute]:
             ),
             attribute=annotation,
         )
-        children[name] = extended
-        return extended
+        # the first of several threads to get here decides, all of them get its path
+        return children.setdefault(name, extended)
 
     def __getitem__(
         self,
@@ -958,9 +958,12 @@ class AttributePath[Root, Attribute]:
 
         extended: AttributePath[Root, Any] = _extended_by_item(self, key)
         # the keys of items are whatever the code indexes with, so what is kept is bounded -
-        # the attributes of a class are not, they can't outgrow its annotations
+        # the attributes of a class are not, they can't outgrow its annotations. the bound
+        # is checked before keeping, so threads keeping at the same time may overshoot it
+        # by their number - it is there to stop growth, not to be exact. the first path
+        # kept for an item is the one every thread gets
         if len(children) < _ITEM_PATHS_KEPT:
-            children[item] = extended
+            return children.setdefault(item, extended)
 
         return extended
 

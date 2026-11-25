@@ -183,6 +183,27 @@ def test_to_mapping_non_recursive_keeps_nested_instances() -> None:
     assert RICH.to_mapping(recursive=False)["nested"] is RICH.nested
 
 
+@mark.parametrize("recursive", [True, False])
+@mark.parametrize(
+    "value",
+    [
+        param(b"ab", id="bytes"),
+        param(bytearray(b"ab"), id="bytearray"),
+        param(memoryview(b"ab"), id="memoryview"),
+    ],
+)
+def test_to_mapping_keeps_bytes_like_values_as_leaves(value: Any, recursive: bool) -> None:
+    class Holder(State):
+        payload: Any
+        nested: tuple[Any, ...] = ()
+
+    mapping = Holder(payload=value, nested=(value,)).to_mapping(recursive=recursive)
+
+    assert mapping["payload"] is value
+    assert mapping["nested"][0] is value
+    assert Holder(payload=value).to_basic_object()["payload"] == "YWI="
+
+
 def test_to_mapping_uses_aliases_as_keys() -> None:
     class Aliased(State):
         identifier: Annotated[str, Alias("id")]

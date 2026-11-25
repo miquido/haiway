@@ -132,7 +132,8 @@ Supported annotations include:
   validation runs. It always receives the raw input, including for nested State attributes and for
   custom classes providing their own `validate`, which validate the value afterwards.
 - `Verifier(callable)` — applies an additional check after the base attribute has been validated and
-  typed.
+  typed. It has to **return the value** - what it returns is what the attribute holds, so a verifier
+  which only checks and returns nothing stores `None`. Raise to reject.
 - `Sensitive` — marks the attribute as carrying a secret or personal data. `str()`, `repr()`, and
   `format_str` render `<redacted>` instead of the value, which keeps it out of logs and
   observability backends. The class and `Sensitive()` mark the attribute alike; pass a custom marker
@@ -142,8 +143,17 @@ Marking an attribute sensitive covers rendering only: attribute access, `to_mapp
 the generated JSON schema all keep working on the real value, so persistence and outgoing requests
 are unaffected. Review those call sites separately when handling secrets.
 
+Several `Validator`s, or several `Verifier`s, of one attribute compose in the order they are
+declared: each is given what the previous one returned, and a failure of any stops the rest and is
+reported at the position of the attribute. Validators all run before the base validation, verifiers
+all after it - writing a verifier before a validator changes nothing. Declarations nested through
+`Annotated` or a `type` alias read inner first: given `type Checked = Annotated[int, Validator(a)]`,
+`Annotated[Checked, Validator(b)]` runs `a` and then `b`.
+
 `typing.NotRequired[T]` is most useful inside `TypedDict` definitions embedded in State fields. For
-regular State attributes, prefer an explicit default when a field may be omitted.
+regular State attributes, prefer an explicit default when a field may be omitted. `typing.ReadOnly`
+(PEP 705) is accepted in a `TypedDict` and on an attribute and is resolved as the type it qualifies
+\- it only matters to a type checker, as State attributes are immutable anyway.
 
 ### Structured Metadata with `Meta`
 
@@ -396,7 +406,11 @@ This is useful for serialization or when you need to work with plain dictionarie
 When working with external payloads, use the complementary helpers:
 
 - `State.from_mapping(mapping)` — accepts both attribute names and aliases. A key which is neither
-  is refused, in nested States and TypedDicts as well; see `ignore_extra` below.
+  is refused, in nested States and TypedDicts as well; see `ignore_extra` below. A State refuses
+  such a key the same way wherever it is given - the constructor, `updating()`, `validate` and the
+  decoding helpers - with `Unexpected attribute 'x' for Name`
+  (`Unexpected attributes 'a', 'b' for Name` for several of them in the constructor and
+  `updating()`).
 - `State.from_json(payload)` / `State.from_json_array(payload)` — decode JSON strings into State
   instances (or tuples of instances). Validation errors are converted into informative exceptions.
 - `state.to_json(indent=2)` — encode a State instance to JSON using the same alias behaviour as
@@ -580,7 +594,8 @@ A few validation details matter in practice:
 
 ### JSON Schema Generation
 
-Every State exposes a JSON Schema fragment through the `__SPECIFICATION__` attribute. Call
+Every State which can be represented as JSON Schema exposes a fragment of it through the
+`__SPECIFICATION__` attribute, and one which cannot raises a `TypeError` on reading it. Call
 `State.json_schema(indent=2)` when you need a ready-to-serialize schema definition:
 
 ```python

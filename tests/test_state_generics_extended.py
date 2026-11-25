@@ -16,7 +16,12 @@ import pytest
 
 from haiway import Alias, Description, Sensitive, State, Validator, Verifier
 from haiway.attributes import annotations
-from haiway.attributes.generics import argument_variances, bind_type_arguments, parameter_variances
+from haiway.attributes.generics import (
+    VariancesCell,
+    argument_variances,
+    bind_type_arguments,
+    parameter_variances,
+)
 from haiway.attributes.validation import ValidationError
 
 
@@ -797,3 +802,27 @@ def test_typed_dict_collection_of_a_parameter_validates_its_elements() -> None:
     assert _HoldsItems(payload={"items": [1]}).payload == {"items": (1,)}
     with pytest.raises(ValidationError):
         _HoldsItems(payload={"items": ["one"]})  # pyright: ignore[reportArgumentType]
+
+
+# the variances of a generic are kept as a whole, never filled in a part at a time
+
+
+def test_variances_cell_holds_the_first_complete_mapping_published() -> None:
+    cell: VariancesCell = VariancesCell()
+    assert cell.variances is None
+
+    first: Any = {"T": "co", "U": "inv"}
+    cell.publish(first)
+    cell.publish({"T": "inv"})
+    assert cell.variances is first
+
+
+def test_generic_state_keeps_the_variances_worked_out_in_its_cell() -> None:
+    class Box[T](State):
+        value: T
+
+    cell: VariancesCell = Box.__VARIANCES__
+    assert cell.variances is None  # not asked for yet
+    worked_out = parameter_variances(Box)
+    assert cell.variances is worked_out
+    assert parameter_variances(Box) is worked_out

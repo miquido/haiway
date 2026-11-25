@@ -39,7 +39,6 @@ from typing import (
     TypeVarTuple,
     cast,
     dataclass_transform,
-    final,
     get_args,
     get_origin,
     overload,
@@ -56,6 +55,7 @@ from haiway.attributes.annotations import (
 from haiway.attributes.attribute import Attribute
 from haiway.attributes.generics import (
     Variance,
+    VariancesCell,
     argument_variances,
     bind_type_arguments,
     is_open_type_argument,
@@ -174,17 +174,17 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
     __SELF_ATTRIBUTE__: ObjectAttribute
     __TYPE_PARAMETERS__: Mapping[str, Any] | None
     __SPECIALIZED__: bool
-    __SPECIFICATION__: TypeSpecification
+    # none for a class which can't be represented using json schema
+    __JSON_SPECIFICATION__: TypeSpecification | None
     __FIELDS__: Sequence[Attribute]
-    __ALLOWED_FIELDS__: Set[str]
-    __ALIASES__: Mapping[str, str]
-    __SERIALIZABLE__: bool
+    # every key an attribute can be provided under, by the name of the attribute
+    __ALLOWED_FIELDS__: Mapping[str, str]
     __DESCRIPTION__: str | None
     __DEFAULTED__: Set[str]
     __ANNOTATED__: Mapping[str, Any]
     # held by a generic class alone, filled in place when first asked for
     __SPECIALIZATIONS__: MutableMapping[tuple[Any, ...], Any]
-    __VARIANCES__: MutableMapping[str, Variance]
+    __VARIANCES__: VariancesCell
     __slots__: tuple[str, ...]
     __match_args__: tuple[str, ...]
     # declared by a specialization alone - `__SPECIALIZED__` tells whether the
@@ -319,21 +319,19 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
             cls.__SPECIALIZATIONS__ = {}  # pyright: ignore[reportConstantRedefinition]
             # the variance of its parameters, worked out when first asked for - once
             # the classes its annotations refer to exist
-            cls.__VARIANCES__ = {}  # pyright: ignore[reportConstantRedefinition]
+            cls.__VARIANCES__ = VariancesCell()  # pyright: ignore[reportConstantRedefinition]
 
         if not any(isinstance(base, StateMeta) for base in bases):
             # the base class - no fields specified
             assert not type_parameters  # nosec: B101
-            cls.__SPECIFICATION__ = {  # pyright: ignore[reportConstantRedefinition]
+            cls.__JSON_SPECIFICATION__ = {  # pyright: ignore[reportConstantRedefinition]
                 "type": "object",
                 "properties": {},
                 "required": [],
                 "additionalProperties": False,
             }
             cls.__FIELDS__ = ()  # pyright: ignore[reportConstantRedefinition]
-            cls.__ALLOWED_FIELDS__ = frozenset()  # pyright: ignore[reportConstantRedefinition]
-            cls.__ALIASES__ = {}  # pyright: ignore[reportConstantRedefinition]
-            cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
+            cls.__ALLOWED_FIELDS__ = {}  # pyright: ignore[reportConstantRedefinition]
             cls.__match_args__ = ()
             native.install(cls, (), ())  # last - the class can't be changed after
 
@@ -369,24 +367,13 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
             description=cls.__DESCRIPTION__,
         )
 
-        if specification is not None:  # it is technically not serializable otherwise
-            cls.__SPECIFICATION__ = specification  # pyright: ignore[reportConstantRedefinition]
-            cls.__SERIALIZABLE__ = True  # pyright: ignore[reportConstantRedefinition]
-
-        elif serializable:
+        if specification is None and serializable:
             raise TypeError(f"{cls.__name__} requires serialization but cannot produce json schema")
 
-        else:  # no specification
-            cls.__SERIALIZABLE__ = False  # pyright: ignore[reportConstantRedefinition]
-            cls.__SPECIFICATION__ = _no_specification  # pyright: ignore[reportAttributeAccessIssue, reportConstantRedefinition]
-
+        # without a specification the class is not serializable
+        cls.__JSON_SPECIFICATION__ = specification  # pyright: ignore[reportConstantRedefinition]
         cls.__FIELDS__ = fields  # pyright: ignore[reportConstantRedefinition]
-        cls.__ALLOWED_FIELDS__ = frozenset(allowed_fields)  # pyright: ignore[reportConstantRedefinition]
-        # resolved here so that updates can be normalized to canonical names
-        # without rebuilding this mapping of the class on each of them
-        cls.__ALIASES__ = {  # pyright: ignore[reportConstantRedefinition]
-            field.alias: field.name for field in fields if field.alias is not None
-        }
+        cls.__ALLOWED_FIELDS__ = allowed_fields  # pyright: ignore[reportConstantRedefinition]
         # every field, unlike `__slots__` which holds the names declared here - a
         # specialized generic declares none of them and matches all of them
         cls.__match_args__ = tuple(field.name for field in fields)
@@ -395,6 +382,19 @@ class StateMeta(nstruct.StructMeta):  # the classes of the native storage - thei
         native.install(cls, fields, names)
 
         return cls
+
+    @property
+    def __SPECIFICATION__(cls) -> TypeSpecification:
+        # the one place telling a class can't be represented using json schema
+        specification: TypeSpecification | None = cls.__JSON_SPECIFICATION__
+        if specification is None:
+            raise TypeError(f"{cls.__name__} cannot be represented using json schema")
+
+        return specification
+
+    @property
+    def __SERIALIZABLE__(cls) -> bool:
+        return cls.__JSON_SPECIFICATION__ is not None
 
     @property
     def __signature__(cls) -> inspect.Signature:
@@ -507,12 +507,13 @@ def _check_keys(
 ) -> None:
     # what the constructor and `__replace__` refuse before looking at any value -
     # the native code hands over the moment it finds a key which is not right
-    if unexpected := kwargs.keys() - cls.__ALLOWED_FIELDS__:
+    allowed: Mapping[str, str] = cls.__ALLOWED_FIELDS__
+    if unexpected := kwargs.keys() - allowed.keys():
         raise _unexpected_attributes(cls, unexpected)
 
-    for alias, name in cls.__ALIASES__.items():
-        if alias in kwargs and name in kwargs:
-            raise _duplicate_attribute(cls, name, alias)
+    for key, name in allowed.items():
+        if key != name and key in kwargs and name in kwargs:  # an alias and its name
+            raise _duplicate_attribute(cls, name, key)
 
 
 # a variant is made once - two threads asking for the same one at the same time would
@@ -990,26 +991,15 @@ def _duplicate_attribute(
 def _unexpected_attributes(
     cls: type[Any],
     /,
-    keys: Set[str],
+    keys: Iterable[Any],
 ) -> TypeError:
+    # the one refusal of keys which are no attribute, wherever they are found - given
+    # to the constructor, to `updating` or read from a mapping. whatever a mapping is
+    # keyed by is not sorted by comparing the keys, they may not compare
+    texts: Sequence[str] = sorted(repr(key) for key in keys)
     return TypeError(
-        f"{cls.__name__} has no attribute {', '.join(repr(key) for key in sorted(keys))}"
+        f"Unexpected attribute{'s' if len(texts) > 1 else ''} {', '.join(texts)} for {cls.__name__}"
     )
-
-
-@final
-class _NoSpecification:
-    __slots__ = ()
-
-    def __get__(
-        self,
-        instance: object,
-        owner: type[object],
-    ) -> NoReturn:
-        raise TypeError(f"{owner.__name__} cannot be represented using json schema")
-
-
-_no_specification: _NoSpecification = _NoSpecification()
 
 
 class State(nstruct.Struct, metaclass=StateMeta):
@@ -1689,8 +1679,9 @@ def _is_dataclass_instance(value: Any, /) -> bool:
 def _recursive_mapping(  # noqa: PLR0911
     value: Any,
 ) -> Any:
-    if isinstance(value, str | bytes | float | int | bool | None):
-        return value
+    # bytes-like values are leaves, as they are when they are converted to basic ones
+    if isinstance(value, str | bytes | bytearray | memoryview | float | int | bool | None):
+        return cast(Any, value)  # a leaf as it is
 
     elif isinstance(value, State):
         return value.to_mapping(recursive=True)
@@ -1724,7 +1715,7 @@ def _validated[Instance: State](cls: type[Instance], value: Any, ignore_extra: b
 
 
 def _unexpected_key(cls: Any, key: Any) -> NoReturn:
-    raise TypeError(f"Unexpected attribute '{key}' for {cls.__name__}")
+    raise _unexpected_attributes(cls, (key,))
 
 
 def _basic_fallback(value: Any, strict: bool, path: tuple[str, ...]) -> Any:

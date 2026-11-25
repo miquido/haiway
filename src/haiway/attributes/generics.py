@@ -9,12 +9,14 @@ from typing import (
     TypeVar,
     TypeVarTuple,
     cast,
+    final,
     get_args,
     get_origin,
 )
 
 __all__ = (
     "Variance",
+    "VariancesCell",
     "argument_variances",
     "bind_type_arguments",
     "is_open_type_argument",
@@ -25,6 +27,37 @@ __all__ = (
 )
 
 type Variance = typing.Literal["co", "contra", "inv"]
+
+
+@final
+class VariancesCell:
+    """
+    Where a generic State keeps the variances of its parameters once they are worked out.
+
+    The class can't be changed after it is made, the cell can. What it holds is
+    published as a whole, in a single assignment, so a thread reading it never finds
+    a part of it.
+
+    Attributes
+    ----------
+    variances : Mapping[str, Variance] | None
+        The variance of each type parameter by its name, ``None`` until worked out.
+    """
+
+    __slots__ = ("variances",)
+
+    def __init__(self) -> None:
+        self.variances: Mapping[str, Variance] | None = None
+
+    def publish(
+        self,
+        variances: Mapping[str, Variance],
+        /,
+    ) -> None:
+        # worked out twice at the same time, either result is complete and equal to the
+        # other - whichever is assigned last is the one kept
+        if self.variances is None:
+            self.variances = variances
 
 
 def type_parameters_of(
@@ -335,8 +368,8 @@ def parameter_variances(
     Mapping[str, Variance]
         ``"co"``, ``"contra"`` or ``"inv"`` for each parameter, by its name.
     """
-    # a generic always has a parameter - an empty mapping is one not worked out yet
-    if cached := cls.__dict__.get("__VARIANCES__"):
+    kept: VariancesCell | None = cls.__dict__.get("__VARIANCES__")
+    if kept is not None and (cached := kept.variances) is not None:
         return cached
 
     computing: set[type[Any]] = _computing_variances()
@@ -372,9 +405,9 @@ def _worked_out_variances(
     # a class which is not declared yet has no annotations to read the use of a
     # parameter from - what is worked out then is not kept. a generic State is made
     # with the mapping they are kept in, as the class itself can't be changed
-    kept: MutableMapping[str, Variance] | None = cls.__dict__.get("__VARIANCES__")
+    kept: VariancesCell | None = cls.__dict__.get("__VARIANCES__")
     if keep and kept is not None:
-        kept.update(variances)
+        kept.publish(variances)
 
     return variances
 

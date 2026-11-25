@@ -298,7 +298,9 @@ Haiway consumes several types through `typing.Annotated[...]` when resolving `St
 - `Meta.of(...)` attaches structured metadata to the resolved attribute definition
 - `Validator(callable)` applies an additional validation or coercion step before the base type
   validation runs
-- `Verifier(callable)` applies an additional check after the base type has been validated
+- `Verifier(callable)` applies an additional check after the base type has been validated; it has to
+  return the value, which is what the attribute then holds. Several validators, or several
+  verifiers, of one attribute compose in the order they are declared
 
 ```python
 from typing import Annotated

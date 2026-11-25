@@ -8,9 +8,12 @@ from haiway.types import (
     Missing,
     TypeSpecification,
 )
-from haiway.types.frozen import same_copy, same_deepcopy
+from haiway.types.frozen import refuse_assignment, refuse_deletion, same_copy, same_deepcopy
 
 __all__ = ("Attribute",)
+
+# bound once, the attributes are made for each of the attributes of each class
+_bind = object.__setattr__
 
 
 @final
@@ -37,11 +40,11 @@ class Attribute:
         spec: Any,
         redaction: str | None = None,
     ) -> None:
-        self.name = name
-        self.annotation = annotation
-        self.default = default
-        self.spec = spec
-        self.redaction = redaction
+        _bind(self, "name", name)
+        _bind(self, "annotation", annotation)
+        _bind(self, "default", default)
+        _bind(self, "spec", spec)
+        _bind(self, "redaction", redaction)
 
     @property
     def alias(self) -> str | None:
@@ -93,3 +96,5 @@ class Attribute:
 
     __copy__ = same_copy
     __deepcopy__ = same_deepcopy
+    __setattr__ = refuse_assignment
+    __delattr__ = refuse_deletion
