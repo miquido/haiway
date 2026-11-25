@@ -1378,7 +1378,7 @@ validate_key_integer(PyObject *value)
 static PyObject *
 validate_key_float(PyObject *value)
 {
-    /* the infinities and NaN, spelled as `basic_key` writes them - a JSON number has no such */
+    /* the infinities and NaN, spelled as `key_spelling` writes them - a JSON number has no such */
     if (equals_word(value, "inf")) return PyFloat_FromDouble(Py_HUGE_VAL);
     if (equals_word(value, "-inf")) return PyFloat_FromDouble(-Py_HUGE_VAL);
     if (equals_word(value, "nan")) return PyFloat_FromDouble(Py_NAN);

@@ -245,6 +245,10 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
   succeeds: they are no longer `required` in the signature of the class. Whether an attribute can
   be omitted is read from the compiled validation itself now, where it was worked out again
   beside it.
+- A key which is an `int` or a `float` of a class with a `__str__` of its own - a mixed-in
+  `class E(int, Enum)` - is spelled as the plain number (`"1"`) in `to_basic_object`, `to_json`
+  and the key patterns of the schema, as `json.dumps` spells it, where it was spelled by `str()`
+  (`"E.A"`). `IntEnum` and `StrEnum` keys are spelled as before.
 - A `State` holding another one in a set, a `frozenset` or another container the extension does not
   walk itself is converted by `to_mapping` as it is within a tuple, list or mapping: an override of
   `to_mapping` on the nested class is not called in any of them, where it was called in those only.

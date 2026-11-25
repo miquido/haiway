@@ -139,6 +139,9 @@ def test_configure_only_once() -> None:
         nstruct.configure(object(), object(), object())
 
 
+_UNTYPED: Any = nstruct  # the entry points called with what their stubs refuse
+
+
 @pytest.mark.parametrize(
     "call",
     (
@@ -150,6 +153,8 @@ def test_configure_only_once() -> None:
         lambda: nstruct.validate(object(), 1),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.check(object(), 1),  # pyright: ignore[reportArgumentType]
         lambda: nstruct.compile_spec(()),
+        lambda: _UNTYPED.accepts_missing(object()),
+        lambda: _UNTYPED.spelled_once(set()),
     ),
 )
 def test_internal_entry_points_refuse_what_they_are_not_given(call: Any) -> None:
