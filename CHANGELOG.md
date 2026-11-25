@@ -6,6 +6,9 @@ Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
 ### Changed
 
+- haiway has no runtime dependencies: `typing-extensions` is no longer required. When it is
+  installed (the `opentelemetry` and `fastapi` extras bring it), its `TypedDict`s are recognized as
+  before; every other form it provides is the one of `typing` on Python 3.15.
 - `to_json` writes compact JSON, with no space after `,` and `:` (`{"a":1,"b":[1,2]}`), where it
   wrote `json.dumps`'s default `", "` and `": "` - shorter payloads, written faster. With `indent`
   the output is as before. Code comparing the exact text of the output has to follow.

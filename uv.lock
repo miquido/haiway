@@ -359,9 +359,6 @@ name = "haiway"
 version = "0.66.0"
 source = { editable = "." }
 default-groups = "all"
-dependencies = [
-    { name = "typing-extensions" },
-]
 
 [package.optional-dependencies]
 fastapi = [
@@ -396,6 +393,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "typing-extensions" },
 ]
 docs = [
     { name = "haiway", extra = ["fastapi", "httpx", "opentelemetry", "postgres", "rabbitmq", "starlette"] },
@@ -418,7 +416,6 @@ requires-dist = [
     { name = "pika", marker = "extra == 'rabbitmq'", specifier = "~=1.4" },
     { name = "starlette", marker = "extra == 'fastapi'", specifier = "~=1.10" },
     { name = "starlette", marker = "extra == 'starlette'", specifier = "~=1.10" },
-    { name = "typing-extensions", specifier = "~=4.16" },
 ]
 provides-extras = ["opentelemetry", "httpx", "postgres", "rabbitmq", "starlette", "fastapi"]
 
@@ -432,6 +429,7 @@ dev = [
     { name = "pytest-asyncio", specifier = "~=1.4" },
     { name = "pytest-cov", specifier = "~=7.1" },
     { name = "ruff", specifier = "~=0.17" },
+    { name = "typing-extensions", specifier = "~=4.16" },
 ]
 docs = [
     { name = "haiway", extras = ["opentelemetry", "httpx", "postgres", "rabbitmq", "starlette", "fastapi"] },

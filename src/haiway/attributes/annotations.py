@@ -34,9 +34,6 @@ from typing import (
     is_typeddict,
 )
 
-import typing_extensions
-from typing_extensions import is_typeddict as is_typeddict_ext  # keep this particular import
-
 from haiway import types as haiway_types
 from haiway.attributes.generics import (
     is_open_type_argument,
@@ -1490,9 +1487,7 @@ type FunctionSignature = CallableSignature | ProtocolSignature
 
 
 def _unpacked(argument: Any, /) -> bool:
-    return get_origin(argument) in (typing.Unpack, typing_extensions.Unpack) or getattr(
-        argument, "__unpacked__", False
-    )
+    return get_origin(argument) is typing.Unpack or getattr(argument, "__unpacked__", False)
 
 
 def _function_signature(
@@ -1515,7 +1510,7 @@ def _function_signature(
         fixed: int = sum(1 for argument in listed if not _unpacked(argument))
         return _callable_signature(fixed, extensible=fixed < len(listed))
 
-    if get_origin(signature) in (typing.Concatenate, typing_extensions.Concatenate):
+    if get_origin(signature) is typing.Concatenate:
         # the last argument of Concatenate is the ParamSpec
         return _callable_signature(len(get_args(signature)) - 1, extensible=True)
 
@@ -1937,7 +1932,7 @@ def _unpacked_tuple(argument: Any, /) -> Sequence[Any] | None:
     if get_origin(argument) is typing.Unpack:
         unpacked = get_args(argument)[0]
         visited: set[int] = set()
-        while isinstance(unpacked, typing.TypeAliasType | typing_extensions.TypeAliasType):
+        while isinstance(unpacked, typing.TypeAliasType):
             if id(unpacked) in visited:
                 return None  # an alias of itself stands for nothing
 
@@ -2355,7 +2350,7 @@ def _alias_references(
 
 
 def _alias_scope(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     /,
     localns: Mapping[str, Any] | None,
 ) -> Mapping[str, Any]:
@@ -2377,7 +2372,7 @@ def _alias_scope(
 
 
 def _alias_value(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     /,
 ) -> Any:
     try:
@@ -2401,7 +2396,7 @@ def _alias_value(
 
 
 def _resolve_alias_value(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     value: Any,
     /,
     *,
@@ -2439,7 +2434,7 @@ def _resolve_alias_value(
 
 
 def _resolve_generic_type_alias(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     *,
     arguments: Sequence[Any],
     localns: Mapping[str, Any] | None,
@@ -2510,7 +2505,7 @@ def _resolve_generic_type_alias(
 
 
 def _resolve_type_alias(
-    annotation: typing.TypeAliasType | typing_extensions.TypeAliasType,
+    annotation: typing.TypeAliasType,
     *,
     arguments: Sequence[Any] = (),
     localns: Mapping[str, Any] | None,
@@ -2604,7 +2599,7 @@ def _specialized_callable(
 
     signature: Any = arguments[0]
     leading: list[Any] = []
-    if get_origin(signature) in (typing.Concatenate, typing_extensions.Concatenate):
+    if get_origin(signature) is typing.Concatenate:
         *leading, signature = get_args(signature)
 
     if not isinstance(signature, typing.ParamSpec):
@@ -2700,7 +2695,7 @@ def _resolve_generic_alias(  # noqa: PLR0911
         # checked by the shape of its signature, whatever its type arguments
         return FunctionAttribute(base=annotation)
 
-    if isinstance(origin_type, typing.TypeAliasType | typing_extensions.TypeAliasType):
+    if isinstance(origin_type, typing.TypeAliasType):
         return _resolve_type_alias(
             origin_type,
             arguments=get_args(annotation),
@@ -2918,7 +2913,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
         case types.NoneType | None:
             return NONE_ATTRIBUTE
 
-        case typeddict if is_typeddict(typeddict) or is_typeddict_ext(typeddict):
+        case typeddict if any(check(typeddict) for check in _TYPEDDICT_CHECKS):
             return _resolve_typeddict(
                 typeddict,
                 arguments=get_args(annotation),
@@ -2931,7 +2926,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
         case haiway_types.Missing:
             return MISSING_ATTRIBUTE
 
-        case typing.Any | typing_extensions.Any:
+        case typing.Any:
             return ANY_ATTRIBUTE
 
         case haiway_types.Meta:
@@ -2982,10 +2977,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             | collections_abc.MutableMapping
             | typing.Mapping
             | typing.MutableMapping
-            | typing_extensions.Mapping
-            | typing_extensions.MutableMapping
             | typing.Dict  # noqa: UP006
-            | typing_extensions.Dict
         ):
             keys_annotation: Any
             values_annotation: Any
@@ -3024,9 +3016,6 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             | typing.Set  # noqa: UP006
             | typing.MutableSet
             | typing.FrozenSet  # noqa: UP006
-            | typing_extensions.Set
-            | typing_extensions.MutableSet
-            | typing_extensions.FrozenSet
         ):
             values_annotation: Any
             match get_args(annotation):
@@ -3047,7 +3036,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 ),
             )
 
-        case builtins.tuple | typing.Tuple | typing_extensions.Tuple:  # noqa: UP006
+        case builtins.tuple | typing.Tuple:  # noqa: UP006
             match get_args(annotation):
                 case () if annotation in (builtins.tuple, typing.Tuple):  # noqa: UP006
                     # not parametrized at all, which is any tuple - `tuple[()]` is the empty one
@@ -3083,10 +3072,7 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             | collections_abc.MutableSequence
             | typing.Sequence
             | typing.MutableSequence
-            | typing_extensions.Sequence
-            | typing_extensions.MutableSequence
             | typing.List  # noqa: UP006
-            | typing_extensions.List
         ):
             values_annotation: Any
             match get_args(annotation):
@@ -3112,8 +3098,6 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             | collections_abc.Iterable
             | typing.Collection
             | typing.Iterable
-            | typing_extensions.Collection
-            | typing_extensions.Iterable
         ):
             values_annotation: Any
             match get_args(annotation):
@@ -3167,23 +3151,31 @@ def _resolve_type(  # noqa: C901, PLR0911, PLR0912, PLR0915
             )
 
 
+def _typeddict_checks() -> tuple[Callable[[object], bool], ...]:
+    # typing_extensions makes TypedDicts of its own - an optional dependency, so when it is not
+    # installed no annotation can be one of them
+    try:
+        import typing_extensions  # noqa: PLC0415
+
+    except ImportError:
+        return (is_typeddict,)
+
+    return (is_typeddict, typing_extensions.is_typeddict)
+
+
+_TYPEDDICT_CHECKS: Final[tuple[Callable[[object], bool], ...]] = _typeddict_checks()
+
 # the special forms which only wrap their arguments - resolved by their own cases, never
 # specialized as a generic is
 _PARAMETER_WRAPPING_FORMS: Final[frozenset[Any]] = frozenset(
     (
         typing.Annotated,
-        typing_extensions.Annotated,
         typing.Union,
-        typing_extensions.Union,
         types.UnionType,
         typing.Required,
-        typing_extensions.Required,
         typing.NotRequired,
-        typing_extensions.NotRequired,
         typing.Final,
-        typing_extensions.Final,
         typing.ReadOnly,
-        typing_extensions.ReadOnly,
     )
 )
 
@@ -3227,7 +3219,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         case None:
             return NONE_ATTRIBUTE
 
-        case typing.Union | types.UnionType | typing_extensions.Union:
+        case typing.Union | types.UnionType:
             return UnionAttribute(
                 base=annotation,
                 alternatives=tuple(
@@ -3242,7 +3234,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 ),
             )
 
-        case typing.TypeAliasType | typing_extensions.TypeAliasType:
+        case typing.TypeAliasType:
             return _resolve_type_alias(
                 annotation,
                 localns=localns,
@@ -3251,7 +3243,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 recursion_guard=recursion_guard,
             )
 
-        case typing.Annotated | typing_extensions.Annotated:
+        case typing.Annotated:
             annotation_args: Sequence[Any] = get_args(annotation)
             attribute: AttributeAnnotation = resolve_attribute(
                 annotation_args[0],
@@ -3262,7 +3254,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
             )
             return attribute.annotated(_annotation_markers(annotation_args[1:]))
 
-        case typing.TypeVar | typing_extensions.TypeVar:
+        case typing.TypeVar:
             if resolved := resolved_parameters.get(annotation.__name__):
                 return resolved
 
@@ -3274,20 +3266,20 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 recursion_guard=recursion_guard,
             )
 
-        case typing.Literal | typing_extensions.Literal:
+        case typing.Literal:
             return _resolve_literal(annotation)
 
-        case collections_abc.Callable | typing.Callable | typing_extensions.Callable:  # pyright: ignore[reportUnknownMemberType]
+        case collections_abc.Callable | typing.Callable:  # pyright: ignore[reportUnknownMemberType]
             return FunctionAttribute(base=_specialized_callable(annotation, resolved_parameters))
 
-        case typing.Self | typing_extensions.Self:  # pyright: ignore[reportUnknownMemberType]
+        case typing.Self:  # pyright: ignore[reportUnknownMemberType]
             if self_attribute := recursion_guard.get("Self"):
                 return self_attribute
 
             else:
                 raise RuntimeError(f"Unresolved Self annotation: {annotation}")
 
-        case typing.Required | typing_extensions.Required:
+        case typing.Required:
             attribute: AttributeAnnotation = resolve_attribute(
                 get_args(annotation)[0],
                 localns=localns,
@@ -3298,7 +3290,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 
             return attribute
 
-        case typing.NotRequired | typing_extensions.NotRequired:
+        case typing.NotRequired:
             attribute: AttributeAnnotation = resolve_attribute(
                 get_args(annotation)[0],
                 localns=localns,
@@ -3312,7 +3304,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
 
             return attribute
 
-        case typing.Optional | typing_extensions.Optional:
+        case typing.Optional:
             return UnionAttribute(
                 base=annotation,
                 alternatives=(
@@ -3330,7 +3322,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
         # a qualifier of a TypedDict key which only tells a type checker the key is not
         # to be assigned, it changes nothing about the value - State attributes are
         # immutable already
-        case typing.Final | typing_extensions.Final | typing.ReadOnly | typing_extensions.ReadOnly:
+        case typing.Final | typing.ReadOnly:
             return resolve_attribute(
                 get_args(annotation)[0],
                 localns=localns,
@@ -3339,7 +3331,7 @@ def resolve_attribute(  # noqa: C901, PLR0911, PLR0912
                 recursion_guard=recursion_guard,
             )
 
-        case typing.ForwardRef | typing_extensions.ForwardRef:
+        case typing.ForwardRef:
             return _resolve_forward_reference(
                 _evaluate_forward_ref(
                     annotation,

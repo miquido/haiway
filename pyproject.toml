@@ -23,7 +23,7 @@ classifiers = [
 ]
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = ["typing-extensions~=4.16"]
+dependencies = []
 
 [project.urls]
 Homepage = "https://miquido.com"
@@ -55,6 +55,8 @@ dev = [
   "pytest-asyncio~=1.4",
   "pytest-cov~=7.1",
   "ruff~=0.17",
+  # optional at runtime - its TypedDicts are recognized when it is installed
+  "typing-extensions~=4.16",
 ]
 docs = [
   "haiway[opentelemetry,httpx,postgres,rabbitmq,starlette,fastapi]",

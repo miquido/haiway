@@ -1,6 +1,7 @@
 import datetime
 import enum
 import pathlib
+import sys
 import typing
 import uuid
 from collections.abc import Iterator
@@ -11,6 +12,7 @@ import pytest
 import typing_extensions as te
 
 from haiway import State
+from haiway.attributes import annotations as annotations_module
 from haiway.attributes import native
 from haiway.attributes.annotations import (
     AliasAttribute,
@@ -537,3 +539,13 @@ def test_read_only_attribute_is_resolved_as_what_it_qualifies() -> None:
         "value": {"type": "integer"},
         "extension": {"type": "string"},
     }
+
+
+def test_typed_dicts_are_recognized_without_typing_extensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # typing_extensions is optional - without it only the TypedDicts of typing exist
+    monkeypatch.setitem(sys.modules, "typing_extensions", None)
+    checks: Any = vars(annotations_module)["_typeddict_checks"]()
+    assert len(checks) == 1
+    assert checks[0](TypedDict("Plain", {"a": int}))
