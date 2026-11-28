@@ -112,14 +112,5 @@ adding `# type: ignore`, `cast` or `Any`; do not widen ruff ignores to make a fi
 
 ## Tests
 
-Mirror the package layout in `tests/`. Add an autouse fixture so no task leaks between tests:
-
-```python
-@pytest.fixture(autouse=True)
-def cleanup_background_tasks() -> Generator[None]:
-    yield
-    ctx.shutdown_background_tasks()
-```
-
-Capture an edge case as a regression test before fixing it. How to fake dependencies is in
-`patterns.md` and `recipes.md`.
+Mirror the package layout in `tests/`. Capture an edge case as a regression test before fixing it. How to fake dependencies
+is in `patterns.md` and `recipes.md`.

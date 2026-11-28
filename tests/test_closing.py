@@ -96,7 +96,7 @@ async def test_closing_records_no_failure() -> None:
         metric_recording=lambda *args, **kwargs: None,
         event_recording=lambda *args, **kwargs: None,
         attributes_recording=lambda *args, **kwargs: None,
-        scope_entering=lambda scope, /: "trace",
+        scope_entering=lambda scope, /, *, links: "trace",
         scope_exiting=lambda scope, /, *, exception: None,
     )
 

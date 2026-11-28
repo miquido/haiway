@@ -10,7 +10,12 @@ from haiway.context.closing import ContextClosing
 from haiway.context.disposables import Disposables
 from haiway.context.events import ContextEvents
 from haiway.context.identifier import ContextIdentifier, ScopeKind
-from haiway.context.observability import ContextObservability, Observability, ObservabilityLevel
+from haiway.context.observability import (
+    ContextObservability,
+    Observability,
+    ObservabilityLevel,
+    ObservabilityLink,
+)
 
 # Import after other imports to avoid circular dependencies
 from haiway.context.presets import ContextPresets, ContextPresetsRegistry
@@ -29,6 +34,7 @@ class ContextScope:
         "_identifier",
         "_isolated",
         "_kind",
+        "_links",
         "_name",
         "_observability",
         "_presets",
@@ -45,6 +51,7 @@ class ContextScope:
         observability: Observability | Logger | None,
         kind: ScopeKind,
         isolated: bool,
+        links: Sequence[ObservabilityLink] = (),
     ) -> None:
         self._identifier: ContextIdentifier | None = None
         self._name: str = name
@@ -54,6 +61,7 @@ class ContextScope:
         self._state: Sequence[State] = state
         self._disposables: Disposables = disposables
         self._isolated: bool = isolated
+        self._links: Sequence[ObservabilityLink] = links
         self._unwinds: MutableSequence[_Unwind] | None = None
 
     async def __aenter__(self) -> str:
@@ -77,6 +85,7 @@ class ContextScope:
             observability: ContextObservability = ContextObservability.scope(
                 identifier,
                 observability=self._observability,
+                links=self._links,
             )
             trace_id: str = observability.__enter__()
             unwinds.append(observability.__exit__)

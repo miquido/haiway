@@ -56,11 +56,12 @@ Because the shield waits for the tasks, an isolated scope needs tasks which fini
 Tasks can't be spawned with `ctx.spawn(...)` while the disposables of a scope are being prepared or
 disposed - the task group of the scope does not exist yet, respectively is already joined, so the
 task would end up attached to an enclosing scope or detached entirely. Such a call raises
-`RuntimeError`; use `ctx.spawn_background(...)` for work which has to outlive the preparation, and
-dispose of it in the disposable itself.
+`RuntimeError`. A helper loop of a disposable is an `asyncio` task the disposable owns: create it on
+enter, cancel and await it on exit. Work which has to outlive the scope or the process is a
+[managed task](managed-tasks.md) instead.
 
-Calling `ctx.spawn(...)` outside of any scope falls back to `ctx.spawn_background(...)` and logs a
-debug message about it, as it is rarely intended.
+Calling `ctx.spawn(...)` outside of any scope raises `ContextMissing` - there is no task group to
+own the task. A coroutine given to the call is closed, so it is never reported as not awaited.
 
 ### Disposal
 
@@ -70,14 +71,11 @@ exiting - even repeatedly - lets every one of them finish first, and is raised a
 failures are then logged instead of raised). The closing future of a scope, `ContextClosing`, always
 completes with the scope identifier - the error of the scope body is not a result of waiting for it.
 
-If work must outlive the current scope, use `ctx.spawn_background(...)` instead of `ctx.spawn(...)`.
-Such a task is fully detached - it runs with an empty context, so `ctx.state(...)` and
-`ctx.subscribe(...)` raise `ContextMissing` within it. Enter a scope inside the task, or pass what
-it needs as arguments.
+## Managed tasks
 
-Nothing joins a background task on its own - no scope owns it and no signal handler is installed to
-reach for it. `ctx.shutdown_background_tasks()` cancels the ones belonging to the running loop, for
-a graceful shutdown or a test teardown which must not leak tasks into the next case.
+Work which has to outlive the current scope is not started with `ctx.spawn(...)`: use managed tasks
+(`ManagedTasks`), which keep their own lifetime, status and outcome, can be retried, time-limited
+and cancelled, and with a database store survive a restart. See [Managed Tasks](managed-tasks.md).
 
 ## `process_concurrently`
 

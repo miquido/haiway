@@ -10,6 +10,7 @@ except ImportError as exc:  # pragma: no cover
 from haiway.postgres.client import PostgresConnectionPool
 from haiway.postgres.configuration import PostgresConfigurationRepository
 from haiway.postgres.state import Postgres, PostgresConnection
+from haiway.postgres.tasks import PostgresTaskStore
 from haiway.postgres.types import (
     PostgresErrorCode,
     PostgresException,
@@ -26,6 +27,7 @@ __all__ = (
     "PostgresErrorCode",
     "PostgresException",
     "PostgresRow",
+    "PostgresTaskStore",
     "PostgresTransactionIsolation",
     "PostgresValue",
 )

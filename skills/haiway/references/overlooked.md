@@ -19,7 +19,7 @@ use.
 | `Optional` sentinels, `None` meaning "unset" | `Missing` (`is Missing`), `without_missing(mapping)` to drop unset values |
 | `list(x)`, `dict(x)`, `set(x)`, `tuple(x)` of unknown input | `as_tuple`, `as_list`, `as_set`, `as_dict`, `as_map` |
 | immutable dict / metadata container | `Map`, `Meta` |
-| `asyncio.create_task`, `asyncio.TaskGroup` | `ctx.spawn(...)` (scoped), `ctx.spawn_background(...)` only to outlive the scope |
+| `asyncio.create_task`, `asyncio.TaskGroup` | `ctx.spawn(...)` (scoped), managed tasks to outlive the scope |
 | `asyncio.gather` | `gather(*coros)` (cancels the rest on failure) |
 | semaphore + gather for N at a time | `concurrently(coros, concurrent_tasks=...)`, `execute_concurrently(handler, items, concurrent_tasks=...)`, `process_concurrently(source, handler, ...)` |
 | merging async generators | `stream_concurrently(*sources)`, `stream2/3/4_concurrently` (keeps types); close early-left generators with `ctx.closing(gen)` |
@@ -51,7 +51,6 @@ use.
   `State` with no required attribute is built from its defaults when absent.
 - `ContextPresets.of(name, *state, disposables=(factories...))` + `with ctx.presets(...)` for
   environments (dev/test/prod) selected by name.
-- `ctx.shutdown_background_tasks()` for graceful shutdown and test teardown.
 - `ctx.record_*` takes `event=`, or `metric=, value=, kind="counter"|"histogram"|"gauge"`
   (optional `unit=`), each optionally with `attributes=`, or `attributes=` alone. The scope's
   observability level filters what is recorded.

@@ -97,6 +97,7 @@ nav:
       - Configuration: guides/configuration.md
       - Utilities: guides/utilities.md
       - Concurrent Processing: guides/concurrent.md
+      - Managed Tasks: guides/managed-tasks.md
       - Packages: guides/packages.md
   - Features:
       - OpenTelemetry: features/opentelemetry.md

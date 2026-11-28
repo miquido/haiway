@@ -1,7 +1,9 @@
 from asyncio import Task, ensure_future, get_running_loop, sleep, timeout
 from collections.abc import Iterator, Mapping, MutableSequence
+from contextvars import Context
 from datetime import UTC, datetime
 from decimal import Decimal
+from gc import collect
 from typing import Any
 
 from pika import BasicProperties, DeliveryMode
@@ -1700,6 +1702,49 @@ async def test_recovery_gives_up_after_the_configured_attempts(
 
 
 @mark.asyncio
+async def test_a_recovery_which_raises_discards_its_consumers_and_is_retrieved(
+    channels: MutableSequence[FakeChannel],
+    monkeypatch: MonkeyPatch,
+) -> None:
+    unretrieved: list[str] = []
+    get_running_loop().set_exception_handler(
+        lambda _, context: unretrieved.append(str(context.get("message")))
+    )
+    try:
+        async with ctx.scope("test"), _client(recovery_attempts=2, recovery_delay=0.01) as mq:
+            queue_access = await mq.queue("jobs", bytes, bytes)
+            access: Any = queue_access
+            async with queue_access as queue:
+                channel = channels[-1]
+                async with await queue.consume() as messages:
+
+                    def refusing(self: FakeChannel, *args: Any, **kwargs: Any) -> str:
+                        raise ChannelWrongStateError("Channel is closed.")
+
+                    def detaching(self: Any, consumer: Any, /) -> None:
+                        raise RuntimeError("detaching failed")
+
+                    monkeypatch.setattr(FakeChannel, "basic_consume", refusing)
+                    monkeypatch.setattr(type(access), "_detach_consumer", detaching)
+                    channel.force_close(AMQPConnectionError("channel gone"))
+
+                    with raises(RabbitMQException, match="recovery failed") as error:
+                        async with timeout(1):
+                            async for _ in messages:
+                                raise AssertionError("nothing can be delivered")
+
+                    assert error.value.retryable is True
+                    assert isinstance(error.value.__cause__, RuntimeError)
+                    assert access._recoveries == set()
+
+        collect()
+        assert unretrieved == []
+
+    finally:
+        get_running_loop().set_exception_handler(None)
+
+
+@mark.asyncio
 async def test_recovery_stops_when_the_consumption_is_abandoned(
     channels: MutableSequence[FakeChannel],
 ) -> None:
@@ -1717,6 +1762,45 @@ async def test_recovery_stops_when_the_consumption_is_abandoned(
             assert messages.is_finished is True
             await sleep(0.05)  # long enough for a recovery attempt to run
             assert access._consumers == []
+
+
+@mark.asyncio
+async def test_recovery_runs_when_the_channel_closes_outside_of_any_scope(
+    channels: MutableSequence[FakeChannel],
+) -> None:
+    # pika runs its callbacks in the context captured when the connection opened,
+    # which may hold no scope at all
+    async with ctx.scope("test"), _client() as mq:
+        async with await mq.queue("jobs", bytes, bytes) as queue:
+            first = channels[-1]
+            async with await queue.consume() as messages:
+                get_running_loop().call_soon(
+                    first.force_close,
+                    AMQPConnectionError("channel gone"),
+                    context=Context(),
+                )
+                second = await _recovered(channels, first)
+                assert second is not first
+                assert len(second.consumer_callbacks) == 1
+                assert messages.is_finished is False
+
+
+@mark.asyncio
+async def test_closing_the_access_cancels_a_running_recovery(
+    channels: MutableSequence[FakeChannel],
+) -> None:
+    async with ctx.scope("test"), _client(recovery_delay=10) as mq:
+        queue_access = await mq.queue("jobs", bytes, bytes)
+        access: Any = queue_access
+        messages = None
+        async with queue_access as queue:
+            consumption = await queue.consume()
+            messages = await consumption.__aenter__()
+            channels[-1].force_close(AMQPConnectionError("channel gone"))
+            assert len(access._recoveries) == 1
+
+        assert access._recoveries == set()
+        assert messages.is_finished is True
 
 
 # --------------------------------------------------------------------------

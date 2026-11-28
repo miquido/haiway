@@ -235,7 +235,7 @@ Guidelines:
 - Priority: explicit > disposables > presets > parent context
 - Methods: use `@statemethod` for helpers that may be called from class or instance
 - Concurrency: use `ctx.spawn(...)` inside an active `ctx.scope(...)`; use `isolated=True` for
-  task/event boundaries and `ctx.spawn_background(...)` for detached work
+  task/event boundaries and managed tasks for work which has to outlive the scope
 - Observability: `ctx.record_info(event=..., attributes={...})` or `ctx.log_info(...)`
 
 This functional, immutable, and context‑driven approach yields predictable, testable, and

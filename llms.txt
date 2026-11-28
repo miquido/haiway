@@ -169,11 +169,12 @@ the iteration is left early.
   `unhandled errors in a TaskGroup` wrapper. Iterating a `ctx.subscribe(...)`
   subscription to exhaustion is fine in a task spawned in the scope which created it (or an
   enclosing one) - a scope completes its closing before joining its tasks, which ends the iteration
-  first. `ctx.spawn_background(...)` only when work must outlive the
-  scope - such a
-  task runs with an empty context, so `ctx.state(...)`/`ctx.subscribe(...)` raise `ContextMissing`
-  within it. Nothing joins a background task on its own - `ctx.shutdown_background_tasks()` cancels
-  the ones of the running loop for a graceful shutdown or a test teardown.
+  first. `ctx.spawn(...)` outside of any scope raises `ContextMissing` (a given coroutine is
+  closed). Work which must outlive the scope goes to managed tasks (`ManagedTasks`), not to a
+  detached spawn. Shape: register with `@managed_task()` (one `State` argument, `State` or `None`
+  result), `async with ctx.managed_tasks(TaskRuntime(tasks=(task,))):`, then
+  `await ManagedTasks.spawn(task(argument))` and `await handle.outcome()`. Guide:
+  `docs/guides/managed-tasks.md`.
 - `ctx.closing(generator)` closes an async generator on leaving its iteration - required for
   `stream_concurrently(...)`, or any generator entering a scope of its own, left early, since the
   collector finalizes a generator in a fresh context where the scope it opened can no longer be

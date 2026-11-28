@@ -288,6 +288,29 @@ async def test_external_cache_writes_while_disposables_are_prepared() -> None:
     assert backend == {"cache:alpha": 5}
 
 
+@mark.asyncio
+async def test_external_cache_writes_before_returning_outside_of_any_scope() -> None:
+    backend: dict[str, int] = {}
+
+    async def read_from_store(key: str) -> int | None:
+        return backend.get(key)
+
+    async def write_to_store(key: str, value: int) -> None:
+        backend[key] = value
+
+    @cache_externally(
+        make_key=lambda value: f"cache:{value}",
+        read=read_from_store,
+        write=write_to_store,
+    )
+    async def compute(value: str) -> int:
+        return len(value)
+
+    # no scope to own a spawned write, so it is done in place
+    assert await compute("alpha") == 5
+    assert backend == {"cache:alpha": 5}
+
+
 def test_local_cache_is_consistent_across_threads():
     @cache(limit=4, expiration=0.0005)
     async def cached(value: int) -> int:

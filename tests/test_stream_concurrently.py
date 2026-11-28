@@ -1,4 +1,4 @@
-from asyncio import CancelledError, sleep, timeout
+from asyncio import CancelledError, create_task, sleep, timeout
 from collections.abc import AsyncGenerator
 from types import TracebackType
 from typing import NoReturn
@@ -214,7 +214,7 @@ async def test_cancellation_cancels_both_sources():
                 raise CancelledError()
 
     with raises(CancelledError):
-        task = ctx.spawn(consume_with_cancel)
+        task = create_task(consume_with_cancel())
         await task
 
     # Both iterators should have started and been cancelled

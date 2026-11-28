@@ -169,7 +169,7 @@ async def test_clear_removes_buffered_elements():
 async def test_clear_does_not_drop_waiting_consumer_result():
     stream: AsyncQueue[int] = AsyncQueue()
 
-    consumer = ctx.spawn(stream.next)
+    consumer = create_task(stream.next())
     await sleep(0)
 
     stream.clear()
@@ -235,7 +235,7 @@ async def test_waiting_consumer_bypasses_limit():
     # the limit, so no item should be dropped when the buffer is empty.
     stream: AsyncQueue[int] = AsyncQueue(limit=1)
 
-    consumer = ctx.spawn(stream.next)
+    consumer = create_task(stream.next())
     await sleep(0)
 
     stream.enqueue(42)

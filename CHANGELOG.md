@@ -2,6 +2,58 @@
 
 Notable changes to Haiway. Versions follow the `version` in `pyproject.toml`.
 
+## 0.68.0
+
+### Added
+
+- Managed tasks: work registered by name that runs detached from the scope which spawned it, with
+  its state kept in a store. `managed_task` registers a function taking a `State` argument and
+  returning a `State` or `None`, with an optional `name` and `retry` (`TaskRetryPolicy`).
+  `ctx.managed_tasks(TaskRuntime(...))` opens the runtime, which takes the `store`, and yields
+  `ManagedTasks`, whose `spawn` returns a `ManagedTask` handle to await the `outcome`
+  (`TaskCompleted`, `TaskFailed` or `TaskCancelled`) or to `cancel`; `ManagedTasks` also offers
+  `available`, `task` (look a task up) and `tasks` (list them). Each task runs as a separate task
+  tree with its own scope; an optional time limit per spawn, a concurrency limit and a grace period
+  on close apply.
+- `InMemoryTaskStore` and `PostgresTaskStore` (in `haiway.postgres`) hold the tasks, with retry,
+  leases and cancel requests. A store is a `TaskStore` protocol, so a custom one can be written.
+- Listing of stored tasks through `ManagedTasks.tasks`, filtered with `TaskFilter` and paged with
+  `Pagination`, returning `Paginated[TaskSummary]`; page tokens are opaque.
+- `TaskRuntime(unsupported="fail")` fails the due stored tasks of a name the runtime has no
+  registration for, with `TaskUnsupported`; the default, `"leave"`, leaves them waiting.
+- `ServerContext(tasks=...)` of `haiway.starlette` opens a `TaskRuntime` in the lifespan, after the
+  disposables.
+- `ObservabilityLink` links a scope to the scope that spawned the work, and
+  `ObservabilityScopeEntering` receives the links. `LoggerObservability` and the OpenTelemetry
+  backend record them.
+
+### Removed
+
+- **Breaking:** `ctx.spawn_background`, `BackgroundTaskGroup`, `ContextTaskGroup.background_run` and
+  `ctx.shutdown_background_tasks`. Work which has to outlive the scope that starts it is a managed
+  task now. Nothing of haiway itself used them; code depending on them has to move.
+
+### Changed
+
+- **Breaking:** `ctx.spawn` and `ContextTaskGroup.run` called outside of any scope raise
+  `ContextMissing` and close the coroutine they were given, instead of starting it.
+- **Breaking:** `ObservabilityScopeEntering` takes the keyword `links: Sequence[ObservabilityLink]`.
+  A custom `Observability` backend has to accept it in its scope-entering function.
+- `ServerContext.lifespan` yields inside the declared and prepared state and the presets of the
+  context, so code running within it sees them through `ctx.state` and `ctx.scope` presets. It used
+  to run outside of every context scope.
+- A `cache` with an external store called outside of any scope awaits the write of the value in
+  place instead of spawning it.
+
+### Migration
+
+Detached work started with `ctx.spawn_background` becomes a registered task: declare it with
+`@managed_task` (the argument and the result are `State`s), open the runtime around the application
+with `ctx.managed_tasks(TaskRuntime(tasks=(...,)))` - or pass `tasks=TaskRuntime(...)` to
+`ServerContext` - and start the work with `ManagedTasks.spawn` inside it. Work that has no `State`
+argument, or that is started from another thread, can stay a plain `asyncio` task owned by the
+module that starts it, since a managed task can be spawned from the runtime's event loop only.
+
 ## 0.67.0
 
 ### Changed

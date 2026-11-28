@@ -24,7 +24,15 @@ from starlette.routing import Host, Mount, Route, Router, WebSocketRoute
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from haiway import ContextMissing, ContextPresets, LoggerObservability, Observability, State, ctx
+from haiway import (
+    ContextMissing,
+    ContextPresets,
+    LoggerObservability,
+    Observability,
+    State,
+    TaskRuntime,
+    ctx,
+)
 from haiway.starlette import (
     ContextMiddleware,
     ServerContext,
@@ -216,7 +224,7 @@ async def test_unhandled_exception_is_recorded_as_the_failure_of_its_request() -
             metric_recording=lambda scope, /, level, **kwargs: None,
             event_recording=lambda scope, /, level, **kwargs: None,
             attributes_recording=attributes_recording,
-            scope_entering=lambda scope, /: _TRACE_ID.hex,
+            scope_entering=lambda scope, /, *, links: _TRACE_ID.hex,
             scope_exiting=scope_exiting,
             trace_context_encoding=lambda scope, /: {"traceparent": f"00-{_TRACE_ID.hex}-1-01"},
         )
@@ -316,6 +324,25 @@ async def test_lifespan_can_not_be_entered_twice() -> None:
             pass
 
     assert log == ["enter", "exit"]
+
+
+@mark.asyncio
+@mark.parametrize("tasks", [None, TaskRuntime(tasks=())], ids=["without_tasks", "with_tasks"])
+async def test_startup_work_sees_the_state_and_the_presets_of_the_context(
+    tasks: TaskRuntime | None,
+) -> None:
+    context = ServerContext(
+        ExampleState(value="declared"),
+        disposables=(ExampleDisposable([]),),
+        presets=(ContextPresets.of("preset", PresetState(value="from preset")),),
+        tasks=tasks,
+    )
+
+    async with context.lifespan():
+        assert ctx.state(ExampleState).value == "declared"
+        assert ctx.state(DisposableState).value == "disposable"
+        async with ctx.scope("preset"):
+            assert ctx.state(PresetState).value == "from preset"
 
 
 @mark.asyncio
@@ -742,7 +769,7 @@ async def test_http_exception_is_not_recorded_as_a_failure() -> None:
                 metric_recording=lambda scope, /, level, **kwargs: None,
                 event_recording=lambda scope, /, level, **kwargs: None,
                 attributes_recording=lambda scope, /, level, attributes: None,
-                scope_entering=lambda scope, /: _TRACE_ID.hex,
+                scope_entering=lambda scope, /, *, links: _TRACE_ID.hex,
                 scope_exiting=scope_exiting,
                 trace_context_encoding=lambda scope, /: {},
             )
@@ -785,7 +812,7 @@ async def test_client_disconnect_is_not_recorded_as_a_failure() -> None:
             metric_recording=lambda scope, /, level, **kwargs: None,
             event_recording=lambda scope, /, level, **kwargs: None,
             attributes_recording=lambda scope, /, level, attributes: None,
-            scope_entering=lambda scope, /: _TRACE_ID.hex,
+            scope_entering=lambda scope, /, *, links: _TRACE_ID.hex,
             scope_exiting=scope_exiting,
             trace_context_encoding=lambda scope, /: {},
         )
@@ -1234,7 +1261,7 @@ async def request_telemetry(
             attributes_recording=lambda scope, /, level, attributes: recorded.append(
                 dict(attributes)
             ),
-            scope_entering=lambda scope, /: _TRACE_ID.hex,
+            scope_entering=lambda scope, /, *, links: _TRACE_ID.hex,
             scope_exiting=lambda scope, /, *, exception: None,
             trace_context_encoding=lambda scope, /: {},
         )
@@ -1645,7 +1672,7 @@ async def test_websocket_disconnect_is_not_recorded_as_a_failure() -> None:
             metric_recording=lambda scope, /, level, **kwargs: None,
             event_recording=lambda scope, /, level, **kwargs: None,
             attributes_recording=lambda scope, /, level, attributes: None,
-            scope_entering=lambda scope, /: _TRACE_ID.hex,
+            scope_entering=lambda scope, /, *, links: _TRACE_ID.hex,
             scope_exiting=scope_exiting,
             trace_context_encoding=lambda scope, /: {},
         )

@@ -1,4 +1,4 @@
-from asyncio import CancelledError, current_task, sleep
+from asyncio import CancelledError, create_task, current_task, sleep
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
@@ -140,10 +140,8 @@ async def test_cancels_running_tasks_on_cancellation():
 
     # Run the process with cancellation
     with raises(CancelledError):
-        task = ctx.spawn(
-            execute_concurrently,
-            slow_handler,
-            list(range(10)),
+        task = create_task(
+            execute_concurrently(slow_handler, list(range(10))),
         )
         # Give some time for tasks to start
         await sleep(0.1)

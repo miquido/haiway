@@ -358,9 +358,9 @@ def cache_externally[**Args, Result, Key: Hashable](
     Notes
     -----
     - Only coroutine functions are supported; synchronous callables raise an assertion.
-    - Writes are detached tasks; ensure your context stays alive so persistence can finish.
-    - While the disposables of a scope are prepared or disposed, scoped tasks can't be
-      spawned - a write is then awaited in place, and its latency adds to the call.
+    - A write is a scoped task, awaited by its scope before the scope ends.
+    - Where spawning is refused - while the disposables of a scope are prepared or disposed, and
+      outside of any scope - the write is awaited in place, and its latency adds to the call.
     """
 
     def _wrap(

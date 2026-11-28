@@ -16,6 +16,7 @@ from haiway.context import (
     Observability,
     ObservabilityAttribute,
     ObservabilityLevel,
+    ObservabilityLink,
     ObservabilityMetricKind,
 )
 from haiway.postgres import Postgres, PostgresConnection, PostgresErrorCode, PostgresException
@@ -99,7 +100,12 @@ class _Recorder:
         ) -> None:
             return None
 
-        def scope_entering(scope: ContextIdentifier, /) -> str:
+        def scope_entering(
+            scope: ContextIdentifier,
+            /,
+            *,
+            links: Sequence[ObservabilityLink],
+        ) -> str:
             return ""
 
         def scope_exiting(

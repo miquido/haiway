@@ -571,6 +571,60 @@ filter by. Two things the default deliberately avoids: a logger named after the 
 `ctx.scope` would request and which allocates one per distinct request path, and a logger of our own
 created on import, which `setup_logging` disables along with every other logger predating it.
 
+## Managed Tasks
+
+`ServerContext(tasks=...)` takes a `TaskRuntime` of [managed tasks](../guides/managed-tasks.md), for
+work which has to outlive the request which started it:
+
+```python
+from haiway import ManagedTasks, State, TaskRuntime, managed_task
+from haiway.postgres import PostgresConnectionPool
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+
+
+class ReportRequest(State):
+    month: str
+
+
+@managed_task()
+async def build_report(request: ReportRequest) -> None: ...
+
+
+context = ServerContext(
+    ServiceConfig(),
+    disposables=(PostgresConnectionPool(),),
+    tasks=TaskRuntime(tasks=(build_report,), concurrency_limit=8),
+)
+
+
+async def start_report(request: Request) -> Response:
+    task = await ManagedTasks.spawn(build_report(ReportRequest(month="2026-11")))
+    return JSONResponse({"task": str(task.identifier)}, status_code=202)
+```
+
+The lifespan opens the runtime after the disposables are prepared and closes it before they are
+released. The runtime takes its root snapshot of the state of the disposables and the declared
+state, and of the presets. The `ManagedTasks` of the runtime is added to the state of every request
+scope, after the declared state, so routes spawn with `ManagedTasks.spawn(...)`. Without `tasks`, no
+managed tasks are available in requests.
+
+- **Entering starts executing stored tasks.** With a store which keeps tasks - `PostgresTaskStore`
+  with a database holding due tasks - tasks start as the lifespan is entered, before the first
+  request is served.
+- **One shared connection.** Every task shares the instances of the snapshot, so a single connection
+  among the disposables, such as a `PostgresConnection`, would be handed to every task at once. Keep
+  a single connection out of the disposables and the declared state.
+- **Observability.** A runtime given no `observability` records tasks through the observability of
+  the context: the backend itself for an `Observability`, a logging backend for a `Logger`, and for
+  a preparing function the backend it returns for a request without trace headers. Each task is a
+  new trace linked to the request which spawned it.
+- **Migrating the task store.** Opening `PostgresTaskStore` checks its schema and fails when it is
+  missing, so run `await store.migrate()` before the lifespan is entered - before
+  `async with context.lifespan(app)` in a hand-built lifespan, or as a deploy step - see
+  [Postgres](postgres.md#schema).
+- The lifespan has to be installed as the application lifespan, as for every request context.
+
 ## Context Presets
 
 Presets declared by the application context are available within request scopes, which lets an
@@ -627,9 +681,13 @@ Note the scope entered and exited before the `yield`. A scope held open across i
 state into the context the server creates its request tasks in - preparing state for requests is
 what the server context is for.
 
-Startup runs outside of every context scope, the disposables of the context included: they are
-prepared, but nothing entered a scope carrying their state, so `ctx.state(...)` resolves nothing
-there. Startup work needing state enters a scope of its own, as above.
+The lifespan of the context yields inside its state and its presets, whether or not it was given
+`tasks=`: the state declared and the state the disposables prepared resolve through `ctx.state(...)`
+there, and a preset is entered by name through `ctx.scope(...)`, so startup work needs no scope of
+its own to read them. Work which needs more than the context carries, a resource of its own as
+above, enters a scope for it. With `ServerContext(tasks=...)` the lifespan yields inside the managed
+tasks block as well, so code running while the application is served also sees `ManagedTasks` - see
+[Managed Tasks](#managed-tasks).
 
 ## Testing
 

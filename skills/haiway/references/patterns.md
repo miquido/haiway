@@ -221,8 +221,8 @@ a, b = await gather(fetch_a(), fetch_b())        # all or nothing, the rest canc
 results = await execute_concurrently(handler, items, concurrent_tasks=8)  # ordered, limited
 ```
 
-A task a scope waits on must be able to finish by itself. Background work (`ctx.spawn_background`)
-keeps logging but has no scope state. See `recipes.md` for choosing among the helpers.
+A task a scope waits on must be able to finish by itself. Work which must outlive the scope belongs
+to managed tasks. See `recipes.md` for choosing among the helpers.
 
 ## Errors
 

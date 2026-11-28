@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from logging import DEBUG, INFO, Handler, Logger, LogRecord, getLogger
 from typing import Any
 from uuid import UUID, uuid4
@@ -10,9 +10,11 @@ from haiway import LoggerObservability, Observability, ObservabilityLevel, Scope
 from haiway.context import (
     ObservabilityAttribute,
     ObservabilityLevelChecking,
+    ObservabilityLink,
     ObservabilityMetricKind,
 )
 from haiway.context.identifier import ContextIdentifier
+from tests.observability_helpers import linking
 
 
 class _CollectingHandler(Handler):
@@ -355,7 +357,7 @@ def _recording_observability(
     ) -> None:
         calls.append("attributes")
 
-    def scope_entering(scope: ContextIdentifier, /) -> str:
+    def scope_entering(scope: ContextIdentifier, /, *, links: Sequence[ObservabilityLink]) -> str:
         return UUID(int=0).hex
 
     def scope_exiting(scope: ContextIdentifier, /, *, exception: BaseException | None) -> None:
@@ -469,3 +471,60 @@ def test_discarded_logs_out_of_context_are_not_formatted(caplog: LogCaptureFixtu
     messages: list[str] = [record.getMessage() for record in caplog.records]
     assert "kept 1" in messages
     assert not any("skipped" in message for message in messages)
+
+
+@mark.asyncio
+async def test_link_is_logged_once_with_a_new_trace(
+    logger: tuple[Logger, list[LogRecord]],
+) -> None:
+    instance, records = logger
+    instance.setLevel(INFO)
+    base = LoggerObservability(instance)
+    async with ctx.scope("origin", observability=base):
+        origin_trace = ctx.trace_id()
+        link = ObservabilityLink.current()
+
+    async with ctx.scope("task", observability=linking(base, (link,))):
+        task_trace = ctx.trace_id()
+        ctx.log_info("first")
+        ctx.log_info("second")
+
+    assert task_trace != origin_trace
+    task_records = [m for m in _messages(records) if m.startswith(f"[{task_trace}]")]
+    assert len(task_records) == 3
+    linked = [m for m in _messages(records) if origin_trace in m and link.scope_id.hex in m]
+    assert len(linked) == 1
+    assert linked[0].startswith(f"[{task_trace}]")
+
+
+@mark.asyncio
+async def test_no_link_is_logged_without_links(
+    logger: tuple[Logger, list[LogRecord]],
+) -> None:
+    instance, records = logger
+    instance.setLevel(INFO)
+    async with ctx.scope("plain", observability=LoggerObservability(instance)):
+        pass
+
+    assert not any("Linked" in m for m in _messages(records))
+
+
+@mark.asyncio
+async def test_linked_nested_scope_starts_a_trace_and_keeps_the_logger(
+    logger: tuple[Logger, list[LogRecord]],
+) -> None:
+    instance, records = logger
+    instance.setLevel(INFO)
+    base = LoggerObservability(instance)
+    async with ctx.scope("origin", observability=base):
+        link = ObservabilityLink.current()
+
+    async with ctx.scope("parent", observability=base):
+        parent_trace = ctx.trace_id()
+        async with ctx.scope("linked", observability=linking(base, (link,))):
+            assert ctx.trace_id() != parent_trace
+            ctx.log_info("inside")
+
+    messages = _messages(records)
+    assert len([m for m in messages if "Linked to" in m]) == 1
+    assert any(m.endswith("inside") and not m.startswith(f"[{parent_trace}]") for m in messages)
