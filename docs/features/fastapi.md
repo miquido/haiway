@@ -85,6 +85,9 @@ the application factory differs:
   without it. Handlers of other exceptions are passed as `exception_handlers`, and also answer
   within the scope; `Exception` and `500` do not belong there
 
+`ServerContext(tasks=...)` works here as it does for Starlette, see
+[Managed Tasks](starlette.md#managed-tasks): requests spawn through `ManagedTasks.spawn(...)`.
+
 `middleware` and `debug` work exactly as in the Starlette factory - `debug` included its default of
 `__debug__`, see [Starlette](starlette.md#request-handling) - and `ContextMiddleware` is installed
 around the whole middleware stack of the application. There is no `max_body_size` here - FastAPI

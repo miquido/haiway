@@ -18,6 +18,8 @@ from haiway.attributes import State
 from haiway.context.disposables import ContextDisposables, Disposable, Disposables
 from haiway.context.events import ContextEvents, EventsSubscription
 from haiway.context.identifier import ScopeKind
+from haiway.context.managed import ManagedTasks, TaskRuntime
+from haiway.context.managed.block import managed_tasks_block
 from haiway.context.observability import (
     ContextObservability,
     Observability,
@@ -30,7 +32,7 @@ from haiway.context.observability import (
 from haiway.context.presets import ContextPresets, ContextPresetsRegistry
 from haiway.context.scope import ContextScope
 from haiway.context.state import ContextState
-from haiway.context.tasks import BackgroundTaskGroup, ContextTaskGroup, ScopeTaskGroup
+from haiway.context.tasks import ScopeTaskGroup
 from haiway.utils.context import NoopAsyncContext, NoopContext
 
 __all__ = ("ctx",)
@@ -330,6 +332,76 @@ class ctx:
 
         return ContextDisposables(disposables)
 
+    @staticmethod
+    def managed_tasks(
+        runtime: TaskRuntime,
+        /,
+        *,
+        observability: Observability | None = None,
+    ) -> AbstractAsyncContextManager[ManagedTasks]:
+        """
+        Enter a block in which managed tasks are spawned and run.
+
+        Entering the block takes the root snapshot, opens the runtime and its task store,
+        puts the ``ManagedTasks`` of the runtime into the context of the body and yields
+        it. Leaving the block restores the context and closes the runtime: running
+        attempts get the grace period of the runtime, the rest are cancelled and released
+        to the store.
+
+        Entering the block starts executing stored tasks: the due tasks of the store
+        whose registered names the runtime lists start running at once, concurrently with
+        the body and without any spawn. A task can therefore start before the first
+        statement of the body. The body does not wait for them.
+
+        The root snapshot holds the ``State`` instances and the presets registry current
+        when the block is entered, and never changes afterwards: state merged or presets
+        entered in the body do not reach tasks. Every task shares the instances of the
+        snapshot, so a snapshot holding a single connection, for example a
+        ``PostgresConnection``, hands that one connection to every task at once, which
+        most connections do not support. The block closes its runtime, ending every
+        attempt, before it returns, so the state taken from the scopes and disposables
+        around it stays usable for every attempt - this holds only when the block is
+        exited before them, as nesting ``async with`` blocks ensures.
+
+        A block entered inside another block, or inside a task, is a separate block with
+        its own tasks, which have its ``ManagedTasks`` as their owner. A runtime object can
+        be entered once.
+
+        Parameters
+        ----------
+        runtime : TaskRuntime
+            The runtime of the block, with its store and settings.
+        observability : Observability | None, default=None
+            The backend recording the tasks when the runtime was given none, a
+            ``LoggerObservability`` created for the block when neither is given.
+
+        Returns
+        -------
+        AbstractAsyncContextManager[ManagedTasks]
+            The block, yielding the ``ManagedTasks`` of the runtime.
+
+        Raises
+        ------
+        RuntimeError
+            When the runtime object was entered before.
+        Exception
+            Whatever opening the store raised, leaving nothing entered.
+
+        Examples
+        --------
+        >>> @managed_task(name="build_report")
+        ... async def build_report(request: Request) -> Report: ...
+        >>>
+        >>> async with ctx.scope("app"):
+        ...     async with ctx.managed_tasks(TaskRuntime(tasks=(build_report,))):
+        ...         task = await ManagedTasks.spawn(build_report(Request()))
+        ...         outcome = await task.outcome()
+        """
+        return managed_tasks_block(
+            runtime,
+            observability=observability,
+        )
+
     @overload
     @staticmethod
     def spawn[Result](
@@ -357,15 +429,15 @@ class ctx:
         Spawn an async task within current scope context task group.
 
         Spawned tasks inherit the current context snapshot via ``contextvars`` at
-        spawn time. When called outside of any scope, this falls back to the global
-        background task group instead.
+        spawn time. Called outside of any scope, ``ContextMissing`` is raised and a
+        given coroutine is closed, so it is never reported as not awaited.
 
         Every scope owns a task group, so a task is awaited by the scope it was
         spawned in when that scope exits - never by an enclosing one. This keeps the
         scope, its state and its observability records alive for as long as the task
         runs. Tasks are not automatically cancelled on a healthy scope exit; use
-        ``task.cancel()`` or ``ctx.spawn_background(...)`` when different lifetime
-        semantics are required.
+        ``task.cancel()`` when different lifetime semantics are required, or managed
+        tasks for work which has to outlive the scope.
 
         A failed task does not cancel the scope body or its sibling tasks - the
         errors of all failed tasks are raised when the scope exits, even when the
@@ -373,9 +445,8 @@ class ctx:
         tasks are cancelled and its error takes precedence.
 
         Tasks can't be spawned while the disposables of a scope are being prepared
-        or disposed, ``RuntimeError`` is raised - use ``ctx.spawn_background(...)``.
-        Outside of any scope the task is spawned in the background, which is logged
-        at debug level.
+        or disposed, ``RuntimeError`` is raised - use managed tasks for work which
+        has to outlive the scope.
 
         A task consuming ``ctx.subscribe(...)`` ends together with the scope the
         subscription was created in, including a nested non isolated one sharing
@@ -398,76 +469,16 @@ class ctx:
         -------
         Task[Result]
             task for tracking function execution and result
+
+        Raises
+        ------
+        ContextMissing
+            when called outside of any scope - a given coroutine is closed
+        RuntimeError
+            when called while the disposables of a scope are being prepared or disposed
         """
 
         return ScopeTaskGroup.run(coro, *args, **kwargs)
-
-    @overload
-    @staticmethod
-    def spawn_background[Result](
-        coro: Coroutine[None, None, Result],
-        /,
-    ) -> Task[Result]: ...
-
-    @overload
-    @staticmethod
-    def spawn_background[Result, **Arguments](
-        coro: Callable[Arguments, Coroutine[None, None, Result]],
-        /,
-        *args: Arguments.args,
-        **kwargs: Arguments.kwargs,
-    ) -> Task[Result]: ...
-
-    @staticmethod
-    def spawn_background[Result, **Arguments](
-        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result],
-        /,
-        *args: Arguments.args,
-        **kwargs: Arguments.kwargs,
-    ) -> Task[Result]:
-        """
-        Spawn an async task within background task group.
-
-        Background tasks are fully detached - they run with an empty context instead
-        of a snapshot of the current one, and may outlive the scope they were spawned
-        in. Inheriting that snapshot would bind them to a scope which is free to
-        complete while they still run, silently voiding their state, events and
-        observability records.
-
-        As a consequence ``ctx.state(...)`` and ``ctx.subscribe(...)`` raise
-        ``ContextMissing`` within a background task, and records go to the root
-        logger. Enter a scope within the task, or pass what it needs as arguments,
-        when either is required. Use ``ctx.shutdown_background_tasks()`` for
-        best-effort cleanup during shutdown or tests.
-
-        Parameters
-        ----------
-        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result]
-            function or coroutine to be called within the task group
-
-        *args: Arguments.args
-            positional arguments passed to function call
-
-        **kwargs: Arguments.kwargs
-            keyword arguments passed to function call
-
-        Returns
-        -------
-        Task[Result]
-            task for tracking function execution and result
-        """
-
-        return ContextTaskGroup.background_run(coro, *args, **kwargs)
-
-    @staticmethod
-    def shutdown_background_tasks() -> None:
-        """
-        Cancel all background tasks created via ``ctx.spawn_background`` or fallback spawns.
-
-        Intended for graceful shutdown and test teardown to avoid task leaks.
-        """
-
-        BackgroundTaskGroup.shutdown_all()
 
     @staticmethod
     def closing[Element](

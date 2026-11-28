@@ -4,7 +4,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from contextvars import ContextVar, Token
+from contextvars import Context, ContextVar, Token
 from types import TracebackType
 from typing import (
     Any,
@@ -265,6 +265,11 @@ class ContextPresets:
 @final
 class ContextPresetsRegistry:
     @classmethod
+    def current(cls) -> Self | None:
+        # the innermost registry, none when no presets were registered
+        return cls._context.get(None)
+
+    @classmethod
     def select(
         cls,
         name: str,
@@ -296,6 +301,15 @@ class ContextPresetsRegistry:
         /,
     ) -> ContextPresets | None:
         return self._registry.get(name)
+
+    def installing(
+        self,
+        context: Context,
+        /,
+    ) -> None:
+        # sets this registry as a value of a context built apart from the current one,
+        # which is not entering it - entering one registry twice is rejected
+        context.run(ContextPresetsRegistry._context.set, self)
 
     def __enter__(self) -> None:
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101

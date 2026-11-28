@@ -8,10 +8,8 @@ from asyncio import (
 )
 from collections.abc import (
     Callable,
-    Collection,
     Coroutine,
     Generator,
-    MutableMapping,
     MutableSet,
     Sequence,
 )
@@ -20,112 +18,14 @@ from contextvars import Context, ContextVar, Token, copy_context
 from inspect import iscoroutine
 from types import CoroutineType, FunctionType, MethodType, TracebackType
 from typing import Any, ClassVar, Final, Self, cast, final
-from weakref import WeakKeyDictionary
 
 from haiway.context.observability import ContextObservability, ObservabilityLevel
+from haiway.context.types import ContextMissing
 
 __all__ = (
-    "BackgroundTaskGroup",
     "ContextTaskGroup",
     "ScopeTaskGroup",
 )
-
-
-@final  # global background tasks
-class BackgroundTaskGroup:
-    # tasks can only be created from within a running loop, i.e. from its own thread, and are
-    # discarded by done callbacks running on that same thread - multithreading is not supported,
-    # hence no lock is required to guard the mapping.
-    # keeping the loops weakly lets a loop completing without an explicit shutdown drop its entry
-    # instead of leaking it - pending tasks reference their loop, keeping it alive until they end.
-    _loops_tasks: ClassVar[MutableMapping[AbstractEventLoop, MutableSet[Task[Any]]]] = (
-        WeakKeyDictionary()
-    )
-
-    @classmethod
-    def create_task[Result](
-        cls,
-        coroutine: Coroutine[None, None, Result],
-        /,
-        *,
-        context: Context | None = None,
-    ) -> Task[Result]:
-        loop: AbstractEventLoop = get_running_loop()
-
-        task: Task[Result] = loop.create_task(
-            coroutine,
-            context=context,
-        )
-
-        tasks: MutableSet[Task[Any]]
-        loop_tasks: MutableSet[Task[Any]] | None = cls._loops_tasks.get(loop)
-        if loop_tasks is None:
-            tasks = set()
-            cls._loops_tasks[loop] = tasks
-
-        else:
-            tasks = loop_tasks
-
-        tasks.add(task)
-
-        def handle_done(completed: Task[Any]) -> None:
-            tasks.discard(completed)
-
-            try:
-                exception = completed.exception()
-
-            except CancelledError:
-                return
-
-            if exception is None:
-                return
-
-            ContextObservability.record_log(
-                ObservabilityLevel.ERROR,
-                "Background task failed",
-                exception=exception,
-            )
-
-        # run detached like the task itself - the spawning scope may be long gone
-        task.add_done_callback(handle_done, context=Context())
-        return task
-
-    @classmethod
-    def shutdown(
-        cls,
-        *,
-        loop: AbstractEventLoop | None = None,
-    ) -> None:
-        if loop is None:
-            loop = get_running_loop()
-
-        loop_tasks: Collection[Task[Any]] = tuple(cls._loops_tasks.pop(loop, ()))
-
-        if loop.is_closed():
-            return
-
-        else:
-            # the failures of the tasks are retrieved by their done callbacks, nothing is
-            # left to wait for here - cancelling is all of it
-
-            def cancel_tasks() -> None:
-                for task in loop_tasks:
-                    try:
-                        task.cancel()
-
-                    except RuntimeError:
-                        pass  # the loop closed meanwhile, it runs nothing anymore
-
-            try:  # within the loop of the tasks - cancelling is not thread safe
-                loop.call_soon_threadsafe(cancel_tasks)
-
-            except RuntimeError:
-                cancel_tasks()
-
-    @classmethod
-    def shutdown_all(cls) -> None:
-        for loop in tuple(cls._loops_tasks.keys()):
-            cls.shutdown(loop=loop)
 
 
 def _coroutine[Result, **Arguments](
@@ -271,17 +171,14 @@ class ScopeTaskGroup:
         try:
             tasks = cls._context.get()
 
-        except LookupError:  # spawn task in the background as a fallback
-            ContextObservability.record_log(
-                ObservabilityLevel.DEBUG,
-                "Task spawned outside of a context scope, running it in the background",
-                exception=None,
-            )
-            return ContextTaskGroup.background_run(
-                coro,
-                *args,
-                **kwargs,
-            )
+        except LookupError:
+            if iscoroutine(coro):
+                coro.close()  # never started
+
+            raise ContextMissing(
+                "Tasks can't be spawned outside of a context scope - "
+                "use ManagedTasks.spawn for work which has to outlive it"
+            ) from None
 
         if tasks is None:
             if iscoroutine(coro):
@@ -289,7 +186,8 @@ class ScopeTaskGroup:
 
             raise RuntimeError(
                 "Tasks can't be spawned while disposables are being prepared or disposed, "
-                "they would outlive the scope owning them - use ctx.spawn_background instead"
+                "they would outlive the scope owning them - "
+                "use ManagedTasks.spawn for work which has to outlive it"
             )
 
         coroutine: Coroutine[None, None, Result] = _coroutine(coro, *args, **kwargs)
@@ -301,9 +199,8 @@ class ScopeTaskGroup:
 
     @classmethod
     def spawning(cls) -> bool:
-        # `False` only within a region refusing scoped tasks, outside of any scope
-        # tasks fall back to running in the background
-        return cls._context.get(True) is not None
+        # `False` within a region refusing scoped tasks and outside of any scope
+        return cls._context.get(None) is not None
 
     # `None` marks a region where spawning scoped tasks is not allowed
     _context: ClassVar[ContextVar[_ScopeTasks | None]] = ContextVar[_ScopeTasks | None](
@@ -451,36 +348,17 @@ class ContextTaskGroup:
         try:
             task_group = cls._context.get()
 
-        except LookupError:  # spawn task in the background as a fallback
-            return cls.background_run(
-                coro,
-                *args,
-                **kwargs,
-            )
+        except LookupError:
+            if iscoroutine(coro):
+                coro.close()  # never started
+
+            raise ContextMissing("Tasks can't be spawned outside of a context task group") from None
 
         coroutine: Coroutine[None, None, Result] = _coroutine(coro, *args, **kwargs)
 
         return task_group.create_task(
             coroutine,
             context=copy_context(),
-        )
-
-    @classmethod
-    def background_run[Result, **Arguments](
-        cls,
-        coro: Callable[Arguments, Coroutine[None, None, Result]] | Coroutine[None, None, Result],
-        /,
-        *args: Arguments.args,
-        **kwargs: Arguments.kwargs,
-    ) -> Task[Result]:
-        coroutine: Coroutine[None, None, Result] = _coroutine(coro, *args, **kwargs)
-
-        # detached tasks run outside of any scope - inheriting the spawning
-        # context would bind them to a scope which is free to complete while
-        # they still run, silently voiding their state, events and records
-        return BackgroundTaskGroup.create_task(
-            coroutine,
-            context=Context(),
         )
 
     _context: ClassVar[ContextVar[TaskGroup]] = ContextVar[TaskGroup]("ContextTaskGroup")

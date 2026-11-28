@@ -395,7 +395,7 @@ def _recording_observability(
         metric_recording=metric_recording,
         event_recording=event_recording,
         attributes_recording=lambda scope, /, level, attributes: None,
-        scope_entering=lambda scope, /: "trace",
+        scope_entering=lambda scope, /, *, links: "trace",
         scope_exiting=lambda scope, /, *, exception: None,
         trace_context_encoding=lambda scope, /: trace_context,
     )

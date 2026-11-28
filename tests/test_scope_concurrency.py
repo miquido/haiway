@@ -215,37 +215,6 @@ async def test_spawn_within_scope_body_works_after_disposables_prepared():
     assert completed.is_set()
 
 
-@mark.asyncio
-async def test_spawn_background_within_disposable_preparation_is_allowed():
-    errors: list[BaseException] = []
-
-    class BackgroundDisposable:
-        async def __aenter__(self) -> ExampleState:
-            async def noop() -> None:
-                pass
-
-            try:
-                await ctx.spawn_background(noop)
-
-            except BaseException as exc:
-                errors.append(exc)
-
-            return ExampleState()
-
-        async def __aexit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc_val: BaseException | None,
-            exc_tb: TracebackType | None,
-        ) -> None:
-            pass
-
-    async with ctx.scope("root", disposables=(BackgroundDisposable(),)):
-        pass
-
-    assert errors == []
-
-
 # --- disposal is ensured -----------------------------------------------------------------
 
 
@@ -343,35 +312,6 @@ async def test_disposal_completes_when_the_scope_body_is_cancelled():
 
 
 # --- spawn outside of a scope ------------------------------------------------------------
-
-
-@mark.asyncio
-async def test_spawn_outside_of_scope_logs_debug_message(caplog: LogCaptureFixture):
-    done = asyncio.Event()
-
-    async def worker() -> None:
-        done.set()
-
-    with caplog.at_level(logging.DEBUG):
-        ctx.spawn(worker)
-        await done.wait()
-
-    messages: list[str] = [
-        record.getMessage() for record in caplog.records if record.levelno == logging.DEBUG
-    ]
-    assert any("outside" in message and "background" in message for message in messages)
-
-
-@mark.asyncio
-async def test_spawn_within_scope_does_not_log_fallback(caplog: LogCaptureFixture):
-    async def worker() -> None:
-        pass
-
-    with caplog.at_level(logging.DEBUG):
-        async with ctx.scope("scoped"):
-            ctx.spawn(worker)
-
-    assert not any("background" in record.getMessage() for record in caplog.records)
 
 
 # --- closing future ----------------------------------------------------------------------

@@ -1,4 +1,4 @@
-from asyncio import CancelledError, Event, Task, current_task, sleep, timeout
+from asyncio import CancelledError, Event, Task, create_task, current_task, sleep, timeout
 from collections import deque
 from collections.abc import AsyncGenerator, Iterable
 from gc import collect
@@ -161,10 +161,8 @@ async def test_cancels_running_tasks_on_cancellation():
 
     # Run the process with cancellation
     with raises(CancelledError):
-        task = ctx.spawn(
-            process_concurrently,
-            elements_source(range(10)),
-            slow_handler,
+        task = create_task(
+            process_concurrently(elements_source(range(10)), slow_handler),
         )
         # Wait deterministically until at least one handler actually started
         async with timeout(5):
@@ -208,7 +206,7 @@ async def test_processes_elements_from_queue():
         processed.append(element + 1)
 
     # Start processing in the background
-    task = ctx.spawn(process_concurrently, queue, handler)
+    task = create_task(process_concurrently(queue, handler))
     # Add elements to the queue
     for i in range(5):
         queue.enqueue(i)
@@ -281,7 +279,7 @@ async def test_closes_the_source_when_cancelled():
         await sleep(10)
 
     async with ctx.scope("cancelled_source"):
-        task = ctx.spawn(process_concurrently, tracked_source(), slow_handler)
+        task = create_task(process_concurrently(tracked_source(), slow_handler))
         await started.wait()
         task.cancel()
         with raises(CancelledError):

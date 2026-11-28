@@ -1,4 +1,14 @@
-from asyncio import AbstractEventLoop, Future, Lock, get_running_loop, sleep, timeout
+from asyncio import (
+    AbstractEventLoop,
+    Future,
+    Lock,
+    Task,
+    create_task,
+    gather,
+    get_running_loop,
+    sleep,
+    timeout,
+)
 from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, MutableMapping
 from contextlib import AbstractAsyncContextManager
 from functools import partial
@@ -1051,6 +1061,7 @@ class _QueueAccess[Content]:
         "_publish_timeout",
         "_publisher_confirms",
         "_queue",
+        "_recoveries",
         "_recovery_attempts",
         "_recovery_delay",
     )
@@ -1086,6 +1097,7 @@ class _QueueAccess[Content]:
         self._lock: Lock = Lock()
         self._channel: _ChannelState | None = None
         self._consumers: list[_Consumer[Content]] = []
+        self._recoveries: set[Task[None]] = set()
         self._closed: bool = False
 
     async def __aenter__(self) -> MQQueue[Content]:
@@ -1128,6 +1140,14 @@ class _QueueAccess[Content]:
                     limit=self._operation_timeout,
                     message="Timed out closing RabbitMQ channel",
                 )
+
+        # the recoveries are owned by this access, not by any scope - the channel
+        # callbacks starting them may run outside of one
+        recoveries: tuple[Task[None], ...] = tuple(self._recoveries)
+        for recovery in recoveries:
+            recovery.cancel()
+
+        await gather(*recoveries, return_exceptions=True)
 
         for consumer in consumers:
             consumer.discard()
@@ -1227,17 +1247,20 @@ class _QueueAccess[Content]:
 
         if not (self._closed or self._recovery_attempts < 1):
             try:
-                ctx.spawn(
-                    self._recover,
-                    consumers,
-                    message=message,
-                    cause=cause,
+                recovery: Task[None] = create_task(
+                    self._recover(
+                        consumers,
+                        message=message,
+                        cause=cause,
+                    )
                 )
+                self._recoveries.add(recovery)
+                recovery.add_done_callback(partial(self._recovery_done, consumers))
                 return  # the recovery owns them now
 
             except Exception as exc:
-                # nothing is left to run the recovery on - the scope owning the
-                # queue access is gone, which ends the iteration either way
+                # nothing is left to run the recovery on - no running loop is left,
+                # which ends the iteration either way
                 ctx.log_error(
                     "Failed to start RabbitMQ consumer recovery",
                     exception=exc,
@@ -1250,6 +1273,40 @@ class _QueueAccess[Content]:
                     operation="consume",
                     queue=self._queue,
                     cause=cause,
+                    retryable=True,
+                )
+            )
+
+    def _recovery_done(
+        self,
+        consumers: list[_Consumer[Content]],
+        recovery: Task[None],
+        /,
+    ) -> None:
+        self._recoveries.discard(recovery)
+        if recovery.cancelled():
+            # closed meanwhile, possibly before it started - nothing is left to recover onto
+            for consumer in consumers:
+                consumer.discard()
+
+            return
+
+        # retrieved here, so that asyncio does not report it as never retrieved
+        failure: BaseException | None = recovery.exception()
+        if failure is None:
+            return
+
+        ctx.log_error(
+            "RabbitMQ consumer recovery failed",
+            exception=failure,
+        )
+        for consumer in consumers:
+            consumer.discard(
+                RabbitMQException(
+                    "RabbitMQ consumer recovery failed",
+                    operation="consume",
+                    queue=self._queue,
+                    cause=failure if isinstance(failure, Exception) else None,
                     retryable=True,
                 )
             )

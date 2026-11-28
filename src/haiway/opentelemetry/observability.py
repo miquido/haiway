@@ -47,7 +47,7 @@ from opentelemetry.sdk.metrics.export import (
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SpanExporter
-from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
+from opentelemetry.trace import Link, Span, SpanContext, SpanKind, StatusCode, Tracer
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.util.types import AttributeValue
 
@@ -56,6 +56,7 @@ from haiway.context import (
     Observability,
     ObservabilityAttribute,
     ObservabilityLevel,
+    ObservabilityLink,
     ObservabilityMetricKind,
     ScopeKind,
 )
@@ -648,6 +649,22 @@ def _active_w3c_trace_context() -> Mapping[str, str]:
     return carrier
 
 
+def _link_span_context(
+    link: ObservabilityLink,
+    /,
+) -> SpanContext | None:
+    if not link.trace_context:
+        return None
+
+    # an explicitly empty context, so nothing ambient is mistaken for the link
+    context: Context = _W3C_PROPAGATOR.extract(dict(link.trace_context), context=Context())
+    span_context: SpanContext = trace.get_current_span(context).get_span_context()
+    if not span_context.is_valid:
+        return None
+
+    return span_context
+
+
 @final
 class _ObservabilityAdapter:
     # one adapter may back several independent scope trees, including concurrent
@@ -858,12 +875,29 @@ class _ObservabilityAdapter:
         self,
         scope: ContextIdentifier,
         /,
+        *,
+        links: Sequence[ObservabilityLink],
     ) -> str:
         assert scope.scope_id not in self._scopes  # nosec: B101
 
         parent: ScopeStore | None = self._scopes.get(scope.parent_id)
         context: Context
-        if parent is not None:
+        span_links: list[Link] = []
+        if links:
+            # a linked scope starts a trace of its own - neither the remote nor the
+            # ambient context may become its parent
+            context = Context()
+            for link in links:
+                span_context: SpanContext | None = _link_span_context(link)
+                if span_context is None:
+                    _logger.warning(
+                        "Linked scope has no valid trace context, skipping the span link"
+                    )
+
+                else:
+                    span_links.append(Link(span_context))
+
+        elif parent is not None:
             context = parent.context
 
         elif self._remote_context is not None and scope.is_root:
@@ -882,6 +916,7 @@ class _ObservabilityAdapter:
                 name=scope.name,
                 context=context,
                 kind=_SPAN_KINDS.get(scope.kind, SpanKind.INTERNAL),
+                links=span_links,
             ),
             logger=self._logger,
         )

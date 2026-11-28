@@ -1,4 +1,4 @@
-from asyncio import CancelledError, Task, create_task, sleep, to_thread
+from asyncio import CancelledError, Task, create_task, gather, sleep, to_thread
 
 import pytest
 from pytest import mark, raises
@@ -133,13 +133,14 @@ async def test_delivers_all_when_sending_async():
         await stream.send(2)
         stream.finish()
 
-    ctx.spawn(sender)
+    sending = create_task(sender())
     elements: list[int] = []
 
     async for element in stream:
         elements.append(element)
 
     assert elements == [0, 1, 2]
+    await sending
 
 
 @pytest.mark.asyncio
@@ -152,13 +153,13 @@ async def test_multiple_producers_deliver_all_once():
 
     async def orchestrate() -> None:
         # two producers sending disjoint ranges concurrently
-        t1 = ctx.spawn(producer, 0, 50)
-        t2 = ctx.spawn(producer, 1000, 50)
+        t1 = create_task(producer(0, 50))
+        t2 = create_task(producer(1000, 50))
         await t1
         await t2
         stream.finish()
 
-    ctx.spawn(orchestrate)
+    orchestrating = create_task(orchestrate())
 
     received: list[int] = []
     async for x in stream:
@@ -169,6 +170,7 @@ async def test_multiple_producers_deliver_all_once():
     assert len(received) == len(set(received))
     assert set(range(0, 50)).issubset({x for x in received if x < 1000})
     assert set(range(1000, 1050)).issubset(set(received))
+    await orchestrating
 
 
 @pytest.mark.asyncio
@@ -176,8 +178,8 @@ async def test_producer_race_on_same_ready():
     stream: AsyncStream[str] = AsyncStream()
 
     # Start two sends that will race to deliver when consumer is ready
-    ctx.spawn(stream.send, "first")
-    ctx.spawn(stream.send, "second")
+    first = create_task(stream.send("first"))
+    second = create_task(stream.send("second"))
 
     got: list[str] = []
 
@@ -191,15 +193,16 @@ async def test_producer_race_on_same_ready():
 
     # Exactly both values delivered once, in some order
     assert sorted(got) == ["first", "second"]
+    await gather(first, second)
 
 
 @pytest.mark.asyncio
 async def test_delivers_next_element_when_producer_was_cancelled():
     stream: AsyncStream[int] = AsyncStream()
 
-    abandoned: Task[None] = ctx.spawn(stream.send, 0)
+    abandoned: Task[None] = create_task(stream.send(0))
     await sleep(0)  # let it park waiting for a consumer
-    delivering: Task[None] = ctx.spawn(stream.send, 1)
+    delivering: Task[None] = create_task(stream.send(1))
     await sleep(0)  # let it park behind the abandoned one
 
     abandoned.cancel()
@@ -215,7 +218,7 @@ async def test_delivers_next_element_when_producer_was_cancelled():
 async def test_finishes_when_producer_was_cancelled():
     stream: AsyncStream[int] = AsyncStream()
 
-    abandoned: Task[None] = ctx.spawn(stream.send, 0)
+    abandoned: Task[None] = create_task(stream.send(0))
     await sleep(0)  # let it park waiting for a consumer
 
     abandoned.cancel()
@@ -242,7 +245,7 @@ async def test_aclose_ends_the_iteration():
 async def test_aclose_releases_a_waiting_consumer():
     stream: AsyncStream[int] = AsyncStream()
 
-    consuming: Task[int] = ctx.spawn(anext, stream)
+    consuming: Task[int] = create_task(anext(stream))
     await sleep(0)  # let it park waiting for an element
 
     await stream.aclose()
@@ -255,7 +258,7 @@ async def test_aclose_releases_a_waiting_consumer():
 async def test_aclose_releases_a_waiting_producer():
     stream: AsyncStream[int] = AsyncStream()
 
-    delivering: Task[None] = ctx.spawn(stream.send, 0)
+    delivering: Task[None] = create_task(stream.send(0))
     await sleep(0)  # let it park waiting for a consumer
 
     await stream.aclose()
@@ -305,7 +308,7 @@ async def test_athrow_normalizes_a_type_with_a_value_like_a_generator():
 async def test_asend_resumes_iteration_and_rejects_values():
     stream: AsyncStream[int] = AsyncStream()
 
-    delivering: Task[None] = ctx.spawn(stream.send, 7)
+    delivering: Task[None] = create_task(stream.send(7))
     assert await stream.asend() == 7
     await delivering
 
@@ -318,7 +321,7 @@ async def test_aclosing_ends_the_stream():
     stream: AsyncStream[int] = AsyncStream()
 
     async with ctx.closing(stream) as elements:
-        delivering: Task[None] = ctx.spawn(stream.send, 1)
+        delivering: Task[None] = create_task(stream.send(1))
         assert await elements.asend() == 1
         await delivering
 

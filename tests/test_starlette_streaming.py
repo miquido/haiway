@@ -299,7 +299,7 @@ class _Records:
             metric_recording=lambda scope, /, level, **kwargs: None,
             event_recording=lambda scope, /, level, **kwargs: None,
             attributes_recording=lambda scope, /, level, attributes: None,
-            scope_entering=lambda scope, /: "trace",
+            scope_entering=lambda scope, /, *, links: "trace",
             scope_exiting=scope_exiting,
             trace_context_encoding=lambda scope, /: {},
         )

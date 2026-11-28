@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
+from uuid import UUID
 
 from opentelemetry import metrics, trace
 from opentelemetry._logs import NoOpLoggerProvider, SeverityNumber
@@ -20,9 +21,10 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 from opentelemetry.trace import ProxyTracerProvider, SpanContext, SpanKind, StatusCode, Tracer
 from pytest import LogCaptureFixture, MonkeyPatch, fixture, mark, raises
 
-from haiway import Observability, ObservabilityLevel, ScopeKind, ctx
+from haiway import Observability, ObservabilityLevel, ObservabilityLink, ScopeKind, ctx
 from haiway.context.identifier import ContextIdentifier
 from haiway.opentelemetry import OpenTelemetry, OpenTelemetryException, observability
+from tests.observability_helpers import linking
 
 _CONFIGURATION_ATTRIBUTES: Sequence[str] = (
     "service",
@@ -1473,3 +1475,61 @@ async def test_recordings_below_the_level_never_reach_the_adapter(
         _record_each_kind_of_error("loud")
 
     assert reached == ["log ERROR", "event ERROR", "metric ERROR", "attributes ERROR"]
+
+
+@mark.asyncio
+async def test_linked_scope_is_a_root_with_a_span_link(spans: InMemorySpanExporter) -> None:
+    # the remote parent of the adapter must not parent a linked scope either
+    remote = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    async with ctx.scope("request", observability=OpenTelemetry.observability()):
+        link = ObservabilityLink.current()
+
+    task_observability = linking(OpenTelemetry.observability(traceparent=remote), (link,))
+    async with ctx.scope("task", observability=task_observability):
+        pass
+
+    request = _context(_named(spans, "request"))
+    task = _named(spans, "task")
+    assert task.parent is None
+    assert _context(task).trace_id != request.trace_id
+    assert _context(task).trace_id != 0x4BF92F3577B34DA6A3CE929D0E0E4736
+    assert len(task.links) == 1
+    assert task.links[0].context.trace_id == request.trace_id
+    assert task.links[0].context.span_id == request.span_id
+
+
+@mark.asyncio
+async def test_link_without_trace_context_creates_no_span_link(
+    spans: InMemorySpanExporter,
+    caplog: LogCaptureFixture,
+) -> None:
+    link = ObservabilityLink(
+        trace_id=UUID(int=1),
+        scope_id=UUID(int=2),
+        trace_context={},
+    )
+    with caplog.at_level("WARNING", logger="OpenTelemetry"):
+        linked = linking(OpenTelemetry.observability(), (link,))
+        async with ctx.scope("task", observability=linked):
+            pass
+
+    task = _named(spans, "task")
+    assert not task.links
+    assert task.parent is None
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+
+
+@mark.asyncio
+async def test_linked_scope_ignores_the_ambient_span(spans: InMemorySpanExporter) -> None:
+    async with ctx.scope("request", observability=OpenTelemetry.observability()):
+        link = ObservabilityLink.current()
+
+    base = OpenTelemetry.observability()
+    async with ctx.scope("ambient", observability=base):
+        async with ctx.scope("task", observability=linking(base, (link,))):
+            pass
+
+    task = _named(spans, "task")
+    assert task.parent is None
+    assert _context(task).trace_id != _context(_named(spans, "ambient")).trace_id
+    assert len(task.links) == 1

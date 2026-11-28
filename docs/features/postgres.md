@@ -11,6 +11,7 @@ framework's functional style while handling connection pooling and transactions 
   and primitive types
 - **Protocol Driven**: Backends plug in via protocols, enabling custom clients in tests
 - **Migrations Included**: Built-in runner discovers and executes ordered migration modules
+- **Task Store**: `PostgresTaskStore` keeps managed tasks in the database
 - **Configuration Storage**: Optional `ConfigurationRepository` backed by versioned Postgres rows
 - **Immutable State**: Connections are exposed as `State`; rows are immutable `Mapping` wrappers
   with strict typing helpers
@@ -373,6 +374,115 @@ my_app/db/migrations/
 ```
 
 Each module should export an async `migration(connection: PostgresConnection) -> None` callable.
+
+## Task Store
+
+`PostgresTaskStore` keeps [managed tasks](../guides/managed-tasks.md) in PostgreSQL. Tasks survive a
+restart of the process, and any runtime opening the same database can run them. PostgreSQL 16 is the
+minimum verified version.
+
+```python
+from haiway import ManagedTasks, TaskRuntime, ctx
+from haiway.postgres import PostgresConnectionPool, PostgresTaskStore
+
+store = PostgresTaskStore(
+    PostgresConnectionPool(connection_limit=2),
+    lease=30.0,
+    lease_renewal=10.0,
+    polling=1.0,
+)
+
+# once per deployment, before any runtime opens the store
+await store.migrate()
+
+async with ctx.scope("app"):
+    runtime = TaskRuntime(store=store, tasks=(build_report,), concurrency_limit=8)
+    async with ctx.managed_tasks(runtime):
+        task = await ManagedTasks.spawn(build_report(ReportRequest(month="2026-11")))
+        outcome = await task.outcome()
+```
+
+The three timings have no defaults, the values above are the example's own:
+
+- `lease` - seconds a claim or renewal holds a task for a runtime. A task whose lease expires is
+  recovered by another runtime as interrupted, and the retry policy decides what follows.
+- `lease_renewal` - seconds between renewals, above 0 and below `lease`.
+- `polling` - seconds between claim rounds and outcome polls.
+
+Renewals run at a fixed delay after each renewal returns, so the gap between two extensions of a
+lease is `lease_renewal` plus the duration of the renewal itself. `lease - lease_renewal` has to
+exceed the expected duration of a renewal, which a slow or contended database lengthens.
+
+### Schema
+
+Under a server, `migrate()` runs before the lifespan of the application is entered, or as a deploy
+step: opening the store checks the schema and fails otherwise, see
+[Starlette](starlette.md#managed-tasks).
+
+`await store.migrate()` installs or upgrades the schema: the `haiway_managed_tasks` and
+`haiway_managed_task_attempts` tables and their indexes, tracked in
+`haiway_managed_tasks_migrations`. It runs every migration not recorded yet under an advisory lock,
+each in its own transaction, and needs no `Postgres` in the context. It enters and exits the store's
+own pool, and accepts `timeout` - the seconds any statement may wait for a lock, `300` by default,
+`0` to disable the bound. It does not use the `migrations` table of `Postgres.execute_migrations`.
+
+A runtime opening a store whose schema is missing or older than the store's raises
+`PostgresException` naming both versions - run `migrate()` first. A schema of a higher version
+opens: every later migration of these tables is additive and compatible with stores of earlier
+versions, so during a rolling deploy a newer replica can migrate first.
+
+### The Pool
+
+The store owns its pool: opening the store enters it and closing the session exits it. Two rules
+follow:
+
+- the pool needs at least 2 connections, since claims, renewals, records and polls of one runtime
+  queue behind each other on one
+- the pool has to be used by nothing else - neither entered by the caller, nor shared with task
+  bodies, which could hold every connection while a lease needs renewing
+
+The store never uses a connection found in the context, so it works whatever connection the calling
+task holds. Use one store object for each runtime.
+
+### Shared Queue and Registered Names
+
+Every runtime on one database is a worker of one shared queue: any open runtime claims any due task
+whose registered name it lists. Registered names are unique per database. Runtimes of different
+applications sharing a database run each other's tasks of one name, each under its own root snapshot
+of state.
+
+A row whose name no runtime lists stays as it is while no runtime with `unsupported="fail"` is open.
+A runtime with `unsupported="fail"` fails such rows once they are due, and also the rows another
+runtime on the database would run - see the warnings of
+[Managed Tasks](../guides/managed-tasks.md#unsupported-tasks). To find unfinished rows whose name a
+set of registered names does not hold, bind the names as the parameter:
+
+```sql
+SELECT id, name, status, created_at
+FROM haiway_managed_tasks
+WHERE status <> 'finished' AND NOT (name = ANY($1::text[]))
+ORDER BY created_at;
+```
+
+### Listing
+
+`ManagedTasks.tasks(...)` lists every row until the application deletes it, whether or not the
+runtime lists its name. Creation and finish times are the clock of the database server, which can
+differ from the clock of the caller. A page with several names in the filter reads and sorts the
+matching rows past the keyset, so it costs more than a page with one name, which follows the index
+of names.
+
+### Retention
+
+The store never deletes rows. Delete finished tasks which are not needed anymore, for example the
+ones older than a given time:
+
+```sql
+DELETE FROM haiway_managed_tasks WHERE status = 'finished' AND finished_at < $1;
+```
+
+The attempt rows of a deleted task follow it (`ON DELETE CASCADE`). A deleted task is no longer
+found by `ManagedTasks.task(...)`, and its handles raise `LookupError`.
 
 ## Configuration Repository
 

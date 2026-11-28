@@ -60,9 +60,9 @@ the docs at https://miquido.github.io/haiway/ rather than guessing - names chang
 
 - All I/O is async. Never block the event loop; bridge unavoidable sync calls with
   `@asynchronous`, never with custom threads.
-- Start tasks with `ctx.spawn(...)` (scoped, joined by the scope on exit). Use
-  `ctx.spawn_background(...)` only when work must outlive the scope - it has no scope state, so
-  `ctx.state(...)` raises there: pass what it needs or open a scope inside.
+- Start tasks with `ctx.spawn(...)` (scoped, joined by the scope on exit).
+  `ctx.spawn(...)` outside of any scope raises `ContextMissing`. Work which must outlive the scope
+  goes to managed tasks (`ManagedTasks`; shape and guide in `references/recipes.md`).
 - Use `gather(...)`, `concurrently(...)`, `execute_concurrently(...)` instead of raw
   `asyncio.gather`/`create_task`. Wrap async generators left early in `ctx.closing(...)`.
 

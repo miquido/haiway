@@ -70,6 +70,15 @@ Master concurrent and parallel processing patterns:
 - Streaming multiple sources
 - Performance optimization strategies
 
+### [Managed Tasks](managed-tasks.md)
+
+Work which outlives the scope that started it:
+
+- Registering tasks with `@managed_task` and running them in a `TaskRuntime`
+- Outcomes, cancellation, retries and time limits
+- Listing stored tasks
+- In-memory and PostgreSQL task stores
+
 ## Learning Path
 
 1. **Start with State** - Understanding immutable state is fundamental to using Haiway effectively

@@ -1,4 +1,4 @@
-from asyncio import CancelledError, current_task, sleep
+from asyncio import CancelledError, create_task, current_task, sleep
 from collections.abc import AsyncGenerator, Coroutine
 
 from pytest import mark, raises
@@ -155,9 +155,8 @@ async def test_cancels_running_tasks_on_cancellation():
 
     # Run the process with cancellation
     with raises(CancelledError):
-        task = ctx.spawn(
-            concurrently,
-            coroutines,
+        task = create_task(
+            concurrently(coroutines),
         )
         # Give some time for tasks to start
         await sleep(0.1)

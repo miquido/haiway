@@ -67,7 +67,8 @@ Apply to every design decision, new or changed code, and review:
 ### Concurrency & Async
 
 - All I/O is async, keep boundaries async and use `ctx.spawn` for scoped tasks.
-  Use `ctx.spawn_background` only when work must outlive the current scope.
+  `ctx.spawn` outside of any scope raises `ContextMissing`. Use managed tasks (`ManagedTasks`)
+  when work must outlive the current scope.
 - Ensure structured concurrency concepts and valid coroutine usage
 - Rely on haiway and asyncio packages with coroutines, avoid custom threading
 - Await long-running operations directly; never block the event loop with sync calls.

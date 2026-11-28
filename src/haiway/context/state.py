@@ -1,5 +1,5 @@
 from collections.abc import Collection, Iterable, Mapping, MutableMapping
-from contextvars import ContextVar, Token
+from contextvars import Context, ContextVar, Token
 from threading import Lock
 from types import TracebackType
 from typing import ClassVar, Self, cast, final
@@ -19,6 +19,17 @@ class ContextState:
 
         except LookupError:
             return ()  # return empty as default
+
+    @classmethod
+    def installing(
+        cls,
+        context: Context,
+        state: Iterable[State | None],
+        /,
+    ) -> None:
+        # sets exactly the given state, ignoring the state current here, as the root
+        # of a context built apart from the current one
+        context.run(cls._context.set, cls(state=state))
 
     @classmethod
     def contains[StateType: State](

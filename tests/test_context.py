@@ -1,6 +1,8 @@
 import asyncio
+import gc
 import logging
-from collections.abc import Callable, Mapping
+import warnings
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from types import TracebackType
 from uuid import UUID, uuid4
@@ -12,6 +14,7 @@ from haiway.context import (
     ContextIdentifier,
     Observability,
     ObservabilityLevel,
+    ObservabilityLink,
 )
 from haiway.context import tasks as tasks_module
 from haiway.context.state import ContextState
@@ -357,40 +360,6 @@ async def test_context_task_group_keeps_context_during_exit(monkeypatch):
     assert captured == [instances[0]]
 
 
-def test_background_task_shutdown_handles_loop_race(monkeypatch):
-    class DummyTask:
-        def __init__(self) -> None:
-            self.cancelled = False
-
-        def cancel(self) -> None:
-            self.cancelled = True
-
-    class DummyLoop:
-        def __init__(self) -> None:
-            self.called = False
-
-        def is_closed(self) -> bool:
-            return False
-
-        def call_soon_threadsafe(self, callback: object) -> None:
-            self.called = True
-            raise RuntimeError("loop closed")
-
-    dummy_loop = DummyLoop()
-    dummy_task = DummyTask()
-
-    monkeypatch.setattr(
-        tasks_module.BackgroundTaskGroup,
-        "_loops_tasks",
-        {dummy_loop: {dummy_task}},
-    )
-
-    tasks_module.BackgroundTaskGroup.shutdown(loop=dummy_loop)
-
-    assert dummy_loop.called is True
-    assert dummy_task.cancelled is True
-
-
 @mark.asyncio
 async def test_scope_task_group_exit_propagates_cancelled_error():
     cancellation = asyncio.Event()
@@ -553,7 +522,7 @@ async def test_observability_lookup_failures_are_reported() -> None:
         metric_recording=failing,
         event_recording=failing,
         attributes_recording=failing,
-        scope_entering=lambda scope, /: "trace",
+        scope_entering=lambda scope, /, *, links: "trace",
         scope_exiting=lambda scope, /, *, exception: None,
     )
 
@@ -605,7 +574,7 @@ async def test_trace_context_encoding_failure_is_reported() -> None:
         metric_recording=lambda scope, /, level, **kwargs: None,
         event_recording=lambda scope, /, level, **kwargs: None,
         attributes_recording=lambda scope, /, level, attributes: None,
-        scope_entering=lambda scope, /: "trace",
+        scope_entering=lambda scope, /, *, links: "trace",
         scope_exiting=lambda scope, /, *, exception: None,
         trace_context_encoding=failing,
     )
@@ -724,7 +693,7 @@ async def test_observability_scope_exits_when_released_from_a_different_context(
     def trace_identifying(scope: ContextIdentifier, /) -> UUID:
         return uuid4()
 
-    def scope_entering(scope: ContextIdentifier, /) -> str:
+    def scope_entering(scope: ContextIdentifier, /, *, links: Sequence[ObservabilityLink]) -> str:
         entered.append(scope)
         return "trace"
 
@@ -756,3 +725,54 @@ async def test_observability_scope_exits_when_released_from_a_different_context(
     # releasing the context variable failed, the backend still has to learn the scope ended
     assert exited == entered
     assert len(exited) == 1
+
+
+@mark.asyncio
+async def test_spawn_outside_of_scope_raises_context_missing_and_closes_coroutine() -> None:
+    ran: list[str] = []
+
+    async def worker() -> None:
+        ran.append("ran")
+
+    coroutine = worker()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with raises(ContextMissing):
+            ctx.spawn(coroutine)
+
+        assert coroutine.cr_frame is None  # closed, never started
+        del coroutine
+        gc.collect()
+
+    assert ran == []
+
+
+@mark.asyncio
+async def test_spawn_function_outside_of_scope_raises_context_missing() -> None:
+    called: list[str] = []
+
+    async def worker() -> None:
+        called.append("ran")
+
+    with raises(ContextMissing):
+        ctx.spawn(worker)
+
+    assert called == []
+
+
+@mark.asyncio
+async def test_context_task_group_run_outside_of_task_group_closes_coroutine() -> None:
+    async def worker() -> None:
+        pass
+
+    coroutine = worker()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with raises(ContextMissing):
+            ContextTaskGroup.run(coroutine)
+
+        assert coroutine.cr_frame is None  # closed, never started
+        del coroutine
+        gc.collect()

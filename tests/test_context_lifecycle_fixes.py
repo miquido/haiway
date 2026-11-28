@@ -158,30 +158,6 @@ async def test_disposal_errors_are_logged_when_cancellation_lands_on_completion(
     )
 
 
-@pytest.mark.asyncio
-async def test_failed_background_task_is_logged_to_root_after_scope_exit(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    async def failing() -> None:
-        await asyncio.sleep(0.01)
-        raise ValueError("background")
-
-    with caplog.at_level("ERROR"):
-        async with ctx.scope("background"):
-            task = ctx.spawn_background(failing)
-
-        with pytest.raises(ValueError):
-            await task
-
-        await asyncio.sleep(0)
-
-    records = [
-        record for record in caplog.records if record.getMessage() == "Background task failed"
-    ]
-    assert len(records) == 1
-    assert records[0].name == "root"
-
-
 class _Ping(State):
     value: int = 0
 

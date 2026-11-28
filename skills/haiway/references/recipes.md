@@ -70,9 +70,21 @@ async def store(content: str, **extra: Any) -> None:
 | many coroutines, bounded, keep failures | `await concurrently(coros, concurrent_tasks=8, return_exceptions=True)` |
 | consume a source, no results | `await process_concurrently(source, handler, concurrent_tasks=8)` |
 | work alongside the current task | `task = ctx.spawn(fn, arg)`; `await task` or let the scope join it |
-| work that must survive the scope | `ctx.spawn_background(fn, arg)` - no scope state, pass what it needs |
+| work that must survive the scope | managed tasks (`ManagedTasks`), not `ctx.spawn` |
 
 `concurrent_tasks` defaults to 2. Never leave tasks unreferenced or reach for `asyncio.create_task`.
+
+Work which must survive the scope is a managed task (guide: `docs/guides/managed-tasks.md`):
+
+```python
+@managed_task()
+async def build_report(request: ReportRequest) -> Report: ...
+
+
+async with ctx.managed_tasks(TaskRuntime(tasks=(build_report,))):
+    handle = await ManagedTasks.spawn(build_report(ReportRequest(month="2026-11")))
+    outcome = await handle.outcome()  # TaskCompleted, TaskFailed or TaskCancelled
+```
 
 ## Resilient adapter around an unreliable call
 
@@ -189,7 +201,7 @@ Never call blocking code directly in a coroutine, and do not start threads yours
 | code using `HTTPClient` | `HTTPClient(requesting=fake_request)` returning `HTTPResponse(...)` (`integrations.md`) |
 | `Configuration` | `ConfigurationRepository.volatile(MyConfig(...))` |
 | replacing one piece of a preset | `ctx.scope(preset, Fake(...))` - explicit state wins |
-| per-test isolation | everything inside `ctx.scope(...)`; autouse fixture calling `ctx.shutdown_background_tasks()` after each test |
+| per-test isolation | everything inside `ctx.scope(...)` |
 | several inputs | `pytest.mark.parametrize`, not loops |
 | async code | `@pytest.mark.asyncio`, no `sleep` for synchronisation - await the task or event |
 

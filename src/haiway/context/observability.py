@@ -6,9 +6,11 @@ from logging import ERROR as ERROR_LOGGING
 from logging import INFO as INFO_LOGGING
 from logging import WARNING as WARNING_LOGGING
 from logging import Logger, getLogger
+from re import compile as compile_pattern
 from time import monotonic
 from types import TracebackType
 from typing import (
+    Annotated,
     Any,
     ClassVar,
     Final,
@@ -21,6 +23,7 @@ from typing import (
 )
 from uuid import UUID
 
+from haiway.attributes import State, Verifier
 from haiway.context.identifier import ContextIdentifier, random_identifier
 from haiway.context.types import ContextMissing
 from haiway.types import Missing
@@ -35,6 +38,7 @@ __all__ = (
     "ObservabilityEventRecording",
     "ObservabilityLevel",
     "ObservabilityLevelChecking",
+    "ObservabilityLink",
     "ObservabilityLogRecording",
     "ObservabilityMetricKind",
     "ObservabilityMetricRecording",
@@ -200,6 +204,140 @@ class ObservabilityAttributesRecording(Protocol):
     ) -> None: ...
 
 
+# W3C Trace Context Level 1, section 3.2.2 - traceparent of version 00 only, with
+# non-zero trace and parent identifiers
+_TRACEPARENT_PATTERN: Final = compile_pattern(
+    r"00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}"
+)
+# W3C Trace Context Level 1, section 3.3.1 - limits of tracestate, empty list-members
+# included in the count, and the whole length bounded by the largest list the
+# grammar allows: 32 members of a key, "=" and a value, 31 separators of a comma and
+# at most one space or tab on each side
+_TRACESTATE_MEMBERS_LIMIT: Final[int] = 32
+_TRACESTATE_ITEM_LIMIT: Final[int] = 256
+_TRACESTATE_LENGTH_LIMIT: Final[int] = (
+    _TRACESTATE_MEMBERS_LIMIT * (2 * _TRACESTATE_ITEM_LIMIT + 1)
+    + (_TRACESTATE_MEMBERS_LIMIT - 1) * 3
+)
+_TRACE_CONTEXT_KEYS: Final[frozenset[str]] = frozenset(("traceparent", "tracestate"))
+
+
+def _is_tracestate_bounded(
+    tracestate: str,
+    /,
+) -> bool:
+    if len(tracestate) > _TRACESTATE_LENGTH_LIMIT:
+        return False
+
+    members: list[str] = tracestate.split(",")
+    if len(members) > _TRACESTATE_MEMBERS_LIMIT:
+        return False
+
+    for raw_member in members:
+        member: str = raw_member.strip(" \t")
+        if not member:
+            continue  # an empty list-member is allowed, though it counts
+
+        key, separator, value = member.partition("=")
+        if (
+            not separator
+            or not key
+            or len(key) > _TRACESTATE_ITEM_LIMIT
+            or len(value) > _TRACESTATE_ITEM_LIMIT
+        ):
+            return False
+
+    return True
+
+
+def _is_trace_context_bounded(
+    trace_context: Mapping[str, str],
+    /,
+) -> bool:
+    if not trace_context.keys() <= _TRACE_CONTEXT_KEYS:
+        return False
+
+    for key, value in trace_context.items():
+        if key == "traceparent":
+            if _TRACEPARENT_PATTERN.fullmatch(value) is None:
+                return False
+
+        elif not _is_tracestate_bounded(value):
+            return False
+
+    return True
+
+
+def _verify_trace_context(
+    value: Mapping[str, str],
+) -> Mapping[str, str]:
+    if not _is_trace_context_bounded(value):
+        raise ValueError(
+            "Trace context has to hold only traceparent of version 00 and tracestate "
+            "within W3C Trace Context Level 1 limits"
+        )
+
+    return value
+
+
+@final
+class ObservabilityLink(State):
+    """
+    Position of a scope within its trace, to be linked from a scope of another trace.
+
+    Parameters
+    ----------
+    trace_id : UUID
+        Identifier of the trace of the linked scope.
+    scope_id : UUID
+        Identifier of the linked scope.
+    trace_context : Mapping[str, str]
+        Trace position encoded by the observability backend of the linked scope. Holds
+        only W3C ``traceparent`` of version 00 and ``tracestate`` within the limits of
+        W3C Trace Context Level 1, can be empty. A value outside of them is rejected
+        with ``ValueError`` on construction and decoding.
+    """
+
+    trace_id: UUID
+    scope_id: UUID
+    trace_context: Annotated[Mapping[str, str], Verifier(_verify_trace_context)]
+
+    @classmethod
+    def current(cls) -> Self:
+        """
+        Capture the link to the current scope.
+
+        Returns
+        -------
+        ObservabilityLink
+            Link to the current scope. Its ``trace_context`` is the one of the
+            observability backend when it holds only ``traceparent`` and ``tracestate``
+            within W3C limits, otherwise it is empty and a warning is logged without
+            the values.
+
+        Raises
+        ------
+        ContextMissing
+            When called outside of any scope.
+        """
+        scope: ContextIdentifier = ContextIdentifier.current()
+        trace_id: UUID = UUID(hex=ContextObservability.trace_id())
+        trace_context: Mapping[str, str] = ContextObservability.trace_context()
+        if not _is_trace_context_bounded(trace_context):
+            ContextObservability.record_log(
+                ObservabilityLevel.WARNING,
+                "Trace context is outside the stored origin limits, linking with ids alone",
+                exception=None,
+            )
+            trace_context = {}
+
+        return cls(
+            trace_id=trace_id,
+            scope_id=scope.scope_id,
+            trace_context=trace_context,
+        )
+
+
 @runtime_checkable
 class ObservabilityScopeEntering(Protocol):
     """Begin recording the given scope and report the trace it belongs to.
@@ -207,12 +345,17 @@ class ObservabilityScopeEntering(Protocol):
     The returned value is what ``ctx.scope(...)`` yields when entered, and has to
     match what ``ObservabilityTraceIdentifying`` resolves within the same scope -
     unpadded lowercase hex of that identifier.
+
+    A scope entered with links starts a new trace and refers to the linked scopes of
+    other traces. Every scope but a task scope is entered with no links.
     """
 
     def __call__(
         self,
         scope: ContextIdentifier,
         /,
+        *,
+        links: Sequence[ObservabilityLink],
     ) -> str: ...
 
 
@@ -608,6 +751,8 @@ def LoggerObservability(  # noqa: C901, PLR0915
     def scope_entering(
         scope: ContextIdentifier,
         /,
+        *,
+        links: Sequence[ObservabilityLink],
     ) -> str:
         assert scope.scope_id.int not in scopes  # nosec: B101
         # a root scope is its own parent, so the lookup misses and it starts a
@@ -615,7 +760,8 @@ def LoggerObservability(  # noqa: C901, PLR0915
         # scope it belongs to already completed
         parent: ScopeStore | None = scopes.get(scope.parent_id.int)
         store: ScopeStore
-        if parent is not None:  # one trace per tree - everything below a root inherits it
+        if parent is not None and not links:  # one trace per tree - everything below a root
+            # inherits it, unless the scope is linked to another trace
             store = ScopeStore(
                 scope,
                 trace_id=parent.trace_id,
@@ -629,7 +775,9 @@ def LoggerObservability(  # noqa: C901, PLR0915
                 scope,
                 trace_id=trace_id,
                 trace_hex=trace_id.hex,
-                logger=logger or getLogger(scope.name),
+                logger=(parent.logger if parent is not None else None)
+                or logger
+                or getLogger(scope.name),
             )
 
         if parent is not None:
@@ -643,6 +791,15 @@ def LoggerObservability(  # noqa: C901, PLR0915
             store.logger.log(
                 ObservabilityLevel.DEBUG,
                 f"{store.prefix} Entering scope: {scope.name}",
+            )
+
+        if links and store.logger.isEnabledFor(ObservabilityLevel.INFO):
+            store.logger.log(
+                ObservabilityLevel.INFO,
+                f"{store.prefix} Linked to: "
+                + ", ".join(
+                    f"trace {link.trace_id.hex} scope {link.scope_id.hex}" for link in links
+                ),
             )
 
         return store.trace_hex
@@ -756,6 +913,7 @@ class ContextObservability:
         /,
         *,
         observability: Observability | Logger | None,
+        links: Sequence[ObservabilityLink] = (),
     ) -> Self:
         if observability is None:
             # read without raising - a root scope has no observability around it
@@ -764,6 +922,7 @@ class ContextObservability:
                 return cls(
                     scope=scope,
                     observability=current.observability,
+                    links=links,
                 )
 
             else:  # create default logger observability on missing
@@ -773,6 +932,7 @@ class ContextObservability:
                         getLogger(scope.name),
                         debug_context=False,
                     ),
+                    links=links,
                 )
 
         elif isinstance(observability, Logger):
@@ -782,12 +942,14 @@ class ContextObservability:
                     observability,
                     debug_context=False,
                 ),
+                links=links,
             )
 
         else:
             return cls(
                 scope=scope,
                 observability=observability,
+                links=links,
             )
 
     @classmethod
@@ -1019,6 +1181,7 @@ class ContextObservability:
 
     _context: ClassVar[ContextVar[Self]] = ContextVar("ContextObservability")
     __slots__ = (
+        "_links",
         "_scope",
         "_token",
         "observability",
@@ -1028,16 +1191,18 @@ class ContextObservability:
         self,
         scope: ContextIdentifier,
         observability: Observability,
+        links: Sequence[ObservabilityLink] = (),
     ) -> None:
         self.observability: Observability = observability
         self._scope: ContextIdentifier = scope
+        self._links: Sequence[ObservabilityLink] = links
         self._token: Token[ContextObservability] | None = None
 
     def __enter__(self) -> str:
         assert self._token is None, "Context reentrance is not allowed"  # nosec: B101
         self._token = ContextObservability._context.set(self)
         try:
-            return self.observability.scope_entering(self._scope)
+            return self.observability.scope_entering(self._scope, links=self._links)
 
         except BaseException:
             # __exit__ is never called when __enter__ raises, so the context

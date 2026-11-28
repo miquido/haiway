@@ -16,7 +16,9 @@ from haiway.context import (
     Disposable,
     Disposables,
     Observability,
+    ctx,
 )
+from haiway.context.managed import TaskRuntime
 from haiway.context.observability import LoggerObservability
 from haiway.starlette.trace import request_trace_context
 from haiway.starlette.types import ObservabilityPreparing
@@ -30,6 +32,58 @@ __all__ = ("ServerContext",)
 # logger created on import, which `setup_logging` disables along with every other
 # logger predating it - silently dropping everything recorded through it
 DEFAULT_LOGGER: Final[Logger] = getLogger()
+
+
+@final
+class _SharedBackend:
+    __slots__ = ("backend",)
+
+    def __init__(
+        self,
+        backend: Observability,
+        /,
+    ) -> None:
+        self.backend: Observability = backend
+
+
+@final
+class _LoggedBackend:
+    __slots__ = ("logger",)
+
+    def __init__(
+        self,
+        logger: Logger,
+        /,
+    ) -> None:
+        self.logger: Logger = logger
+
+
+@final
+class _PreparedBackend:
+    __slots__ = ("preparing",)
+
+    def __init__(
+        self,
+        preparing: ObservabilityPreparing,
+        /,
+    ) -> None:
+        self.preparing: ObservabilityPreparing = preparing
+
+
+type _ServerObservability = _SharedBackend | _LoggedBackend | _PreparedBackend
+
+
+def _server_observability(
+    observability: Observability | Logger | ObservabilityPreparing,
+    /,
+) -> _ServerObservability:
+    if isinstance(observability, Observability):
+        return _SharedBackend(observability)
+
+    if isinstance(observability, Logger):
+        return _LoggedBackend(observability)
+
+    return _PreparedBackend(observability)
 
 
 @final
@@ -80,7 +134,18 @@ class ServerContext:
         Defaults to logging through the root logger, which is where a logging
         setup always applies - a named one of ours would be silenced by a
         ``setup_logging`` call made after this module was imported.
-
+    tasks : TaskRuntime | None
+        Runtime of managed tasks, which the lifespan opens after the disposables
+        are prepared and closes before they are released, and whose
+        ``ManagedTasks`` is added to the state of every request scope, after the
+        declared state. Tasks run in a context built from the state of the
+        disposables and the declared state, and from the presets, and record
+        through the observability of the runtime, else through the one declared
+        here, which for a ``Logger`` is a logging backend shared by every task.
+        Entering the block starts executing the due tasks stored by the store of
+        the runtime, so a task can start before the first request is served.
+        Requires ``lifespan`` to be installed as the application lifespan.
+        Without it, no managed tasks are available in requests.
 
     Examples
     --------
@@ -101,8 +166,9 @@ class ServerContext:
 
     __slots__ = (
         "_disposables",
-        "_observability_preparing",
+        "_observability",
         "_state",
+        "_tasks",
         "presets",
         "state",
     )
@@ -113,36 +179,14 @@ class ServerContext:
         disposables: Iterable[Disposable | None] = (),
         presets: Iterable[ContextPresets] = (),
         observability: Observability | Logger | ObservabilityPreparing = DEFAULT_LOGGER,
+        tasks: TaskRuntime | None = None,
     ) -> None:
         self._state: Sequence[State] = tuple(element for element in state if element is not None)
         self.state: Sequence[State]
         self._disposables: Disposables = Disposables.of(*disposables)
         self.presets: Collection[ContextPresets] = tuple(presets)
-        self._observability_preparing: ObservabilityPreparing
-        if isinstance(observability, Observability):
-
-            def _observability(
-                *,
-                traceparent: str | None,
-                tracestate: str | None,
-            ) -> Observability:
-                return observability
-
-            self._observability_preparing = _observability
-
-        elif isinstance(observability, Logger):
-
-            def _observability(
-                *,
-                traceparent: str | None,
-                tracestate: str | None,
-            ) -> Observability:
-                return LoggerObservability(observability)
-
-            self._observability_preparing = _observability
-
-        else:
-            self._observability_preparing = observability
+        self._tasks: TaskRuntime | None = tasks
+        self._observability: _ServerObservability = _server_observability(observability)
 
     def lifespan(
         self,
@@ -194,17 +238,44 @@ class ServerContext:
             async with self._disposables as disposable_state:
                 # explicitly declared state goes last to take precedence
                 # over the state prepared by the disposables
-                self.state = (*disposable_state, *self._state)
-                DEFAULT_LOGGER.info("...server state initialized...")
-
+                declared: Sequence[State] = (*disposable_state, *self._state)
                 try:
-                    yield  # suspend until shutdown
+                    # startup work sees the declared state and the presets with or without
+                    # tasks, and the managed tasks block takes its root snapshot of them, so
+                    # they are current when it is entered and it is exited before them
+                    with ctx.updating(*declared), ctx.presets(*self.presets):
+                        if self._tasks is None:
+                            self.state = declared
+                            DEFAULT_LOGGER.info("...server state initialized...")
+                            yield  # suspend until shutdown
+
+                        else:
+                            async with ctx.managed_tasks(
+                                self._tasks,
+                                observability=self._tasks_observability(),
+                            ) as managed:
+                                self.state = (*declared, managed)
+                                DEFAULT_LOGGER.info("...server state initialized...")
+                                yield  # suspend until shutdown
 
                 finally:
                     DEFAULT_LOGGER.info("...closing server...")
 
         finally:
             DEFAULT_LOGGER.info("...server closed!")
+
+    def _tasks_observability(self) -> Observability:
+        # what records the tasks of a runtime which was given no backend: the one declared
+        # for requests, a logger becoming a backend which is not meant for a single request
+        match self._observability:
+            case _SharedBackend(backend=backend):
+                return backend
+
+            case _LoggedBackend(logger=logger):
+                return LoggerObservability(logger, debug_context=False)
+
+            case _PreparedBackend(preparing=preparing):
+                return preparing(traceparent=None, tracestate=None)
 
     @property
     def request_state(self) -> Sequence[State]:
@@ -214,7 +285,8 @@ class ServerContext:
         -------
         Sequence[State]
             The state prepared by the disposables of the context, followed by
-            the state it was declared with, which takes precedence over it.
+            the state it was declared with, which takes precedence over it, and
+            the ``ManagedTasks`` of its runtime when it was given one.
 
         Raises
         ------
@@ -266,7 +338,15 @@ class ServerContext:
         # the trace context of every request is resolved here, so a backend which
         # continues the trace of its caller needs no wiring of its own
         trace_context: Mapping[str, str] = request_trace_context(request_scope)
-        return self._observability_preparing(
-            traceparent=trace_context.get("traceparent"),
-            tracestate=trace_context.get("tracestate"),
-        )
+        match self._observability:
+            case _SharedBackend(backend=backend):
+                return backend
+
+            case _LoggedBackend(logger=logger):
+                return LoggerObservability(logger)
+
+            case _PreparedBackend(preparing=preparing):
+                return preparing(
+                    traceparent=trace_context.get("traceparent"),
+                    tracestate=trace_context.get("tracestate"),
+                )
